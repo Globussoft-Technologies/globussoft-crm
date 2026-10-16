@@ -2100,6 +2100,78 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
   });
 
+  it('applies a Leads assistant filter to the server query and table rows', async () => {
+    const assistantRows = [
+      { ...SAMPLE_LEADS[0], email: null },
+      { ...SAMPLE_LEADS[1], email: null },
+      SAMPLE_LEADS[2],
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/leads-assistant/message') {
+        return Promise.resolve({
+          reply: 'I found 2 leads without an email address.',
+          records: assistantRows.slice(0, 2),
+          filterSpec: { missingEmail: true },
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const params = new URL(url, 'http://crm.test').searchParams;
+        const filters = JSON.parse(params.get('filters') || '[]');
+        const missingEmail = filters.some((filter) => filter.field === 'email' && filter.operator === 'is_empty');
+        const rows = missingEmail ? assistantRows.filter((lead) => !lead.email) : assistantRows;
+        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 25, totalPages: 1 });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('generic-leads-assistant-fab'));
+    fireEvent.change(screen.getByTestId('generic-leads-assistant-input'), { target: { value: 'show leads without email' } });
+    fireEvent.click(screen.getByTestId('generic-leads-assistant-send'));
+    await waitFor(() => expect(screen.getByText('I found 2 leads without an email address.')).toBeInTheDocument());
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead&page=1&limit=25') && !opts && url.includes('filters='),
+      );
+      expect(filteredCall).toBeDefined();
+      expect(JSON.parse(new URL(filteredCall[0], 'http://crm.test').searchParams.get('filters'))).toEqual([
+        { field: 'email', operator: 'is_empty', values: [] },
+      ]);
+    });
+    await waitFor(() => expect(screen.queryByText('Carol Diaz')).not.toBeInTheDocument());
+  });
+
+  it('uses the assistant name prefix to filter the table instead of broad text search', async () => {
+    const diana = { ...SAMPLE_LEADS[0], id: 44, name: 'Diana Shah', company: 'Example Co' };
+    const unrelated = { ...SAMPLE_LEADS[1], id: 45, name: 'Ayesha Khan', company: 'Delta Systems' };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/leads-assistant/message') {
+        return Promise.resolve({ reply: 'I found 1 lead matching your request.', filterSpec: { nameStartsWith: 'D' } });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const params = new URL(url, 'http://crm.test').searchParams;
+        const rows = params.get('nameStartsWith') === 'D' ? [diana] : [diana, unrelated];
+        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 25, totalPages: 1 });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Diana Shah')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('generic-leads-assistant-fab'));
+    fireEvent.change(screen.getByTestId('generic-leads-assistant-input'), { target: { value: 'filter leads whose name starts with D' } });
+    fireEvent.click(screen.getByTestId('generic-leads-assistant-send'));
+
+    await waitFor(() => expect(screen.getByText('I found 1 lead matching your request.')).toBeInTheDocument());
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) => typeof url === 'string' && url.includes('nameStartsWith=D'))).toBe(true);
+      expect(screen.getByText('Diana Shah')).toBeInTheDocument();
+      expect(screen.queryByText('Ayesha Khan')).not.toBeInTheDocument();
+    });
+  });
+
   it('queries Generic lead search on the server and reloads the full list when cleared', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());

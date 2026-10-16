@@ -614,6 +614,41 @@ describe('<TripDetail /> — Participants tab', () => {
     expect(await screen.findByTestId('participant-bulk-import-result')).toBeInTheDocument();
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Imported 1, updated 1/i));
   });
+
+  it('shows the participant import schema and downloads the CSV template', async () => {
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:participant-template');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    rawFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: () => Promise.resolve(new Blob(['fullName,parentName'], { type: 'text/csv' })),
+    });
+
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+
+    const schema = await screen.findByTestId('participant-import-schema');
+    expect(schema).toHaveTextContent('fullName');
+    expect(schema).toHaveTextContent('is required');
+    expect(screen.getByRole('button', { name: /CSV template/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /XLSX template/i })).toBeInTheDocument();
+    expect(screen.getByText('applicationStatus')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /CSV template/i }));
+    await waitFor(() => {
+      expect(rawFetchMock).toHaveBeenCalledWith(
+        '/api/travel/trips/101/participants/import-template?format=csv',
+        { headers: { Authorization: 'Bearer test-token' } },
+      );
+    });
+    expect(createObjectUrlSpy).toHaveBeenCalled();
+    expect(clickSpy).toHaveBeenCalled();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Downloaded CSV participant template/i));
+  });
 });
 
 describe('<TripDetail /> — Rooming tab', () => {

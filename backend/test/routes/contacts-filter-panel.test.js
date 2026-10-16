@@ -819,6 +819,13 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
     ]);
   });
 
+  test("generic Leads supports an exact name-prefix query", async () => {
+    const res = await request(makeApp()).get("/api/contacts?status=Lead&nameStartsWith=D");
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where).toEqual(expect.objectContaining({ status: "Lead", name: { startsWith: "D" } }));
+  });
+
   test("web-form tracking filters are tenant-safe relation clauses", async () => {
     prisma.$queryRaw.mockResolvedValue([{ id: 9001 }]);
     const filters = [

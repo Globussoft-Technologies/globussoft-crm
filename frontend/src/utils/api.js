@@ -129,6 +129,27 @@ export function clearAuthToken() {
   } catch {
     /* ignore */
   }
+  // Lead assistant conversations are persisted for page navigation, but they
+  // must never survive an authentication boundary. Remove both the current
+  // user-scoped keys and any legacy unscoped key before the next account can
+  // mount the Leads page.
+  try {
+    const assistantKeys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith('generic-leads-assistant-session')) assistantKeys.push(key);
+    }
+    assistantKeys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    /* ignore storage failures; the in-memory logout still completes */
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new Event('crm:auth-logout'));
+    } catch {
+      /* ignore event dispatch failures */
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

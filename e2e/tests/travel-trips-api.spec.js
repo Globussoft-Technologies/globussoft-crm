@@ -10,6 +10,7 @@
  *   DELETE /api/travel/trips/:id           (ADMIN only)
  *   GET    /api/travel/trips/:id/participants
  *   POST   /api/travel/trips/:id/participants
+ *   GET    /api/travel/trips/:id/participants/import-template
  *   PATCH  /api/travel/trips/:id/participants/:pid
  *   DELETE /api/travel/trips/:id/participants/:pid
  *   GET    /api/travel/trips/:id/documents
@@ -250,6 +251,26 @@ test.describe("Travel trips API — trip CRUD", () => {
 // ─── Participants ────────────────────────────────────────────────────
 
 test.describe("Travel trips API — participants", () => {
+  test("GET participant import templates returns the documented CSV/XLSX schema", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0) test.skip(true, "no trips");
+    const tripId = created.tripIds[0];
+
+    const csv = await get(request, token, `/api/travel/trips/${tripId}/participants/import-template?format=csv`);
+    expect(csv.status()).toBe(200);
+    expect(csv.headers()["content-type"]).toMatch(/text\/csv/);
+    expect(csv.headers()["content-disposition"]).toContain("travel-participants-template.csv");
+    expect((await csv.text()).replace(/^\uFEFF/, "").trim()).toContain(
+      "fullName,parentName,parentPhone,parentEmail,applicationStatus",
+    );
+
+    const xlsx = await get(request, token, `/api/travel/trips/${tripId}/participants/import-template?format=xlsx`);
+    expect(xlsx.status()).toBe(200);
+    expect(xlsx.headers()["content-type"]).toMatch(/spreadsheetml/);
+    expect(xlsx.headers()["content-disposition"]).toContain("travel-participants-template.xlsx");
+    expect(Number(xlsx.headers()["content-length"])).toBeGreaterThan(100);
+  });
+
   test("POST /trips/:id/participants adds a participant", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || created.tripIds.length === 0) test.skip(true, "no trips");

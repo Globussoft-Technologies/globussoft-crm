@@ -686,7 +686,7 @@ const Layout = () => {
           </small>
         </footer>
       </div>
-      {!isWellness && !isTravel && !isWhatsAppChat && <Softphone />}
+      {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
       {/* Wellness Admin Support Chatbot — the component itself also guards
           on tenant.vertical === 'wellness' + authenticated user; the layout
           check avoids mounting it at all for other verticals. */}

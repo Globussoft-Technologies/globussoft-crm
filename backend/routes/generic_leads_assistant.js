@@ -111,6 +111,7 @@ router.post("/report/export", verifyToken, requireGenericTenant, requirePermissi
       userId: req.user.userId,
       role: req.user.role,
       canReportRead: true,
+      canDealRead: await userHasPermission(req.user, "deals", "read"),
     });
     res.set({
       "Content-Type": result.contentType,
@@ -148,6 +149,7 @@ router.post(
         userHasPermission(req.user, "deals", "update"),
       ]);
       const result = await assistant.executeConfirmedAction({
+        io: req.io,
         action: req.body?.action,
         tenantId: req.user.tenantId,
         userId: req.user.userId,

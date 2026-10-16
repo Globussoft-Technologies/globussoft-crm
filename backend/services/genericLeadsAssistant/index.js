@@ -48,6 +48,10 @@ function slugifyStage(value) {
 }
 
 async function assertValidStage(stage, ctx, pipelineId = null) {
+  if (pipelineId) {
+    const pipeline = await prisma.pipeline.findFirst({ where: { id: pipelineId, tenantId: ctx.tenantId }, select: { id: true } });
+    if (!pipeline) throw assistantError("Pipeline not found for this tenant.", "PIPELINE_NOT_FOUND", 404);
+  }
   const normalized = slugifyStage(stage);
   if (!normalized) throw assistantError("A valid deal stage is required.", "INVALID_STAGE");
   const stages = await prisma.pipelineStage.findMany({ where: { tenantId: ctx.tenantId }, select: { id: true, name: true } });
@@ -254,12 +258,12 @@ async function getLeadDetails(args, ctx) {
     where: { ...visibleLeadWhere(ctx), id: leadId },
     include: {
       assignedTo: { select: { id: true, name: true, email: true } },
-      deals: { where: { tenantId: ctx.tenantId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: 20 },
+      ...(ctx.canDealRead === true ? { deals: { where: visibleDealWhere(ctx), orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 20 } } : {}),
       activities: { where: { tenantId: ctx.tenantId }, orderBy: { createdAt: "desc" }, take: 10 },
     },
   });
   if (!lead) throw assistantError("Lead not found in your visible Leads scope.", "LEAD_NOT_FOUND", 404);
-  const record = { ...serializeLead(lead), deals: lead.deals || [], activities: lead.activities || [] };
+  const record = { ...serializeLead(lead), deals: ctx.canDealRead === true ? lead.deals || [] : [], activities: lead.activities || [] };
   return { result: { lead: record }, sideEffects: { records: [record] } };
 }
 
@@ -272,10 +276,12 @@ async function generateReport(args, ctx) {
   if (reportType === "summary") {
     const [scores, deals] = await Promise.all([
       prisma.contact.aggregate({ where, _avg: { aiScore: true } }),
-      prisma.deal.count({ where: { ...visibleDealWhere(ctx), contact: { is: { ...visibleLeadWhere(ctx) } } } }),
+      ctx.canDealRead === true
+        ? prisma.deal.count({ where: { ...visibleDealWhere(ctx), contact: { is: where } } })
+        : Promise.resolve(null),
     ]);
     report.averageLeadScore = Math.round(Number(scores?._avg?.aiScore || 0) * 10) / 10;
-    report.linkedDeals = deals;
+    if (deals !== null) report.linkedDeals = deals;
   } else if (reportType === "source") {
     const rows = await prisma.contact.groupBy({ by: ["source"], where, _count: { _all: true }, orderBy: { _count: { id: "desc" } } });
     report.breakdown = rows.map((row) => ({ label: row.source || "Unknown", count: row._count._all }));
@@ -289,7 +295,8 @@ async function generateReport(args, ctx) {
     const rows = await prisma.contact.groupBy({ by: ["aiScore"], where, _count: { _all: true }, orderBy: { aiScore: "asc" } });
     report.breakdown = rows.map((row) => ({ score: row.aiScore, count: row._count._all }));
   } else if (reportType === "pipeline") {
-    const rows = await prisma.deal.groupBy({ by: ["stage"], where: visibleDealWhere(ctx), _count: { _all: true }, _sum: { amount: true }, orderBy: { _count: { id: "desc" } } });
+    if (ctx.canDealRead !== true) throw assistantError("You do not have permission to view deals.", "PERMISSION_DENIED", 403);
+    const rows = await prisma.deal.groupBy({ by: ["stage"], where: { ...visibleDealWhere(ctx), contact: { is: where } }, _count: { _all: true }, _sum: { amount: true }, orderBy: { _count: { id: "desc" } } });
     report.breakdown = rows.map((row) => ({ stage: row.stage, deals: row._count._all, amount: Number(row._sum.amount || 0) }));
   } else {
     throw assistantError("Unsupported report type. Use summary, source, owner, score, or pipeline.", "INVALID_REPORT_TYPE");
@@ -571,10 +578,6 @@ async function prepareCreateDeal(args, ctx) {
   const pipelineId = asPositiveInt(args.pipelineId);
   const stage = await assertValidStage(args.stage || "lead", ctx, pipelineId);
   const action = { type: "create_deal", contactId, title, amount: Math.max(0, Number(args.amount) || 0), currency: String(args.currency || "USD").slice(0, 8), pipelineId, stage, probability: Math.max(0, Math.min(100, Number(args.probability ?? 50) || 50)) };
-  if (action.pipelineId) {
-    const pipeline = await prisma.pipeline.findFirst({ where: { id: action.pipelineId, tenantId: ctx.tenantId }, select: { id: true, name: true } });
-    if (!pipeline) throw assistantError("Pipeline not found for this tenant.", "PIPELINE_NOT_FOUND", 404);
-  }
   return { result: { confirmationRequired: true, preview: { action, lead: contact } }, sideEffects: { pendingAction: { action, preview: { lead: contact } } } };
 }
 
@@ -586,7 +589,8 @@ async function prepareMoveDeal(args, ctx) {
   const deal = await prisma.deal.findFirst({ where: { ...visibleDealWhere(ctx), id: dealId }, include: { contact: { select: { id: true, name: true } } } });
   if (!deal) throw assistantError("Deal not found in your visible deal scope.", "DEAL_NOT_FOUND", 404);
   if (["won", "lost"].includes(deal.stage) && deal.stage !== stage) throw assistantError("Closed deals cannot be reopened or moved to another terminal stage.", "INVALID_DEAL_TRANSITION", 422);
-  const pipelineId = asPositiveInt(args.pipelineId);
+  const pipelineId = args.pipelineId == null ? deal.pipelineId || null : asPositiveInt(args.pipelineId);
+  if (args.pipelineId != null && !pipelineId) throw assistantError("pipelineId must be a positive integer.", "INVALID_PIPELINE_ID");
   await assertValidStage(stage, ctx, pipelineId);
   const action = { type: "move_deal_stage", dealId, stage, pipelineId };
   return { result: { confirmationRequired: true, preview: { action, deal: { id: deal.id, title: deal.title, stage: deal.stage, contact: deal.contact } } }, sideEffects: { pendingAction: { action, preview: { deal: { id: deal.id, title: deal.title, stage: deal.stage, contact: deal.contact } } } } };
@@ -900,7 +904,7 @@ async function handleChatMessage({ tenantId, userId, role, canLeadWrite, canLead
   };
 }
 
-async function executeConfirmedAction({ action, tenantId, userId, role, canLeadWrite, canLeadUpdate, canDealWrite, canDealUpdate }) {
+async function executeConfirmedAction({ action, tenantId, userId, role, canLeadWrite, canLeadUpdate, canDealWrite, canDealUpdate, io }) {
   if (!action || typeof action !== "object") throw assistantError("A confirmation action is required.", "ACTION_REQUIRED");
   const ctx = { tenantId, userId, role, canLeadWrite, canLeadUpdate, canDealWrite, canDealUpdate };
   if (action.type === "update_leads") {
@@ -930,11 +934,33 @@ async function executeConfirmedAction({ action, tenantId, userId, role, canLeadW
   if (action.type === "move_deal_stage") {
     const prepared = await prepareMoveDeal(action, ctx);
     const clean = prepared.sideEffects.pendingAction.action;
-    const deal = await prisma.deal.findFirst({ where: { ...visibleDealWhere(ctx), id: clean.dealId }, select: { id: true, title: true, stage: true, contactId: true } });
+    const deal = await prisma.deal.findFirst({ where: { ...visibleDealWhere(ctx), id: clean.dealId } });
     if (!deal) throw assistantError("Deal is no longer available in your visible scope.", "DEAL_NOT_FOUND", 404);
-    const updated = await prisma.deal.update({ where: { id: deal.id }, data: { stage: clean.stage, ...(clean.pipelineId ? { pipelineId: clean.pipelineId } : {}) } });
+    const data = { stage: clean.stage, ...(clean.pipelineId ? { pipelineId: clean.pipelineId } : {}) };
+    if (clean.stage === "won") data.probability = 100;
+    if (clean.stage === "lost") data.probability = 0;
+    const updated = await prisma.deal.update({ where: { id: deal.id, tenantId }, data });
     if (updated.contactId) await prisma.activity.create({ data: { type: "Deal", description: `Deal moved to ${updated.stage} by Leads assistant`, contactId: updated.contactId, tenantId, userId } }).catch(() => null);
-    await writeAudit("Deal", "UPDATE", updated.id, userId, tenantId, { changedFields: ["stage", ...(clean.pipelineId ? ["pipelineId"] : [])], stage: updated.stage, source: "generic-leads-assistant" });
+    await writeAudit("Deal", "UPDATE", updated.id, userId, tenantId, { changedFields: Object.keys(data), stage: updated.stage, source: "generic-leads-assistant" });
+    // Mirror the normal deal-update path so assistant transitions also drive
+    // workflow conditions, terminal-stage automations and live board updates.
+    try {
+      const { emitEvent } = require("../../lib/eventBus");
+      const payload = {
+        dealId: updated.id, title: updated.title, amount: updated.amount,
+        stage: updated.stage, currency: updated.currency, probability: updated.probability,
+        contactId: updated.contactId, ownerId: updated.ownerId, userId,
+        changedFields: Object.keys(data),
+        previous: { stage: deal.stage, amount: deal.amount, title: deal.title, ownerId: deal.ownerId, probability: deal.probability },
+        fromStage: deal.stage, toStage: updated.stage, lostReason: updated.lostReason || null,
+      };
+      await emitEvent("deal.updated", payload, tenantId, io);
+      if (deal.stage !== updated.stage) {
+        await emitEvent("deal.stage_changed", payload, tenantId, io);
+        if (["won", "lost"].includes(updated.stage)) await emitEvent(`deal.${updated.stage}`, payload, tenantId, io);
+      }
+    } catch (_) { /* workflow failures must not fail an already committed update */ }
+    if (io) io.to(`tenant:${tenantId}`).emit("deal_updated", updated);
     return { message: `Moved “${updated.title}” to ${updated.stage}.`, dealId: updated.id, refresh: true };
   }
   throw assistantError("Unsupported confirmation action.", "INVALID_ACTION");

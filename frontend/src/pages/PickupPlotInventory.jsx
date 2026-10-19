@@ -18,7 +18,7 @@ import MultiSelectDropdown from '../components/MultiSelectDropdown';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import CompactPickupLocationCell from '../components/CompactPickupLocationCell';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
-import { googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
+import { googleMapsSearchUrl } from '../utils/googleMaps';
 
 const EMPTY_PLOT = {
   name: '', plotNumber: '', block: '', address: '', area: '', areaUnit: 'SQ_FT', price: '',
@@ -113,8 +113,10 @@ const columnFilterLabelStyle = {
   display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, whiteSpace: 'nowrap',
 };
 
-function plotMapUrl(address) {
-  return googleMapsSearchUrl(address);
+function plotMapUrl(plot) {
+  const placeName = String(plot?.name || '').trim();
+  const address = String(plot?.address || '').trim();
+  return googleMapsSearchUrl([placeName, address].filter(Boolean).join(', '));
 }
 
 function areaInSquareFeet(value) {
@@ -162,8 +164,7 @@ function PlotAddress({ plot, areaUnit, locale }) {
 
   return (
     <a
-      href={plotMapUrl(address)}
-      onClick={(event) => { void openPreciseGoogleMap(event, plot); }}
+      href={plotMapUrl(plot)}
       target="_blank"
       rel="noreferrer"
       aria-label={`Show ${plot.name} address on Google Maps`}
@@ -404,6 +405,7 @@ export default function PickupPlotInventory() {
 
   return (
     <div
+      className="pickup-plot-inventory-page"
       data-testid="pickup-plot-inventory-page"
       style={{
         display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0,
@@ -460,7 +462,7 @@ export default function PickupPlotInventory() {
           }}
         >
           <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-resizable-table" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={PLOT_INVENTORY_COLUMNS[index].label} style={{ width }} />)}
             </colgroup>

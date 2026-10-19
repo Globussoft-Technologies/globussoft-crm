@@ -1,0 +1,72 @@
+/* Generic CRM Create Lead modal layout.
+ *
+ * Keep this deliberately scoped to the generic modifier classes. Wellness
+ * and travel retain their existing modal layout, while the field components
+ * and their behaviour continue to come from Leads.jsx unchanged. */
+.create-lead-modal--generic {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%) !important;
+  max-width: 480px !important;
+  overflow: hidden !important;
+}
+
+/* A modal should stay visually fixed while the pointer moves over it. The
+ * shared .card hover lift/shimmer is useful for dashboard cards, but feels
+ * excessive on this dialog. */
+.create-lead-modal--generic::before {
+  display: none;
+}
+
+.create-lead-modal--generic:hover {
+  transform: none;
+  border-color: var(--border-color);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.create-lead-modal--generic .create-lead-modal__header {
+  flex: 0 0 auto;
+}
+
+.create-lead-modal--generic .create-lead-form--generic {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  min-height: 0;
+  overflow: visible;
+}
+
+.create-lead-form--generic > * {
+  min-width: 0;
+}
+
+.create-lead-form--generic > .input-field {
+  max-width: 100%;
+}
+
+.create-lead-form--generic .create-lead-form__actions {
+  grid-column: 1 / -1;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 0.75rem;
+  padding-bottom: 0.1rem;
+  background: var(--bg-color);
+}
+
+@media (max-width: 640px) {
+  .create-lead-backdrop--generic {
+    align-items: stretch !important;
+    padding: 0.5rem !important;
+  }
+
+  .create-lead-modal--generic {
+    max-height: calc(100dvh - 1rem) !important;
+    padding: 1rem !important;
+  }
+
+  .create-lead-modal--generic .create-lead-form--generic {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

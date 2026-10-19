@@ -60,6 +60,15 @@ function makeFetchImpl(overrides = {}) {
     sms: { kind: 'ok', data: [{ id: 601, contactId: 42, body: 'Hello from SMS', direction: 'INBOUND', fromNumber: '+919000000002', contactName: 'Priya Sharma', createdAt: '2026-05-23T10:00:00.000Z' }] },
     emailThreads: { kind: 'ok', data: [{ subject: 'Renewal', messages: [{ id: 701, contactId: 42, body: 'Sent renewal quote', direction: 'OUTBOUND', to: BASE_CONTACT.email, contactName: 'Priya Sharma', createdAt: '2026-05-22T10:00:00.000Z' }] }] },
     staff: { kind: 'ok', data: [] },
+    workflow: { kind: 'ok', data: {
+      customers: [{
+        contactId: 42,
+        pickupAddress: 'Kursakanta, Bihar, India',
+        assignedPlots: [{ id: 301, name: 'Green Meadows', plotNumber: 'A-17' }],
+        currentStage: 'transport',
+        currentStatus: 'awaiting_transport',
+      }],
+    } },
     ...overrides,
   };
   const resolve = (slot) => {
@@ -72,6 +81,7 @@ function makeFetchImpl(overrides = {}) {
     if (/^\/api\/contacts\/\d+\/activities\?/.test(url)) return resolve(options.activities);
     if (/^\/api\/sms\/messages\?/.test(url)) return resolve(options.sms);
     if (url === '/api/email/threads') return resolve(options.emailThreads);
+    if (url === '/api/pickup-plot-inventory/lead-status?contactIds=42') return resolve(options.workflow);
     if (/^\/api\/contacts\/\d+$/.test(url) && method === 'GET') return resolve(options.contact);
     return Promise.resolve([]);
   };
@@ -194,7 +204,7 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getAllByRole('button', { name: 'Add deal' }).length).toBeGreaterThan(0);
   });
 
-  it('shows Generic web-form Page URL and Location in Contact details', async () => {
+  it('shows Generic Customize-table fields and web-form tracking in Contact details', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();
     const profile = await getProfile();
@@ -205,7 +215,20 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('https://example.com/pricing')).toBeInTheDocument();
     expect(profile.getByText('Location')).toBeInTheDocument();
     expect(profile.getByText('Koramangala, Bengaluru, Karnataka, 560034, India')).toBeInTheDocument();
-    expect(profile.queryByText('Website URL')).toBeNull();
+    expect(profile.getByText('Website URL')).toBeInTheDocument();
+    expect(profile.getByText('Source')).toBeInTheDocument();
+    expect(profile.getByText('Medium')).toBeInTheDocument();
+    expect(profile.getByText('Pickup Location')).toBeInTheDocument();
+    expect(await profile.findByText('Kursakanta, Bihar, India')).toBeInTheDocument();
+    expect(profile.getByText('Plot Assign')).toBeInTheDocument();
+    expect(profile.getByText('A-17')).toBeInTheDocument();
+    expect(profile.getByText('Overall Status')).toBeInTheDocument();
+    expect(profile.getByText('Transport: Awaiting Transport')).toBeInTheDocument();
+    expect(profile.getByText('Callified Campaign')).toBeInTheDocument();
+    expect(profile.getByText('Call Status')).toBeInTheDocument();
+    expect(profile.getByText('Callified Score')).toBeInTheDocument();
+    expect(profile.getByText('First Touch Source')).toBeInTheDocument();
+    expect(profile.getByText('Last Touch Source')).toBeInTheDocument();
   });
 
   it.each(['wellness', 'travel'])('preserves Website URL outside Generic CRM (%s)', async (vertical) => {
@@ -293,6 +316,7 @@ describe('Generic CRM contact details', () => {
       webFormSubmissions: [{
         id: 92,
         submittedAt: '2026-10-14T04:30:00.000Z',
+        webForm: { id: 8, name: 'October Lead Form' },
         payloadJson: JSON.stringify({
           _meta: { tracking: { pageUrl: 'https://example.com/offer', referrerUrl: 'https://search.example/referrer', utm_source: 'meta', utm_campaign: 'October leads' } },
         }),
@@ -333,10 +357,12 @@ describe('Generic CRM contact details', () => {
 
     fireEvent.click(within(tabs).getByRole('tab', { name: 'Ad Information' }));
     expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
+    expect(screen.getByText('https://search.example/referrer')).toBeInTheDocument();
     expect(screen.queryByText('SEO')).toBeNull();
 
     fireEvent.click(within(tabs).getByRole('tab', { name: 'All details' }));
     expect(screen.getByText('October leads')).toBeInTheDocument();
+    expect(screen.getByText('October Lead Form')).toBeInTheDocument();
     expect(screen.getByText('SEO')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
   });
@@ -374,5 +400,6 @@ describe('Generic CRM contact details', () => {
 
     expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
     expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/contacts/tags')).toBe(false);
+    expect(fetchApiMock.mock.calls.some(([url]) => String(url).startsWith('/api/pickup-plot-inventory/lead-status'))).toBe(false);
   });
 });

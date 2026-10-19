@@ -142,12 +142,11 @@ function paymentSubjectLabel(payment) {
   return payment.travelInvoiceNum || null;
 }
 
-// Always render in the tenant's default currency (INR for wellness tenants).
-// Per-row currency stamps were previously honored, which surfaced "$" rows on
-// INR tenants when historical payments were captured in USD — now display is
-// uniformly tenant-currency.
-function formatCurrency(amount) {
-  return formatMoney(amount || 0);
+// Generic CRM pickup/plot payments are denominated in INR even when an older
+// tenant record still carries USD as its default. Other verticals retain the
+// existing tenant-aware currency behavior.
+function formatCurrency(amount, currency) {
+  return formatMoney(amount || 0, currency ? { currency, locale: currency === "INR" ? "en-IN" : undefined } : undefined);
 }
 
 function formatDate(value) {
@@ -171,13 +170,16 @@ function formatPaidDate(value) {
 }
 
 export default function Payments() {
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
   const isCustomer = user?.role === "CUSTOMER" || user?.userType === "CUSTOMER";
+  const isGenericCrm = (tenant?.vertical || user?.tenant?.vertical) === "generic";
+  const displayCurrency = isGenericCrm ? "INR" : undefined;
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
   const [customerLedger, setCustomerLedger] = useState({ total: 0, stats: { collected: 0, pending: 0, failed: 0 } });
+  const [genericStats, setGenericStats] = useState(null);
   const loadSequence = useRef(0);
   const [config, setConfig] = useState(null);
   const [tab, setTab] = useState("all");
@@ -211,18 +213,29 @@ export default function Payments() {
     return `/api/payments?${params}`;
   }, [isCustomer, page, pageSize, tab, rangeStart, rangeEnd]);
 
+  const genericStatsUrl = useMemo(() => {
+    if (!isGenericCrm || isCustomer) return null;
+    const params = new URLSearchParams({ dateBasis: "payment" });
+    if (tab !== "all") params.set("gateway", tab);
+    if (rangeStart) params.set("from", rangeStart.toISOString());
+    if (rangeEnd) params.set("to", rangeEnd.toISOString());
+    return `/api/payments/stats?${params}`;
+  }, [isGenericCrm, isCustomer, tab, rangeStart, rangeEnd]);
+
   const loadAll = useCallback(async ({ silent = false } = {}) => {
     const request = ++loadSequence.current;
     if (!silent) setLoading(true);
     setError("");
     try {
-      const [list, cfg] = await Promise.all([
+      const [list, cfg, aggregate] = await Promise.all([
         isCustomer ? fetchApi(paymentUrl) : fetchApi(paymentUrl).catch(() => []),
         isCustomer ? Promise.resolve(null) : fetchApi("/api/payments/config").catch(() => null),
+        genericStatsUrl ? fetchApi(genericStatsUrl).catch(() => null) : Promise.resolve(null),
       ]);
       if (request !== loadSequence.current) return;
       setPayments(isCustomer ? (list?.data || []) : (Array.isArray(list) ? list : []));
       if (isCustomer) setCustomerLedger({ total: list?.total || 0, stats: list?.stats || { collected: 0, pending: 0, failed: 0 } });
+      if (genericStatsUrl) setGenericStats(aggregate);
       if (isCustomer && Number(list?.page) > (list?.totalPages || 1)) setPage(list?.totalPages || 1);
       setConfig(cfg);
     } catch (err) {
@@ -230,7 +243,7 @@ export default function Payments() {
     } finally {
       if (request === loadSequence.current) setLoading(false);
     }
-  }, [isCustomer, paymentUrl]);
+  }, [isCustomer, paymentUrl, genericStatsUrl]);
 
   useEffect(() => {
     loadAll();
@@ -290,10 +303,10 @@ export default function Payments() {
         override: booking,
         title: booking
           ? "Admin override — refund now (bypasses the cancellation policy)"
-          : `Refund ${formatCurrency(p.amount)} via Razorpay`,
+          : `Refund ${formatCurrency(p.amount, displayCurrency)} via Razorpay`,
       };
     },
-    [isBookingPayment, isAdmin, user],
+    [isBookingPayment, isAdmin, user, displayCurrency],
   );
 
   async function handleRefund(p) {
@@ -312,7 +325,7 @@ export default function Payments() {
     } else {
       const ok = await notify.confirm({
         title: "Refund payment?",
-        message: `Refund ${formatCurrency(p.amount)} back to the customer via Razorpay? This cannot be undone.`,
+        message: `Refund ${formatCurrency(p.amount, displayCurrency)} back to the customer via Razorpay? This cannot be undone.`,
         confirmText: "Refund",
         cancelText: "Cancel",
         destructive: true,
@@ -329,7 +342,7 @@ export default function Payments() {
         body: JSON.stringify(reason ? { reason: String(reason).trim() } : {}),
       });
       setNotice(
-        `Refund of ${formatCurrency(p.amount)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
+        `Refund of ${formatCurrency(p.amount, displayCurrency)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
       );
       await loadAll();
     } catch (err) {
@@ -378,6 +391,17 @@ export default function Payments() {
 
   const stats = useMemo(() => {
     if (isCustomer) return customerLedger.stats;
+    if (isGenericCrm && genericStats) {
+      const statusCount = (names) => names.reduce(
+        (total, name) => total + Number(genericStats.byStatus?.[name] || 0),
+        0,
+      );
+      return {
+        collected: Number(genericStats.successfulAmount || 0),
+        pending: statusCount(["PENDING", "pending"]),
+        failed: statusCount(["FAILED", "failed"]),
+      };
+    }
     let collected = 0,
       pending = 0,
       failed = 0;
@@ -390,7 +414,7 @@ export default function Payments() {
       else if (p.status === "FAILED") failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments, inDateRange, isCustomer, customerLedger.stats]);
+  }, [payments, inDateRange, isCustomer, isGenericCrm, genericStats, customerLedger.stats]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -633,7 +657,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         <StatCard
           icon={<IndianRupee size={20} />}
           label={`${isCustomer ? "Total Paid" : "Total Collected"} (${filterLabel})`}
-          value={formatMoney(stats.collected)}
+          value={formatCurrency(stats.collected, displayCurrency)}
           color="#10b981"
         />
         <StatCard
@@ -870,7 +894,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     })()}
                   </Td>
                   <Td>
-                    <strong>{formatCurrency(p.amount)}</strong>
+                    <strong>{formatCurrency(p.amount, displayCurrency)}</strong>
                   </Td>
                   <Td>
                     <GatewayBadge gateway={p.gateway} />
@@ -1141,7 +1165,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
 
       {/* Detail modal */}
       {selected && (
-        <DetailModal payment={selected} onClose={() => setSelected(null)} />
+        <DetailModal payment={selected} displayCurrency={displayCurrency} onClose={() => setSelected(null)} />
       )}
 
       <style>{`@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }`}</style>
@@ -1423,7 +1447,7 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
   );
 }
 
-function DetailModal({ payment, onClose }) {
+function DetailModal({ payment, displayCurrency, onClose }) {
   const meta =
     payment.metadata && typeof payment.metadata === "object"
       ? payment.metadata
@@ -1486,7 +1510,7 @@ function DetailModal({ payment, onClose }) {
         </DetailRow>
         <DetailRow label="Amount">
           <strong>
-            {formatCurrency(payment.amount)} {payment.currency}
+            {formatCurrency(payment.amount, displayCurrency)} {displayCurrency || payment.currency}
           </strong>
         </DetailRow>
         <DetailRow label="Gateway">

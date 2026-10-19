@@ -380,7 +380,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
       expect(screen.getByText('Transport Work').closest('a')).toHaveAttribute('href', '/transport-workspace');
       expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
-      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/billing-workspace');
+      expect(screen.queryByText('Billing Queue')).toBeNull();
       expect(screen.queryByText('Customer Status')).toBeNull();
       generic.unmount();
 
@@ -401,13 +401,6 @@ describe('Sidebar — load-bearing render surface', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
       expect(screen.queryByText('Transport Work')).toBeNull();
-    });
-
-    it('shows billing work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['ACCOUNTS_TEAM'], permissions: ['billing_workspace.read'] });
-      fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
-      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/billing-workspace');
-      expect(screen.queryByText('Site Visits')).toBeNull();
     });
 
     it('hides a workspace when its permission is removed, even when the role name matches the work type', () => {

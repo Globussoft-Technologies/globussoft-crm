@@ -66,6 +66,18 @@ describe('getCatalog', () => {
   });
 });
 
+describe('generic billing workspace page', () => {
+  it('maps billing access to Customer Workflows instead of the legacy Billing Queue', () => {
+    const customerWorkflows = getPage('/pickup-customers');
+    expect(customerWorkflows).toMatchObject({
+      label: 'Customer Workflows',
+      vertical: 'generic',
+      requiredPermissions: [{ module: 'billing_workspace', action: 'read' }],
+    });
+    expect(getPage('/billing-workspace')).toBeNull();
+  });
+});
+
 describe('customerOnly storefront pages', () => {
   // The customer-facing surfaces (Buy Gift Cards storefront + My
   // Transactions history) are open to any authenticated session

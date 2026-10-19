@@ -388,6 +388,76 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     // Close button is rendered inside the drawer.
     expect(screen.getByRole('button', { name: /Close/i })).toBeInTheDocument();
   });
+
+  it('applies the responsive modal layout only to generic CRM', async () => {
+    const genericAuth = {
+      user: { userId: 1, role: 'ADMIN' },
+      tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+      loading: false,
+    };
+    const { unmount } = renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const genericDialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(genericDialog).toHaveClass('create-lead-backdrop--generic');
+    expect(genericDialog.querySelector('.create-lead-modal--generic')).toBeInTheDocument();
+    expect(genericDialog.querySelector('.create-lead-form--generic')).toBeInTheDocument();
+    unmount();
+
+    fetchApiMock.mockClear();
+    renderLeads({
+      ...genericAuth,
+      tenant: { id: 2, vertical: 'wellness', name: 'Wellness CRM' },
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const wellnessDialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(wellnessDialog).not.toHaveClass('create-lead-backdrop--generic');
+    expect(wellnessDialog.querySelector('.create-lead-modal--generic')).toBeNull();
+    expect(wellnessDialog.querySelector('.create-lead-form--generic')).toBeNull();
+  });
+
+  it('shows only the six standard sections in the generic Create Lead modal', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/lead-custom-fields') {
+        return Promise.resolve([
+          {
+            id: 201,
+            fieldKey: 'priority',
+            label: 'Priority',
+            fieldType: 'text',
+            placeholder: 'Priority level',
+            isRequired: true,
+          },
+        ]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderLeads({
+      user: { userId: 1, role: 'ADMIN' },
+      tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+      loading: false,
+    });
+    await waitFor(() =>
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/lead-custom-fields',
+        { silent: true },
+      ),
+    );
+    openDrawer();
+
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Full Name')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Email Address')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Company')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText(/Phone \(/)).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('Organic')).toBeInTheDocument();
+    expect(within(dialog).queryByPlaceholderText('Priority level')).toBeNull();
+  });
 });
 
 describe('Leads Freshsales-style list UI affordances', () => {
@@ -479,6 +549,34 @@ describe('Leads Freshsales-style list UI affordances', () => {
           }],
         });
       }
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && opts?.silent) {
+        return Promise.resolve({
+          plots: [
+            { id: 31, name: 'North Avenue', plotNumber: '25', block: 'B', availability: 'AVAILABLE', isActive: true },
+            { id: 32, name: 'North Avenue', plotNumber: '107', block: 'C', availability: 'AVAILABLE', isActive: true },
+          ],
+          allPlots: [
+            { id: 30, name: 'North Avenue', plotNumber: '24', block: 'B', availability: 'RESERVED', isActive: true },
+            { id: 31, name: 'North Avenue', plotNumber: '25', block: 'B', availability: 'AVAILABLE', isActive: true },
+            { id: 32, name: 'North Avenue', plotNumber: '107', block: 'C', availability: 'AVAILABLE', isActive: true },
+            { id: 33, name: 'North Avenue', plotNumber: '108', block: 'C', availability: 'SOLD', isActive: true },
+            { id: 34, name: 'South Avenue', plotNumber: '9', block: 'A', availability: 'AVAILABLE', isActive: true },
+          ],
+          customers: [
+            {
+              id: 501,
+              contact: { id: 101, name: 'Alice Lead' },
+              assignedPlots: [
+                { id: 30, name: 'North Avenue', plotNumber: '24', block: 'B', availability: 'RESERVED', isActive: true },
+              ],
+              customerAssignedPlotIds: [30],
+            },
+          ],
+        });
+      }
+      if (url === '/api/pickup-plot-inventory/customer-pickups/101/plots' && opts?.method === 'POST') {
+        return Promise.resolve({ bookingsCreated: 2, assignedPlotIds: [30, 31, 32] });
+      }
       if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/tags')) {
         return Promise.resolve({
           values: [
@@ -510,7 +608,172 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('hides both header and body cells for deselected workflow columns', async () => {
+  it('shows Plot Assign as a default generic column and reuses the customer assignment workflow', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [
+            { id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE' },
+            { id: 32, name: 'North Avenue', plotNumber: '107', availability: 'AVAILABLE' },
+          ],
+          customers: [{
+            contact: { id: 102, name: 'Bob Lead' },
+            assignedPlots: [],
+            customerAssignedPlotIds: [],
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups',
+      { silent: true },
+    );
+    expect(screen.getByRole('columnheader', { name: 'Plot Assign column' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Assign plot to Bob Lead' }));
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    expect(within(dialog).getByRole('combobox', { name: 'Plot or site name' })).toHaveValue('North Avenue');
+    expect(within(dialog).queryByRole('checkbox', { name: /Plot 24/ })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 25/ }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 107/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Assign 2 plots' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/102/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [31, 32] }) },
+    ));
+  });
+
+  it('shows only View plot in the table after a plot is assigned', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const viewButton = screen.getByRole('button', { name: 'View plots for Alice Lead' });
+    const cell = viewButton.closest('td');
+    expect(cell).toHaveTextContent('View plot');
+    expect(cell).not.toHaveTextContent('North Avenue');
+    expect(cell).not.toHaveTextContent('Assign plot');
+    expect(cell).not.toHaveTextContent('Change');
+
+    fireEvent.click(viewButton);
+    const dialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    expect(within(dialog).getByText('North Avenue')).toBeInTheDocument();
+    expect(within(dialog).getByText('Plot 24')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Change plot 24 for Alice Lead' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'View selected plot 24 for Alice Lead' })).toBeInTheDocument();
+  });
+
+  it('shows a purchased plot as read-only with View selected plot instead of Change', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [],
+          customers: [{
+            contact: { id: 101, name: 'Alice Lead' },
+            assignedPlots: [{
+              id: 30,
+              name: 'North Avenue',
+              plotNumber: '24',
+              block: 'B',
+              address: '24 North Avenue, Bengaluru',
+              availability: 'SOLD',
+            }],
+            customerAssignedPlotIds: [30],
+            booking: { plotSiteId: 30, status: 'TRANSACTION_COMPLETED' },
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    expect(within(dialog).queryByRole('button', { name: /Change plot/ })).not.toBeInTheDocument();
+    const viewSelected = within(dialog).getByRole('button', {
+      name: 'View selected plot 24 for Alice Lead',
+    });
+    expect(viewSelected).toHaveTextContent('View selected plot');
+
+    fireEvent.click(viewSelected);
+    const details = within(dialog).getByRole('region', { name: 'Selected plot details' });
+    expect(details).toHaveTextContent('North Avenue');
+    expect(details).toHaveTextContent('Plot number: 24');
+    expect(details).toHaveTextContent('Block: B');
+    expect(details).toHaveTextContent('24 North Avenue, Bengaluru');
+  });
+
+  it('allows opening plot assignment before transport when no plots are currently available', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [],
+          customers: [{
+            contact: { id: 102, name: 'Bob Lead' },
+            assignedPlots: [],
+            customerAssignedPlotIds: [],
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+
+    renderLeads(authValue);
+
+    await screen.findByText('Bob Lead');
+    const assignButton = screen.getByRole('button', { name: 'Assign plot to Bob Lead' });
+    expect(assignButton).toBeEnabled();
+    fireEvent.click(assignButton);
+
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    expect(within(dialog).getByText('No available plot numbers')).toBeInTheDocument();
+  });
+
+  it('changes one assigned plot number without replacing the other assignments', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')) {
+        return Promise.resolve({ pickupLocations: [], customers: [] });
+      }
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
+    const assignedPlotsDialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    fireEvent.click(within(assignedPlotsDialog).getByRole('button', { name: 'Change plot 24 for Alice Lead' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Change plot number' });
+    expect(within(dialog).getByRole('radio', { name: /Plot 24/ })).toBeDisabled();
+    expect(within(dialog).getByRole('radio', { name: /Plot 25/ })).toBeEnabled();
+    expect(within(dialog).getByRole('radio', { name: /Plot 107/ })).toBeEnabled();
+    expect(within(dialog).getByRole('radio', { name: /Plot 108/ })).toBeDisabled();
+    expect(within(dialog).queryByRole('radio', { name: /Plot 9/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByText('Current plot')).toBeInTheDocument();
+    expect(within(dialog).getByText('SOLD')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Plot 25/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change plot number' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots',
+      {
+        method: 'POST',
+        body: JSON.stringify({ plotSiteIds: [31], replacePlotSiteId: 30 }),
+      },
+    ));
+  });
+
+  it('hides all three deselected pickup and plot workflow columns', async () => {
     const originalFetch = fetchApiMock.getMockImplementation();
     fetchApiMock.mockImplementation((url, options) => {
       if (url === '/api/table-column-prefs/leads' && !options) return Promise.resolve({
@@ -522,9 +785,32 @@ describe('Leads Freshsales-style list UI affordances', () => {
     await screen.findByText('Alice Lead');
     await waitFor(() => expect(screen.queryByText('Interested plot area')).not.toBeInTheDocument());
     expect(screen.queryByText('Pickup location')).not.toBeInTheDocument();
-    expect(screen.queryByText('Overall status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Plot Assign column' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Overall status column' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit pickup location for Alice Lead' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View plots for Alice Lead' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View all status for Alice Lead' })).not.toBeInTheDocument();
+  });
+
+  it('shows all three pickup and plot workflow columns when selected', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/table-column-prefs/leads' && !options) return Promise.resolve({
+        visible: ['name', 'pickupLocation', 'plotAssign', 'overallPickupStatus', 'actions'],
+        availableColumns: [],
+      });
+      return originalFetch(url, options);
+    });
+
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+
+    expect(screen.getByText('Pickup location')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Plot Assign column' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Overall status column' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pickup location for Alice Lead' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View plots for Alice Lead' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View all status for Alice Lead' })).toBeInTheDocument();
   });
 
   it('centers the empty state in the visible table area for Generic CRM only', async () => {
@@ -653,7 +939,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     ).toBeNull();
   });
 
-  it('shows a saved pickup address and only offers the selector to leads without one', async () => {
+  it('locks pickup and plot changes after transport starts while keeping unstarted leads editable', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -676,10 +962,16 @@ describe('Leads Freshsales-style list UI affordances', () => {
     const overallStatus = screen.getByText('Sales Executive: Plot shown');
     expect(overallStatus).toBeInTheDocument();
     expect(overallStatus.closest('td')).toHaveStyle({ paddingLeft: '1.5rem' });
+    expect(overallStatus.closest('td').querySelector('.generic-overall-status-date')).toBeNull();
     expect(screen.getByText('Overall status').closest('th')).toHaveStyle({ paddingLeft: '1.5rem' });
 
-    expect(screen.getByText('42 Lake View Road, Bengaluru')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Pickup location for Alice Lead' })).not.toBeInTheDocument();
+    const alicePickupInput = screen.getByRole('button', { name: 'Pickup location for Alice Lead' });
+    expect(alicePickupInput).toHaveTextContent('42 Lake View Road, Bengaluru');
+    expect(alicePickupInput).toBeDisabled();
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101',
+      expect.objectContaining({ method: 'PUT' }),
+    );
 
     const pickupInput = screen.getByRole('button', { name: 'Pickup location for Bob Lead' });
     expect(pickupInput).toHaveTextContent('Select pickup location');
@@ -693,12 +985,31 @@ describe('Leads Freshsales-style list UI affordances', () => {
         body: expect.stringContaining('55 New Pickup Road, Bengaluru'),
       }),
     ));
-    await screen.findByText('55 New Pickup Road, Bengaluru');
-    expect(screen.queryByRole('button', { name: 'Pickup location for Bob Lead' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pickup location for Bob Lead' })).toHaveTextContent(
+      '55 New Pickup Road, Bengaluru',
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'View all status for Alice Lead' }));
     expect(screen.getByRole('dialog', { name: 'All customer statuses' })).toBeInTheDocument();
     expect(screen.getByTestId('workflow-timeline')).toBeInTheDocument();
+  });
+
+  it('allows assigning a plot before a pickup location is selected', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Bob Lead');
+    const assignButton = screen.getByRole('button', { name: 'Assign plot to Bob Lead' });
+    expect(assignButton).toBeEnabled();
+    fireEvent.click(assignButton);
+
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 25/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Assign 1 plot' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/102/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [31] }) },
+    ));
   });
 
   it('renders the Name column as a profile link instead of an inline edit trigger', async () => {

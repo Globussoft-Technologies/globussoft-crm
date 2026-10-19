@@ -1672,8 +1672,9 @@ router.get("/config", async (req, res) => {
 // the middleware explicitly so the auth surface is grep-visible).
 //
 // Query params:
-//   ?from / ?to — optional ISO date bounds on createdAt. Invalid → 400
-//                 INVALID_DATE. Both optional and independent.
+//   ?from / ?to — optional ISO date bounds. Invalid → 400 INVALID_DATE.
+//   ?dateBasis=payment — use paidAt, falling back to createdAt.
+//   ?gateway — optional gateway filter.
 //
 // Response envelope:
 //   { total, byStatus, byMethod, totalAmount, successfulAmount,
@@ -1701,15 +1702,25 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
     }
 
     const where = { tenantId: tenantOf(req) };
+    if (req.query.gateway) {
+      where.gateway = String(req.query.gateway).trim().toLowerCase();
+    }
     if (Object.keys(createdAtClause).length > 0) {
-      where.createdAt = createdAtClause;
+      if (req.query.dateBasis === "payment") {
+        where.OR = [
+          { paidAt: createdAtClause },
+          { paidAt: null, createdAt: createdAtClause },
+        ];
+      } else {
+        where.createdAt = createdAtClause;
+      }
     }
 
     // Pull just the columns we need to aggregate. Avoids dragging the
     // full row (metadata blob in particular) into memory just to sum.
     const rows = await prisma.payment.findMany({
       where,
-      select: { status: true, gateway: true, amount: true, createdAt: true },
+      select: { status: true, gateway: true, amount: true, paidAt: true, createdAt: true },
     });
 
     const total = rows.length;
@@ -1732,8 +1743,9 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
       if (["SUCCESS", "PAID", "CAPTURED"].includes(String(status).toUpperCase())) {
         successSum += amt;
       }
-      if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {
-        lastCreatedAt = new Date(r.createdAt);
+      const activityAt = req.query.dateBasis === "payment" ? (r.paidAt || r.createdAt) : r.createdAt;
+      if (activityAt && (lastCreatedAt === null || new Date(activityAt) > lastCreatedAt)) {
+        lastCreatedAt = new Date(activityAt);
       }
     }
 

@@ -37,7 +37,7 @@ const STATUS_CONFIG = {
   VOIDED: { color: "#6b7280", bg: "rgba(107,114,128,0.15)", label: "Voided" },
 };
 
-function StatusBadge({ status, borderless = false }) {
+function StatusBadge({ status, borderless = false, label = null }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.UNPAID;
   return (
     <span
@@ -54,7 +54,7 @@ function StatusBadge({ status, borderless = false }) {
         border: borderless ? "0 solid transparent" : `1px solid ${cfg.color}33`,
       }}
     >
-      {cfg.label}
+      {label || cfg.label}
     </span>
   );
 }
@@ -184,8 +184,8 @@ function InvoicePagination({
 
 import { formatMoney, currencySymbol } from "../utils/money";
 import { formatDate } from "../utils/date";
-const formatCurrency = (v) =>
-  formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+const formatCurrency = (v, currency) =>
+  formatMoney(v, { currency, maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
 function getInvoiceLineItems(invoice) {
   if (Array.isArray(invoice?.lineItems)) return invoice.lineItems;
@@ -366,8 +366,10 @@ export default function Invoices() {
   // to switch to the travel nav); fall back to user.tenant for safety.
   const { user, tenant } = useContext(AuthContext) || {};
   const vertical = tenant?.vertical || user?.tenant?.vertical || "generic";
+  const isGeneric = vertical === "generic";
   const isTravel = vertical === "travel";
   const isWellness = vertical === "wellness";
+  const invoiceDisplayCurrency = isGeneric ? "INR" : undefined;
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand() || {};
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -383,6 +385,7 @@ export default function Invoices() {
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [isLoadingVisitItems, setIsLoadingVisitItems] = useState(false);
   const visitRequestRef = useRef(0);
+  const invoiceLoadRequestRef = useRef(0);
   const patientLookupRequestRef = useRef(0);
   const productLookupRequestRef = useRef(0);
   const selectedPatientIdRef = useRef("");
@@ -506,6 +509,7 @@ export default function Invoices() {
   // Re-fetch when the travel sub-brand filter changes (no-op for other
   // verticals — activeSubBrand stays undefined there).
   const loadData = useCallback(async () => {
+    const requestId = ++invoiceLoadRequestRef.current;
     try {
       // One query string for both filters. URLSearchParams rather than manual
       // concatenation so adding the date params cannot produce a stray `&`
@@ -516,14 +520,27 @@ export default function Invoices() {
       if (range.from) params.set("from", range.from);
       if (range.to) params.set("to", range.to);
       const qs = params.toString() ? `?${params.toString()}` : "";
-      const [invs, c, d] = await Promise.all([
+      const [invoiceResult, contactResult, dealResult] = await Promise.allSettled([
         fetchApi(`/api/billing${qs}`),
         fetchApi("/api/contacts"),
         fetchApi("/api/deals"),
       ]);
-      setInvoices(Array.isArray(invs) ? invs : []);
-      setContacts(Array.isArray(c) ? c : []);
-      setDeals(Array.isArray(d) ? d : []);
+      if (requestId !== invoiceLoadRequestRef.current) return;
+      setInvoices(
+        invoiceResult.status === "fulfilled" && Array.isArray(invoiceResult.value)
+          ? invoiceResult.value
+          : [],
+      );
+      setContacts(
+        contactResult.status === "fulfilled" && Array.isArray(contactResult.value)
+          ? contactResult.value
+          : [],
+      );
+      setDeals(
+        dealResult.status === "fulfilled" && Array.isArray(dealResult.value)
+          ? dealResult.value
+          : [],
+      );
 
       if (isWellness) {
         const [serviceResult] = await Promise.allSettled([
@@ -543,13 +560,30 @@ export default function Invoices() {
         setProducts([]);
       }
     } catch (_err) {
-      // Network or auth error handled by fetchApi
+      if (requestId === invoiceLoadRequestRef.current) {
+        setInvoices([]);
+        setContacts([]);
+        setDeals([]);
+      }
     }
   }, [activeSubBrand, isTravel, isWellness, dateRange, customFrom, customTo]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    const refreshAfterPayment = () => {
+      if (document.visibilityState === "visible") loadData();
+    };
+    window.addEventListener("focus", refreshAfterPayment);
+    document.addEventListener("visibilitychange", refreshAfterPayment);
+    return () => {
+      window.removeEventListener("focus", refreshAfterPayment);
+      document.removeEventListener("visibilitychange", refreshAfterPayment);
+    };
+  }, [isGeneric, loadData]);
 
   // Patient and product selectors use bounded backend searches. This keeps
   // the invoice screen responsive for large clinics and avoids downloading
@@ -634,7 +668,7 @@ export default function Invoices() {
 
     const totalOutstanding = invoices
       .filter((inv) => inv.status !== "PAID" && inv.status !== "VOIDED")
-      .reduce((sum, inv) => sum + Number(inv.amount), 0);
+      .reduce((sum, inv) => sum + Number(isGeneric ? inv.balance ?? inv.amount : inv.amount), 0);
 
     // #119: filter on paidAt (set by /pay route). Fall back to issuedDate for legacy
     // rows from before paidAt existed — at worst they count toward the issuance month
@@ -652,16 +686,28 @@ export default function Invoices() {
     ).length;
 
     return { totalOutstanding, totalPaidThisMonth, overdueCount };
-  }, [invoices]);
+  }, [invoices, isGeneric]);
 
   const filteredInvoices = useMemo(() => {
     let rows = invoices;
     if (hasReportInvoiceFilter) {
       rows = rows.filter((inv) => reportInvoiceIds.has(Number(inv.id)));
     }
-    if (statusFilter === "ALL") return rows;
-    return rows.filter((inv) => inv.status === statusFilter);
-  }, [invoices, statusFilter, hasReportInvoiceFilter, reportInvoiceIds]);
+    if (statusFilter !== "ALL") {
+      rows = rows.filter((inv) => inv.status === statusFilter);
+    }
+    if (isGeneric) {
+      rows = [...rows].sort((a, b) => {
+        const aTime = Date.parse(a.issuedDate || a.createdAt || "");
+        const bTime = Date.parse(b.issuedDate || b.createdAt || "");
+        if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return bTime - aTime;
+      });
+    }
+    return rows;
+  }, [invoices, statusFilter, hasReportInvoiceFilter, reportInvoiceIds, isGeneric]);
 
   const invoiceTotalPages = Math.max(
     1,
@@ -1116,7 +1162,7 @@ export default function Invoices() {
           }}
         >
           <IndianRupee size={14} /> Outstanding:{" "}
-          {formatCurrency(stats.totalOutstanding)}
+          {formatCurrency(stats.totalOutstanding, invoiceDisplayCurrency)}
         </span>
         <span
           style={{
@@ -1133,7 +1179,7 @@ export default function Invoices() {
           }}
         >
           <CheckCircle2 size={14} /> Paid This Month:{" "}
-          {formatCurrency(stats.totalPaidThisMonth)}
+          {formatCurrency(stats.totalPaidThisMonth, invoiceDisplayCurrency)}
         </span>
         {stats.overdueCount > 0 && (
           <span
@@ -1932,7 +1978,7 @@ export default function Invoices() {
                   <option value="">-- No Deal --</option>
                     {deals.map((d) => (
                     <option key={d.id} value={d.id}>
-                      {d.title} - {formatCurrency(d.amount)}
+                      {d.title} - {formatCurrency(d.amount, invoiceDisplayCurrency)}
                     </option>
                     ))}
                   </select>
@@ -2060,7 +2106,7 @@ export default function Invoices() {
                               aria-label={`Line item ${index + 1} unit price`}
                             />
                             <span style={{ display: "block", fontSize: "0.68rem", color: "var(--text-secondary)", marginTop: "0.2rem" }}>
-                              {formatCurrency(lineTotal)}
+                              {formatCurrency(lineTotal, invoiceDisplayCurrency)}
                             </span>
                           </div>
                           <button
@@ -2078,7 +2124,7 @@ export default function Invoices() {
 
                   <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.6rem", borderTop: "1px solid var(--border-color)", paddingTop: "0.75rem" }}>
                     <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Invoice total</span>
-                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal)}</strong>
+                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal, invoiceDisplayCurrency)}</strong>
                   </div>
                 </section>
               )}
@@ -2094,7 +2140,7 @@ export default function Invoices() {
                       color: "var(--text-secondary)",
                     }}
                   >
-                    Amount ({currencySymbol()})
+                    Amount ({currencySymbol(invoiceDisplayCurrency)})
                   </label>
                   <input
                     type="number"
@@ -2228,7 +2274,7 @@ export default function Invoices() {
       )}
 
       {/* Invoice Table */}
-      <div className="card" style={{ padding: "1.5rem", minWidth: 0, overflowX: "hidden" }}>
+      <div className="card invoice-ledger-card" style={{ padding: "1.5rem", minWidth: 0, overflowX: "hidden" }}>
         <h3
           style={{
             fontSize: "1.15rem",
@@ -2293,6 +2339,7 @@ export default function Invoices() {
             <div className="invoice-table-scroll">
               <TopScrollSync
                 hideTopBar
+                verticalOverflow={isGeneric ? "auto" : "visible"}
                 scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
               >
               {/* #243: table-layout fixed + per-column widths so the Contact
@@ -2481,6 +2528,12 @@ export default function Invoices() {
                     const wellnessLineItems = getInvoiceLineItems(inv);
                     const customerName = inv.customerName || inv.contact?.name || "No customer data";
                     const customerContact = inv.customerPhone || inv.customerEmail || "";
+                    const amountPaid = Number(inv.amountPaid || 0);
+                    const balanceDue = Number(inv.balance ?? inv.amount ?? 0);
+                    const isPartiallyPaid = isGeneric
+                      && inv.status === "UNPAID"
+                      && amountPaid > 0
+                      && balanceDue > 0;
                     return (
                     <tr
                       key={inv.id}
@@ -2488,10 +2541,10 @@ export default function Invoices() {
                         borderBottom: "1px solid var(--border-color)",
                         transition: "background 0.15s",
                       }}
-                      onMouseOver={(e) =>
+                      onMouseOver={isGeneric ? undefined : (e) =>
                         (e.currentTarget.style.background = "var(--hover-bg)")
                       }
-                      onMouseOut={(e) =>
+                      onMouseOut={isGeneric ? undefined : (e) =>
                         (e.currentTarget.style.background = "transparent")
                       }
                     >
@@ -2581,8 +2634,17 @@ export default function Invoices() {
                             fontWeight: 600,
                           }}
                         >
-                          {formatCurrency(inv.amount)}
+                          {formatCurrency(inv.amount, invoiceDisplayCurrency)}
                         </span>
+                        {isPartiallyPaid && (
+                          <div
+                            data-testid={`invoice-payment-progress-${inv.id}`}
+                            style={{ marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.35, color: "var(--text-secondary)" }}
+                          >
+                            <div>Paid {formatCurrency(amountPaid, invoiceDisplayCurrency)}</div>
+                            <div>Balance {formatCurrency(balanceDue, invoiceDisplayCurrency)}</div>
+                          </div>
+                        )}
                       </td>
                       {isWellness && (
                         <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
@@ -2590,7 +2652,11 @@ export default function Invoices() {
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
-                        <StatusBadge status={inv.status} borderless={isWellness} />
+                        <StatusBadge
+                          status={inv.status}
+                          borderless={isWellness}
+                          label={isPartiallyPaid ? "Partially paid" : null}
+                        />
                       </td>
                       <td
                         style={{
@@ -2885,7 +2951,7 @@ export default function Invoices() {
               }}
             >
               Invoice {recurInvoice.invoiceNum} ·{" "}
-              {formatCurrency(recurInvoice.amount)}
+              {formatCurrency(recurInvoice.amount, invoiceDisplayCurrency)}
             </p>
 
             {recurInvoice.isRecurring ? (
@@ -3150,7 +3216,7 @@ export default function Invoices() {
               <strong>{linkModal.inv.contact?.name || "the customer"}</strong>{" "}
               to collect payment for invoice{" "}
               <strong>{linkModal.inv.invoiceNum}</strong> (
-              {formatCurrency(linkModal.inv.amount)}).
+              {formatCurrency(linkModal.inv.amount, invoiceDisplayCurrency)}).
             </p>
             <div
               style={{

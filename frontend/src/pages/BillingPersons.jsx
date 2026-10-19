@@ -205,7 +205,7 @@ export default function BillingPersons() {
           }}
         >
           <div data-testid="billing-persons-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-resizable-table" aria-label="Billing persons" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label="Billing persons" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={BILLING_TABLE_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>{BILLING_TABLE_COLUMNS.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={billingHeaderStyle}>{column.label}</ResizableTableHeader>)}</tr></thead>
             <tbody>

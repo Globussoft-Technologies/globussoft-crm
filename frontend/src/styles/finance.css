@@ -134,6 +134,56 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoi
   margin-left: auto;
 }
 
+/* Generic CRM keeps the invoice workspace inside the available viewport.
+   The page chrome stays fixed while only the live API-backed table rows
+   scroll. Wellness and Travel intentionally retain their existing layouts. */
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 64px);
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header,
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-summary-controls {
+  flex: 0 0 auto;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-ledger-card > h3,
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-pagination {
+  flex: 0 0 auto;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll,
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll .top-scroll-sync__bottom {
+  flex: 1 1 auto;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto !important;
+}
+
+.invoices-mobile-page.invoices-generic-page .invoice-ledger-card table.stable-table tbody tr:hover,
+.invoices-mobile-page.invoices-generic-page .invoice-ledger-card table.stable-table tbody tr:hover td {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
 /* Wellness uses the same compact invoice toolbar composition as the approved
    invoice layout, but remains explicitly scoped to the Wellness vertical. */
 html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-controls {
@@ -549,6 +599,16 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
   html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
     flex-wrap: wrap;
     margin-left: 0;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page {
+    height: auto;
+    min-height: 100% !important;
+    overflow: visible;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
+    overflow: hidden !important;
   }
 
   html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-controls {

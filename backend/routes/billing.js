@@ -12,6 +12,7 @@ const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { formatMoney } = require("../utils/formatMoney");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
 const {
   sanitizeText,
   sanitizeJsonForStringColumn,
@@ -75,6 +76,10 @@ function isTravelRequest(req) {
 
 function isWellnessRequest(req) {
   return req.user?.vertical === "wellness";
+}
+
+function isGenericRequest(req) {
+  return !req.user?.vertical || req.user.vertical === "generic";
 }
 
 async function loadInvoiceBrandContext(tenantId, tenant) {
@@ -1416,6 +1421,7 @@ router.post(
         contactId: resolvedContactId,
         dealId: dealId ? parseInt(dealId) : null,
         tenantId: req.user.tenantId,
+        ...(isGenericRequest(req) ? { currency: "INR" } : {}),
         ...wellnessData,
       };
       let invoice;
@@ -2955,8 +2961,12 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
         ownerEmail: true,
       },
     });
-    const currency = tenant?.defaultCurrency || "USD";
-    const locale = tenant?.locale || undefined;
+    const currency = isGenericRequest(req)
+      ? "INR"
+      : tenant?.defaultCurrency || "USD";
+    const locale = isGenericRequest(req)
+      ? "en-IN"
+      : tenant?.locale || undefined;
 
     // Keep the corporate and wellness documents separate. Both receive the
     // same dynamic tenant branding context, but wellness invoices retain their

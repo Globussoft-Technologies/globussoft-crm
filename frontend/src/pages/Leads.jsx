@@ -69,10 +69,10 @@ import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
+import "./Leads.css";
 import {
   PICKUP_STAGE_LABELS,
   formatPickupStatus,
-  formatPickupStatusDate,
 } from "../utils/pickupCustomerStatus";
 
 const SOURCE_OPTIONS = [
@@ -217,6 +217,52 @@ const LEAD_CHECKBOX_STYLE = {
 const LEADS_HEADER_MENU_WIDTH = 300;
 const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
 const LEADS_HEADER_MENU_GAP = 6;
+const PURCHASED_PLOT_STATUSES = new Set([
+  "PLOT_SOLD",
+  "TRANSACTION_COMPLETED",
+]);
+const isPurchasedCustomerPlot = (plot, customer, pickupStatus) => {
+  if (String(plot?.availability || "").trim().toUpperCase() === "SOLD") {
+    return true;
+  }
+  const booking = customer?.booking;
+  if (
+    Number(booking?.plotSiteId) === Number(plot?.id) &&
+    PURCHASED_PLOT_STATUSES.has(
+      String(booking?.status || "").trim().toUpperCase(),
+    )
+  ) {
+    return true;
+  }
+  const selectedPlotId =
+    pickupStatus?.selectedPlot?.id || pickupStatus?.assignedPlot?.id;
+  return (
+    Number(selectedPlotId) === Number(plot?.id) &&
+    PURCHASED_PLOT_STATUSES.has(
+      String(
+        pickupStatus?.currentStatus ||
+          pickupStatus?.workflow?.billing?.status ||
+          pickupStatus?.status ||
+          "",
+      )
+        .trim()
+        .toUpperCase(),
+    )
+  );
+};
+const isTransportWorkflowLocked = (pickupStatus) => {
+  if (!pickupStatus) return false;
+  const stage = String(pickupStatus.currentStage || "").trim().toLowerCase();
+  if (["broker", "billing"].includes(stage)) return true;
+  if (stage !== "transport") return false;
+  const status = String(
+    pickupStatus.currentStatus ||
+      pickupStatus.workflow?.transport?.status ||
+      pickupStatus.status ||
+      "",
+  ).trim().toUpperCase();
+  return Boolean(status && status !== "PICKUP_LOCATION_CAPTURED");
+};
 const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "name",
   "email",
@@ -229,6 +275,8 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "medium",
   "location",
   "pickupLocation",
+  "plotAssign",
+  "overallPickupStatus",
   "subBrand",
   "tags",
   "assignedTo",
@@ -238,6 +286,44 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "callifiedAi",
   "callifiedScore",
 ];
+const ensureGenericPlotAssignCatalog = (columns) => {
+  if (!Array.isArray(columns)) return columns;
+  const withoutPlotAssign = columns.filter(
+    (column) => column?.key !== "plotAssign",
+  );
+  const pickupLocationIndex = withoutPlotAssign.findIndex(
+    (column) => column?.key === "pickupLocation",
+  );
+  withoutPlotAssign.splice(
+    pickupLocationIndex >= 0 ? pickupLocationIndex + 1 : withoutPlotAssign.length,
+    0,
+    { key: "plotAssign", label: "Plot Assign" },
+  );
+  return withoutPlotAssign;
+};
+const ensureGenericOverallStatusCatalog = (columns) => {
+  if (!Array.isArray(columns)) return columns;
+  const withoutOverallStatus = columns.filter(
+    (column) => column?.key !== "overallPickupStatus",
+  );
+  const plotAssignIndex = withoutOverallStatus.findIndex(
+    (column) => column?.key === "plotAssign",
+  );
+  const pickupLocationIndex = withoutOverallStatus.findIndex(
+    (column) => column?.key === "pickupLocation",
+  );
+  const insertAfter =
+    plotAssignIndex >= 0 ? plotAssignIndex : pickupLocationIndex;
+  withoutOverallStatus.splice(
+    insertAfter >= 0 ? insertAfter + 1 : withoutOverallStatus.length,
+    0,
+    {
+      key: "overallPickupStatus",
+      label: "Overall Status",
+    },
+  );
+  return withoutOverallStatus;
+};
 // Travel Leads intentionally exposes only the vertical's core lead columns.
 // Generic's extended Contact fields (for example touch attribution, billing
 // state, Job Title, Website, and LinkedIn) must not appear even if a stale
@@ -337,6 +423,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   callifiedScore: 128,
   interestedPlotArea: 190,
   pickupLocation: 270,
+  plotAssign: 230,
   overallPickupStatus: 250,
   subBrand: 130,
   amount: 130,
@@ -2124,6 +2211,53 @@ const Leads = () => {
     () => new Map(),
   );
   const [pickupLocationOptions, setPickupLocationOptions] = useState([]);
+  const [plotAssignmentInventory, setPlotAssignmentInventory] = useState({
+    plots: [],
+    allPlots: [],
+    customers: [],
+  });
+  const [assigningPlotLead, setAssigningPlotLead] = useState(null);
+  const [assigningPlotName, setAssigningPlotName] = useState("");
+  const [assigningPlotIds, setAssigningPlotIds] = useState([]);
+  const [assigningPlots, setAssigningPlots] = useState(false);
+  const [viewingLeadPlots, setViewingLeadPlots] = useState(null);
+  const [changingPlotAssignment, setChangingPlotAssignment] = useState(null);
+  const [replacementPlotId, setReplacementPlotId] = useState(null);
+  const [changingPlotNumber, setChangingPlotNumber] = useState(false);
+  const loadPlotAssignmentInventory = useCallback(async () => {
+    if (!isGeneric || !isAdmin) {
+      setPlotAssignmentInventory({ plots: [], allPlots: [], customers: [] });
+      return { plots: [], allPlots: [], customers: [] };
+    }
+    try {
+      // Use the same projection as Customer Workflow so both entry points
+      // share identical plot availability and assignment semantics.
+      const response = await fetchApi(
+        "/api/pickup-plot-inventory/customer-pickups",
+        { silent: true },
+      );
+      const next = {
+        plots: Array.isArray(response?.plots) ? response.plots : [],
+        allPlots: Array.isArray(response?.allPlots)
+          ? response.allPlots
+          : Array.isArray(response?.plots)
+            ? response.plots
+            : [],
+        customers: [
+          ...(Array.isArray(response?.customers) ? response.customers : []),
+          ...(Array.isArray(response?.plotAssignments) ? response.plotAssignments : []),
+        ],
+      };
+      setPlotAssignmentInventory(next);
+      return next;
+    } catch (_error) {
+      setPlotAssignmentInventory({ plots: [], allPlots: [], customers: [] });
+      return { plots: [], allPlots: [], customers: [] };
+    }
+  }, [isAdmin, isGeneric]);
+  useEffect(() => {
+    void loadPlotAssignmentInventory();
+  }, [loadPlotAssignmentInventory]);
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
@@ -3009,6 +3143,7 @@ const Leads = () => {
         );
         return next;
       });
+      await loadPlotAssignmentInventory();
       notify.success("Pickup location updated.");
     } catch (error) {
       notify.error(
@@ -3018,6 +3153,224 @@ const Leads = () => {
       );
     } finally {
       setSavingPickupLocationId(null);
+    }
+  };
+
+  const getPlotAssignmentCustomer = (contactId) =>
+    plotAssignmentInventory.customers.find(
+      (customer) => Number(customer.contact?.id) === Number(contactId),
+    ) || null;
+  const getAssignedPlotsForLead = (lead, pickupStatus) => {
+    const customer = getPlotAssignmentCustomer(lead.id);
+    if (customer) {
+      if (Array.isArray(customer.assignedPlots)) {
+        return customer.assignedPlots;
+      }
+      const assignedIds = new Set(
+        (customer.customerAssignedPlotIds || customer.assignedPlotIds || []).map(
+          Number,
+        ),
+      );
+      return plotAssignmentInventory.plots.filter((plot) =>
+        assignedIds.has(Number(plot.id)),
+      );
+    }
+    return Array.isArray(pickupStatus?.assignedPlots)
+      ? pickupStatus.assignedPlots
+      : pickupStatus?.assignedPlot
+        ? [pickupStatus.assignedPlot]
+        : [];
+  };
+  const availablePlotAssignmentOptions = plotAssignmentInventory.plots.filter(
+    (plot) =>
+      String(plot.availability || "").trim().toUpperCase() === "AVAILABLE" &&
+      String(plot.plotNumber || "").trim(),
+  );
+  const availablePlotAssignmentNames = [
+    ...new Map(
+      availablePlotAssignmentOptions.map((plot) => [
+        String(plot.name || "").trim().toLowerCase(),
+        String(plot.name || "").trim(),
+      ]),
+    ).values(),
+  ].filter(Boolean);
+  const assigningPlotCustomer = assigningPlotLead
+    ? getPlotAssignmentCustomer(assigningPlotLead.id)
+    : null;
+  const alreadyAssignedPlotIds = new Set(
+    (
+      assigningPlotCustomer?.customerAssignedPlotIds ||
+      assigningPlotCustomer?.assignedPlotIds ||
+      []
+    ).map(Number),
+  );
+  const assigningPlotOptions = availablePlotAssignmentOptions.filter(
+    (plot) =>
+      String(plot.name || "").trim().toLowerCase() ===
+      assigningPlotName.trim().toLowerCase(),
+  );
+  const getDefaultPlotAssignmentName = (leadId, inventory) => {
+    const customer = inventory.customers.find(
+      (item) => Number(item?.contact?.id ?? item?.contactId) === Number(leadId),
+    );
+    const assignedName = String(customer?.assignedPlots?.[0]?.name || "").trim();
+    const availableNames = [
+      ...new Map(
+        inventory.plots
+          .filter(
+            (plot) =>
+              String(plot.availability || "").trim().toUpperCase() ===
+                "AVAILABLE" && String(plot.plotNumber || "").trim(),
+          )
+          .map((plot) => [
+            String(plot.name || "").trim().toLowerCase(),
+            String(plot.name || "").trim(),
+          ]),
+      ).values(),
+    ].filter(Boolean);
+    return availableNames.some(
+      (name) => name.toLowerCase() === assignedName.toLowerCase(),
+    )
+      ? assignedName
+      : availableNames[0] || "";
+  };
+  const openLeadPlotAssignment = async (lead) => {
+    if (isTransportWorkflowLocked(pickupPlotStatusByContact.get(Number(lead.id)))) {
+      notify.info("Plot assignments cannot be changed after transport has started.");
+      return;
+    }
+    setAssigningPlotLead(lead);
+    setAssigningPlotName(
+      getDefaultPlotAssignmentName(lead.id, plotAssignmentInventory),
+    );
+    setAssigningPlotIds([]);
+    const latestInventory = await loadPlotAssignmentInventory();
+    setAssigningPlotName(
+      getDefaultPlotAssignmentName(lead.id, latestInventory),
+    );
+  };
+  const closeLeadPlotAssignment = () => {
+    if (assigningPlots) return;
+    setAssigningPlotLead(null);
+    setAssigningPlotName("");
+    setAssigningPlotIds([]);
+  };
+  const replacementPlotCustomer = changingPlotAssignment
+    ? getPlotAssignmentCustomer(changingPlotAssignment.lead.id)
+    : null;
+  const replacementAssignedPlotIds = new Set(
+    (
+      replacementPlotCustomer?.customerAssignedPlotIds ||
+      replacementPlotCustomer?.assignedPlotIds ||
+      []
+    ).map(Number),
+  );
+  const replacementPlotOptions = changingPlotAssignment
+    ? [...new Map([
+        changingPlotAssignment.plot,
+        ...(plotAssignmentInventory.allPlots || []),
+      ]
+        .filter((plot) => (
+          plot?.id &&
+          String(plot.name || "").trim().toLowerCase() ===
+            String(changingPlotAssignment.plot.name || "").trim().toLowerCase()
+        ))
+        .map((plot) => [Number(plot.id), plot])).values()]
+        .sort((left, right) => String(left.plotNumber || "").localeCompare(
+          String(right.plotNumber || ""),
+          undefined,
+          { numeric: true, sensitivity: "base" },
+        ))
+    : [];
+  const replacementPlotChoices = replacementPlotOptions.map((plot) => {
+    const isCurrent = Number(plot.id) === Number(changingPlotAssignment?.plot?.id);
+    const isAssigned = replacementAssignedPlotIds.has(Number(plot.id));
+    const availability = String(plot.availability || "").trim().toUpperCase();
+    return {
+      plot,
+      isCurrent,
+      isAssigned,
+      availability,
+      canSelect: !isCurrent && !isAssigned && availability === "AVAILABLE",
+    };
+  });
+  const openLeadPlotReplacement = async (lead, plot) => {
+    if (isTransportWorkflowLocked(viewingLeadPlots?.pickupStatus)) {
+      notify.info("Plot assignments cannot be changed after transport has started.");
+      return;
+    }
+    setViewingLeadPlots(null);
+    setChangingPlotAssignment({ lead, plot });
+    setReplacementPlotId(null);
+    const latestInventory = await loadPlotAssignmentInventory();
+    const customer = latestInventory.customers.find(
+      (item) => Number(item?.contact?.id ?? item?.contactId) === Number(lead.id),
+    );
+    const assignedIds = new Set(
+      (customer?.customerAssignedPlotIds || customer?.assignedPlotIds || []).map(Number),
+    );
+    const firstReplacement = (latestInventory.allPlots || latestInventory.plots).find((option) => (
+      String(option.availability || "").trim().toUpperCase() === "AVAILABLE" &&
+      String(option.plotNumber || "").trim() &&
+      String(option.name || "").trim().toLowerCase() ===
+        String(plot.name || "").trim().toLowerCase() &&
+      !assignedIds.has(Number(option.id))
+    ));
+    setReplacementPlotId(firstReplacement ? Number(firstReplacement.id) : null);
+  };
+  const closeLeadPlotReplacement = () => {
+    if (changingPlotNumber) return;
+    setChangingPlotAssignment(null);
+    setReplacementPlotId(null);
+  };
+  const replaceLeadPlot = async (event) => {
+    event.preventDefault();
+    if (!changingPlotAssignment?.lead?.id || !changingPlotAssignment?.plot?.id || !replacementPlotId) return;
+    setChangingPlotNumber(true);
+    try {
+      await fetchApi(
+        `/api/pickup-plot-inventory/customer-pickups/${changingPlotAssignment.lead.id}/plots`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            plotSiteIds: [replacementPlotId],
+            replacePlotSiteId: Number(changingPlotAssignment.plot.id),
+          }),
+        },
+      );
+      notify.success("Plot number changed.");
+      setChangingPlotAssignment(null);
+      setReplacementPlotId(null);
+      await loadPlotAssignmentInventory();
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || "Could not change the plot number.");
+    } finally {
+      setChangingPlotNumber(false);
+    }
+  };
+  const assignLeadPlots = async (event) => {
+    event.preventDefault();
+    if (!assigningPlotLead?.id || !assigningPlotIds.length) return;
+    setAssigningPlots(true);
+    try {
+      await fetchApi(
+        `/api/pickup-plot-inventory/customer-pickups/${assigningPlotLead.id}/plots`,
+        {
+          method: "POST",
+          body: JSON.stringify({ plotSiteIds: assigningPlotIds }),
+        },
+      );
+      notify.success(
+        `${assigningPlotIds.length} plot${assigningPlotIds.length === 1 ? "" : "s"} assigned.`,
+      );
+      setAssigningPlotLead(null);
+      setAssigningPlotName("");
+      setAssigningPlotIds([]);
+      await loadPlotAssignmentInventory();
+    } catch (error) {
+      notify.error(error?.message || "Could not assign the selected plots.");
+    } finally {
+      setAssigningPlots(false);
     }
   };
 
@@ -4051,79 +4404,6 @@ const Leads = () => {
         return;
       }
     }
-    for (const definition of isGeneric ? customFieldDefs : []) {
-      const value = newLead.customFields?.[definition.fieldKey];
-      const empty = Array.isArray(value)
-        ? value.length === 0
-        : String(value ?? "").trim() === "";
-      if (
-        definition.isRequired &&
-        (definition.fieldType === "checkbox" ? value !== true : empty)
-      ) {
-        notify.error(`${definition.label} is required`);
-        return;
-      }
-      if (
-        value === undefined ||
-        value === null ||
-        value === "" ||
-        (Array.isArray(value) && value.length === 0)
-      )
-        continue;
-      if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
-        notify.error(`${definition.label} contains invalid control characters`);
-        return;
-      }
-      if (
-        definition.fieldType === "number" &&
-        !Number.isFinite(Number(value))
-      ) {
-        notify.error(`${definition.label} must be a valid number`);
-        return;
-      }
-      if (
-        definition.fieldType === "date" &&
-        !/^\d{4}-\d{2}-\d{2}$/.test(String(value))
-      ) {
-        notify.error(`${definition.label} must be a valid date`);
-        return;
-      }
-      if (definition.fieldType === "url") {
-        try {
-          const parsed = new URL(String(value));
-          if (!["http:", "https:"].includes(parsed.protocol))
-            throw new Error("invalid protocol");
-        } catch (_error) {
-          notify.error(`${definition.label} must be a valid URL`);
-          return;
-        }
-      }
-      if (
-        ["dropdown", "radio"].includes(definition.fieldType) &&
-        !(definition.options || []).includes(value)
-      ) {
-        notify.error(`Please select a valid ${definition.label}`);
-        return;
-      }
-      if (definition.fieldType === "multiselect") {
-        const selected = Array.isArray(value) ? value : [value];
-        if (
-          selected.some(
-            (option) => !(definition.options || []).includes(option),
-          )
-        ) {
-          notify.error(`Please select valid values for ${definition.label}`);
-          return;
-        }
-      }
-      if (typeof value === "string" && value.length > 2000) {
-        notify.error(
-          `${definition.label} is too long (maximum 2000 characters)`,
-        );
-        return;
-      }
-    }
-
     // #315: refetch leads after a successful create so the "All Leads" pipeline
     // counter chip in the header (which reads `leads.length`) refreshes
     // immediately. Pre-fix the await on the create call could throw and skip
@@ -4854,7 +5134,9 @@ const Leads = () => {
             ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
           ];
       return isGeneric
-        ? preferred.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+        ? preferred.filter(
+            (key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key),
+          )
         : preferred;
     },
     [customFieldDefs, isGeneric, visibleColumns],
@@ -5110,6 +5392,7 @@ const Leads = () => {
       ? [
           { key: "interestedPlotArea", label: "Interested plot area" },
           { key: "pickupLocation", label: "Pickup location" },
+          { key: "plotAssign", label: "Plot Assign" },
           { key: "overallPickupStatus", label: "Overall status" },
           { key: "campaign", label: "Callified Campaign" },
           { key: "callStatus", label: "Call Status" },
@@ -5126,7 +5409,7 @@ const Leads = () => {
   ].filter(
     (column) =>
       !isGeneric ||
-      !["interestedPlotArea", "pickupLocation", "overallPickupStatus"].includes(
+      !["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(
         column.key,
       ) ||
       !Array.isArray(visibleColumns) ||
@@ -9638,10 +9921,16 @@ const Leads = () => {
               <ColumnPicker
                 tableKey="leads"
                 onColumnsChange={(columns) => setVisibleColumns(isGeneric
-                  ? columns.filter((column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column))
+                  ? columns.filter(
+                      (column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
+                    )
                   : columns)}
                 onAvailableColumnsChange={(columns) => setLeadColumnCatalog(isGeneric
-                  ? columns.filter((column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key))
+                  ? ensureGenericOverallStatusCatalog(
+                      ensureGenericPlotAssignCatalog(columns),
+                    ).filter(
+                      (column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
+                    )
                   : columns)}
                 deletableColumns={
                   isGeneric && isAdmin
@@ -10038,6 +10327,7 @@ const Leads = () => {
                           "Pickup location",
                           { paddingRight: "1.5rem" },
                         ],
+                        ["plotAssign", "Plot Assign"],
                         [
                           "overallPickupStatus",
                           "Overall status",
@@ -10254,6 +10544,24 @@ const Leads = () => {
                               : "Not started";
                             const pickupAddress =
                               pickupStatus?.pickupAddress?.trim();
+                            const selectedPickupLocation = pickupLocationOptions.find(
+                              (location) => String(location.address || "").trim() === pickupAddress,
+                            );
+                            const currentPickupOption = pickupAddress && !selectedPickupLocation
+                              ? {
+                                  id: `current-${lead.id}`,
+                                  name: "Current pickup",
+                                  address: pickupAddress,
+                                }
+                              : null;
+                            const plotAssignmentCustomer =
+                              getPlotAssignmentCustomer(lead.id);
+                            const assignedPlots = getAssignedPlotsForLead(
+                              lead,
+                              pickupStatus,
+                            );
+                            const transportWorkflowLocked =
+                              isTransportWorkflowLocked(pickupStatus);
                             return (
                               <>
                                 {isLeadFixedColumnVisible(
@@ -10304,38 +10612,26 @@ const Leads = () => {
                                       }}
                                     >
                                       <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                                        {pickupAddress ? (
-                                          <span
-                                            title={pickupAddress}
-                                            style={{
-                                              display: "block",
-                                              overflowWrap: "anywhere",
-                                              lineHeight: 1.35,
-                                              fontWeight: 600,
-                                            }}
-                                          >
-                                            {pickupAddress}
-                                          </span>
-                                        ) : (
-                                          <PickupLocationSelect
-                                            compact
-                                            ariaLabel={`Pickup location for ${lead.name || "lead"}`}
-                                            value=""
-                                            disabled={
-                                              pickupLocationOptions.length === 0 ||
-                                              savingPickupLocationId ===
-                                                Number(lead.id)
-                                            }
-                                            onChange={(locationId) =>
-                                              saveLeadPickupLocation(
-                                                lead,
-                                                pickupStatus,
-                                                locationId,
-                                              )
-                                            }
-                                            options={pickupLocationOptions}
-                                          />
-                                        )}
+                                        <PickupLocationSelect
+                                          compact
+                                          ariaLabel={`Pickup location for ${lead.name || "lead"}`}
+                                          value={selectedPickupLocation?.id || currentPickupOption?.id || ""}
+                                          disabled={
+                                            pickupLocationOptions.length === 0 ||
+                                            savingPickupLocationId === Number(lead.id) ||
+                                            transportWorkflowLocked
+                                          }
+                                          onChange={(locationId) =>
+                                            saveLeadPickupLocation(
+                                              lead,
+                                              pickupStatus,
+                                              locationId,
+                                            )
+                                          }
+                                          options={currentPickupOption
+                                            ? [currentPickupOption, ...pickupLocationOptions]
+                                            : pickupLocationOptions}
+                                        />
                                       </div>
                                       {pickupAddress && (
                                         <a
@@ -10363,6 +10659,67 @@ const Leads = () => {
                                     </div>
                                   </td>
                                 )}
+                                {isLeadFixedColumnVisible("plotAssign") && (
+                                  <td
+                                    className="generic-plot-assign-cell"
+                                    style={getBodyCellStyle("plotAssign", {
+                                      whiteSpace: "normal",
+                                      overflow: "visible",
+                                    })}
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    <div>
+                                      {isAdmin && assignedPlots.length > 0 && (
+                                        <button
+                                          type="button"
+                                          className="btn-secondary"
+                                          aria-label={`View plots for ${lead.name || "lead"}`}
+                                          onClick={() => setViewingLeadPlots({
+                                            lead,
+                                            plots: assignedPlots,
+                                            customer: plotAssignmentCustomer,
+                                            pickupStatus,
+                                            selectedPlot: null,
+                                          })}
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 5,
+                                            width: "fit-content",
+                                            padding: ".35rem .55rem",
+                                            fontSize: ".72rem",
+                                          }}
+                                        >
+                                          <Eye size={13} /> View plot
+                                        </button>
+                                      )}
+                                      {isAdmin && assignedPlots.length === 0 && (
+                                        <button
+                                          type="button"
+                                          className="btn-secondary"
+                                          aria-label={`Assign plot to ${lead.name || "lead"}`}
+                                          title={transportWorkflowLocked
+                                            ? "Plot assignments are locked because transport has started"
+                                            : "Assign plots"}
+                                          onClick={() => openLeadPlotAssignment(lead)}
+                                          disabled={transportWorkflowLocked}
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 5,
+                                            width: "fit-content",
+                                            padding: ".35rem .55rem",
+                                            fontSize: ".72rem",
+                                          }}
+                                        >
+                                          <Plus size={13} /> Assign plot
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                )}
                                 {isLeadFixedColumnVisible(
                                   "overallPickupStatus",
                                 ) && (
@@ -10380,21 +10737,6 @@ const Leads = () => {
                                   >
                                     <div className="generic-overall-status-content">
                                       <strong>{overallStatus}</strong>
-                                      {pickupStatus && (
-                                        <div
-                                          className="generic-overall-status-date"
-                                          style={{
-                                            marginTop: 3,
-                                            color: "var(--text-secondary)",
-                                            fontSize: ".72rem",
-                                          }}
-                                        >
-                                          {formatPickupStatusDate(
-                                            pickupStatus.currentStatusUpdatedAt ||
-                                              pickupStatus.statusUpdatedAt,
-                                          )}
-                                        </div>
-                                      )}
                                       {pickupStatus && (
                                         <button
                                           type="button"
@@ -10885,6 +11227,383 @@ const Leads = () => {
             customer={viewingPickupStatus}
             onClose={() => setViewingPickupStatus(null)}
           />
+        )}
+        {isGeneric && assigningPlotLead && (
+          <div
+            role="presentation"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              background: "rgba(15,23,42,.55)",
+            }}
+          >
+            <form
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lead-assign-plots-title"
+              className="card"
+              onSubmit={assignLeadPlots}
+              style={{
+                width: "min(620px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                padding: "1.5rem",
+                background: "var(--modal-bg, var(--surface-color))",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  gap: 12,
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <h2 id="lead-assign-plots-title" style={{ margin: 0 }}>
+                    Assign plots
+                  </h2>
+                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                    {assigningPlotLead.name || "Lead"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Close assign plots"
+                  onClick={closeLeadPlotAssignment}
+                  disabled={assigningPlots}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <p style={{ color: "var(--text-secondary)", fontSize: ".84rem" }}>
+                Choose one Plot / Site name, then select one or more available plot numbers. Reserved and sold plots are hidden.
+              </p>
+              <label style={{ display: "grid", gap: 6, fontWeight: 700, fontSize: ".8rem" }}>
+                Plot / Site
+                <select
+                  className="input-field"
+                  aria-label="Plot or site name"
+                  value={assigningPlotName}
+                  disabled={assigningPlots}
+                  onChange={(event) => {
+                    setAssigningPlotName(event.target.value);
+                    setAssigningPlotIds([]);
+                  }}
+                >
+                  {availablePlotAssignmentNames.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              <div
+                role="group"
+                aria-label="Plots to assign"
+                style={{ display: "grid", gap: 8, maxHeight: 340, overflowY: "auto", marginTop: 14 }}
+              >
+                {assigningPlotOptions.map((plotOption) => {
+                  const alreadyAssigned = alreadyAssignedPlotIds.has(Number(plotOption.id));
+                  const checked = assigningPlotIds.includes(Number(plotOption.id));
+                  return (
+                    <label
+                      key={plotOption.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: ".75rem",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 10,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={alreadyAssigned || checked}
+                        disabled={alreadyAssigned || assigningPlots}
+                        onChange={(event) =>
+                          setAssigningPlotIds((current) =>
+                            event.target.checked
+                              ? [...current, Number(plotOption.id)]
+                              : current.filter((id) => id !== Number(plotOption.id)),
+                          )
+                        }
+                      />
+                      <span>
+                        <strong>Plot {plotOption.plotNumber}</strong>
+                        <small style={{ display: "block", marginTop: 2, color: "var(--text-secondary)" }}>
+                          {plotOption.name}
+                          {plotOption.block ? ` · Block ${plotOption.block}` : ""}
+                          {alreadyAssigned ? " · Already assigned" : ""}
+                        </small>
+                      </span>
+                    </label>
+                  );
+                })}
+                {!assigningPlotOptions.length && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 6,
+                      padding: "1rem",
+                      border: "1px dashed var(--border-color)",
+                      borderRadius: 10,
+                      color: "var(--text-secondary)",
+                      fontSize: ".8rem",
+                    }}
+                  >
+                    <strong style={{ color: "var(--text-primary)" }}>
+                      No available plot numbers
+                    </strong>
+                    <span>
+                      All plot numbers for this Plot / Site are reserved, sold,
+                      inactive, or unavailable.
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+                <button type="button" className="btn-secondary" onClick={closeLeadPlotAssignment} disabled={assigningPlots}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={!assigningPlotIds.length || assigningPlots}>
+                  {assigningPlots
+                    ? "Assigning…"
+                    : assigningPlotIds.length
+                      ? `Assign ${assigningPlotIds.length} plot${assigningPlotIds.length === 1 ? "" : "s"}`
+                      : "Assign plots"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+        {viewingLeadPlots && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              background: "rgba(15,23,42,.55)",
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lead-view-plots-title"
+              className="card"
+              style={{
+                width: "min(520px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                padding: "1.5rem",
+                background: "var(--modal-bg, var(--surface-color))",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+                <div>
+                  <h2 id="lead-view-plots-title" style={{ margin: 0 }}>Assigned plots</h2>
+                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                    {viewingLeadPlots.lead.name || "Lead"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Close assigned plots"
+                  onClick={() => setViewingLeadPlots(null)}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <div aria-label="Assigned plot list" style={{ display: "grid", gap: 10 }}>
+                {viewingLeadPlots.plots.map((plot) => (
+                  <div
+                    key={plot.id || `${plot.name}-${plot.plotNumber}`}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: ".8rem",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 10,
+                    }}
+                  >
+                    <span>
+                      <strong>{plot.name || "Plot"}</strong>
+                      <small style={{ display: "block", marginTop: 3, color: "var(--text-secondary)" }}>
+                        {plot.plotNumber ? `Plot ${plot.plotNumber}` : "Plot number unavailable"}
+                      </small>
+                    </span>
+                    {plot.id && (isPurchasedCustomerPlot(
+                      plot,
+                      viewingLeadPlots.customer,
+                      viewingLeadPlots.pickupStatus,
+                    ) || isTransportWorkflowLocked(viewingLeadPlots.pickupStatus)) ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        aria-label={`View selected plot ${plot.plotNumber || plot.name || "details"} for ${viewingLeadPlots.lead.name || "lead"}`}
+                        onClick={() => setViewingLeadPlots((current) => ({
+                          ...current,
+                          selectedPlot: plot,
+                        }))}
+                      >
+                        <Eye size={12} /> View selected plot
+                      </button>
+                    ) : plot.id ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        aria-label={`Change plot ${plot.plotNumber || plot.name || "number"} for ${viewingLeadPlots.lead.name || "lead"}`}
+                        onClick={() => openLeadPlotReplacement(viewingLeadPlots.lead, plot)}
+                      >
+                        <Pencil size={12} /> Change
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              {viewingLeadPlots.selectedPlot && (
+                <div
+                  role="region"
+                  aria-label="Selected plot details"
+                  style={{
+                    marginTop: 14,
+                    padding: ".9rem",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 10,
+                    background: "var(--subtle-bg, rgba(148,163,184,.08))",
+                  }}
+                >
+                  <strong>Selected plot details</strong>
+                  <div style={{ display: "grid", gap: 5, marginTop: 8, fontSize: ".82rem" }}>
+                    <span>Plot / Site: {viewingLeadPlots.selectedPlot.name || "Not available"}</span>
+                    <span>Plot number: {viewingLeadPlots.selectedPlot.plotNumber || "Not available"}</span>
+                    <span>Block: {viewingLeadPlots.selectedPlot.block || "Not available"}</span>
+                    <span>Address: {viewingLeadPlots.selectedPlot.address || "Not available"}</span>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+        {changingPlotAssignment && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              background: "rgba(15,23,42,.55)",
+            }}
+          >
+            <form
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lead-change-plot-title"
+              className="card"
+              onSubmit={replaceLeadPlot}
+              style={{
+                width: "min(520px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                padding: "1.5rem",
+                background: "var(--modal-bg, var(--surface-color))",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <h2 id="lead-change-plot-title" style={{ margin: 0 }}>Change plot number</h2>
+                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                    {changingPlotAssignment.lead.name || "Lead"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Close change plot number"
+                  onClick={closeLeadPlotReplacement}
+                  disabled={changingPlotNumber}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <p style={{ color: "var(--text-secondary)", fontSize: ".84rem" }}>
+                Current: {changingPlotAssignment.plot.name || "Plot"} · {changingPlotAssignment.plot.plotNumber || "Number unavailable"}. Only this plot number will change.
+              </p>
+              <div role="radiogroup" aria-label="Replacement plot number" style={{ display: "grid", gap: 8 }}>
+                {replacementPlotChoices.map(({
+                  plot: plotOption,
+                  isCurrent,
+                  isAssigned,
+                  availability,
+                  canSelect,
+                }) => (
+                  <label
+                    key={plotOption.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: ".75rem",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 10,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="replacementPlot"
+                      value={plotOption.id}
+                      checked={Number(replacementPlotId) === Number(plotOption.id)}
+                      disabled={changingPlotNumber || !canSelect}
+                      onChange={() => setReplacementPlotId(Number(plotOption.id))}
+                    />
+                    <span>
+                      <strong>Plot {plotOption.plotNumber}</strong>
+                      {plotOption.block && (
+                        <small style={{ display: "block", color: "var(--text-secondary)" }}>
+                          Block {plotOption.block}
+                        </small>
+                      )}
+                      <small style={{ display: "block", color: "var(--text-secondary)" }}>
+                        {isCurrent
+                          ? "Current plot"
+                          : isAssigned
+                            ? "Already assigned"
+                            : availability === "AVAILABLE"
+                              ? "Available"
+                              : availability || "Unavailable"}
+                      </small>
+                    </span>
+                  </label>
+                ))}
+                {!replacementPlotChoices.some(({ canSelect }) => canSelect) && (
+                  <div style={{ padding: "1rem", border: "1px dashed var(--border-color)", borderRadius: 10 }}>
+                    No other available plot numbers for this Plot / Site.
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+                <button type="button" className="btn-secondary" onClick={closeLeadPlotReplacement} disabled={changingPlotNumber}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={!replacementPlotId || changingPlotNumber}>
+                  {changingPlotNumber ? "Changing…" : "Change plot number"}
+                </button>
+              </div>
+            </form>
+          </div>
         )}
         <WellnessLeadCallDialog
           lead={wellnessCall.target}
@@ -12038,7 +12757,7 @@ const Leads = () => {
             inline form  only the trigger surface moved. */}
       {creating && (
         <div
-          className="create-lead-backdrop"
+          className={`create-lead-backdrop${isGeneric ? " create-lead-backdrop--generic" : ""}`}
           onClick={(e) => {
             if (e.target === e.currentTarget) closeCreate();
           }}
@@ -12059,7 +12778,7 @@ const Leads = () => {
           aria-label="Create Lead"
         >
           <div
-            className="card"
+            className={`card${isGeneric ? " create-lead-modal--generic" : ""}`}
             style={{
               background: "var(--bg-color)",
               color: "var(--text-primary)",
@@ -12071,6 +12790,7 @@ const Leads = () => {
             }}
           >
             <div
+              className={isGeneric ? "create-lead-modal__header" : undefined}
               style={{
                 display: "flex",
                 justifyContent: "space-between",
@@ -12101,6 +12821,7 @@ const Leads = () => {
                   HTML strip, email shape). Native HTML5 validation would block
                   submit without giving us a chance to surface the targeted toasts. */}
             <form
+              className={isGeneric ? "create-lead-form--generic" : undefined}
               onSubmit={handleCreateLead}
               noValidate
               style={{
@@ -12374,12 +13095,14 @@ const Leads = () => {
                 </>
               )}
 
-              {renderCustomFieldInputs(
-                newLead.customFields,
-                handleCustomFieldChangeNew,
-              )}
+              {!isGeneric &&
+                renderCustomFieldInputs(
+                  newLead.customFields,
+                  handleCustomFieldChangeNew,
+                )}
 
               <div
+                className={isGeneric ? "create-lead-form__actions" : undefined}
                 style={{
                   display: "flex",
                   justifyContent: "flex-end",

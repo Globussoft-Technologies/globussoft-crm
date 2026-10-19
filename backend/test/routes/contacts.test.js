@@ -908,7 +908,12 @@ describe('GET /api/contacts/:id — read', () => {
     expect(args.include.webFormSubmissions).toMatchObject({
       take: 1,
       orderBy: { submittedAt: 'desc' },
-      select: { id: true, payloadJson: true, submittedAt: true },
+      select: {
+        id: true,
+        payloadJson: true,
+        submittedAt: true,
+        webForm: { select: { id: true, name: true } },
+      },
     });
   });
 

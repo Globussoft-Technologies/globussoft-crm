@@ -119,35 +119,44 @@ export default function PickupPlotWorkAssignments() {
             Give staff Transport, Site Visit, or Billing work—one at a time or in any combination.
           </p>
         </div>
-        <div className="card" style={{ padding: '12px 16px', minWidth: 170 }}>
-          <strong style={{ display: 'block', fontSize: '1.25rem' }}>{assignedCount}</strong>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '.8rem' }}>staff with assigned work</span>
+        <div
+          data-testid="staff-work-assignment-header-actions"
+          style={{ display: 'flex', flex: '1 1 520px', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 12 }}
+        >
+          <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 420, minWidth: 220 }}>
+            <Search
+              size={17}
+              aria-hidden="true"
+              style={{ position: 'absolute', zIndex: 1, left: 13, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }}
+            />
+            <input
+              className="input-field"
+              type="search"
+              aria-label="Search staff"
+              placeholder="Search by name, email, or phone…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 40 }}
+            />
+          </div>
+          <div
+            className="card"
+            data-testid="staff-work-assignment-count"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, minWidth: 170, padding: '0 16px', boxSizing: 'border-box' }}
+          >
+            <strong style={{ flex: '0 0 auto', fontSize: '1.15rem', lineHeight: 1 }}>{assignedCount}</strong>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '.76rem', lineHeight: 1.2, whiteSpace: 'nowrap' }}>staff with assigned work</span>
+          </div>
         </div>
       </header>
 
-      <div className="card" style={{ flex: '0 0 auto', padding: 16, marginBottom: 18 }}>
-        <label style={{ position: 'relative', display: 'block', maxWidth: 520 }}>
-          <Search size={17} aria-hidden="true" style={{ position: 'absolute', left: 13, top: 13, color: 'var(--text-secondary)' }} />
-          <span className="sr-only">Search staff</span>
-          <input
-            className="input-field"
-            type="search"
-            aria-label="Search staff"
-            placeholder="Search by name, email, or phone…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 40 }}
-          />
-        </label>
-      </div>
-
       {loading ? <div className="card" style={{ flex: '1 1 0', minHeight: 0, padding: 48, textAlign: 'center' }}>Loading staff…</div> : (
         <div
-          className="card"
+          className="card pickup-plot-table-scroll"
           data-testid="staff-work-assignment-table-scroll"
           style={{ flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >
-          <table aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               <col style={{ width: '22%' }} />
               <col style={{ width: '22%' }} />

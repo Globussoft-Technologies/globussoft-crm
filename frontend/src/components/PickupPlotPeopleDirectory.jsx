@@ -623,7 +623,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
           }}
         >
           <div data-testid={`${type}-directory-table-width`} style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-resizable-table" aria-label={config.title} style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label={config.title} style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={columns[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>
               {columns.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={directoryHeaderStyle}>{column.label}</ResizableTableHeader>)}

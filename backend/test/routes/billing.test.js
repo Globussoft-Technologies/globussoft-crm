@@ -118,6 +118,10 @@ prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
 prisma.plotBooking.update = vi.fn().mockResolvedValue({});
 prisma.$transaction = vi.fn(async callback => callback(prisma));
 prisma.$queryRaw = vi.fn();
+prisma.plotSite = prisma.plotSite || {};
+prisma.plotSite.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotInvoiceItem = prisma.plotInvoiceItem || {};
+prisma.plotInvoiceItem.create = vi.fn().mockResolvedValue({});
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.tenantSetting = {
@@ -204,6 +208,8 @@ beforeEach(() => {
   prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
   prisma.plotBooking.update.mockReset().mockResolvedValue({});
+  prisma.plotSite.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotInvoiceItem.create.mockReset().mockResolvedValue({});
   prisma.tenant.findUnique.mockReset();
   prisma.tenantSetting.findMany.mockReset().mockResolvedValue([]);
   prisma.location.findFirst.mockReset().mockResolvedValue(null);
@@ -303,6 +309,45 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
       renderSpy.mockRestore();
     }
   });
+
+  test("preserves the stored Generic invoice currency when the tenant currency differs", async () => {
+    const invoice = {
+      id: 102,
+      invoiceNum: "PLOT-INR-102",
+      currency: "EUR",
+      amount: 200000,
+      status: "UNPAID",
+      issuedDate: new Date("2026-10-19T00:00:00.000Z"),
+      dueDate: new Date("2026-10-26T00:00:00.000Z"),
+      contact: { id: 8, name: "Manoj Kumar" },
+    };
+    const tenant = {
+      name: "NovaCrest Technologies",
+      defaultCurrency: "USD",
+      locale: "en-US",
+      logoUrl: null,
+    };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue(tenant);
+
+    const renderSpy = vi
+      .spyOn(pdfRenderer, "renderProfessionalInvoicePdf")
+      .mockResolvedValue(Buffer.from("%PDF-generic-inr"));
+
+    try {
+      const res = await request(makeApp()).get("/api/billing/102/pdf");
+
+      expect(res.status).toBe(200);
+      expect(renderSpy).toHaveBeenCalledWith(
+        invoice,
+        invoice.contact,
+        null,
+        expect.objectContaining({ currency: invoice.currency || "USD", locale: "en-US" }),
+      );
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
 });
 
 describe("POST /api/billing/public/confirm-payment - payment-link statuses", () => {
@@ -334,11 +379,26 @@ describe("POST /api/billing/public/confirm-payment - payment-link statuses", () 
     prisma.plotBooking.findFirst.mockResolvedValue({
       id: 501,
       tenantId: 1,
+      contactId: 61,
+      plotSiteId: 30,
+      invoiceId: null,
       totalAmount: 200000,
       amountPaid: 0,
       balance: 200000,
       paymentStatus: "UNPAID",
     });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 61,
+      name: "sadab",
+      email: "sadab@example.com",
+      phone: "9000000000",
+    });
+    prisma.plotSite.findFirst.mockResolvedValue({
+      id: 30,
+      name: "Marathahalli",
+      plotNumber: "10",
+    });
+    prisma.invoice.create.mockImplementation(async ({ data }) => ({ id: 701, ...data }));
 
     const res = await request(makeApp())
       .post("/api/billing/public/confirm-payment")
@@ -364,6 +424,20 @@ describe("POST /api/billing/public/confirm-payment - payment-link statuses", () 
         balance: 199999,
         paymentStatus: "PARTIAL",
       },
+    });
+    expect(prisma.invoice.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        contactId: 61,
+        amount: 200000,
+        amountPaid: 1,
+        balance: 199999,
+        status: "UNPAID",
+        tenantId: 1,
+      }),
+    });
+    expect(prisma.payment.update).toHaveBeenCalledWith({
+      where: { id: 900 },
+      data: { invoiceId: 701 },
     });
   });
 
@@ -559,7 +633,8 @@ describe("POST /api/billing/public/confirm-payment - payment-link statuses", () 
 // ─── POST / — Invoice creation (validation contract) ───────────────
 
 describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
-  test("happy path: amount + dueDate + contactId → 201 with created row", async () => {
+  test.each(['USD', 'EUR', 'INR'])("happy path preserves tenant currency %s", async (currency) => {
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: currency });
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.invoice.create.mockResolvedValue({
       id: 1001,
@@ -580,6 +655,7 @@ describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
     expect(createArgs.data.amount).toBe(250);
     expect(createArgs.data.contactId).toBe(42);
     expect(createArgs.data.tenantId).toBe(1);
+    expect(createArgs.data.currency).toBe(currency);
     expect(createArgs.data.invoiceNum).toMatch(/^INV-/);
   });
 

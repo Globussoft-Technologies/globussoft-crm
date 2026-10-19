@@ -101,6 +101,7 @@ prisma.$transaction = vi.fn(async callback => callback(prisma));
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
+prisma.invoice.create = vi.fn();
 prisma.invoice.update = vi.fn();
 prisma.sale = prisma.sale || {};
 prisma.sale.findMany = vi.fn();
@@ -134,6 +135,7 @@ prisma.tripInstalmentPayment.update = vi.fn().mockResolvedValue({});
 prisma.tripParticipant = prisma.tripParticipant || {};
 prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn().mockResolvedValue(null);
 prisma.contact.findMany = vi.fn().mockResolvedValue([]);
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
@@ -151,6 +153,10 @@ prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 }
 prisma.plotBooking = prisma.plotBooking || {};
 prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
 prisma.plotBooking.update = vi.fn().mockResolvedValue({});
+prisma.plotSite = prisma.plotSite || {};
+prisma.plotSite.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotInvoiceItem = prisma.plotInvoiceItem || {};
+prisma.plotInvoiceItem.create = vi.fn().mockResolvedValue({});
 
 import express from 'express';
 import request from 'supertest';
@@ -198,6 +204,7 @@ beforeEach(() => {
   prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
+  prisma.invoice.create.mockReset();
   prisma.invoice.update.mockReset();
   prisma.sale.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset();
@@ -208,6 +215,7 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
@@ -220,6 +228,8 @@ beforeEach(() => {
   prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
   prisma.plotBooking.update.mockReset().mockResolvedValue({});
+  prisma.plotSite.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotInvoiceItem.create.mockReset().mockResolvedValue({});
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.visit.findMany.mockReset().mockResolvedValue([]);
   prisma.visit.update.mockReset().mockResolvedValue({});
@@ -1251,6 +1261,14 @@ describe('POST /webhook/razorpay — plot-booking payment reconciliation', () =>
     });
     prisma.$queryRaw.mockResolvedValue([{ amountPaid: 750000 }]);
     prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, tenantId: 1, totalAmount: 4500000 });
+    prisma.payment.findMany.mockResolvedValue([{ amount: 500000 }, { amount: 250000 }]);
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, tenantId: 1, contactId: 61, plotSiteId: 30,
+      invoiceId: null, totalAmount: 4500000,
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Sadab', email: 'sadab@example.com', phone: '9000000000' });
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, name: 'Marathahalli', plotNumber: '10' });
+    prisma.invoice.create.mockImplementation(async ({ data }) => ({ id: 701, ...data }));
 
     const eventObj = {
       event: 'payment_link.paid',
@@ -1275,6 +1293,16 @@ describe('POST /webhook/razorpay — plot-booking payment reconciliation', () =>
     expect(prisma.plotBooking.update).toHaveBeenCalledWith({
       where: { id: 501 },
       data: { amountPaid: 750000, balance: 3750000, paymentStatus: 'PARTIAL' },
+    });
+    expect(prisma.invoice.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        contactId: 61, amount: 4500000, amountPaid: 750000,
+        balance: 3750000, status: 'UNPAID', tenantId: 1,
+      }),
+    });
+    expect(prisma.payment.update).toHaveBeenCalledWith({
+      where: { id: 801 },
+      data: { invoiceId: 701 },
     });
   });
 });

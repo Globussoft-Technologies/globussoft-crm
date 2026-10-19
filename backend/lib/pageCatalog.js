@@ -1481,9 +1481,9 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'broker_workspace', action: 'read' }],
   },
   {
-    path: '/billing-workspace',
-    label: 'My Billing Queue',
-    description: 'Assigned customer billing and payment work',
+    path: '/pickup-customers',
+    label: 'Customer Workflows',
+    description: 'Track customer progress from pickup through sales and billing',
     category: 'Pickup & Plot Work',
     vertical: 'generic',
     requiredPermissions: [{ module: 'billing_workspace', action: 'read' }],

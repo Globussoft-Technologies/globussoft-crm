@@ -32,8 +32,8 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
-// formatMoney mock prefixes "$" so the assertions are currency-symbol
-// agnostic. Real INR/USD switching is covered by money.test.js.
+// Keep the formatter deterministic while asserting the currency selected by
+// the Payments page.
 vi.mock('../utils/money', () => ({
   formatMoney: (v, opts) => {
     const cur = opts?.currency;
@@ -48,10 +48,10 @@ import Payments from '../pages/Payments';
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 const REGULAR_USER = { userId: 2, name: 'User', email: 'u@x.com', role: 'USER' };
 
-function renderPayments(user = ADMIN_USER) {
+function renderPayments(user = ADMIN_USER, tenant = { id: 1, vertical: 'generic', defaultCurrency: 'USD' }) {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'USD' }, loading: false }}>
+      <AuthContext.Provider value={{ user, token: 'tk', tenant, loading: false }}>
         <Payments />
       </AuthContext.Provider>
     </MemoryRouter>
@@ -190,11 +190,9 @@ describe('<Payments /> — page surface', () => {
 
   it('renders one row per payment with invoiceId, amount, and gateway+status badges', async () => {
     renderPayments();
-    // All rows render in the tenant's default currency (USD here) — per-row
-    // currency stamps are kept for audit but not used for display. The
-    // SUCCESS amount ($1500.00) also surfaces in the Total Collected stat
-    // card, so it appears twice in the DOM.
-    await waitFor(() => expect(screen.getAllByText('$1500.00').length).toBeGreaterThanOrEqual(1));
+    // Preserve each payment's currency; the tenant currency only formats
+    // aggregate cards and records without an explicit currency.
+    await waitFor(() => expect(screen.getAllByText('\u20B91500.00').length).toBeGreaterThanOrEqual(1));
     expect(screen.getByText('$250.00')).toBeInTheDocument();
     expect(screen.getByText('$75.00')).toBeInTheDocument();
     // Invoice IDs render in the "For" column as "Invoice #<id>".
@@ -205,6 +203,37 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText(/^Success$/)).toBeInTheDocument();
     expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps the existing tenant currency behavior outside Generic CRM', async () => {
+    renderPayments(ADMIN_USER, { id: 2, vertical: 'travel', defaultCurrency: 'USD' });
+    await waitFor(() => expect(screen.getAllByText('$1500.00').length).toBeGreaterThanOrEqual(1));
+    expect(screen.getByText('$250.00')).toBeInTheDocument();
+  });
+
+  it('uses the server aggregate for the dynamic Generic CRM total and active gateway filter', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/payments/stats?')) {
+        const filteredToStripe = url.includes('gateway=stripe');
+        return Promise.resolve({
+          successfulAmount: filteredToStripe ? 250 : 54321,
+          byStatus: { PENDING: filteredToStripe ? 1 : 4, FAILED: 2 },
+        });
+      }
+      return defaultFetchMock(url);
+    });
+
+    renderPayments();
+    expect(await screen.findByText('$54321.00')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Stripe$/i }));
+    expect(await screen.findByText('$250.00')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => (
+      url.startsWith('/api/payments/stats?')
+      && url.includes('dateBasis=payment')
+      && url.includes('gateway=stripe')
+      && url.includes('from=')
+      && url.includes('to=')
+    ))).toBe(true);
   });
 
   it('shows enriched service labels in the "For" column when description is absent', async () => {
@@ -382,7 +411,7 @@ describe('<Payments /> — page surface', () => {
     expect(refundButtons.length).toBe(3);
     // Row 1: Razorpay SUCCESS with a pay_ gateway id → enabled.
     expect(refundButtons[0]).toBeEnabled();
-    expect(refundButtons[0]).toHaveAttribute('title', expect.stringMatching(/Refund \$1500\.00 via Razorpay/i));
+    expect(refundButtons[0]).toHaveAttribute('title', expect.stringMatching(/Refund ₹1500\.00 via Razorpay/i));
     // Rows 2/3: pending / failed or non-Razorpay → disabled.
     expect(refundButtons[1]).toBeDisabled();
     expect(refundButtons[1]).toHaveAttribute('title', expect.stringMatching(/Only captured Razorpay payments can be refunded/i));
@@ -399,6 +428,7 @@ describe('<Payments /> — page surface', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /^Payment #1$/i })).toBeInTheDocument();
     });
+    expect(screen.getByText(/₹1500\.00 INR/)).toBeInTheDocument();
     // Gateway-id renders in the modal.
     expect(screen.getByText('pay_RZP123')).toBeInTheDocument();
   });

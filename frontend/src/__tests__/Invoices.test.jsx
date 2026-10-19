@@ -38,11 +38,10 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
-// formatMoney mock: prefixes "$" so the assertions are deterministic
-// regardless of the tenant in localStorage. Real tenant-aware money is
-// covered by money.test.js.
+// Keep currency assertions deterministic while still honoring the explicit
+// Deterministic currency formatting for tenant and per-invoice currency tests.
 vi.mock('../utils/money', () => ({
-  formatMoney: (v) => `$${(Number(v) || 0).toFixed(2)}`,
+  formatMoney: (v, opts = {}) => `${opts.currency === 'INR' ? '₹' : '$'}${(Number(v) || 0).toFixed(2)}`,
   currencySymbol: () => '$',
 }));
 vi.mock('../utils/date', () => ({
@@ -237,7 +236,6 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText('INV-003')).toBeInTheDocument();
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
     expect(screen.getByText('Globex Inc')).toBeInTheDocument();
-    // formatMoney mock prefixes "$" + 2dp; assert at least one amount renders.
     expect(screen.getByText('$1234.56')).toBeInTheDocument();
     expect(screen.getByText('$5000.00')).toBeInTheDocument();
     // Status badges (Paid/Unpaid/Voided). Multiple elements may match — Unpaid
@@ -248,6 +246,106 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getAllByText('Voided').length).toBeGreaterThanOrEqual(1);
     const genericUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));
     expect(genericUnpaidBadge.getAttribute('style')).not.toMatch(/border:\s*none/i);
+  });
+
+  it('shows the most recently issued Generic CRM invoices first', async () => {
+    const unorderedInvoices = [
+      { ...sampleInvoices[1], id: 21, invoiceNum: 'OLDER-INVOICE', issuedDate: '2026-08-31' },
+      { ...sampleInvoices[0], id: 22, invoiceNum: 'NEWEST-INVOICE', issuedDate: '2026-10-19' },
+      { ...sampleInvoices[2], id: 23, invoiceNum: 'MIDDLE-INVOICE', issuedDate: '2026-09-15' },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(unorderedInvoices);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices();
+
+    await waitFor(() => expect(screen.getByText('NEWEST-INVOICE')).toBeInTheDocument());
+    const invoiceNumbers = Array.from(
+      screen.getByRole('table', { name: 'Invoices table' }).querySelectorAll('tbody tr td:first-child'),
+      (cell) => cell.textContent.trim(),
+    );
+    expect(invoiceNumbers).toEqual(['NEWEST-INVOICE', 'MIDDLE-INVOICE', 'OLDER-INVOICE']);
+  });
+
+  it('preserves a stored USD invoice when the Generic tenant defaults to INR', async () => {
+    fetchApiMock.mockImplementation((url, opts) => url === '/api/billing'
+      ? Promise.resolve([{ ...sampleInvoices[0], currency: 'USD', invoiceNum: 'USD-ORIGINAL' }])
+      : defaultFetchMock(url, opts));
+    renderInvoices(ADMIN_USER, { vertical: 'generic', defaultCurrency: 'INR' });
+    const label = await screen.findByText('USD-ORIGINAL');
+    expect(label.closest('tr')).toHaveTextContent('$1234.56');
+    expect(label.closest('tr')).not.toHaveTextContent('₹1234.56');
+  });
+
+  it('shows partial plot-payment progress in the Generic CRM ledger', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([{
+          ...sampleInvoices[0],
+          invoiceNum: 'PLOT-PARTIAL',
+          amount: 200000,
+          amountPaid: 1,
+          balance: 199999,
+          status: 'UNPAID',
+        }]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices();
+
+    await waitFor(() => expect(screen.getByText('PLOT-PARTIAL')).toBeInTheDocument());
+    expect(screen.getByText('Partially paid')).toBeInTheDocument();
+    expect(screen.getByText('Paid $1.00')).toBeInTheDocument();
+    expect(screen.getByText('Balance $199999.00')).toBeInTheDocument();
+  });
+
+  it('refreshes the Generic CRM invoice ledger when returning from payment', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    const initialBillingCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/billing').length;
+
+    fireEvent.focus(window);
+
+    await waitFor(() => {
+      const billingCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/billing').length;
+      expect(billingCalls).toBeGreaterThan(initialBillingCalls);
+    });
+  });
+
+  it('keeps the Generic CRM page chrome fixed and makes only the table viewport scrollable', async () => {
+    renderInvoices();
+
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    expect(document.querySelector('.invoices-generic-page > .invoice-ledger-card')).toBeInTheDocument();
+    expect(document.querySelector('.invoice-table-scroll .top-scroll-sync__bottom')).toHaveStyle({
+      overflowY: 'auto',
+    });
+    const firstInvoiceRow = screen.getByText('INV-001').closest('tr');
+    fireEvent.mouseOver(firstInvoiceRow);
+    expect(firstInvoiceRow.style.background).toBe('');
+  });
+
+  it('renders only billing API rows even when an unrelated lookup request fails', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([{ ...sampleInvoices[0], invoiceNum: 'LIVE-INVOICE-ONLY' }]);
+      }
+      if (url === '/api/contacts') return Promise.reject(new Error('contacts unavailable'));
+      if (url === '/api/deals') return Promise.resolve([]);
+      if (url === '/api/payments/config') return Promise.resolve(samplePaymentConfig);
+      return Promise.resolve(null);
+    });
+
+    renderInvoices();
+
+    expect(await screen.findByText('LIVE-INVOICE-ONLY')).toBeInTheDocument();
+    expect(screen.queryByText('INV-002')).toBeNull();
+    expect(screen.queryByText('INV-003')).toBeNull();
   });
 
   it('shows the empty-state message when /api/billing returns []', async () => {
@@ -432,7 +530,6 @@ describe('<Invoices /> — page surface', () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
     // Outstanding = UNPAID (1234.56) — PAID + VOIDED are excluded.
-    // formatMoney mock returns `$<value>`, so the pill text contains "$1234.56".
     expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
   });
 

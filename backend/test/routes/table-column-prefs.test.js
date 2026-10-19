@@ -81,13 +81,23 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.visible).toContain('webForm');
     expect(res.body.visible).toContain('location');
     expect(res.body.visible).toContain('pickupLocation');
+    expect(res.body.visible).toContain('plotAssign');
+    expect(res.body.visible).toContain('overallPickupStatus');
     expect(res.body.availableColumns.find((c) => c.key === 'location')).toMatchObject({
       label: 'Location',
     });
     expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).toMatchObject({
       label: 'Pickup Location',
-      lockedVisible: true,
     });
+    expect(res.body.availableColumns.find((c) => c.key === 'plotAssign')).toMatchObject({
+      label: 'Plot Assign',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).toMatchObject({
+      label: 'Overall Status',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).not.toHaveProperty('lockedVisible');
+    expect(res.body.availableColumns.find((c) => c.key === 'plotAssign')).not.toHaveProperty('lockedVisible');
+    expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).not.toHaveProperty('lockedVisible');
   });
 
   test('an existing preference can intentionally keep Tags hidden', async () => {
@@ -98,7 +108,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 
     expect(res.status).toBe(200);
-    expect(res.body.visible).toEqual(['name', 'email', 'pickupLocation', 'actions']);
+    expect(res.body.visible).toEqual(['name', 'email', 'actions']);
     expect(res.body.visible).not.toContain('tags');
   });
 
@@ -179,7 +189,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     // Locked columns restored (name first, actions appended), known keys kept, unknown dropped.
-    expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'pickupLocation', 'actions']);
+    expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'actions']);
     expect(prisma.tableColumnPreference.upsert).toHaveBeenCalled();
   });
 
@@ -207,6 +217,8 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys).toContain('email');
     for (const genericOnlyKey of [
       'webForm',
+      'plotAssign',
+      'overallPickupStatus',
       'medium',
       'campaign',
       'callStatus',

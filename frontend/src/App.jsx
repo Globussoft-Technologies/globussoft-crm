@@ -310,7 +310,6 @@ const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
 const PickupPlotWorkAssignments = lazy(() => import("./pages/PickupPlotWorkAssignments"));
 const TransportDriverWorkspace = lazy(() => import("./components/TransportDriverWorkspace"));
 const BrokerCustomerWorkspace = lazy(() => import("./components/BrokerCustomerWorkspace"));
-const BillingWorkspace = lazy(() => import("./components/BillingWorkspace"));
 const Quotas = lazy(() => import("./pages/Quotas"));
 const WinLoss = lazy(() => import("./pages/WinLoss"));
 const AbTests = lazy(() => import("./pages/AbTests"));
@@ -3185,7 +3184,13 @@ export default function App() {
                       />
                       <Route
                         path="pickup-customers"
-                        element={<GenericOnly><RoleGuard allow={["ADMIN"]}><PickupCustomers /></RoleGuard></GenericOnly>}
+                        element={
+                          <GenericOnly>
+                            <RoleGuard requiredPermission={{ module: "billing_workspace", action: "read" }}>
+                              <PickupCustomers />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
                       />
                       <Route
                         path="pickup-work-assignments"
@@ -3207,16 +3212,6 @@ export default function App() {
                           <GenericOnly>
                             <RoleGuard requiredPermission={{ module: "broker_workspace", action: "read" }}>
                               <BrokerCustomerWorkspace />
-                            </RoleGuard>
-                          </GenericOnly>
-                        }
-                      />
-                      <Route
-                        path="billing-workspace"
-                        element={
-                          <GenericOnly>
-                            <RoleGuard requiredPermission={{ module: "billing_workspace", action: "read" }}>
-                              <BillingWorkspace />
                             </RoleGuard>
                           </GenericOnly>
                         }

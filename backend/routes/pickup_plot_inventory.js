@@ -10,6 +10,7 @@ const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const { cleanPickupAddress } = require("../lib/callifiedPickup");
 const { safeNotifyCustomerPickupPlotAssignments } = require("../lib/pickupPlotAssignmentWhatsApp");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
 const {
   normalizeBoundary,
   calculateBoundaryAreaSqFt,
@@ -227,6 +228,56 @@ function appendPersonAssignment(person, customerId, plotSiteId) {
   };
 }
 
+function replacePersonPlotAssignment(person, customerId, previousPlotSiteId, replacementPlotSiteId, statusField = null) {
+  const currentPairs = assignmentPairs(person);
+  const hasMatchingPair = currentPairs.some((pair) => (
+    pair.customerId === Number(customerId) && pair.plotSiteId === Number(previousPlotSiteId)
+  ));
+  if (!hasMatchingPair) return null;
+
+  const pairs = currentPairs.map((pair) => (
+    pair.customerId === Number(customerId) && pair.plotSiteId === Number(previousPlotSiteId)
+      ? { ...pair, plotSiteId: Number(replacementPlotSiteId) }
+      : pair
+  ));
+  const pairPlotIds = new Set(pairs.map((pair) => Number(pair.plotSiteId)));
+  const plotSiteIds = [...new Set([
+    ...parseStoredArray(person.plotSiteIdsJson)
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && (
+        id !== Number(previousPlotSiteId) || pairPlotIds.has(id)
+      )),
+    Number(replacementPlotSiteId),
+  ])];
+  const data = {
+    plotSiteIdsJson: sanitizeJsonForStringColumn(plotSiteIds),
+    assignmentPairsJson: sanitizeJsonForStringColumn(pairs),
+  };
+  if (Object.hasOwn(person, "plotSiteId") && Number(person.plotSiteId) === Number(previousPlotSiteId)) {
+    data.plotSiteId = Number(replacementPlotSiteId);
+  }
+  if (statusField) {
+    const statuses = parseStoredObject(person[statusField]);
+    const previousKey = assignmentKey(customerId, previousPlotSiteId);
+    const replacementKey = assignmentKey(customerId, replacementPlotSiteId);
+    if (statuses[previousKey]) {
+      statuses[replacementKey] = {
+        ...statuses[previousKey],
+        ...(Number(statuses[previousKey].plotId) === Number(previousPlotSiteId)
+          ? { plotId: Number(replacementPlotSiteId) }
+          : {}),
+      };
+      delete statuses[previousKey];
+    }
+    const legacyKey = `customer-${Number(customerId)}`;
+    if (Number(statuses[legacyKey]?.plotId) === Number(previousPlotSiteId)) {
+      statuses[legacyKey] = { ...statuses[legacyKey], plotId: Number(replacementPlotSiteId) };
+    }
+    data[statusField] = sanitizeJsonForStringColumn(statuses);
+  }
+  return data;
+}
+
 function removeCustomerFromPerson(person, customerId, statusField = null) {
   const remainingCustomerIds = parseStoredArray(person.customerIdsJson)
     .map(Number)
@@ -270,6 +321,12 @@ function personStartedCustomer(person, customerId, roleType, statusField) {
       }
       return normalizeBrokerWorkflowStatus(saved) !== BROKER_WORKFLOW[0];
     });
+}
+
+function customerTransportStarted(transportPeople, customerId) {
+  return (transportPeople || []).some((person) => (
+    assignmentPairs(person).some((pair) => pair.customerId === Number(customerId))
+  ));
 }
 
 function startedCustomerOwners(people, roleType, statusField) {
@@ -572,6 +629,18 @@ function normalizeBillingWorkflowStatus(saved) {
   };
   if (legacyStatuses[saved?.billingStatus]) return legacyStatuses[saved.billingStatus];
   return saved?.status === "BILLED" ? "TRANSACTION_COMPLETED" : BILLING_WORKFLOW[0];
+}
+
+function billingStatusWithBooking(status, booking) {
+  if (!booking) return status;
+  const totalAmount = Number(booking.totalAmount || 0);
+  const balance = Number(booking.balance ?? totalAmount);
+  const fullyPaid = booking.paymentStatus === "PAID" || (totalAmount > 0 && balance <= 0);
+  if (!fullyPaid) return status;
+
+  const currentIndex = BILLING_WORKFLOW.indexOf(status);
+  const verifiedIndex = BILLING_WORKFLOW.indexOf("PAYMENT_VERIFIED");
+  return currentIndex >= 0 && currentIndex < verifiedIndex ? "PAYMENT_VERIFIED" : status;
 }
 
 async function requireBillingProfile(req, res) {
@@ -2116,7 +2185,7 @@ router.get("/billing/me", requirePermission("billing_workspace", "read"), async 
       ...visibleQueue.map((row) => row.plotId),
       ...waitingQueue.map((row) => row.plotSiteId),
     ].filter(Boolean))];
-    const [customers, plots] = await Promise.all([
+    const [customers, plots, plotBookings] = await Promise.all([
       customerIds.length ? prisma.contact.findMany({
         where: { tenantId, id: { in: customerIds }, deletedAt: null },
         select: { id: true, name: true, phone: true, email: true, company: true },
@@ -2125,29 +2194,55 @@ router.get("/billing/me", requirePermission("billing_workspace", "read"), async 
         where: { tenantId, id: { in: plotIds }, isActive: true },
         select: { id: true, name: true, plotNumber: true, address: true, referenceCode: true, price: true },
       }) : [],
+      customerIds.length && plotIds.length ? prisma.plotBooking.findMany({
+        where: {
+          tenantId,
+          contactId: { in: customerIds },
+          plotSiteId: { in: plotIds },
+          status: { not: "CANCELLED" },
+        },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true, bookingNumber: true, contactId: true, plotSiteId: true,
+          invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
+          amountPaid: true, balance: true,
+        },
+      }) : [],
     ]);
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotMap = new Map(plots.map((row) => [row.id, row]));
-    const assignments = visibleQueue.map((row) => ({
-      assignmentKey: `${row.brokerId}-${row.customerId}-${row.plotId}`,
-      assignedStaff: row.billingPerson ? assignedStaff(row.billingPerson) : null,
-      awaitingAssignment: !row.billingPerson,
-      broker: { id: row.brokerId, name: row.brokerName },
-      customer: customerMap.get(row.customerId) || null,
-      plot: row.plotId ? plotMap.get(row.plotId) || null : null,
-      status: row.billingStatus,
-      statusUpdatedAt: row.billingUpdatedAt,
-      bookingId: row.bookingId,
-      bookingNumber: row.bookingNumber,
-      invoiceId: row.invoiceId,
-      invoiceNum: row.invoiceNum,
-      invoiceAmount: row.invoiceAmount,
-      amountPaid: row.amountPaid,
-      balance: row.balance,
-      paymentId: row.paymentId,
-      paymentMethod: row.paymentMethod,
-      transactionRef: row.transactionRef,
-    })).filter((row) => row.customer && row.plot);
+    const bookingById = new Map(plotBookings.map((row) => [Number(row.id), row]));
+    const bookingByPair = new Map();
+    for (const booking of plotBookings) {
+      const key = assignmentKey(booking.contactId, booking.plotSiteId);
+      if (!bookingByPair.has(key)) bookingByPair.set(key, booking);
+    }
+    const assignments = visibleQueue.map((row) => {
+      const booking = bookingById.get(Number(row.bookingId))
+        || bookingByPair.get(assignmentKey(row.customerId, row.plotId))
+        || null;
+      return {
+        assignmentKey: `${row.brokerId}-${row.customerId}-${row.plotId}`,
+        assignedStaff: row.billingPerson ? assignedStaff(row.billingPerson) : null,
+        awaitingAssignment: !row.billingPerson,
+        broker: { id: row.brokerId, name: row.brokerName },
+        customer: customerMap.get(row.customerId) || null,
+        plot: row.plotId ? plotMap.get(row.plotId) || null : null,
+        status: billingStatusWithBooking(row.billingStatus, booking),
+        statusUpdatedAt: row.billingUpdatedAt,
+        bookingId: booking?.id || row.bookingId,
+        bookingNumber: booking?.bookingNumber || row.bookingNumber,
+        invoiceId: booking?.invoiceId || row.invoiceId,
+        invoiceNum: row.invoiceNum,
+        invoiceAmount: booking ? Number(booking.totalAmount) : row.invoiceAmount,
+        amountPaid: booking ? Number(booking.amountPaid) : row.amountPaid,
+        balance: booking ? Number(booking.balance) : row.balance,
+        paymentStatus: booking?.paymentStatus || null,
+        paymentId: row.paymentId,
+        paymentMethod: row.paymentMethod,
+        transactionRef: row.transactionRef,
+      };
+    }).filter((row) => row.customer && row.plot);
     const waitingAssignments = waitingQueue.map((row) => {
       const brokerAssignment = brokerAssignments.get(assignmentKey(row.customerId, row.plotSiteId));
       return {
@@ -2257,7 +2352,15 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
     if (normalizeBrokerWorkflowStatus(statuses[key]) !== "PLOT_SELECTED") {
       return res.status(409).json({ error: "Customer has not been handed to Billing", code: "CUSTOMER_NOT_READY_FOR_BILLING" });
     }
-    const currentStatus = normalizeBillingWorkflowStatus(statuses[key]);
+    const saved = { ...statuses[key] };
+    const plotId = requestedPlotId;
+    let booking = saved.bookingId
+      ? await prisma.plotBooking.findFirst({ where: { id: Number(saved.bookingId), tenantId: req.user.tenantId } })
+      : await findActivePlotBooking(prisma, req.user.tenantId, customerId, plotId);
+    const currentStatus = billingStatusWithBooking(
+      normalizeBillingWorkflowStatus(statuses[key]),
+      booking,
+    );
     const nextStatus = BILLING_WORKFLOW[BILLING_WORKFLOW.indexOf(currentStatus) + 1];
     if (!nextStatus || req.body?.status !== nextStatus) {
       return res.status(409).json({
@@ -2268,11 +2371,6 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       });
     }
     const now = new Date().toISOString();
-    const saved = { ...statuses[key] };
-    const plotId = requestedPlotId;
-    let booking = saved.bookingId
-      ? await prisma.plotBooking.findFirst({ where: { id: Number(saved.bookingId), tenantId: req.user.tenantId } })
-      : await findActivePlotBooking(prisma, req.user.tenantId, customerId, plotId);
     if (
       currentStatus === BILLING_WORKFLOW[0]
       && nextStatus === BILLING_WORKFLOW[1]
@@ -2627,7 +2725,7 @@ router.get("/lead-status", async (req, res) => {
       return rows.map((row) => row.id);
     };
     const [transportIds, brokerIds] = await Promise.all([assignedIds('TransportPerson'), assignedIds('PlotBroker')]);
-    const [pickups, transportPeople, brokers, eventPages] = await Promise.all([
+    const [pickups, transportPeople, brokers, eventPages, plotBookings] = await Promise.all([
       prisma.customerPickup.findMany({
         where: { tenantId, contactId: { in: visibleContactIds } },
         orderBy: { updatedAt: "desc" },
@@ -2651,6 +2749,15 @@ router.get("/lead-status", async (req, res) => {
         });
         return { contactId, events: events.slice(0, 50).reverse(), hasMore: events.length > 50 };
       })),
+      prisma.plotBooking.findMany({
+        where: {
+          tenantId,
+          contactId: { in: visibleContactIds },
+          status: { not: "CANCELLED" },
+        },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true, contactId: true, plotSiteId: true, status: true, updatedAt: true },
+      }),
     ]);
     const selectedPlotIds = brokers.flatMap((broker) => {
       const statuses = parseStoredObject(broker.workflowStatusJson);
@@ -2664,6 +2771,7 @@ router.get("/lead-status", async (req, res) => {
         assignmentPairs(person).filter((pair) => visibleContactIds.includes(pair.customerId))
           .map((pair) => pair.plotSiteId)),
       ...selectedPlotIds,
+      ...plotBookings.map((booking) => Number(booking.plotSiteId)),
     ].filter((id) => Number.isInteger(id) && id > 0))];
     if (plotIds.length > 200) {
       const error = new Error("Too many plot assignments. Request fewer contacts.");
@@ -2692,13 +2800,51 @@ router.get("/lead-status", async (req, res) => {
       });
       historyByCustomer.set(event.contactId, history);
     }
-    const customers = pickups.map((pickup) => ({
-      ...pickup,
-      pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
-      ...findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap),
-      workflowHistory: historyByCustomer.get(pickup.contactId) || [],
-      workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === pickup.contactId)?.hasMore || false },
-    }));
+    const bookingsByContact = new Map();
+    for (const booking of plotBookings) {
+      const rows = bookingsByContact.get(Number(booking.contactId)) || [];
+      rows.push(booking);
+      bookingsByContact.set(Number(booking.contactId), rows);
+    }
+    const pickupContactIds = new Set(pickups.map((pickup) => Number(pickup.contactId)));
+    const customers = pickups.map((pickup) => {
+      const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap);
+      const bookingPlots = (bookingsByContact.get(Number(pickup.contactId)) || [])
+        .map((booking) => plotMap.get(Number(booking.plotSiteId)))
+        .filter(Boolean);
+      const assignedPlots = [...new Map([
+        workflowStatus.assignedPlot,
+        ...bookingPlots,
+      ].filter(Boolean).map((plot) => [Number(plot.id), plot])).values()];
+      return {
+        ...pickup,
+        pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
+        ...workflowStatus,
+        assignedPlot: workflowStatus.assignedPlot || assignedPlots[0] || null,
+        assignedPlots,
+        workflowHistory: historyByCustomer.get(pickup.contactId) || [],
+        workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === pickup.contactId)?.hasMore || false },
+      };
+    });
+    for (const [contactId, bookings] of bookingsByContact) {
+      if (pickupContactIds.has(contactId)) continue;
+      const assignedPlots = [...new Map(bookings
+        .map((booking) => plotMap.get(Number(booking.plotSiteId)))
+        .filter(Boolean)
+        .map((plot) => [Number(plot.id), plot])).values()];
+      const latestBooking = bookings[0];
+      customers.push({
+        contactId,
+        pickupAddress: null,
+        assignedPlot: assignedPlots[0] || null,
+        assignedPlots,
+        currentStage: "plot",
+        currentStatus: latestBooking?.status || "PLOT_ASSIGNED",
+        currentStatusUpdatedAt: latestBooking?.updatedAt || null,
+        workflowHistory: historyByCustomer.get(contactId) || [],
+        workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === contactId)?.hasMore || false },
+      });
+    }
     return res.json({ customers, pickupLocations });
   } catch (error) {
     console.error("pickup-plot-inventory GET /lead-status error:", error);
@@ -2721,8 +2867,17 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
     if (plotSiteIds.length < 1 || plotSiteIds.length > 50 || plotSiteIds.some((id) => !Number.isInteger(id) || id <= 0)) {
       return res.status(400).json({ error: "Select between 1 and 50 valid plots.", code: "INVALID_PLOT_IDS" });
     }
+    const replacePlotSiteId = req.body?.replacePlotSiteId === undefined
+      ? null
+      : Number(req.body.replacePlotSiteId);
+    if (replacePlotSiteId !== null && (!Number.isInteger(replacePlotSiteId) || replacePlotSiteId <= 0 || plotSiteIds.length !== 1)) {
+      return res.status(400).json({
+        error: "Choose one valid assigned plot and one replacement plot number.",
+        code: "INVALID_PLOT_REPLACEMENT",
+      });
+    }
 
-    const [contact, customerPickup, plots, existingBookings] = await Promise.all([
+    const [contact, customerPickup, plots, existingBookings, transportPeople] = await Promise.all([
       prisma.contact.findFirst({
         where: { id: contactId, tenantId, deletedAt: null },
         select: { id: true },
@@ -2739,12 +2894,16 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
         where: { tenantId, contactId, status: { not: "CANCELLED" } },
         select: { id: true, plotSiteId: true, bookingNumber: true, status: true },
       }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      }),
     ]);
     if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
-    if (!customerPickup) {
+    if (customerTransportStarted(transportPeople, contactId)) {
       return res.status(409).json({
-        error: "Capture the customer's pickup location before assigning plots.",
-        code: "PICKUP_LOCATION_REQUIRED",
+        error: "Pickup location and plot assignments cannot be changed after transport has started.",
+        code: "TRANSPORT_WORKFLOW_LOCKED",
       });
     }
     if (plots.length !== plotSiteIds.length) {
@@ -2780,8 +2939,117 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
     }
     const existingPlots = existingPlotIds.size ? await prisma.plotSite.findMany({
       where: { tenantId, id: { in: [...existingPlotIds] } },
-      select: { id: true, name: true, plotNumber: true },
+      select: { id: true, name: true, plotNumber: true, availability: true },
     }) : [];
+
+    if (replacePlotSiteId !== null) {
+      const sourceBooking = existingBookings.find((booking) => Number(booking.plotSiteId) === replacePlotSiteId);
+      const sourcePlot = existingPlots.find((plot) => Number(plot.id) === replacePlotSiteId);
+      const replacementPlot = plots[0];
+      if (!sourceBooking || !sourcePlot) {
+        return res.status(404).json({ error: "The assigned plot was not found.", code: "ASSIGNED_PLOT_NOT_FOUND" });
+      }
+      const sourceBookingStatus = String(sourceBooking.status || "").trim().toUpperCase();
+      const sourceAvailability = String(sourcePlot.availability || "").trim().toUpperCase();
+      if (
+        sourceAvailability === "SOLD" ||
+        ["PLOT_SOLD", "TRANSACTION_COMPLETED"].includes(sourceBookingStatus)
+      ) {
+        return res.status(409).json({
+          error: "A purchased plot cannot be changed. View the selected plot instead.",
+          code: "PURCHASED_PLOT_IMMUTABLE",
+        });
+      }
+      if (Number(replacementPlot.id) === replacePlotSiteId || existingPlotIds.has(Number(replacementPlot.id))) {
+        return res.status(409).json({
+          error: "Choose a different plot number that is not already assigned to this customer.",
+          code: "PLOT_ALREADY_ASSIGNED",
+        });
+      }
+      if (normalizePlotName(sourcePlot.name) !== normalizePlotName(replacementPlot.name)) {
+        return res.status(400).json({
+          error: "Choose a replacement number from the same Plot / Site name.",
+          code: "PLOT_NAME_MISMATCH",
+        });
+      }
+
+      const [transportPeople, brokers, billingPeople] = await Promise.all([
+        prisma.transportPerson.findMany({ where: { tenantId } }),
+        prisma.plotBroker.findMany({ where: { tenantId } }),
+        prisma.billingPerson.findMany({ where: { tenantId } }),
+      ]);
+      await prisma.$transaction(async (tx) => {
+        if (["RESERVED", "SOLD"].includes(sourceAvailability)) {
+          const reserved = await tx.plotSite.updateMany({
+            where: { id: replacementPlot.id, tenantId, isActive: true, availability: "AVAILABLE" },
+            data: { availability: sourceAvailability },
+          });
+          if (reserved.count !== 1) {
+            const error = new Error("The replacement plot is no longer available. Refresh and choose another plot.");
+            error.statusCode = 409;
+            error.code = "PLOT_NOT_AVAILABLE";
+            throw error;
+          }
+          await tx.plotSite.updateMany({
+            where: { id: replacePlotSiteId, tenantId, availability: sourceAvailability },
+            data: { availability: "AVAILABLE" },
+          });
+        }
+        await tx.plotBooking.update({
+          where: { id: sourceBooking.id },
+          data: { plotSiteId: replacementPlot.id },
+        });
+        if (sourceBooking.invoiceId) {
+          await tx.plotInvoiceItem.updateMany({
+            where: { tenantId, plotBookingId: sourceBooking.id },
+            data: { itemId: replacementPlot.id, description: replacementPlot.name },
+          });
+        }
+        for (const person of transportPeople) {
+          const data = replacePersonPlotAssignment(
+            person, contactId, replacePlotSiteId, replacementPlot.id, "assignmentStatusJson",
+          );
+          if (data) await tx.transportPerson.update({ where: { id: person.id }, data });
+        }
+        for (const person of brokers) {
+          const data = replacePersonPlotAssignment(
+            person, contactId, replacePlotSiteId, replacementPlot.id, "workflowStatusJson",
+          );
+          if (data) await tx.plotBroker.update({ where: { id: person.id }, data });
+        }
+        for (const person of billingPeople) {
+          const data = replacePersonPlotAssignment(
+            person, contactId, replacePlotSiteId, replacementPlot.id,
+          );
+          if (data) await tx.billingPerson.update({ where: { id: person.id }, data });
+        }
+        await appendWorkflowEvent(tx, req, {
+          bookingId: sourceBooking.id,
+          contactId,
+          plotSiteId: replacementPlot.id,
+          stage: "PLOT",
+          fromStatus: sourceBooking.status,
+          toStatus: "PLOT_CHANGED",
+          metadata: {
+            previousPlotSiteId: replacePlotSiteId,
+            replacementPlotSiteId: replacementPlot.id,
+          },
+        });
+      });
+
+      return res.json({
+        contactId,
+        replacedPlotSiteId: replacePlotSiteId,
+        replacementPlotSiteId: Number(replacementPlot.id),
+        assignedPlotIds: existingBookings.map((booking) => (
+          Number(booking.plotSiteId) === replacePlotSiteId
+            ? Number(replacementPlot.id)
+            : Number(booking.plotSiteId)
+        )),
+        bookingsUpdated: 1,
+      });
+    }
+
     const selectedPlotName = [...selectedPlotNames][0] || "";
     const existingNumbers = new Set(existingPlots
       .filter((plot) => normalizePlotName(plot.name) === selectedPlotName)
@@ -2802,7 +3070,7 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
             bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
             tenantId,
             contactId,
-            customerPickupId: customerPickup.id,
+            customerPickupId: customerPickup?.id || null,
             plotSiteId: plot.id,
             status: "PLOT_ASSIGNED",
             paymentStatus: "UNPAID",
@@ -2984,6 +3252,16 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
           paymentStatus: nextBalance === 0 ? "PAID" : "PARTIAL",
         },
       });
+      await syncPlotBookingInvoice(tx, {
+        tenantId,
+        booking,
+        contact,
+        paymentId: payment.id,
+        amountPaid: nextAmountPaid,
+        balance: nextBalance,
+        paymentMode: method,
+        paidAt,
+      });
       await appendWorkflowEvent(tx, req, {
         bookingId: booking.id,
         contactId,
@@ -3022,12 +3300,25 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
   }
 });
 
-router.get("/customer-pickups", adminOnly, async (req, res) => {
+router.get("/customer-pickups", requirePermission("billing_workspace", "read"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const adminOverview = isAdminWorkspaceOverview(req);
+    const profile = adminOverview ? null : await requireBillingProfile(req, res);
+    if (!adminOverview && !profile) return;
+    const pairs = profile ? assignmentPairs(profile.billingPerson).filter((pair) => (
+      Number.isInteger(pair.customerId) && pair.customerId > 0
+      && Number.isInteger(pair.plotSiteId) && pair.plotSiteId > 0
+    )) : [];
+    const allowedPairKeys = new Set(pairs.map((pair) => assignmentKey(pair.customerId, pair.plotSiteId)));
+    const contactIds = [...new Set(pairs.map((pair) => pair.customerId))];
+    const plotIds = [...new Set(pairs.map((pair) => pair.plotSiteId))];
+    const pairWhere = pairs.map((pair) => ({ contactId: pair.customerId, plotSiteId: pair.plotSiteId }));
+    const customerScope = adminOverview ? {} : { contactId: { in: contactIds } };
+    const assignmentScope = adminOverview ? {} : { OR: pairWhere.length ? pairWhere : [{ id: -1 }] };
     const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments] = await Promise.all([
       prisma.customerPickup.findMany({
-        where: { tenantId, contact: { deletedAt: null } },
+        where: { tenantId, ...customerScope, contact: { deletedAt: null } },
         orderBy: { updatedAt: "desc" },
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true } },
@@ -3042,11 +3333,11 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
       }),
       prisma.plotWorkflowEvent.findMany({
-        where: { tenantId },
+        where: { tenantId, ...assignmentScope },
         orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
       }),
       prisma.plotSite.findMany({
-        where: { tenantId },
+        where: { tenantId, ...(!adminOverview ? { id: { in: plotIds } } : {}) },
         select: {
           id: true, name: true, plotNumber: true, block: true, address: true,
           referenceCode: true, area: true, areaUnit: true, roadWidth: true,
@@ -3054,7 +3345,7 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         },
       }),
       prisma.plotBooking.findMany({
-        where: { tenantId },
+        where: { tenantId, ...assignmentScope },
         orderBy: { updatedAt: "desc" },
         select: {
           id: true, bookingNumber: true, contactId: true, plotSiteId: true,
@@ -3066,6 +3357,7 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
       prisma.payment.findMany({
         where: {
           tenantId,
+          ...customerScope,
           OR: [
             { invoiceId: { not: null } },
             { metadata: { contains: '"kind":"plot-booking-payment"' } },
@@ -3079,6 +3371,24 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         },
       }),
     ]);
+    // Legacy person records contain tenant-wide assignment JSON. Trim it
+    // before deriving workflow state so another plot for the same customer
+    // cannot leak through a shared transport/broker profile.
+    if (!adminOverview) {
+      for (const person of [...transportPeople, ...brokers]) {
+        const allowed = assignmentPairs(person).filter((pair) => allowedPairKeys.has(assignmentKey(pair.customerId, pair.plotSiteId)));
+        person.assignmentPairsJson = JSON.stringify(allowed);
+        person.customerIdsJson = JSON.stringify([...new Set(allowed.map((pair) => pair.customerId))]);
+        person.plotSiteIdsJson = JSON.stringify([...new Set(allowed.map((pair) => pair.plotSiteId))]);
+        for (const field of ["assignmentStatusJson", "workflowStatusJson"]) {
+          const statuses = parseStoredObject(person[field]);
+          person[field] = JSON.stringify(Object.fromEntries(allowed.map((pair) => {
+            const key = assignmentKey(pair.customerId, pair.plotSiteId);
+            return [key, statuses[key] || statuses[`customer-${pair.customerId}`]];
+          }).filter(([, value]) => value)));
+        }
+      }
+    }
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
     const historyByCustomer = new Map();
     for (const event of workflowEvents) {
@@ -3112,6 +3422,22 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         Number(row.contactId) === Number(pickup.contactId)
         && (!assignedPlot?.id || Number(row.plotSiteId) === Number(assignedPlot.id))
       )) || financialBookings[0] || null;
+      const effectiveBillingStatus = workflowStatus.currentStage === "billing"
+        ? billingStatusWithBooking(workflowStatus.currentStatus, booking)
+        : workflowStatus.currentStatus;
+      const effectiveWorkflowStatus = effectiveBillingStatus === workflowStatus.currentStatus
+        ? workflowStatus
+        : {
+            ...workflowStatus,
+            currentStatus: effectiveBillingStatus,
+            workflow: {
+              ...workflowStatus.workflow,
+              billing: {
+                ...workflowStatus.workflow.billing,
+                status: effectiveBillingStatus,
+              },
+            },
+          };
       const selectedPlot = booking ? plotMap.get(Number(booking.plotSiteId)) || null : null;
       const payments = plotPayments.filter((payment) => {
         let metadata = {};
@@ -3123,7 +3449,7 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
       return {
         ...pickup,
         pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
-        ...workflowStatus,
+        ...effectiveWorkflowStatus,
         assignedPlot,
         assignedPlots,
         selectedPlot,
@@ -3133,8 +3459,37 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         workflowHistory: historyByCustomer.get(pickup.contactId) || [],
       };
     });
+    const pickupContactIds = new Set(pickups.map((pickup) => Number(pickup.contactId)));
+    const plotOnlyContactIds = [...new Set(bookings
+      .filter((booking) => booking.status !== "CANCELLED")
+      .map((booking) => Number(booking.contactId))
+      .filter((contactId) => Number.isInteger(contactId) && contactId > 0 && !pickupContactIds.has(contactId)))];
+    const plotOnlyContacts = plotOnlyContactIds.length
+      ? await prisma.contact.findMany({
+          where: { tenantId, id: { in: plotOnlyContactIds }, deletedAt: null },
+          select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true },
+        })
+      : [];
+    const plotAssignments = plotOnlyContacts.map((contact) => {
+      const customerBookings = bookings.filter((booking) => (
+        Number(booking.contactId) === Number(contact.id) && booking.status !== "CANCELLED"
+      ));
+      const assignedPlots = [...new Set(customerBookings.map((booking) => Number(booking.plotSiteId)))]
+        .map((plotId) => plotMap.get(plotId))
+        .filter(Boolean);
+      return {
+        contactId: contact.id,
+        contact,
+        assignedPlot: assignedPlots[0] || null,
+        assignedPlots,
+        customerAssignedPlotIds: customerBookings.map((booking) => Number(booking.plotSiteId)),
+        booking: customerBookings.find((booking) => booking.status !== "PLOT_ASSIGNED") || null,
+      };
+    });
     return res.json({
       customers,
+      plotAssignments,
+      allPlots: plots.filter((plot) => plot.isActive),
       plots: plots.filter((plot) => (
         plot.isActive && String(plot.availability || "").trim().toUpperCase() === "AVAILABLE"
       )),
@@ -3175,10 +3530,22 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
     });
     if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
 
-    const existingPickup = await prisma.customerPickup.findUnique({
-      where: { tenantId_contactId: { tenantId, contactId } },
-      select: { id: true },
-    });
+    const [existingPickup, transportPeople] = await Promise.all([
+      prisma.customerPickup.findUnique({
+        where: { tenantId_contactId: { tenantId, contactId } },
+        select: { id: true },
+      }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      }),
+    ]);
+    if (customerTransportStarted(transportPeople, contactId)) {
+      return res.status(409).json({
+        error: "Pickup location and plot assignments cannot be changed after transport has started.",
+        code: "TRANSPORT_WORKFLOW_LOCKED",
+      });
+    }
 
     const sourceTranscriptId = text(req.body.sourceTranscriptId, 191);
     const sourceExcerpt = text(req.body.sourceExcerpt, 4000);
@@ -3226,7 +3593,7 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
 router.get("/", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const [pickupLocations, plots] = await Promise.all([
+    const [pickupLocations, plots, customerPickups, plotBookings] = await Promise.all([
       prisma.pickupLocation.findMany({
         where: { tenantId },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
@@ -3237,7 +3604,38 @@ router.get("/", adminOnly, async (req, res) => {
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
       }),
+      prisma.customerPickup.findMany({
+        where: { tenantId, contact: { deletedAt: null } },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          contactId: true,
+          contact: { select: { id: true, name: true, phone: true, email: true } },
+        },
+      }),
+      prisma.plotBooking.findMany({
+        where: { tenantId, status: { not: "CANCELLED" } },
+        select: { contactId: true, plotSiteId: true },
+      }),
     ]);
+
+    const pickupByContactId = new Map(customerPickups.map((pickup) => [Number(pickup.contactId), pickup]));
+    const assignedPlotIdsByContact = new Map();
+    const assignedContactsByPlot = new Map();
+    for (const booking of plotBookings) {
+      const contactId = Number(booking.contactId);
+      const plotSiteId = Number(booking.plotSiteId);
+      const pickup = pickupByContactId.get(contactId);
+      if (!pickup || !Number.isInteger(plotSiteId)) continue;
+
+      const contactPlotIds = assignedPlotIdsByContact.get(contactId) || new Set();
+      contactPlotIds.add(plotSiteId);
+      assignedPlotIdsByContact.set(contactId, contactPlotIds);
+
+      const plotContacts = assignedContactsByPlot.get(plotSiteId) || new Map();
+      plotContacts.set(contactId, pickup.contact);
+      assignedContactsByPlot.set(plotSiteId, plotContacts);
+    }
 
     const locationPlotCounts = new Map(pickupLocations.map((location) => [location.id, 0]));
     const serializedPlots = plots.map((plot) => {
@@ -3247,6 +3645,7 @@ router.get("/", adminOnly, async (req, res) => {
       }
       return {
         ...serialized,
+        assignedCustomers: [...(assignedContactsByPlot.get(Number(plot.id))?.values() || [])],
         pickupLocations: serialized.pickupLocationIds
           .map((locationId) => pickupLocations.find((location) => location.id === locationId))
           .filter(Boolean)
@@ -3262,6 +3661,11 @@ router.get("/", adminOnly, async (req, res) => {
     return res.json({
       pickupLocations: locationRows,
       plots: serializedPlots,
+      customers: customerPickups.map((pickup) => ({
+        id: pickup.id,
+        contact: pickup.contact,
+        assignedPlotIds: [...(assignedPlotIdsByContact.get(Number(pickup.contactId)) || [])],
+      })),
       summary: {
         activeLocations: locationRows.filter((location) => location.isActive).length,
         totalPlots: activePlots.length,

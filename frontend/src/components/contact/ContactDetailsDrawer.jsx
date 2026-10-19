@@ -108,6 +108,14 @@ function latestWebFormTracking(contact) {
   }
 }
 
+function formatWorkflowLabel(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 export function ContactDetailsGroup({ label, open, onToggle, children, showHeader = true }) {
   return (
     <section className={`cd-group${open ? ' is-open' : ''}`}>
@@ -134,6 +142,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const [activeDetailTab, setActiveDetailTab] = useState('all');
   const [openDetailSections, setOpenDetailSections] = useState({ basic: true, utm: true, custom: true, ad: true });
   const [customDefinitions, setCustomDefinitions] = useState([]);
+  const [genericWorkflowDetails, setGenericWorkflowDetails] = useState(null);
   const [tagDraft, setTagDraft] = useState('');
   const tags = Array.isArray(contact?.tags) ? contact.tags : [];
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -161,6 +170,27 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   }, []);
 
   useEffect(() => {
+    if (!isGeneric || !contact?.id) {
+      setGenericWorkflowDetails(null);
+      return undefined;
+    }
+    let active = true;
+    setGenericWorkflowDetails(null);
+    fetchApi(`/api/pickup-plot-inventory/lead-status?contactIds=${contact.id}`, { silent: true })
+      .then((data) => {
+        const customers = Array.isArray(data?.customers) ? data.customers : [];
+        const details = customers.find((customer) => (
+          Number(customer?.contactId ?? customer?.contact?.id) === Number(contact.id)
+        )) || null;
+        if (active) setGenericWorkflowDetails(details);
+      })
+      .catch(() => {
+        if (active) setGenericWorkflowDetails(null);
+      });
+    return () => { active = false; };
+  }, [contact?.id, isGeneric]);
+
+  useEffect(() => {
     setPendingTags(dedupeTags(contact?.tags));
   }, [contact?.id, contact?.tags]);
 
@@ -181,6 +211,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
 
   const customFields = contact?.customFields || {};
   const webFormTracking = isGeneric ? latestWebFormTracking(contact) : {};
+  const latestWebFormSubmission = contact?.webFormSubmissions?.[0];
   const customKey = (keys) => keys.find((key) => Object.prototype.hasOwnProperty.call(customFields, key));
   const trackingValue = (...keys) => {
     for (const key of keys) {
@@ -189,7 +220,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     }
     return undefined;
   };
-  const basicFields = [
+  const standardBasicFields = [
     { label: 'Email', key: 'email', value: contact?.email },
     { label: 'First name', key: 'firstName', value: contact?.firstName || nameParts[0] },
     { label: 'Last name', key: 'lastName', value: contact?.lastName || nameParts.slice(1).join(' ') },
@@ -207,6 +238,60 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Telegram / WhatsApp / Teams', key: customKey(['telegram', 'whatsapp', 'teams', 'messenger']) || 'messenger', value: contact?.telegram || contact?.whatsapp || contact?.teams || contact?.messenger || customFields.telegram || customFields.whatsapp || customFields.teams || customFields.messenger, custom: true },
     { label: 'Advertising Platform', key: customKey(['advertising_platform', 'advertisingPlatform', 'ad_platform']) || 'advertising_platform', value: contact?.advertisingPlatform || contact?.adPlatform || customFields.advertising_platform || customFields.advertisingPlatform || customFields.ad_platform, custom: true },
   ];
+  const assignedPlots = Array.isArray(genericWorkflowDetails?.assignedPlots)
+    ? genericWorkflowDetails.assignedPlots
+    : genericWorkflowDetails?.assignedPlot
+      ? [genericWorkflowDetails.assignedPlot]
+      : Array.isArray(contact?.assignedPlots)
+        ? contact.assignedPlots
+        : contact?.assignedPlot
+          ? [contact.assignedPlot]
+          : [];
+  const overallPickupStatus = genericWorkflowDetails?.currentStatus
+    ? [formatWorkflowLabel(genericWorkflowDetails.currentStage), formatWorkflowLabel(genericWorkflowDetails.currentStatus)].filter(Boolean).join(': ')
+    : contact?.overallPickupStatus || contact?.currentStatus || contact?.workflowStatus;
+  const genericBasicFields = [
+    { label: 'Name', key: 'name', value: contact?.name },
+    { label: 'Email', key: 'email', value: contact?.email },
+    { label: 'First Name', key: 'firstName', value: contact?.firstName || nameParts[0] },
+    { label: 'Last Name', key: 'lastName', value: contact?.lastName || nameParts.slice(1).join(' ') },
+    { label: 'WhatsApp Number', key: 'whatsappPhone', value: contact?.whatsappPhone },
+    { label: 'Company', key: 'company', value: contact?.company },
+    { label: 'Lead Score', key: 'aiScore', value: contact?.aiScore, readOnly: true },
+    { label: 'Source', key: 'source', value: contact?.source },
+    { label: 'Web Form', key: 'webForm', value: latestWebFormSubmission?.webForm?.name || contact?.webFormName, readOnly: true },
+    { label: 'Medium', key: 'medium', value: contact?.medium },
+    { label: 'Pickup Location', key: 'pickupLocation', value: genericWorkflowDetails?.pickupAddress || contact?.pickupAddress || contact?.pickupLocation, readOnly: true },
+    { label: 'Plot Assign', key: 'plotAssign', value: assignedPlots.map((plot) => plot?.plotNumber || plot?.name).filter(Boolean).join(', ') || contact?.plotAssign, readOnly: true },
+    { label: 'Overall Status', key: 'overallPickupStatus', value: overallPickupStatus, readOnly: true },
+    { label: 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email, owner: true },
+    { label: 'Created', key: 'createdAt', value: contact?.createdAt, readOnly: true },
+    { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId, readOnly: true },
+    { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus, readOnly: true },
+    { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore, readOnly: true },
+    { label: 'Status', key: 'status', value: contact?.status },
+    { label: 'Job Title', key: 'title', value: contact?.title },
+    { label: 'Website URL', key: 'website', value: contact?.website },
+    { label: 'LinkedIn', key: 'linkedin', value: contact?.linkedin },
+    { label: 'Service Type', key: 'industry', value: contact?.industry },
+    { label: 'No Of Employee', key: 'companySize', value: contact?.companySize },
+    { label: 'Sub-brand', key: 'subBrand', value: contact?.subBrand },
+    { label: 'Note', key: 'description', value: contact?.description },
+    { label: 'State', key: 'stateCode', value: contact?.stateCode },
+    { label: 'Last Updated', key: 'lastUpdated', value: contact?.updatedAt, readOnly: true },
+    { label: 'First Touch Source', key: 'firstTouchSource', value: contact?.firstTouchSource },
+    { label: 'Last Touch Source', key: 'lastTouchSource', value: contact?.lastTouchSource },
+    { label: 'Treatment Of Interest', key: 'treatmentOfInterest', value: contact?.treatmentOfInterest },
+    { label: 'Birth Date', key: 'birthDate', value: contact?.birthDate },
+    { label: 'Anniversary', key: 'anniversary', value: contact?.anniversary },
+    { label: 'GSTIN', key: 'gst', value: contact?.gst },
+    { label: 'Billing State Code', key: 'billingStateCode', value: contact?.billingStateCode },
+    { label: 'Keyword', key: customKey(['keyword']) || 'keyword', value: contact?.keyword ?? customFields.keyword, custom: true, readOnly: true },
+    { label: 'Monthly Budget', key: customKey(['monthly_budget', 'monthlyBudget']) || 'monthly_budget', value: contact?.monthlyBudget ?? customFields.monthly_budget ?? customFields.monthlyBudget, custom: true, type: 'number' },
+    { label: 'Telegram / WhatsApp / Teams', key: customKey(['telegram', 'whatsapp', 'teams', 'messenger']) || 'messenger', value: contact?.telegram || contact?.whatsapp || contact?.teams || contact?.messenger || customFields.telegram || customFields.whatsapp || customFields.teams || customFields.messenger, custom: true },
+    { label: 'Advertising Platform', key: customKey(['advertising_platform', 'advertisingPlatform', 'ad_platform']) || 'advertising_platform', value: contact?.advertisingPlatform || contact?.adPlatform || customFields.advertising_platform || customFields.advertisingPlatform || customFields.ad_platform, custom: true },
+  ];
+  const basicFields = isGeneric ? genericBasicFields : standardBasicFields;
   const dynamicFields = customDefinitions
     .filter((definition) => !basicFields.some((field) => field.key === definition.fieldKey) && !(isGeneric && GENERIC_TRACKING_KEYS.has(definition.fieldKey)))
     .map((definition) => {
@@ -248,6 +333,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Page URL', key: 'pageUrl', value: trackingValue('pageUrl'), readOnly: true },
     { label: 'Page Title', key: 'pageTitle', value: trackingValue('pageTitle'), readOnly: true },
     { label: 'Page Source', key: 'pageSource', value: trackingValue('pageSource'), readOnly: true },
+    { label: 'Referrer URL', key: 'referrerUrl', value: trackingValue('referrerUrl'), readOnly: true },
     { label: 'Landing Page URL', key: 'landingPageUrl', value: trackingValue('landingPageUrl'), readOnly: true },
     { label: 'Current Domain', key: 'currentDomain', value: trackingValue('currentDomain'), readOnly: true },
     { label: 'Form Name / ID', key: 'formName', value: trackingValue('formName'), readOnly: true },

@@ -99,7 +99,7 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.getByText('RESIDENTIAL')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Show Plot A-9 address on Google Maps' })).toHaveAttribute(
       'href',
-      'https://www.google.com/maps/search/?api=1&query=25%20Lake%20Road',
+      'https://www.google.com/maps/search/?api=1&query=Plot%20A-9%2C%2025%20Lake%20Road',
     );
     expect(screen.getByTestId('pickup-plot-inventory-page')).toHaveStyle({
       display: 'flex', height: '100%', minHeight: '0', overflow: 'hidden',

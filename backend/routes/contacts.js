@@ -2431,7 +2431,12 @@ router.get("/:id", async (req, res) => {
         assignedTo: { select: { id: true, name: true, email: true } },
         ...(isGenericCrmRequest(req) ? {
           webFormSubmissions: {
-            select: { id: true, payloadJson: true, submittedAt: true },
+            select: {
+              id: true,
+              payloadJson: true,
+              submittedAt: true,
+              webForm: { select: { id: true, name: true } },
+            },
             orderBy: { submittedAt: "desc" },
             take: 1,
           },

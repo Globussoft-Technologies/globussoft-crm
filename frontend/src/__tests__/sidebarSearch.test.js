@@ -81,9 +81,6 @@ describe('filterSidebarPages', () => {
     expect(genericRoleGuardProps('/sales-workspace')).toEqual({
       requiredPermission: { module: 'broker_workspace', action: 'read' },
     });
-    expect(genericRoleGuardProps('/billing-workspace')).toEqual({
-      requiredPermission: { module: 'billing_workspace', action: 'read' },
-    });
   });
 
   it('includes navigable pages and external launchers in the searchable catalogue', () => {

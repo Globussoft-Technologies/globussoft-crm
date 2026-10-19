@@ -86,13 +86,6 @@ const LEGACY_GENERIC_PAGE_CATALOG = [
     requiredPermissions: [{ module: 'staff', action: 'manage' }],
   },
   {
-    path: '/pickup-customers',
-    label: 'Customer Status',
-    description: 'Track customer progress from pickup through broker and billing',
-    category: 'Pickup & Plot',
-    requiredPermissions: [{ module: 'staff', action: 'manage' }],
-  },
-  {
     path: '/admin/status',
     label: 'Status',
     description: 'Platform status admin',

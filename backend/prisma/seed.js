@@ -496,7 +496,7 @@ async function main() {
     await prisma.invoice.create({
       data: {
         invoiceNum: inv.num, amount: inv.amount, status: inv.status, dueDate: inv.due,
-        contactId: contacts[inv.ci].id, dealId: deals[inv.di].id,
+        contactId: contacts[inv.ci].id, dealId: deals[inv.di].id, currency: 'INR',
       },
     });
   }

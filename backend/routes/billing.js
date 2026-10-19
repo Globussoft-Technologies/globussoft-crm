@@ -12,6 +12,7 @@ const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { formatMoney } = require("../utils/formatMoney");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
 const {
   sanitizeText,
   sanitizeJsonForStringColumn,
@@ -75,6 +76,10 @@ function isTravelRequest(req) {
 
 function isWellnessRequest(req) {
   return req.user?.vertical === "wellness";
+}
+
+function isGenericRequest(req) {
+  return !req.user?.vertical || req.user.vertical === "generic";
 }
 
 async function loadInvoiceBrandContext(tenantId, tenant) {
@@ -1409,6 +1414,9 @@ router.post(
           ? subBrandRaw
           : null;
 
+      const invoiceTenant = isGenericRequest(req)
+        ? await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { defaultCurrency: true } })
+        : null;
       const baseData = {
         invoiceNum: invNum,
         amount: Math.round((resolvedInvoiceAmount ?? amt) * 100) / 100, // #198: store to-the-paise; reject was above
@@ -1416,6 +1424,7 @@ router.post(
         contactId: resolvedContactId,
         dealId: dealId ? parseInt(dealId) : null,
         tenantId: req.user.tenantId,
+        ...(isGenericRequest(req) ? { currency: invoiceTenant?.defaultCurrency || "USD" } : {}),
         ...wellnessData,
       };
       let invoice;
@@ -2955,7 +2964,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
         ownerEmail: true,
       },
     });
-    const currency = tenant?.defaultCurrency || "USD";
+    const currency = invoice.currency || tenant?.defaultCurrency || "USD";
     const locale = tenant?.locale || undefined;
 
     // Keep the corporate and wellness documents separate. Both receive the

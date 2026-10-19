@@ -1365,7 +1365,6 @@ const PAGE_ICON_BY_PATH = {
   "/pipeline": Briefcase,
   "/transport-workspace": Truck,
   "/sales-workspace": Handshake,
-  "/billing-workspace": Receipt,
   // Finance
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
@@ -2791,14 +2790,13 @@ function renderGenericNav({
       {renderGroup("Pickup & Plot", <>
         <Link to="/pickup-plot-inventory" icon={MapIcon} label="Plot Inventory" adminOnly />
         <Link to="/pickup-inventory" icon={MapPin} label="Pickup Inventory" adminOnly />
-        <Link to="/pickup-customers" icon={MapPin} label="Customer Workflows" adminOnly />
+        <Link to="/pickup-customers" icon={MapPin} label="Customer Workflows" requiredPermission={{ module: "billing_workspace", action: "read" }} />
         <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
         <Link to="/plot-brokers" icon={Handshake} label="Sales Executives" adminOnly />
         <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
         <Link to="/pickup-work-assignments" icon={ClipboardCheck} label="Assign Staff Work" adminOnly />
         <Link to="/transport-workspace" icon={Truck} label="Transport Work" requiredPermission={{ module: "transport_workspace", action: "read" }} />
         <Link to="/sales-workspace" icon={Handshake} label="Site Visits" requiredPermission={{ module: "broker_workspace", action: "read" }} />
-        <Link to="/billing-workspace" icon={Receipt} label="Billing Queue" requiredPermission={{ module: "billing_workspace", action: "read" }} />
       </>)}
 
       {renderGroup("Administration", <>

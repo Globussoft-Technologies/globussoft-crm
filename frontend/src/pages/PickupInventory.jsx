@@ -253,7 +253,7 @@ export default function PickupInventory() {
           }}
         >
           <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-resizable-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
               <ResizableTableHeader

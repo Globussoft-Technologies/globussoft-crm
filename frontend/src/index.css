@@ -4072,8 +4072,8 @@ table.leads-table thead th {
   .leads-split-table--density-comfortable
   .generic-overall-status-content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-template-areas: "status date action";
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "status action";
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
@@ -4174,9 +4174,7 @@ table.leads-table thead th {
   .generic-overall-status-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "status action"
-    "date action";
+  grid-template-areas: "status action";
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
@@ -8199,4 +8197,56 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 
 .card.pickup-plot-table-scroll:hover {
   transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+/* Generic CRM Pickup & Plot tables intentionally keep their resting visual
+   state on pointer hover. Row click handlers (for example Customer Status
+   selection) remain active, and the selected-row class keeps its highlight. */
+body[data-vertical="generic"] table.pickup-plot-leads-table {
+  width: 100%;
+  background-color: var(--surface-color);
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
+body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
+  background-color: var(--modal-bg) !important;
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table th,
+body[data-vertical="generic"] table.pickup-plot-leads-table td {
+  box-sizing: border-box;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--surface-color);
+  background-clip: padding-box;
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table th:first-child,
+body[data-vertical="generic"] table.pickup-plot-leads-table td:first-child {
+  border-left: 1px solid var(--border-color);
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table th:last-child,
+body[data-vertical="generic"] table.pickup-plot-leads-table td:last-child {
+  border-right: 0;
+}
+
+body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr {
+  transition: none;
+}
+
+body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-selected):hover,
+body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-selected):hover > td {
+  background-color: transparent !important;
+  box-shadow: none;
+  transform: none;
+  filter: none;
 }

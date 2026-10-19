@@ -56,6 +56,8 @@ export default function ColumnPicker({
     "lastUpdated",
     "companySize",
     "pickupLocation",
+    "plotAssign",
+    "overallPickupStatus",
     "actions",
   ];
 

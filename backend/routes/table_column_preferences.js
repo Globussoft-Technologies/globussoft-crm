@@ -67,7 +67,9 @@ const BUILTIN_COLUMNS = {
     { key: "webForm", label: "Web Form" },
     { key: "medium", label: "Medium" }, // Contact.medium — web-form Medium, kept separate from Source
     { key: "location", label: "Location" },
-    { key: "pickupLocation", label: "Pickup Location", lockedVisible: true },
+    { key: "pickupLocation", label: "Pickup Location" },
+    { key: "plotAssign", label: "Plot Assign" },
+    { key: "overallPickupStatus", label: "Overall Status" },
     { key: "tags", label: "Tags" },
     { key: "assignedTo", label: "Assigned To" },
     { key: "createdAt", label: "Created" },
@@ -179,7 +181,7 @@ function getDefaultVisibleColumns(tableKey, vertical) {
   if (vertical === "generic" && tableKey === "leads") {
     return [
       "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm",
-      "medium", "location", "pickupLocation", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
+      "medium", "location", "pickupLocation", "plotAssign", "overallPickupStatus", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
       "callStatus", "callifiedAi", "callifiedScore",
     ];
   }
@@ -245,9 +247,7 @@ router.get("/:tableKey", async (req, res) => {
         tableKey,
         saved.filter((k) => availableKeys.has(k)),
       );
-      // Restore locked columns on read as well as write. Pickup Location was
-      // promoted to a core Leads column after many users already had saved
-      // layouts, so those layouts must receive it without a manual reset.
+      // Restore genuinely locked columns on read as well as write.
       const lockedKeys = getBuiltinColumns(tableKey, res.locals.tenantVertical)
         .filter((column) => column.lockedVisible)
         .map((column) => column.key);

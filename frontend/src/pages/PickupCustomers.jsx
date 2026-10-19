@@ -79,7 +79,7 @@ function PickupLocationLink({ address, customerName }) {
 function DetailTable({ label, rows }) {
   return (
     <div className="pickup-detail-table-wrap">
-      <table className="pickup-detail-table" aria-label={label}>
+      <table className="pickup-detail-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label={label}>
         <tbody>{rows.map(([name, value]) => <tr key={name}><th scope="row">{name}</th><td>{value || "Not available"}</td></tr>)}</tbody>
       </table>
     </div>
@@ -89,7 +89,7 @@ function DetailTable({ label, rows }) {
 function PaymentTable({ label, payments }) {
   return (
     <div className="pickup-payment-table-wrap">
-      <table className="pickup-payment-table" aria-label={label}>
+      <table className="pickup-payment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label={label}>
         <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th></tr></thead>
         <tbody>{payments.map((payment) => (
           <tr key={payment.id}>
@@ -130,7 +130,7 @@ function PaymentSection({ customer, selectedPlot, plannedInstallments, onGenerat
       </section>
       <section className="pickup-detail-section" aria-labelledby="future-installments-heading">
         <div className="pickup-section-heading pickup-section-heading-with-action"><span className="pickup-section-icon"><WalletCards size={17} /></span><div><h3 id="future-installments-heading">Future installments</h3><p>Every payment after the initial deposit is listed here.</p></div>{canGeneratePayment && initialPaymentCompleted && <button type="button" className="btn-primary pickup-generate-payment" onClick={onAddInstallment}><Plus size={15} /> Add installment</button>}</div>
-        {plannedInstallments.length > 0 && <table className="pickup-detail-table" aria-label="Planned installments"><thead><tr><th>Month</th><th>Year</th><th>Amount</th><th>Action</th></tr></thead><tbody>{plannedInstallments.map((installment) => <tr key={installment.id}><td>{installment.monthLabel}</td><td>{installment.year}</td><td>{formatMoney(installment.amount)}</td><td><button type="button" className="btn-primary" onClick={() => onInitiateInstallment(installment)}><Link2 size={14} /> Initiate payment</button></td></tr>)}</tbody></table>}
+        {plannedInstallments.length > 0 && <table className="pickup-detail-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Planned installments"><thead><tr><th>Month</th><th>Year</th><th>Amount</th><th>Action</th></tr></thead><tbody>{plannedInstallments.map((installment) => <tr key={installment.id}><td>{installment.monthLabel}</td><td>{installment.year}</td><td>{formatMoney(installment.amount)}</td><td><button type="button" className="btn-primary" onClick={() => onInitiateInstallment(installment)}><Link2 size={14} /> Initiate payment</button></td></tr>)}</tbody></table>}
         {installments.length ? <><div className="pickup-payment-balance"><span>Remaining installment balance</span><strong>{formatMoney(balance)}</strong></div><PaymentTable label="Future installment payments" payments={installments} /></> : (
           <div className="pickup-payment-empty"><strong>{balance > 0 ? "No installment has been recorded yet" : "No future installments due"}</strong><span>{balance > 0 ? `${formatMoney(balance)} remains on this booking.` : "Any later installment will appear here as a table row."}</span></div>
         )}
@@ -281,7 +281,6 @@ export default function PickupCustomers() {
       });
     return [...byNumber.values()];
   }, [availablePlots, selectedPlotName]);
-
   const openEdit = (row) => { setEditingCustomer(row); setEditAddress(row.pickupAddress || ""); };
   const openPlotAssignment = (row) => {
     const assignedName = String(row.assignedPlots?.[0]?.name || "").trim();
@@ -428,13 +427,13 @@ export default function PickupCustomers() {
     <main className="pickup-customers-page" data-testid="pickup-customers-page">
       <header className="pickup-page-header"><div><h1><MapPin size={28} /> Customer Status</h1><p>Select a customer to review their plot, deposit, and installment details.</p></div><button type="button" className="btn-secondary pickup-refresh" onClick={load} disabled={loading}><RefreshCw size={15} /> Refresh</button></header>
       <div className="pickup-master-detail">
-        <aside className="card pickup-customer-directory" aria-label="Customer directory">
+        <aside className="card pickup-plot-table-scroll pickup-customer-directory" aria-label="Customer directory">
           <div className="pickup-directory-toolbar">
             <label><Search size={15} aria-hidden="true" /><input className="input-field" type="search" aria-label="Search customer status" placeholder="Search customers..." value={search} onChange={(event) => setSearch(event.target.value)} /></label>
             <select className="input-field" aria-label="Filter customer trip status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="waiting">Awaiting assignment</option><option value="active">Active trips</option><option value="completed">Completed</option></select>
           </div>
           <div className="pickup-directory-scroll" data-testid="pickup-customers-table-scroll">
-            <table className="pickup-customer-table" aria-label="Customer list">
+            <table className="pickup-customer-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Customer list">
               <thead><tr><th>Customer</th><th>Contact</th><th>Status</th></tr></thead>
               <tbody>
                 {visibleCustomers.map((row) => { const selected = row.id === selectedCustomer?.id; const journeyStatus = customerJourneyStatus(row); return <tr key={row.id} className={selected ? "is-selected" : ""} onClick={() => setSelectedCustomerId(row.id)}><td><button type="button" onClick={() => setSelectedCustomerId(row.id)} aria-pressed={selected}>{row.contact?.name || "Customer"}</button><small>{row.assignedPlot?.name || row.contact?.interestedPlotArea || "No plot selected"}</small></td><td>{row.contact?.phone || row.contact?.email || "Not available"}</td><td><span style={pickupTripStatusStyle(journeyStatus)}>{formatPickupStatus(journeyStatus)}</span></td></tr>; })}
@@ -443,7 +442,7 @@ export default function PickupCustomers() {
             </table>
           </div>
         </aside>
-        <section className="card pickup-detail-pane" aria-live="polite">
+        <section className="card pickup-plot-table-scroll pickup-detail-pane" aria-live="polite">
           {loading ? <div className="pickup-detail-placeholder">Loading customer details…</div> : selectedCustomer ? <CustomerDetails key={selectedCustomer.id} customer={selectedCustomer} plannedInstallments={plannedInstallments[selectedCustomer.booking?.id] || []} onEdit={() => openEdit(selectedCustomer)} onAssignPlots={() => openPlotAssignment(selectedCustomer)} onViewAssignedPlots={() => setViewingAssignedPlots(selectedCustomer)} onViewStatus={() => setViewingCustomer(selectedCustomer)} onGeneratePayment={() => openPayment(selectedCustomer)} onAddInstallment={() => openInstallment(selectedCustomer)} onInitiateInstallment={(installment) => openPayment(selectedCustomer, installment)} /> : <div className="pickup-detail-placeholder"><UserRound size={34} /><strong>Select a customer</strong><span>Their details will appear here.</span></div>}
         </section>
       </div>

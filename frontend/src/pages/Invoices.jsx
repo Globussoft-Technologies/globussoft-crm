@@ -369,7 +369,7 @@ export default function Invoices() {
   const isGeneric = vertical === "generic";
   const isTravel = vertical === "travel";
   const isWellness = vertical === "wellness";
-  const invoiceDisplayCurrency = isGeneric ? "INR" : undefined;
+  const invoiceDisplayCurrency = isGeneric ? tenant?.defaultCurrency || user?.tenant?.defaultCurrency : undefined;
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand() || {};
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -2634,15 +2634,15 @@ export default function Invoices() {
                             fontWeight: 600,
                           }}
                         >
-                          {formatCurrency(inv.amount, invoiceDisplayCurrency)}
+                          {formatCurrency(inv.amount, inv.currency || invoiceDisplayCurrency)}
                         </span>
                         {isPartiallyPaid && (
                           <div
                             data-testid={`invoice-payment-progress-${inv.id}`}
                             style={{ marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.35, color: "var(--text-secondary)" }}
                           >
-                            <div>Paid {formatCurrency(amountPaid, invoiceDisplayCurrency)}</div>
-                            <div>Balance {formatCurrency(balanceDue, invoiceDisplayCurrency)}</div>
+                            <div>Paid {formatCurrency(amountPaid, inv.currency || invoiceDisplayCurrency)}</div>
+                            <div>Balance {formatCurrency(balanceDue, inv.currency || invoiceDisplayCurrency)}</div>
                           </div>
                         )}
                       </td>
@@ -2951,7 +2951,7 @@ export default function Invoices() {
               }}
             >
               Invoice {recurInvoice.invoiceNum} ·{" "}
-              {formatCurrency(recurInvoice.amount, invoiceDisplayCurrency)}
+              {formatCurrency(recurInvoice.amount, recurInvoice.currency || invoiceDisplayCurrency)}
             </p>
 
             {recurInvoice.isRecurring ? (
@@ -3216,7 +3216,7 @@ export default function Invoices() {
               <strong>{linkModal.inv.contact?.name || "the customer"}</strong>{" "}
               to collect payment for invoice{" "}
               <strong>{linkModal.inv.invoiceNum}</strong> (
-              {formatCurrency(linkModal.inv.amount, invoiceDisplayCurrency)}).
+              {formatCurrency(linkModal.inv.amount, linkModal.inv.currency || invoiceDisplayCurrency)}).
             </p>
             <div
               style={{

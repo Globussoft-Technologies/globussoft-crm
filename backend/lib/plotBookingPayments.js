@@ -22,7 +22,7 @@ async function reconcilePlotBookingPayment(payment) {
   try { metadata = JSON.parse(payment?.metadata || '{}'); } catch { return null; }
   const bookingId = Number(metadata?.plotBookingId);
   if (metadata?.kind !== 'plot-booking-payment' || !Number.isInteger(bookingId) || bookingId <= 0) return null;
-  const reconciled = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     // All booking balance writers take the same row lock before reading.
     await lockBooking(tx, payment.tenantId, bookingId);
     const booking = await tx.plotBooking.findFirst({ where: { id: bookingId, tenantId: payment.tenantId } });
@@ -34,25 +34,24 @@ async function reconcilePlotBookingPayment(payment) {
       where: { id: booking.id },
       data: { amountPaid, balance, paymentStatus: balance === 0 ? 'PAID' : 'PARTIAL' },
     });
-    return {
+    const reconciled = {
       ...booking,
       ...updated,
       totalAmount: total,
       amountPaid,
       balance,
     };
+    await syncPlotBookingInvoice(tx, {
+      tenantId: payment.tenantId,
+      booking: reconciled,
+      paymentId: payment.id,
+      amountPaid: reconciled.amountPaid,
+      balance: reconciled.balance,
+      paymentMode: payment.gateway,
+      paidAt: payment.paidAt || new Date(),
+    });
+    return reconciled;
   });
-  if (!reconciled) return null;
-  await syncPlotBookingInvoice(prisma, {
-    tenantId: payment.tenantId,
-    booking: reconciled,
-    paymentId: payment.id,
-    amountPaid: reconciled.amountPaid,
-    balance: reconciled.balance,
-    paymentMode: payment.gateway,
-    paidAt: payment.paidAt || new Date(),
-  });
-  return reconciled;
 }
 
 module.exports = { lockBooking, successfulPaymentTotal, reconcilePlotBookingPayment };

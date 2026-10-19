@@ -3303,9 +3303,22 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
 router.get("/customer-pickups", requirePermission("billing_workspace", "read"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const adminOverview = isAdminWorkspaceOverview(req);
+    const profile = adminOverview ? null : await requireBillingProfile(req, res);
+    if (!adminOverview && !profile) return;
+    const pairs = profile ? assignmentPairs(profile.billingPerson).filter((pair) => (
+      Number.isInteger(pair.customerId) && pair.customerId > 0
+      && Number.isInteger(pair.plotSiteId) && pair.plotSiteId > 0
+    )) : [];
+    const allowedPairKeys = new Set(pairs.map((pair) => assignmentKey(pair.customerId, pair.plotSiteId)));
+    const contactIds = [...new Set(pairs.map((pair) => pair.customerId))];
+    const plotIds = [...new Set(pairs.map((pair) => pair.plotSiteId))];
+    const pairWhere = pairs.map((pair) => ({ contactId: pair.customerId, plotSiteId: pair.plotSiteId }));
+    const customerScope = adminOverview ? {} : { contactId: { in: contactIds } };
+    const assignmentScope = adminOverview ? {} : { OR: pairWhere.length ? pairWhere : [{ id: -1 }] };
     const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments] = await Promise.all([
       prisma.customerPickup.findMany({
-        where: { tenantId, contact: { deletedAt: null } },
+        where: { tenantId, ...customerScope, contact: { deletedAt: null } },
         orderBy: { updatedAt: "desc" },
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true } },
@@ -3320,11 +3333,11 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
       }),
       prisma.plotWorkflowEvent.findMany({
-        where: { tenantId },
+        where: { tenantId, ...assignmentScope },
         orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
       }),
       prisma.plotSite.findMany({
-        where: { tenantId },
+        where: { tenantId, ...(!adminOverview ? { id: { in: plotIds } } : {}) },
         select: {
           id: true, name: true, plotNumber: true, block: true, address: true,
           referenceCode: true, area: true, areaUnit: true, roadWidth: true,
@@ -3332,7 +3345,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         },
       }),
       prisma.plotBooking.findMany({
-        where: { tenantId },
+        where: { tenantId, ...assignmentScope },
         orderBy: { updatedAt: "desc" },
         select: {
           id: true, bookingNumber: true, contactId: true, plotSiteId: true,
@@ -3344,6 +3357,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
       prisma.payment.findMany({
         where: {
           tenantId,
+          ...customerScope,
           OR: [
             { invoiceId: { not: null } },
             { metadata: { contains: '"kind":"plot-booking-payment"' } },
@@ -3357,6 +3371,24 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         },
       }),
     ]);
+    // Legacy person records contain tenant-wide assignment JSON. Trim it
+    // before deriving workflow state so another plot for the same customer
+    // cannot leak through a shared transport/broker profile.
+    if (!adminOverview) {
+      for (const person of [...transportPeople, ...brokers]) {
+        const allowed = assignmentPairs(person).filter((pair) => allowedPairKeys.has(assignmentKey(pair.customerId, pair.plotSiteId)));
+        person.assignmentPairsJson = JSON.stringify(allowed);
+        person.customerIdsJson = JSON.stringify([...new Set(allowed.map((pair) => pair.customerId))]);
+        person.plotSiteIdsJson = JSON.stringify([...new Set(allowed.map((pair) => pair.plotSiteId))]);
+        for (const field of ["assignmentStatusJson", "workflowStatusJson"]) {
+          const statuses = parseStoredObject(person[field]);
+          person[field] = JSON.stringify(Object.fromEntries(allowed.map((pair) => {
+            const key = assignmentKey(pair.customerId, pair.plotSiteId);
+            return [key, statuses[key] || statuses[`customer-${pair.customerId}`]];
+          }).filter(([, value]) => value)));
+        }
+      }
+    }
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
     const historyByCustomer = new Map();
     for (const event of workflowEvents) {

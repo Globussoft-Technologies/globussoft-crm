@@ -12,9 +12,29 @@ beforeEach(() => {
   prisma.$transaction.mockReset().mockImplementation(callback => callback(prisma));
   prisma.plotBooking.findFirst.mockReset().mockResolvedValue({ id: 12, tenantId: 7, totalAmount: 1000 });
   prisma.plotBooking.update.mockReset().mockImplementation(async ({ data }) => ({ id: 12, ...data }));
+  prisma.contact = { findFirst: vi.fn().mockResolvedValue(null) };
+  prisma.plotSite = { findFirst: vi.fn().mockResolvedValue(null) };
 });
 
 describe('plot booking payment reconciliation', () => {
+  test('synchronizes invoices before releasing the transaction and rolls back on invoice failure', async () => {
+    let active = false;
+    prisma.$transaction.mockImplementation(async callback => {
+      active = true;
+      try { return await callback(prisma); } finally { active = false; }
+    });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 12, tenantId: 7, totalAmount: 1000, invoiceId: 50 });
+    prisma.invoice = {
+      findFirst: vi.fn(async () => { expect(active).toBe(true); return { id: 50 }; }),
+      update: vi.fn(async () => { expect(active).toBe(true); throw new Error('invoice failure'); }),
+    };
+    const payment = { tenantId: 7, metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 12 }) };
+    await expect(reconcilePlotBookingPayment(payment)).rejects.toThrow('invoice failure');
+    expect(prisma.invoice.update).toHaveBeenCalledOnce();
+    expect(active).toBe(false);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.invoice.findFirst.mock.invocationCallOrder[0]);
+  });
+
   test('uses exact JSON identity, kind, tenant and successful status in a database aggregate', async () => {
     prisma.$queryRaw.mockResolvedValue([{ amountPaid: 100 }]);
     expect(await successfulPaymentTotal(prisma, 7, 12)).toBe(100);

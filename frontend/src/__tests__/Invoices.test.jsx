@@ -39,7 +39,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 // Keep currency assertions deterministic while still honoring the explicit
-// Generic CRM INR override supplied by the page.
+// Deterministic currency formatting for tenant and per-invoice currency tests.
 vi.mock('../utils/money', () => ({
   formatMoney: (v, opts = {}) => `${opts.currency === 'INR' ? '₹' : '$'}${(Number(v) || 0).toFixed(2)}`,
   currencySymbol: () => '$',
@@ -236,8 +236,8 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText('INV-003')).toBeInTheDocument();
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
     expect(screen.getByText('Globex Inc')).toBeInTheDocument();
-    expect(screen.getByText('₹1234.56')).toBeInTheDocument();
-    expect(screen.getByText('₹5000.00')).toBeInTheDocument();
+    expect(screen.getByText('$1234.56')).toBeInTheDocument();
+    expect(screen.getByText('$5000.00')).toBeInTheDocument();
     // Status badges (Paid/Unpaid/Voided). Multiple elements may match — Unpaid
     // and Paid also appear as <option>s in the create-form Status dropdown,
     // and Voided in the ledger's status-filter dropdown.
@@ -271,6 +271,16 @@ describe('<Invoices /> — page surface', () => {
     expect(invoiceNumbers).toEqual(['NEWEST-INVOICE', 'MIDDLE-INVOICE', 'OLDER-INVOICE']);
   });
 
+  it('preserves a stored USD invoice when the Generic tenant defaults to INR', async () => {
+    fetchApiMock.mockImplementation((url, opts) => url === '/api/billing'
+      ? Promise.resolve([{ ...sampleInvoices[0], currency: 'USD', invoiceNum: 'USD-ORIGINAL' }])
+      : defaultFetchMock(url, opts));
+    renderInvoices(ADMIN_USER, { vertical: 'generic', defaultCurrency: 'INR' });
+    const label = await screen.findByText('USD-ORIGINAL');
+    expect(label.closest('tr')).toHaveTextContent('$1234.56');
+    expect(label.closest('tr')).not.toHaveTextContent('₹1234.56');
+  });
+
   it('shows partial plot-payment progress in the Generic CRM ledger', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
@@ -290,8 +300,8 @@ describe('<Invoices /> — page surface', () => {
 
     await waitFor(() => expect(screen.getByText('PLOT-PARTIAL')).toBeInTheDocument());
     expect(screen.getByText('Partially paid')).toBeInTheDocument();
-    expect(screen.getByText('Paid ₹1.00')).toBeInTheDocument();
-    expect(screen.getByText('Balance ₹199999.00')).toBeInTheDocument();
+    expect(screen.getByText('Paid $1.00')).toBeInTheDocument();
+    expect(screen.getByText('Balance $199999.00')).toBeInTheDocument();
   });
 
   it('refreshes the Generic CRM invoice ledger when returning from payment', async () => {
@@ -520,7 +530,7 @@ describe('<Invoices /> — page surface', () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
     // Outstanding = UNPAID (1234.56) — PAID + VOIDED are excluded.
-    expect(screen.getByText(/Outstanding:\s*₹1234\.56/i)).toBeInTheDocument();
+    expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
   });
 
   it('Invoice # field is read-only and seeded from nextInvoiceNum', async () => {
@@ -783,7 +793,7 @@ describe('<Invoices /> — page surface', () => {
   it('renders the KPI pills: Outstanding, Paid This Month, and total count', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
-    expect(screen.getByText(/Outstanding:\s*₹1234\.56/i)).toBeInTheDocument();
+    expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
     expect(screen.getByText(/Paid This Month:/i)).toBeInTheDocument();
     expect(screen.getByText(/3 total invoices/i)).toBeInTheDocument();
   });

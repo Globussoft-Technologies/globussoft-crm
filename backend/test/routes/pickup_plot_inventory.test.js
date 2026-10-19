@@ -3580,6 +3580,7 @@ describe('customer pickup status', () => {
   });
 
   test('allows billing workspace readers to open the customer workflow directory', async () => {
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 9, assignmentPairsJson: JSON.stringify([{ customerId: 61, plotSiteId: 30 }]) });
     prisma.userRole.findMany.mockResolvedValue([{
       role: { permissions: [{ module: 'billing_workspace', action: 'read' }] },
     }]);
@@ -3587,6 +3588,39 @@ describe('customer pickup status', () => {
     const response = await request(makeApp({ role: 'USER', isOwner: false }))
       .get('/api/pickup-plot-inventory/customer-pickups');
     expect(response.status).toBe(200);
+    expect(prisma.customerPickup.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, contactId: { in: [61] }, contact: { deletedAt: null } },
+    }));
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, OR: [{ contactId: 61, plotSiteId: 30 }] },
+    }));
+  });
+
+  test('denies billing readers without a linked profile before loading customer data', async () => {
+    prisma.userRole.findMany.mockResolvedValue([{ role: { permissions: [{ module: 'billing_workspace', action: 'read' }] } }]);
+    prisma.billingPerson.findFirst.mockResolvedValue(null);
+    const response = await request(makeApp({ role: 'USER', isOwner: false }))
+      .get('/api/pickup-plot-inventory/customer-pickups');
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('BILLING_PROFILE_NOT_LINKED');
+    expect(prisma.customerPickup.findMany).not.toHaveBeenCalled();
+  });
+
+  test('billing readers with no assignments cannot query the tenant directory', async () => {
+    prisma.userRole.findMany.mockResolvedValue([{ role: { permissions: [{ module: 'billing_workspace', action: 'read' }] } }]);
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 9, assignmentPairsJson: '[]', customerIdsJson: '[]' });
+    const response = await request(makeApp({ role: 'USER', isOwner: false }))
+      .get('/api/pickup-plot-inventory/customer-pickups');
+    expect(response.status).toBe(200);
+    expect(prisma.customerPickup.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ contactId: { in: [] } }),
+    }));
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ OR: [{ id: -1 }] }),
+    }));
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ contactId: { in: [] } }),
+    }));
   });
 
   test('denies the customer workflow directory without billing workspace access', async () => {

@@ -310,10 +310,11 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
     }
   });
 
-  test("forces INR for Generic CRM PDFs even when legacy tenant currency is USD", async () => {
+  test("preserves the stored Generic invoice currency when the tenant currency differs", async () => {
     const invoice = {
       id: 102,
       invoiceNum: "PLOT-INR-102",
+      currency: "EUR",
       amount: 200000,
       status: "UNPAID",
       issuedDate: new Date("2026-10-19T00:00:00.000Z"),
@@ -341,7 +342,7 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
         invoice,
         invoice.contact,
         null,
-        expect.objectContaining({ currency: "INR", locale: "en-IN" }),
+        expect.objectContaining({ currency: invoice.currency || "USD", locale: "en-US" }),
       );
     } finally {
       renderSpy.mockRestore();
@@ -632,7 +633,8 @@ describe("POST /api/billing/public/confirm-payment - payment-link statuses", () 
 // ─── POST / — Invoice creation (validation contract) ───────────────
 
 describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
-  test("happy path: amount + dueDate + contactId → 201 with created row", async () => {
+  test.each(['USD', 'EUR', 'INR'])("happy path preserves tenant currency %s", async (currency) => {
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: currency });
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.invoice.create.mockResolvedValue({
       id: 1001,
@@ -653,7 +655,7 @@ describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
     expect(createArgs.data.amount).toBe(250);
     expect(createArgs.data.contactId).toBe(42);
     expect(createArgs.data.tenantId).toBe(1);
-    expect(createArgs.data.currency).toBe("INR");
+    expect(createArgs.data.currency).toBe(currency);
     expect(createArgs.data.invoiceNum).toMatch(/^INV-/);
   });
 

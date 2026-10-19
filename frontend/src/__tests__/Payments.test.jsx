@@ -140,11 +140,11 @@ describe('<Payments /> — page surface', () => {
     });
     renderPayments({ userId: 3, role: 'CUSTOMER', userType: 'CUSTOMER' });
     await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent('205 payments'));
-    expect(screen.getByText('\u20B99999.00')).toBeInTheDocument();
+    expect(screen.getByText('$9999.00')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) => url.includes('/api/payments?page=2&limit=10'))).toBe(true));
     await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 2 of 21/));
-    expect(screen.getByText('\u20B99999.00')).toBeInTheDocument();
+    expect(screen.getByText('$9999.00')).toBeInTheDocument();
   });
 
   it('ignores an older customer response after changing gateway filters', async () => {
@@ -158,10 +158,10 @@ describe('<Payments /> — page surface', () => {
     renderPayments({ userId: 3, role: 'CUSTOMER', userType: 'CUSTOMER' });
     await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
     fireEvent.click(screen.getByRole('button', { name: /^Stripe$/i }));
-    await screen.findByText('\u20B9222.00');
+    await screen.findByText('$222.00');
     resolveOld({ data: [samplePayments[0]], total: 999, totalPages: 100, stats: { collected: 9999, pending: 0, failed: 0 } });
     await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent('1 payments'));
-    expect(screen.queryByText('\u20B99999.00')).not.toBeInTheDocument();
+    expect(screen.queryByText('$9999.00')).not.toBeInTheDocument();
   });
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -190,12 +190,11 @@ describe('<Payments /> — page surface', () => {
 
   it('renders one row per payment with invoiceId, amount, and gateway+status badges', async () => {
     renderPayments();
-    // Generic CRM always renders rows in INR even if a legacy tenant default
-    // still says USD. The SUCCESS amount also surfaces in the Total Collected stat
-    // card, so it appears twice in the DOM.
+    // Preserve each payment's currency; the tenant currency only formats
+    // aggregate cards and records without an explicit currency.
     await waitFor(() => expect(screen.getAllByText('\u20B91500.00').length).toBeGreaterThanOrEqual(1));
-    expect(screen.getByText('\u20B9250.00')).toBeInTheDocument();
-    expect(screen.getByText('\u20B975.00')).toBeInTheDocument();
+    expect(screen.getByText('$250.00')).toBeInTheDocument();
+    expect(screen.getByText('$75.00')).toBeInTheDocument();
     // Invoice IDs render in the "For" column as "Invoice #<id>".
     expect(screen.getByText('Invoice #101')).toBeInTheDocument();
     expect(screen.getByText('Invoice #102')).toBeInTheDocument();
@@ -225,9 +224,9 @@ describe('<Payments /> — page surface', () => {
     });
 
     renderPayments();
-    expect(await screen.findByText('\u20B954321.00')).toBeInTheDocument();
+    expect(await screen.findByText('$54321.00')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Stripe$/i }));
-    expect(await screen.findByText('\u20B9250.00')).toBeInTheDocument();
+    expect(await screen.findByText('$250.00')).toBeInTheDocument();
     expect(fetchApiMock.mock.calls.some(([url]) => (
       url.startsWith('/api/payments/stats?')
       && url.includes('dateBasis=payment')
@@ -526,10 +525,10 @@ describe('<Payments /> — page surface', () => {
     });
     renderPayments();
     await waitFor(() => expect(screen.getByText('Invoice #121')).toBeInTheDocument());
-    // Total Collected should render ₹1000.00 (only SUCCESS amount counted —
+    // Total Collected should render $1000.00 (only SUCCESS amount counted —
     // mock formatMoney here uses .toFixed(2); real behavior covered by money.test.js).
     // Same amount also renders in the row's Amount cell (row #121).
-    const matches = screen.getAllByText('\u20B91000.00');
+    const matches = screen.getAllByText('$1000.00');
     expect(matches.length).toBeGreaterThanOrEqual(2);
   });
 });

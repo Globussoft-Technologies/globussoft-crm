@@ -174,7 +174,7 @@ export default function Payments() {
   const isAdmin = user?.role === "ADMIN";
   const isCustomer = user?.role === "CUSTOMER" || user?.userType === "CUSTOMER";
   const isGenericCrm = (tenant?.vertical || user?.tenant?.vertical) === "generic";
-  const displayCurrency = isGenericCrm ? "INR" : undefined;
+  const displayCurrency = isGenericCrm ? tenant?.defaultCurrency || user?.tenant?.defaultCurrency : undefined;
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
@@ -303,7 +303,7 @@ export default function Payments() {
         override: booking,
         title: booking
           ? "Admin override — refund now (bypasses the cancellation policy)"
-          : `Refund ${formatCurrency(p.amount, displayCurrency)} via Razorpay`,
+          : `Refund ${formatCurrency(p.amount, p.currency || displayCurrency)} via Razorpay`,
       };
     },
     [isBookingPayment, isAdmin, user, displayCurrency],
@@ -325,7 +325,7 @@ export default function Payments() {
     } else {
       const ok = await notify.confirm({
         title: "Refund payment?",
-        message: `Refund ${formatCurrency(p.amount, displayCurrency)} back to the customer via Razorpay? This cannot be undone.`,
+        message: `Refund ${formatCurrency(p.amount, p.currency || displayCurrency)} back to the customer via Razorpay? This cannot be undone.`,
         confirmText: "Refund",
         cancelText: "Cancel",
         destructive: true,
@@ -342,7 +342,7 @@ export default function Payments() {
         body: JSON.stringify(reason ? { reason: String(reason).trim() } : {}),
       });
       setNotice(
-        `Refund of ${formatCurrency(p.amount, displayCurrency)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
+        `Refund of ${formatCurrency(p.amount, p.currency || displayCurrency)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
       );
       await loadAll();
     } catch (err) {
@@ -894,7 +894,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     })()}
                   </Td>
                   <Td>
-                    <strong>{formatCurrency(p.amount, displayCurrency)}</strong>
+                    <strong>{formatCurrency(p.amount, p.currency || displayCurrency)}</strong>
                   </Td>
                   <Td>
                     <GatewayBadge gateway={p.gateway} />
@@ -1510,7 +1510,7 @@ function DetailModal({ payment, displayCurrency, onClose }) {
         </DetailRow>
         <DetailRow label="Amount">
           <strong>
-            {formatCurrency(payment.amount, displayCurrency)} {displayCurrency || payment.currency}
+            {formatCurrency(payment.amount, payment.currency || displayCurrency)} {payment.currency || displayCurrency}
           </strong>
         </DetailRow>
         <DetailRow label="Gateway">

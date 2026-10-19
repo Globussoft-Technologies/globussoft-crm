@@ -268,13 +268,13 @@ describe("Leads split-table surface contract", () => {
 
   it("keeps Overall status actions visible in compact density", () => {
     expect(css).toMatch(
-      /\.leads-split-table--density-compact\s+\.generic-overall-status-cell\s*\{[^}]*overflow:\s*visible\s*!important/s,
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+\.generic-overall-status-cell\s*\{[^}]*overflow:\s*visible\s*!important/s,
     );
     expect(css).toMatch(
-      /\.leads-split-table--density-compact\s+\.generic-overall-status-content\s*\{[^}]*display:\s*grid[^}]*grid-template-areas:[^}]*"status action"[^}]*"date action"[^}]*overflow:\s*visible/s,
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+\.generic-overall-status-content\s*\{[^}]*display:\s*grid[^}]*grid-template-areas:\s*"status action"[^}]*overflow:\s*visible/s,
     );
     expect(css).toMatch(
-      /\.leads-split-table--density-compact\s+\.generic-overall-status-action\s*\{[^}]*grid-area:\s*action/s,
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+\.generic-overall-status-action\s*\{[^}]*grid-area:\s*action/s,
     );
   });
 

@@ -38,11 +38,10 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
-// Keep currency assertions deterministic while still honoring the explicit
-// Deterministic currency formatting for tenant and per-invoice currency tests.
+// Keep symbols deterministic while exercising each row's selected currency.
 vi.mock('../utils/money', () => ({
-  formatMoney: (v, opts = {}) => `${opts.currency === 'INR' ? '₹' : '$'}${(Number(v) || 0).toFixed(2)}`,
-  currencySymbol: () => '$',
+  formatMoney: (v, opts = {}) => `${{ INR: '₹', USD: '$', EUR: '€' }[opts.currency || 'USD'] || opts.currency}${(Number(v) || 0).toFixed(2)}`,
+  currencySymbol: (currency = 'USD') => ({ INR: '₹', USD: '$', EUR: '€' })[currency] || currency,
 }));
 vi.mock('../utils/date', () => ({
   formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '—'),
@@ -348,6 +347,22 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.queryByText('INV-003')).toBeNull();
   });
 
+  it('shows invoice amounts and recorded payments in their own currencies', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) return Promise.resolve([
+        { ...sampleInvoices[0], currency: 'INR' },
+        { ...sampleInvoices[1], currency: 'USD', paidAt: new Date().toISOString(), receivedPayments: [{ currency: 'EUR', amount: 4500 }] },
+      ]);
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices();
+    expect(await screen.findByText('₹1234.56')).toBeInTheDocument();
+    expect(screen.getByText('$5000.00')).toBeInTheDocument();
+    expect(screen.getByText(/Received: €4500\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Outstanding: ₹1234\.56/)).toBeInTheDocument();
+    expect(screen.getByText(/Paid This Month: €4500\.00/)).toBeInTheDocument();
+  });
+
   it('shows the empty-state message when /api/billing returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/billing') return Promise.resolve([]);
@@ -489,8 +504,16 @@ describe('<Invoices /> — page surface', () => {
       const body = JSON.parse(call[1].body);
       expect(body.contactId).toBe('1');
       expect(body.amount).toBe('999.99');
+      expect(body.currency).toBe('USD');
       expect(body.dueDate).toBe('2099-07-01');
     });
+  });
+
+  it('starts a new invoice in the tenant currency', async () => {
+    renderInvoices(ADMIN_USER, { defaultCurrency: 'INR' });
+    await openCreateInvoiceForm();
+    expect(screen.getByRole('combobox', { name: 'Invoice currency' })).toHaveValue('INR');
+    expect(screen.getByText('Amount (₹)')).toBeInTheDocument();
   });
 
   it('blocks previous due dates and keeps the create modal open', async () => {
@@ -1237,7 +1260,7 @@ describe('<Invoices /> — wellness customer invoice form', () => {
       expect(screen.getByLabelText(/Line item 1 product or service/i).value).toBe('21');
       expect(screen.getByLabelText(/Line item 2 product or service/i).value).toBe('Aftercare kit');
     });
-    expect(screen.getByText('$2500.00', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.getByText('₹2500.00', { selector: 'strong' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/Billing address/i), { target: { value: '12 Clinic Road, Ranchi' } });
     fireEvent.change(screen.getByLabelText(/Shipping or service address/i), { target: { value: '12 Clinic Road, Ranchi' } });
     fireEvent.change(screen.getByLabelText(/Due date/i), { target: { value: '2099-12-31' } });
@@ -1291,7 +1314,7 @@ describe('<Invoices /> — wellness customer invoice form', () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText(/Line item 1 unit price/i).value).toBe('5000');
-      expect(screen.getByText('$5000.00', { selector: 'strong' })).toBeInTheDocument();
+      expect(screen.getByText('₹5000.00', { selector: 'strong' })).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByLabelText(/Due date/i), { target: { value: '2099-12-31' } });

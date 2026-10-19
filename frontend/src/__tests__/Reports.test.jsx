@@ -107,7 +107,7 @@ import ReportsPage from '../pages/Reports';
 // Reports renders <Link> (clickable navigation); give every render(<Reports />)
 // call site a Router context without touching the 20+ call sites.
 const Reports = (props) => (
-  <MemoryRouter>
+  <MemoryRouter initialEntries={[props.initialEntry || '/reports']}>
     <ReportsPage {...props} />
   </MemoryRouter>
 );
@@ -152,6 +152,18 @@ describe('<Reports /> — broad page surface', () => {
     notifyObj.info.mockReset();
     notifyObj.success.mockReset();
     fetchApiMock.mockImplementation(defaultFetchImpl);
+  });
+
+  it('starts with the dashboard date range and queries that period', async () => {
+    const { container } = render(<Reports initialEntry="/reports?from=2026-10-15&to=2026-10-20" />);
+    const dateInputs = container.querySelectorAll('input[type="date"]');
+    expect(dateInputs[0]).toHaveValue('2026-10-15');
+    expect(dateInputs[1]).toHaveValue('2026-10-20');
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) => {
+      if (!url.startsWith('/api/reports/query?')) return false;
+      const params = new URL(url, 'http://localhost').searchParams;
+      return params.get('from') === '2026-10-15' && params.get('to') === '2026-10-20';
+    })).toBe(true));
   });
 
   it('renders the page header title + tagline', async () => {

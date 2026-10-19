@@ -53,19 +53,14 @@ const TABS = [
 
 const PARTICIPANT_IMPORT_SCHEMA = [
   { key: "fullName", required: true, description: "Student / participant name" },
-  { key: "parentName", description: "Parent or guardian name" },
-  { key: "parentPhone", description: "10-digit Indian mobile or E.164 number" },
-  { key: "parentEmail", description: "Parent email; used when matching rows" },
+  { key: "parentName", required: true, description: "Parent or guardian full name" },
+  { key: "parentPhone", required: true, description: "10-digit Indian mobile or E.164 number; format as text in Excel" },
+  { key: "parentEmail", required: true, description: "Valid parent email; used when matching rows" },
   { key: "applicationStatus", description: "pending, approved, rejected, or waitlisted" },
   { key: "passportNumber", description: "Passport number (international trips)" },
   { key: "passportExpiry", description: "ISO date, e.g. 2027-02-21" },
   { key: "aadhaarLast4", description: "Exactly 4 digits; never upload full Aadhaar" },
   { key: "medicalNotes", description: "Medical notes" },
-  { key: "consentCapturedAt", description: "ISO date/time" },
-  { key: "passportExtractedAt", description: "ISO date/time" },
-  { key: "passportVerifiedAt", description: "ISO date/time" },
-  { key: "passportRejectedAt", description: "ISO date/time" },
-  { key: "passportDocId", description: "Existing ContactAttachment ID" },
   { key: "reviewNotes", description: "Operator review notes" },
 ];
 
@@ -1131,7 +1126,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   Import Participants from CSV / Excel
                 </h2>
                 <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
-                  Upload a CSV or Excel (XLSX) file using the exact column names below.
+                  Download a template and enter one participant per row. Keep the first row of column names unchanged.
                   Existing rows are updated additively and blank cells never clear stored data.
                 </p>
               </div>
@@ -1168,7 +1163,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                <code style={{ color: "var(--text-primary)" }}>fullName</code> is required. Use the exact headers shown; aliases <code style={{ color: "var(--text-primary)" }}>name</code> and <code style={{ color: "var(--text-primary)" }}>status</code> are also accepted.
+                <code style={{ color: "var(--text-primary)" }}>fullName</code>, <code>parentName</code>, <code>parentPhone</code>, and <code>parentEmail</code> are required in every row. Keep phone numbers as text in Excel. Use the Participants sheet for XLSX; the Instructions sheet explains each column.
               </div>
               <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
                 <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>

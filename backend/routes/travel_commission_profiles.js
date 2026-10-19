@@ -1523,9 +1523,9 @@ router.post(
       const normalizedAgentUserId = normalizeOptionalInt(agentUserId, "agentUserId");
       const normalizedValidFrom = normalizeOptionalDate(validFrom, "validFrom");
       const normalizedValidTo = normalizeOptionalDate(validTo, "validTo");
-      if (normalizedValidFrom && normalizedValidTo && normalizedValidFrom > normalizedValidTo) {
+      if (normalizedValidFrom && normalizedValidTo && normalizedValidFrom >= normalizedValidTo) {
         return res.status(400).json({
-          error: "validFrom must be on or before validTo",
+          error: "validTo must be after validFrom",
           code: "INVALID_DATE_RANGE",
         });
       }
@@ -1664,9 +1664,9 @@ router.put(
       if (validTo !== undefined) data.validTo = normalizeOptionalDate(validTo, "validTo");
       const nextValidFrom = data.validFrom !== undefined ? data.validFrom : existing.validFrom;
       const nextValidTo = data.validTo !== undefined ? data.validTo : existing.validTo;
-      if (nextValidFrom && nextValidTo && nextValidFrom > nextValidTo) {
+      if (nextValidFrom && nextValidTo && nextValidFrom >= nextValidTo) {
         return res.status(400).json({
-          error: "validFrom must be on or before validTo",
+          error: "validTo must be after validFrom",
           code: "INVALID_DATE_RANGE",
         });
       }

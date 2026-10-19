@@ -2949,6 +2949,30 @@ table.stable-table tbody tr:hover td {
   border-width: inherit;
   font-weight: inherit;
 }
+
+/* Keep the Currencies page still while the pointer moves across its cards and table. */
+.currencies-page .card::before,
+.currencies-page .btn-primary::after {
+  display: none;
+}
+.currencies-page .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+.currencies-page table.stable-table tbody tr:hover {
+  background-color: transparent;
+}
+.currencies-page .btn-primary:hover {
+  transform: none;
+  box-shadow: 0 4px 15px var(--accent-glow);
+}
+.currencies-page .btn-secondary:hover {
+  background: var(--surface-color);
+  border-color: var(--border-color);
+  transform: none;
+  box-shadow: none;
+}
 table.stable-table th,
 table.stable-table td {
   overflow: hidden;

@@ -70,6 +70,7 @@ const {
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 const {
   buildParticipantImportTemplate,
+  missingParticipantImportHeaders,
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
 } = require("../lib/travelTmcImport");
@@ -1897,6 +1898,29 @@ router.delete(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      const [paidInvoice, paidInstalment] = await Promise.all([
+        prisma.travelInvoice.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            tripId: id,
+            OR: [{ status: { in: ["Paid", "Partial"] } }, { paidAt: { not: null } }],
+          },
+          select: { id: true },
+        }),
+        prisma.tripInstalmentPayment.findFirst({
+          where: {
+            tripId: id,
+            OR: [{ status: { in: ["paid", "partial"] } }, { paidAmount: { gt: 0 } }],
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (paidInvoice || paidInstalment) {
+        return res.status(409).json({
+          error: "This trip cannot be deleted because a payment has been recorded for it.",
+          code: "TRIP_HAS_PAYMENTS",
+        });
+      }
       await prisma.tmcTrip.delete({ where: { id } });
       res.json({ deleted: true, id });
     } catch (e) {
@@ -2301,7 +2325,7 @@ async function loadStaffParentDocument({ tenantId, tripId, parentEmail, document
 const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
 
 // GET /api/travel/trips/:id/participants/import-template
-// Download a header-only starter file. Keeping the template on the server
+// Download a starter file. Keeping the template on the server
 // means its columns stay aligned with the parser used by the import route.
 router.get(
   "/trips/:id/participants/import-template",
@@ -2385,6 +2409,14 @@ router.post(
       }
 
       const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      const missingHeaders = missingParticipantImportHeaders(parsed.headers);
+      if (missingHeaders.length > 0) {
+        return res.status(400).json({
+          error: `Missing required columns: ${missingHeaders.join(", ")}. Download the participant import template and use its exact headers.`,
+          code: "MISSING_COLUMNS",
+          missingColumns: missingHeaders,
+        });
+      }
       if (rows.length === 0) {
         return res
           .status(400)

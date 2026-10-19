@@ -409,6 +409,19 @@ describe('GET /api/contacts — list', () => {
     expect(prisma.contact.count).not.toHaveBeenCalled();
   });
 
+  test('count-only dashboard request uses the full tenant and inclusive date range', async () => {
+    prisma.contact.count.mockResolvedValue(2105);
+    const res = await request(makeApp()).get('/api/contacts?count=1&from=2026-10-01&to=2026-10-19');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ total: 2105 });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.contact.count).toHaveBeenCalledWith({ where: expect.objectContaining({
+      tenantId: TENANT_ID,
+      deletedAt: null,
+      createdAt: { gte: new Date('2026-10-01T00:00:00.000Z'), lt: new Date('2026-10-20T00:00:00.000Z') },
+    }) });
+  });
+
   test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
     const res = await request(makeApp()).get(
       '/api/contacts?status=Customer&q=Acme&callifiedCampaignIds=41,42&count=1',

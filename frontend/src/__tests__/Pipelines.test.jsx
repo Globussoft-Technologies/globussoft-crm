@@ -295,7 +295,9 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     render(<Pipelines />);
     await screen.findByText('Enterprise Sales');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
-    fireEvent.change(await screen.findByRole('combobox', { name: /Select Existing Stage/i }), { target: { value: '21' } });
+    const existingStageSelect = await screen.findByRole('combobox', { name: /Select Existing Stage/i });
+    await waitFor(() => expect(existingStageSelect.disabled).toBe(false));
+    fireEvent.change(existingStageSelect, { target: { value: '21' } });
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. Enterprise Sales/i), { target: { value: 'Reusable Pipeline' } });
     fireEvent.click(screen.getAllByRole('button', { name: /Create Pipeline/i }).at(-1));
 
@@ -324,6 +326,43 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     expect(descTextarea.value).toBe('Self-serve + low-touch inbound');
     // Footer button now reads "Save Changes" (not "Create Pipeline").
     expect(screen.getByRole('button', { name: /Save Changes/i })).toBeInTheDocument();
+  });
+
+  it('disables existing-stage selection when every stage is already selected', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pipeline_stages?pipelineId=12') return Promise.resolve([
+        { id: 21, name: 'Discovery' }, { id: 22, name: 'Qualified' },
+      ]);
+      if (url === '/api/pipeline_stages?reusable=true') return Promise.resolve([
+        { id: 21, name: 'Discovery' }, { id: 22, name: 'Qualified' },
+      ]);
+      return defaultFetchMock(url, opts);
+    });
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
+    const modal = screen.getByRole('heading', { name: /^Edit Pipeline$/i }).closest('.card');
+    await within(modal).findByText('Qualified');
+    const select = within(modal).getByRole('combobox', { name: /Select Existing Stage/i });
+    expect(select.disabled).toBe(true);
+    expect(select.title).toBe('All existing stages are already selected.');
+    expect(select.parentElement.title).toBe('All existing stages are already selected.');
+    expect(select.style.pointerEvents).toBe('none');
+    fireEvent.click(within(modal).getAllByRole('button', { name: 'Remove stage' })[0]);
+    expect(select.disabled).toBe(false);
+    expect(select.parentElement.title).toBe('');
+    expect(select.style.pointerEvents).toBe('auto');
+    expect(within(select).getByRole('option', { name: 'Discovery' })).toBeInTheDocument();
+  });
+
+  it('explains when no existing stages are available', async () => {
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
+    const select = screen.getByRole('combobox', { name: /Select Existing Stage/i });
+    await waitFor(() => expect(select.title).toBe('No existing stages are available.'));
+    expect(select.disabled).toBe(true);
+    expect(select.parentElement.title).toBe('No existing stages are available.');
   });
 
   it('saving an Edit fires PUT /api/pipelines/<id> with name+description; isDefault is NOT in the PUT body', async () => {

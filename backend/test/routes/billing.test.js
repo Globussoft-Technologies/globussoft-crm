@@ -659,6 +659,20 @@ describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
     expect(createArgs.data.invoiceNum).toMatch(/^INV-/);
   });
 
+  test("uses the tenant currency by default and accepts an explicit invoice currency", async () => {
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: "INR" });
+    prisma.invoice.create.mockResolvedValue({ id: 1, amount: 250, currency: "INR" });
+    const app = makeApp();
+    const payload = { amount: 250, dueDate: futureDate, contactId: 42 };
+
+    expect((await request(app).post("/api/billing").send(payload)).status).toBe(201);
+    expect(prisma.invoice.create.mock.calls[0][0].data.currency).toBe("INR");
+
+    expect((await request(app).post("/api/billing").send({ ...payload, currency: "USD" })).status).toBe(201);
+    expect(prisma.invoice.create.mock.calls[1][0].data.currency).toBe("USD");
+  });
+
   test("amount ≤ 0 → 400 INVALID_AMOUNT", async () => {
     const app = makeApp();
     const futureDate = new Date(Date.now() + 86400000).toISOString();
@@ -1296,6 +1310,7 @@ describe("POST /api/billing/:id/mark-paid — UNPAID → PAID + idempotency (#20
       id: 7,
       invoiceNum: "INV-X",
       amount: 100,
+      currency: "USD",
       status: "UNPAID",
       tenantId: 1,
       contactId: 42,
@@ -1326,6 +1341,7 @@ describe("POST /api/billing/:id/mark-paid — UNPAID → PAID + idempotency (#20
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
     expect(updateArgs.data.status).toBe("PAID");
     expect(updateArgs.data.paidAt).toBeInstanceOf(Date);
+    expect(prisma.payment.create.mock.calls[0][0].data.currency).toBe("USD");
     // invoice.paid emitted (downstream automations subscribe).
     const eventNames = eventBus.emitEvent.mock.calls.map(([name]) => name);
     expect(eventNames).toContain("invoice.paid");
@@ -1489,6 +1505,22 @@ describe("POST /api/billing/:id/credit-note — issue credit note (#193)", () =>
 // ─── GET / — ?fields=summary slim-shape opt-in (#920 slice 31) ─────
 
 describe("GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)", () => {
+  test("includes the invoice currency and groups recorded payment amounts by currency", async () => {
+    prisma.invoice.findMany.mockResolvedValue([{
+      id: 7, invoiceNum: "INV-X", amount: 8000, currency: "INR", status: "PAID",
+    }]);
+    prisma.payment.findMany.mockResolvedValue([
+      { invoiceId: 7, amount: 60, currency: "USD" },
+      { invoiceId: 7, amount: 40, currency: "USD" },
+    ]);
+    const res = await request(makeApp()).get("/api/billing");
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ currency: "INR", receivedPayments: [{ currency: "USD", amount: 100 }] });
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, invoiceId: { in: [7] }, status: "SUCCESS" },
+    }));
+  });
+
   test("?fields=summary → Prisma called with `select` (no nested includes)", async () => {
     prisma.invoice.findMany.mockResolvedValue([
       {

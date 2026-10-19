@@ -56,11 +56,11 @@ beforeEach(() => {
 // silently relied on the Dashboard's role-fallback defaulting to ADMIN —
 // that fallback was changed to 'USER' (least-privilege) after a security
 // review, so explicit ADMIN context is now required for these assertions.
-function renderDashboard(userOverride) {
+function renderDashboard(userOverride, initialEntry = '/dashboard') {
   const authValue = { user: { id: 1, role: 'ADMIN', email: 'admin@test.com' }, ...(userOverride || {}) };
   return render(
     <AuthContext.Provider value={authValue}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Dashboard />
       </MemoryRouter>
     </AuthContext.Provider>
@@ -70,6 +70,48 @@ function renderDashboard(userOverride) {
 describe('<Dashboard />', () => {
   beforeEach(() => {
     fetchApi.mockReset();
+  });
+
+  it('does not show an incomplete forecast as zero when an exchange rate is missing', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({
+        totalDeals: 2, wonCount: 1, wonValue: 100, expectedValue: null,
+        fx: { missingRateCount: 1 }, byStage: [],
+      });
+      return Promise.resolve([]);
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/Affected revenue totals are unavailable/)).toBeInTheDocument());
+    expect(screen.getByText('Expected Revenue').nextElementSibling).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Closed Revenue').nextElementSibling).toHaveTextContent('$100');
+  });
+
+  it('counts only non-closed deals in the My Open Deals tile', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({
+        totalDeals: 8, wonCount: 2, lostCount: 1, winRate: 67, wonValue: 100, expectedValue: 50, byStage: [],
+      });
+      return Promise.resolve([]);
+    });
+    renderDashboard({ user: { id: 2, role: 'USER' } });
+    await waitFor(() => expect(screen.getByText('My Open Deals').nextElementSibling).toHaveTextContent('5'));
+    expect(screen.getByText('My Win Rate').nextElementSibling).toHaveTextContent('67.0%');
+  });
+
+  it('passes the selected dates to deal queries and deal links', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 1 });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderDashboard(null, '/dashboard?from=2026-10-15&to=2026-10-20');
+
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && new URL(url, 'http://localhost').searchParams.get('from') === '2026-10-15' && new URL(url, 'http://localhost').searchParams.get('to') === '2026-10-20T23:59:59.999Z')).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && new URL(url, 'http://localhost').searchParams.get('from') === '2026-10-15' && new URL(url, 'http://localhost').searchParams.get('to') === '2026-10-20T23:59:59.999Z')).toBe(true);
+    });
+    expect(screen.getByText('Total Deals').closest('a').getAttribute('href')).toBe('/pipeline?from=2026-10-15&to=2026-10-20');
   });
 
   it('renders Closed Revenue from stats.wonValue (not a list reduce of /api/deals)', async () => {

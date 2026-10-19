@@ -89,6 +89,23 @@ beforeEach(() => {
 });
 
 describe('Deals and Pipelines page', () => {
+  it('loads deals and totals for the dashboard date range, then clears it', async () => {
+    renderPipeline('/pipeline?from=2026-10-15&to=2026-10-20');
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      for (const prefix of ['/api/deals?', '/api/deals/stats?']) {
+        expect(urls.some((url) => {
+          if (!url.startsWith(prefix)) return false;
+          const params = new URL(url, 'http://localhost').searchParams;
+          return params.get('from') === '2026-10-15' && params.get('to') === '2026-10-20T23:59:59.999Z';
+        })).toBe(true);
+      }
+    });
+    expect(screen.getByText(/Created 2026-10-15 to 2026-10-20/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear date filter' }));
+    await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/deals?') && !new URL(url, 'http://localhost').searchParams.has('from'))).toBe(true));
+  });
+
   it('renders the current page heading and primary actions', async () => {
     renderPipeline();
     expect(await screen.findByRole('heading', { name: 'Deals and Pipelines' })).toBeInTheDocument();

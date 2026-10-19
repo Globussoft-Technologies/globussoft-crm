@@ -604,10 +604,8 @@ describe('Bug 2 — PUT /api/roles/:id key/userType on a system role', () => {
     expect(prisma.role.update).toHaveBeenCalledTimes(1);
   });
 
-  test('non-system role with key in body is silently ignored (back-compat)', async () => {
-    // Non-system roles never had key in PUT body schema either, but the
-    // route never rejected — destructure ignores. Pin the behavior so
-    // non-system updates aren't accidentally tightened.
+  test('renames an unassigned non-system role key', async () => {
+    prisma.userRole.count.mockResolvedValue(0);
     prisma.role.findUnique.mockResolvedValue({
       id: 9,
       key: 'CUSTOM',
@@ -615,20 +613,54 @@ describe('Bug 2 — PUT /api/roles/:id key/userType on a system role', () => {
       isSystem: false,
       landingPath: null,
     });
+    prisma.role.findFirst.mockResolvedValue(null);
     prisma.role.update.mockResolvedValue({
       id: 9,
-      key: 'CUSTOM',
+      key: 'BROKER',
       name: 'New',
       permissions: [],
     });
 
     const res = await request(makeApp())
       .put('/api/roles/9')
-      .send({ key: 'IGNORED', name: 'New' });
+      .send({ key: 'BROKER', name: 'New' });
     expect(res.status).toBe(200);
-    // Key in update args is original
-    const updateArg = prisma.role.update.mock.calls[0][0];
-    expect(updateArg.data).not.toHaveProperty('key');
+    expect(prisma.role.update.mock.calls[0][0].data.key).toBe('BROKER');
+    expect(prisma.role.update.mock.calls[0][0].where).toEqual({ id: 9, userRoles: { none: {} } });
+    expect(auditMod.writeAudit).toHaveBeenCalledWith('Role', 'UPDATE_ROLE', 7, 7, 11, expect.objectContaining({
+      changes: expect.objectContaining({ key: { from: 'CUSTOM', to: 'BROKER' } }),
+    }));
+  });
+
+  test('rejects key changes when users are assigned', async () => {
+    prisma.role.findUnique.mockResolvedValue({ id: 9, key: 'CUSTOM', tenantId: 11, isSystem: false });
+    const res = await request(makeApp()).put('/api/roles/9').send({ key: 'BROKER' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ROLE_KEY_IN_USE');
+    expect(prisma.role.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects duplicate and invalid replacement keys', async () => {
+    prisma.userRole.count.mockResolvedValue(0);
+    prisma.role.findUnique.mockResolvedValue({ id: 9, key: 'CUSTOM', tenantId: 11, isSystem: false });
+    prisma.role.findFirst.mockResolvedValue({ id: 10 });
+    const duplicate = await request(makeApp()).put('/api/roles/9').send({ key: 'BROKER' });
+    const invalid = await request(makeApp()).put('/api/roles/9').send({ key: '1BROKER' });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.code).toBe('ROLE_KEY_EXISTS');
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('INVALID_ROLE_KEY');
+    expect(prisma.role.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects a key change if a user is assigned during the save', async () => {
+    prisma.userRole.count.mockResolvedValue(0);
+    prisma.role.findUnique.mockResolvedValue({ id: 9, key: 'CUSTOM', tenantId: 11, isSystem: false });
+    prisma.role.findFirst.mockResolvedValue(null);
+    prisma.role.update.mockRejectedValue({ code: 'P2025' });
+    const res = await request(makeApp()).put('/api/roles/9').send({ key: 'BROKER' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ROLE_KEY_IN_USE');
   });
 });
 

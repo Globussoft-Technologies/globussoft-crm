@@ -48,6 +48,15 @@ function addDealSearch(where, rawSearch) {
   return where;
 }
 
+function canonicalDealStage(stage) {
+  const value = String(stage || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+  if (value === 'won' || value === 'closed-won') return 'closed-won';
+  if (value === 'lost' || value === 'closed-lost') return 'closed-lost';
+  if (value === 'proposal' || value === 'proposal-sent') return 'proposal-sent';
+  if (value === 'lead' || value === 'new') return 'new-lead';
+  return value;
+}
+
 router.use(verifyToken);
 
 // #188: short-circuit non-numeric :id so requests like GET /api/deals/funnel
@@ -244,6 +253,11 @@ router.get("/stats", async (req, res) => {
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
     if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
     if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
+    if (req.query.from || req.query.to) {
+      where.createdAt = {};
+      if (req.query.from) where.createdAt.gte = new Date(req.query.from);
+      if (req.query.to) where.createdAt.lte = new Date(req.query.to);
+    }
     addDealSearch(where, req.query.search);
     if (req.user.role === "USER") where.ownerId = req.user.userId;
 
@@ -257,41 +271,66 @@ router.get("/stats", async (req, res) => {
       };
     }
     const deals = await prisma.deal.findMany({ where });
+    const tenantCurrency = await prisma.tenant.findUnique({ where: { id: tid }, select: { defaultCurrency: true } });
+    const reportingCurrency = String(req.query.currency || tenantCurrency?.defaultCurrency || 'USD').toUpperCase();
+    const configuredCurrencies = await prisma.currency.findMany({ where: { tenantId: tid }, select: { code: true, exchangeRate: true } });
+    const rates = Object.fromEntries(configuredCurrencies.map((currency) => [String(currency.code).toUpperCase(), Number(currency.exchangeRate)]));
+    const targetRate = rates[reportingCurrency];
+    const convertedAmount = (deal) => {
+      const amount = Number(deal.amount || 0);
+      const source = String(deal.currency || reportingCurrency).toUpperCase();
+      const sourceRate = rates[source];
+      if (source === reportingCurrency && !sourceRate) return amount;
+      if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return null;
+      return amount * targetRate / sourceRate;
+    };
+    const missingRateCount = deals.filter((deal) => convertedAmount(deal) === null).length;
+    const sumAmounts = (rows) => rows.some((deal) => convertedAmount(deal) === null)
+      ? null : rows.reduce((sum, deal) => sum + convertedAmount(deal), 0);
 
     const totalDeals = deals.length;
-    const totalValue = deals.reduce((s, d) => s + (d.amount || 0), 0);
-    const avgDealSize = totalDeals ? totalValue / totalDeals : 0;
+    const totalValue = sumAmounts(deals);
+    const avgDealSize = totalValue === null ? null : (totalDeals ? totalValue / totalDeals : 0);
 
-    const wonDeals = deals.filter((d) => d.stage === "won");
-    const lostDeals = deals.filter((d) => d.stage === "lost");
+    const wonDeals = deals.filter((d) => canonicalDealStage(d.stage) === "closed-won");
+    const lostDeals = deals.filter((d) => canonicalDealStage(d.stage) === "closed-lost");
     const won = wonDeals.length;
     const lost = lostDeals.length;
     const closed = won + lost;
     const winRate = closed ? Math.round((won / closed) * 100) : 0;
 
     const wonCount = won;
-    const wonValue = wonDeals.reduce((s, d) => s + (d.amount || 0), 0);
+    const wonValue = sumAmounts(wonDeals);
     const lostCount = lost;
-    const lostValue = lostDeals.reduce((s, d) => s + (d.amount || 0), 0);
+    const lostValue = sumAmounts(lostDeals);
 
-    // #567: probability-weighted pipeline value. Mirrors the per-stage weights
-    // Dashboard.jsx used pre-fix so the rendered "Expected Revenue" tile lines
-    // up with what users saw before — but computed over the FULL population
-    // server-side, not the newest 100 rows. Stages outside this map contribute
-    // 0 (negotiation/lost have no expected uplift).
-    const probs = { lead: 0.1, contacted: 0.3, proposal: 0.7, won: 1.0 };
-    const expectedValue = deals.reduce(
-      (s, d) => s + ((d.amount || 0) * (probs[d.stage] || 0)),
-      0
-    );
+    // Forecast only open deals. Each deal's saved probability takes priority;
+    // stage defaults cover older deals without a probability value.
+    const defaultProbability = { 'new-lead': 10, contacted: 30, 'proposal-sent': 70, negotiation: 80 };
+    const openDealExpectedValue = (deal) => {
+      const stage = canonicalDealStage(deal.stage);
+      if (stage === 'closed-won' || stage === 'closed-lost') return 0;
+      const savedProbability = deal.probability === null || deal.probability === undefined || deal.probability === ''
+        ? NaN : Number(deal.probability);
+      const probability = Number.isFinite(savedProbability) && savedProbability >= 0 && savedProbability <= 100
+        ? savedProbability : (defaultProbability[stage] ?? 50);
+      const amount = convertedAmount(deal);
+      return amount === null ? null : amount * probability / 100;
+    };
+    const openDeals = deals.filter((deal) => !['closed-won', 'closed-lost'].includes(canonicalDealStage(deal.stage)));
+    const expectedValue = openDeals.some((deal) => openDealExpectedValue(deal) === null)
+      ? null : openDeals.reduce((sum, deal) => sum + openDealExpectedValue(deal), 0);
 
     // Group by stage
     const stageMap = {};
     deals.forEach((d) => {
-      if (!stageMap[d.stage]) stageMap[d.stage] = { stage: d.stage, count: 0, value: 0, expectedValue: 0 };
-      stageMap[d.stage].count++;
-      stageMap[d.stage].value += d.amount || 0;
-      stageMap[d.stage].expectedValue += (d.amount || 0) * (Number(d.probability || 0) / 100);
+      const stageKey = canonicalDealStage(d.stage);
+      if (!stageMap[stageKey]) stageMap[stageKey] = { stage: stageKey, count: 0, value: 0, expectedValue: 0 };
+      stageMap[stageKey].count++;
+      const value = convertedAmount(d);
+      const expected = openDealExpectedValue(d);
+      stageMap[stageKey].value = value === null || stageMap[stageKey].value === null ? null : stageMap[stageKey].value + value;
+      stageMap[stageKey].expectedValue = expected === null ? null : (stageMap[stageKey].expectedValue === null ? null : stageMap[stageKey].expectedValue + expected);
     });
     const byStage = Object.values(stageMap);
 
@@ -314,6 +353,8 @@ router.get("/stats", async (req, res) => {
       lostCount,
       lostValue,
       expectedValue,
+      currency: reportingCurrency,
+      fx: { missingRateCount },
     });
   } catch (error) {
     console.error("[deals] stats error:", error.message);

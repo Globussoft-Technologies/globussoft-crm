@@ -2578,7 +2578,8 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     width: 100%;
   }
 
-  .pipelines-stage-controls > :is(select, button) {
+  .pipelines-stage-controls > :is(span, button),
+  .pipelines-stage-controls > span > select {
     width: 100%;
     max-width: none !important;
     min-width: 0;

@@ -5,7 +5,6 @@ import {
   Plus,
   CheckCircle2,
   Trash2,
-  IndianRupee,
   Clock,
   AlertTriangle,
   Download,
@@ -184,8 +183,19 @@ function InvoicePagination({
 
 import { formatMoney, currencySymbol } from "../utils/money";
 import { formatDate } from "../utils/date";
-const formatCurrency = (v, currency) =>
-  formatMoney(v, { currency, maximumFractionDigits: 2, minimumFractionDigits: 2 });
+const formatCurrency = (value, currency = "USD") =>
+  formatMoney(value, { currency, maximumFractionDigits: 2, minimumFractionDigits: 2 });
+
+function totalsByCurrency(rows, fallbackCurrency, amountForRow = (row) => Number(row.amount || 0)) {
+  const totals = new Map();
+  for (const row of rows) {
+    const currency = row.currency || fallbackCurrency;
+    totals.set(currency, (totals.get(currency) || 0) + amountForRow(row));
+  }
+  return totals.size
+    ? [...totals].map(([currency, amount]) => formatCurrency(amount, currency)).join(" · ")
+    : formatCurrency(0, fallbackCurrency);
+}
 
 function getInvoiceLineItems(invoice) {
   if (Array.isArray(invoice?.lineItems)) return invoice.lineItems;
@@ -272,11 +282,12 @@ function applyVisitFinalBill(lineItems, finalBill) {
   ));
 }
 
-const createInvoiceForm = (subBrand = "") => ({
+const createInvoiceForm = (subBrand = "", currency = "USD") => ({
   invoiceNum: "",
   contactId: "",
   dealId: "",
   amount: "",
+  currency,
   dueDate: "",
   status: "UNPAID",
   subBrand,
@@ -374,6 +385,7 @@ export default function Invoices() {
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [availableCurrencies, setAvailableCurrencies] = useState([]);
   const [patients, setPatients] = useState([]);
   const [visits, setVisits] = useState([]);
   const [services, setServices] = useState([]);
@@ -398,7 +410,7 @@ export default function Invoices() {
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [pdfPreview, setPdfPreview] = useState(null); // { url, invoiceNum } | null
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
-  const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm());
+  const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm("", tenant?.defaultCurrency || "USD"));
   // #124: replace the old prompt() flow with a proper modal so the user can
   // pick frequency, see what they're about to activate, and stop recurring
   // explicitly instead of guessing the toggle.
@@ -585,6 +597,14 @@ export default function Invoices() {
     };
   }, [isGeneric, loadData]);
 
+  useEffect(() => {
+    let active = true;
+    fetchApi("/api/currencies?fields=summary")
+      .then((rows) => { if (active) setAvailableCurrencies(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (active) setAvailableCurrencies([]); });
+    return () => { active = false; };
+  }, []);
+
   // Patient and product selectors use bounded backend searches. This keeps
   // the invoice screen responsive for large clinics and avoids downloading
   // every patient record (including PHI) just to populate a combobox.
@@ -666,27 +686,37 @@ export default function Invoices() {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const totalOutstanding = invoices
-      .filter((inv) => inv.status !== "PAID" && inv.status !== "VOIDED")
-      .reduce((sum, inv) => sum + Number(isGeneric ? inv.balance ?? inv.amount : inv.amount), 0);
+    const outstanding = invoices.filter((inv) => inv.status !== "PAID" && inv.status !== "VOIDED");
 
     // #119: filter on paidAt (set by /pay route). Fall back to issuedDate for legacy
     // rows from before paidAt existed — at worst they count toward the issuance month
     // rather than the (unknown) payment month.
-    const totalPaidThisMonth = invoices
-      .filter(
+    const paidThisMonth = invoices.filter(
         (inv) =>
           inv.status === "PAID" &&
           new Date(inv.paidAt || inv.issuedDate) >= startOfMonth,
-      )
-      .reduce((sum, inv) => sum + Number(inv.amount), 0);
+      );
 
     const overdueCount = invoices.filter(
       (inv) => inv.status === "OVERDUE",
     ).length;
 
-    return { totalOutstanding, totalPaidThisMonth, overdueCount };
-  }, [invoices, isGeneric]);
+    const fallbackCurrency = tenant?.defaultCurrency || "USD";
+    return {
+      totalOutstanding: totalsByCurrency(
+        outstanding,
+        fallbackCurrency,
+        (inv) => Number(isGeneric ? inv.balance ?? inv.amount : inv.amount),
+      ),
+      totalPaidThisMonth: totalsByCurrency(
+        paidThisMonth.flatMap((invoice) =>
+          invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice],
+        ),
+        fallbackCurrency,
+      ),
+      overdueCount,
+    };
+  }, [invoices, isGeneric, tenant?.defaultCurrency]);
 
   const filteredInvoices = useMemo(() => {
     let rows = invoices;
@@ -975,6 +1005,7 @@ export default function Invoices() {
         method: "POST",
         body: JSON.stringify({
           amount: isWellness ? wellnessInvoiceTotal : newInvoice.amount,
+          currency: newInvoice.currency,
           dueDate: newInvoice.dueDate,
           contactId: newInvoice.contactId || undefined,
           dealId: newInvoice.dealId || undefined,
@@ -996,7 +1027,7 @@ export default function Invoices() {
             : {}),
         }),
       });
-      setNewInvoice(createInvoiceForm(isTravel ? activeSubBrand || "" : ""));
+      setNewInvoice(createInvoiceForm(isTravel ? activeSubBrand || "" : "", tenant?.defaultCurrency || "USD"));
       setVisits([]);
       setIsLoadingVisits(false);
       setIsLoadingVisitItems(false);
@@ -1161,8 +1192,8 @@ export default function Invoices() {
             gap: "0.4rem",
           }}
         >
-          <IndianRupee size={14} /> Outstanding:{" "}
-          {formatCurrency(stats.totalOutstanding, invoiceDisplayCurrency)}
+          <Receipt size={14} /> Outstanding:{" "}
+          {stats.totalOutstanding}
         </span>
         <span
           style={{
@@ -1179,7 +1210,7 @@ export default function Invoices() {
           }}
         >
           <CheckCircle2 size={14} /> Paid This Month:{" "}
-          {formatCurrency(stats.totalPaidThisMonth, invoiceDisplayCurrency)}
+          {stats.totalPaidThisMonth}
         </span>
         {stats.overdueCount > 0 && (
           <span
@@ -1971,14 +2002,22 @@ export default function Invoices() {
                 <select
                   className="input-field"
                   value={newInvoice.dealId}
-                  onChange={(e) => handleFieldChange("dealId", e.target.value)}
+                  onChange={(e) => {
+                    const dealId = e.target.value;
+                    const deal = deals.find((row) => String(row.id) === dealId);
+                    setNewInvoice((current) => ({
+                      ...current,
+                      dealId,
+                      currency: deal?.currency || current.currency,
+                    }));
+                  }}
                   style={{ background: "var(--input-bg)" }}
                   aria-label="Associated deal"
                 >
                   <option value="">-- No Deal --</option>
                     {deals.map((d) => (
                     <option key={d.id} value={d.id}>
-                      {d.title} - {formatCurrency(d.amount, invoiceDisplayCurrency)}
+                      {d.title} - {formatCurrency(d.amount, d.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}
                     </option>
                     ))}
                   </select>
@@ -2106,7 +2145,7 @@ export default function Invoices() {
                               aria-label={`Line item ${index + 1} unit price`}
                             />
                             <span style={{ display: "block", fontSize: "0.68rem", color: "var(--text-secondary)", marginTop: "0.2rem" }}>
-                              {formatCurrency(lineTotal, invoiceDisplayCurrency)}
+                              {formatCurrency(lineTotal, newInvoice.currency)}
                             </span>
                           </div>
                           <button
@@ -2124,12 +2163,30 @@ export default function Invoices() {
 
                   <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.6rem", borderTop: "1px solid var(--border-color)", paddingTop: "0.75rem" }}>
                     <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Invoice total</span>
-                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal, invoiceDisplayCurrency)}</strong>
+                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal, newInvoice.currency)}</strong>
                   </div>
                 </section>
               )}
 
-              <div style={{ display: "flex", gap: "1rem" }}>
+              <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                {!isWellness && (
+                  <div style={{ flex: 1 }}>
+                    <label htmlFor="invoice-currency" style={{ display: "block", fontSize: "0.875rem", marginBottom: "0.5rem", color: "var(--text-secondary)" }}>
+                      Currency
+                    </label>
+                    <select
+                      id="invoice-currency"
+                      className="input-field"
+                      aria-label="Invoice currency"
+                      value={newInvoice.currency}
+                      onChange={(e) => handleFieldChange("currency", e.target.value)}
+                    >
+                      {[...new Set([newInvoice.currency, tenant?.defaultCurrency || "USD", ...availableCurrencies.map((row) => row.code)])]
+                        .filter(Boolean)
+                        .map((code) => <option key={code} value={code}>{code}</option>)}
+                    </select>
+                  </div>
+                )}
                 {!isWellness && (
                   <div style={{ flex: 1 }}>
                   <label
@@ -2140,7 +2197,7 @@ export default function Invoices() {
                       color: "var(--text-secondary)",
                     }}
                   >
-                    Amount ({currencySymbol(invoiceDisplayCurrency)})
+                    Amount ({currencySymbol(newInvoice.currency)})
                   </label>
                   <input
                     type="number"
@@ -2625,24 +2682,28 @@ export default function Invoices() {
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
-                        {/* #242: removed the hardcoded $ IndianRupee icon — formatCurrency()
-                            already prefixes the right symbol (₹ for INR tenants, $ for USD,
-                            etc.). Stacking the icon caused "$ ₹1,500.00" on Indian tenants. */}
+                        {/* Keep the invoice amount in its issued currency. A payment
+                            received in another currency appears on the next line. */}
                         <span
                           style={{
                             color: "var(--success-color)",
                             fontWeight: 600,
                           }}
                         >
-                          {formatCurrency(inv.amount, inv.currency || invoiceDisplayCurrency)}
+                          {formatCurrency(inv.amount, inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}
                         </span>
                         {isPartiallyPaid && (
                           <div
                             data-testid={`invoice-payment-progress-${inv.id}`}
                             style={{ marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.35, color: "var(--text-secondary)" }}
                           >
-                            <div>Paid {formatCurrency(amountPaid, inv.currency || invoiceDisplayCurrency)}</div>
-                            <div>Balance {formatCurrency(balanceDue, inv.currency || invoiceDisplayCurrency)}</div>
+                            <div>Paid {formatCurrency(amountPaid, inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}</div>
+                            <div>Balance {formatCurrency(balanceDue, inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}</div>
+                          </div>
+                        )}
+                        {inv.status === "PAID" && inv.receivedPayments?.some((payment) => payment.currency !== (inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")) && (
+                          <div style={{ marginTop: 3, color: "var(--text-secondary)", fontSize: "0.72rem" }}>
+                            Received: {inv.receivedPayments.map((payment) => formatCurrency(payment.amount, payment.currency || inv.currency || tenant?.defaultCurrency || "USD")).join(" · ")}
                           </div>
                         )}
                       </td>
@@ -2951,7 +3012,7 @@ export default function Invoices() {
               }}
             >
               Invoice {recurInvoice.invoiceNum} ·{" "}
-              {formatCurrency(recurInvoice.amount, recurInvoice.currency || invoiceDisplayCurrency)}
+              {formatCurrency(recurInvoice.amount, recurInvoice.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}
             </p>
 
             {recurInvoice.isRecurring ? (
@@ -3216,7 +3277,7 @@ export default function Invoices() {
               <strong>{linkModal.inv.contact?.name || "the customer"}</strong>{" "}
               to collect payment for invoice{" "}
               <strong>{linkModal.inv.invoiceNum}</strong> (
-              {formatCurrency(linkModal.inv.amount, linkModal.inv.currency || invoiceDisplayCurrency)}).
+              {formatCurrency(linkModal.inv.amount, linkModal.inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}).
             </p>
             <div
               style={{

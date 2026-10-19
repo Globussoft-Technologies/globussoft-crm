@@ -22,7 +22,7 @@ describe("TmcTeacherDiagnostics", () => {
                 engineState: "strong_match",
                 classificationLabel: "Routed by TMC Engine",
                 recommendedTier: "engine",
-                reportPdfUrl: null,
+                reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
                 reportReady: false,
                 recommendations: [{
                   name: "Campus Overnight Adventure",
@@ -106,6 +106,29 @@ describe("TmcTeacherDiagnostics", () => {
     fetchSpy.mockRestore();
   });
 
+  it("offers the PDF from Previous reports before trip choices are submitted", async () => {
+    const fallback = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((url, options) => {
+      if (url.startsWith("/api/portal/tmc/teacher/diagnostics?")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({
+          diagnostics: [{
+            id: 42,
+            createdAt: "2026-09-11T00:00:00.000Z",
+            reportReady: false,
+            reportPdfUrl: "/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf",
+          }],
+        }) });
+      }
+      return fallback(url, options);
+    });
+
+    render(<TmcTeacherDiagnostics token="teacher-token" contact={{}} onSessionExpired={vi.fn()} />);
+
+    const pdf = await screen.findByRole("link", { name: "Download PDF" });
+    expect(pdf.getAttribute("href")).toBe("/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf");
+    expect(screen.getByRole("button", { name: "View trips" })).toBeTruthy();
+  });
+
   it("keeps the complete diagnostic and trip selection flow inside the teacher portal", async () => {
     render(
       <TmcTeacherDiagnostics
@@ -142,11 +165,11 @@ describe("TmcTeacherDiagnostics", () => {
     expect(await screen.findByText(/Submitting your response/)).toBeTruthy();
     resolveTeacherSubmit();
 
-    await waitFor(() => expect(screen.getByText(/Your trip recommendations are ready/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Your readiness report is ready/i)).toBeTruthy());
     expect(screen.getByText("Recommended trips for your school")).toBeTruthy();
     expect(screen.getByText("Campus Overnight Adventure")).toBeTruthy();
     expect(screen.getByRole("link", { name: "View brochure" }).getAttribute("href")).toBe("https://example.com/campus-brochure.pdf");
-    expect(screen.queryByRole("link", { name: /Download report PDF/i })).toBeNull();
+    expect(screen.getByRole("link", { name: /Download report PDF/i }).getAttribute("href")).toBe("/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf");
     expect(screen.queryByRole("link", { name: /View report/i })).toBeNull();
     expect(screen.queryByText(/diagnostic-form/i)).toBeNull();
 

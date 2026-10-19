@@ -65,6 +65,7 @@ async function main() {
       name: 'NovaCrest Technologies',
       slug: 'novacrest',
       plan: 'enterprise',
+      defaultCurrency: 'INR',
       ownerEmail: 'admin@globussoft.com',
       isActive: true,
     },
@@ -495,7 +496,7 @@ async function main() {
   for (const inv of invoicesData) {
     await prisma.invoice.create({
       data: {
-        invoiceNum: inv.num, amount: inv.amount, status: inv.status, dueDate: inv.due,
+        invoiceNum: inv.num, amount: inv.amount, currency: 'INR', status: inv.status, dueDate: inv.due,
         contactId: contacts[inv.ci].id, dealId: deals[inv.di].id, currency: 'INR',
       },
     });

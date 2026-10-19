@@ -23,13 +23,15 @@
  * to produce a coherent personal dashboard without any backend change.
  */
 import React, { useState, useEffect, useContext } from 'react';
-import { Users, IndianRupee, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
+import { Users, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
-import { formatMoney, formatMoneyCompact } from '../utils/money';
+import { formatMoney, formatMoneyCompact, currencySymbol } from '../utils/money';
 import { formatPercent } from '../utils/percent';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import CalendarRangePicker from '../components/CalendarRangePicker';
+import { readDateRange, setDateRangeParams, pathWithDateRange } from '../utils/dateRangeNavigation';
 
 const DEFAULT_STATS = {
   totalDeals: 0,
@@ -45,7 +47,12 @@ const DEFAULT_STATS = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { user } = useContext(AuthContext) || {};
+  const [dateSearchParams, setDateSearchParams] = useSearchParams();
+  const { user, tenant } = useContext(AuthContext) || {};
+  const currency = tenant?.defaultCurrency || 'USD';
+  const locale = tenant?.locale || (currency === 'INR' ? 'en-IN' : 'en-US');
+  const moneyOptions = { currency, locale };
+  const revenueIcon = <span aria-hidden="true" style={{ fontSize: 24, fontWeight: 700 }}>{currencySymbol(currency)}</span>;
   // Secure-by-default: when AuthContext hasn't populated `user` yet (a one-
   // frame race during the login → navigate handoff, or a unit-test render
   // without a provider), treat the viewer as a USER so the org-wide P&L
@@ -59,18 +66,25 @@ export default function Dashboard() {
   const [recentDeals, setRecentDeals] = useState([]);
   const [contactCount, setContactCount] = useState(0);
   const [myPendingTasks, setMyPendingTasks] = useState([]);
+  const dateRange = readDateRange(dateSearchParams);
+  const updateDateRange = (range) => setDateSearchParams(setDateRangeParams(dateSearchParams, range), { replace: true });
+  const filteredPath = (path) => pathWithDateRange(path, dateRange);
 
   useEffect(() => {
+    let active = true;
     // KPI numbers — full-population aggregates from the server.
     // For role=USER the backend auto-scopes to ownerId=userId, so the same
     // call produces personal-pipeline numbers without a query change here.
-    fetchApi('/api/deals/stats')
-      .then((d) => setStats({ ...DEFAULT_STATS, ...(d || {}) }))
-      .catch(() => setStats(DEFAULT_STATS));
+    const dateQuery = dateRange.from || dateRange.to
+      ? `${dateRange.from ? `&from=${encodeURIComponent(dateRange.from)}` : ''}${dateRange.to ? `&to=${encodeURIComponent(`${dateRange.to}T23:59:59.999Z`)}` : ''}`
+      : '';
+    fetchApi(`/api/deals/stats?currency=${encodeURIComponent(currency)}${dateQuery}`)
+      .then((d) => { if (active) setStats({ ...DEFAULT_STATS, ...(d || {}) }); })
+      .catch(() => { if (active) setStats(DEFAULT_STATS); });
     // Row list for the Recent Deals widget — newest 10 only.
-    fetchApi('/api/deals?limit=10&orderBy=createdAt:desc')
-      .then((d) => setRecentDeals(Array.isArray(d) ? d : []))
-      .catch(() => setRecentDeals([]));
+    fetchApi(`/api/deals?limit=10&orderBy=createdAt:desc${dateQuery}`)
+      .then((d) => { if (active) setRecentDeals(Array.isArray(d) ? d : []); })
+      .catch(() => { if (active) setRecentDeals([]); });
     // Count all visible contacts, not the API's default first page of 100.
     // USER's tile set replaces this tile with My Tasks.
     if (!isUser) {
@@ -86,11 +100,13 @@ export default function Dashboard() {
         .then((d) => setMyPendingTasks(Array.isArray(d) ? d : []))
         .catch(() => setMyPendingTasks([]));
     }
-  }, [isUser]);
+    return () => { active = false; };
+  }, [isUser, currency, dateRange.from, dateRange.to]);
 
   // KPIs derived purely from `stats` (server aggregates), not from any list.
-  const totalRevenue = stats.wonValue || 0;
-  const expectedRevenue = stats.expectedValue || 0;
+  const totalRevenue = stats.wonValue;
+  const expectedRevenue = stats.expectedValue;
+  const displayRevenue = (value) => value === null ? 'Unavailable' : formatMoney(value, moneyOptions);
   // #639 — keep the raw numeric so formatPercent renders a 1-decimal "0.0%"
   // consistently. Pre-fix this was Math.round-d to an integer and rendered
   // as bare "0%" / "12%", out of sync with Funnel + Reports which used 1dp.
@@ -98,12 +114,14 @@ export default function Dashboard() {
     ? ((stats.wonCount || 0) / stats.totalDeals) * 100
     : 0;
   const dealCount = stats.totalDeals || 0;
+  const openDealCount = Math.max(0, dealCount - (stats.wonCount || 0) - (stats.lostCount || 0));
 
   // Pipeline Analytics chart — fed by the server-side byStage aggregation so
   // the chart reflects the full tenant, not a paginated slice. We map the
   // four headline stages and fall back to 0 when a stage is empty.
   const stageValue = (name) => {
-    const row = (stats.byStage || []).find((r) => r.stage === name);
+    const aliases = { lead: ['lead', 'new-lead'], proposal: ['proposal', 'proposal-sent'], won: ['won', 'closed-won'] };
+    const row = (stats.byStage || []).find((r) => (aliases[name] || [name]).includes(r.stage));
     return row ? row.value : 0;
   };
   const chartData = [
@@ -119,9 +137,9 @@ export default function Dashboard() {
   const pendingTaskCount = myPendingTasks.length;
   const tiles = isUser
     ? [
-      { label: 'My Closed Revenue', value: formatMoney(totalRevenue), icon: <IndianRupee size={24} />, color: 'var(--accent-color)', path: '/pipeline', },
+        { label: 'My Closed Revenue', value: displayRevenue(totalRevenue), icon: revenueIcon, color: 'var(--accent-color)', path: '/pipeline', },
       {
-        label: 'My Expected Revenue', value: formatMoney(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
+        label: 'My Expected Revenue', value: displayRevenue(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
         path: '/pipeline',
       },
       {
@@ -129,21 +147,21 @@ export default function Dashboard() {
         path: '/tasks',
       },
       {
-        label: 'My Win Rate', value: formatPercent(conversionRate), icon: <TrendingUp size={24} />, color: 'var(--warning-color)',
+        label: 'My Win Rate', value: formatPercent(stats.winRate || 0), icon: <TrendingUp size={24} />, color: 'var(--warning-color)',
         path: '/reports',
       },
       {
-        label: 'My Open Deals', value: dealCount.toString(), icon: <Calendar size={24} />, color: '#a855f7',
+        label: 'My Open Deals', value: openDealCount.toString(), icon: <Calendar size={24} />, color: '#a855f7',
         path: '/pipeline',
       },
     ]
     : [
       {
-        label: 'Closed Revenue', value: formatMoney(totalRevenue), icon: <IndianRupee size={24} />, color: 'var(--accent-color)',
+        label: 'Closed Revenue', value: displayRevenue(totalRevenue), icon: revenueIcon, color: 'var(--accent-color)',
         path: '/pipeline',
       },
       {
-        label: 'Expected Revenue', value: formatMoney(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
+        label: 'Expected Revenue', value: displayRevenue(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
         path: '/pipeline',
       },
       {
@@ -189,13 +207,22 @@ export default function Dashboard() {
           </p>
         </div>
         {/* #128: this button only navigates — rename so the label matches the action */}
-        <button className="btn-primary" onClick={() => navigate(ctaPath)}>{ctaLabel}</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <CalendarRangePicker value={dateRange} onChange={updateDateRange} label="Dashboard date range" align="right" compact width={190} height={38} />
+          <button className="btn-primary" onClick={() => navigate(filteredPath(ctaPath))}>{ctaLabel}</button>
+        </div>
       </header>
+
+      {stats.fx?.missingRateCount > 0 && (
+        <p role="alert" style={{ color: 'var(--warning-color)', marginBottom: '1rem' }}>
+          {stats.fx.missingRateCount} deal(s) have no exchange rate for {currency}. Affected revenue totals are unavailable.
+        </p>
+      )}
 
       <div className="dashboard-kpis" data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {tiles.map((stat, i) => (
           <Link key={i}
-            to={stat.path}
+            to={stat.path === '/pipeline' || stat.path === '/reports' ? filteredPath(stat.path) : stat.path}
             style={{
               textDecoration: 'none',
               color: 'inherit',
@@ -229,10 +256,11 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value)} />
+                <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
                 <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}
+                  formatter={(value) => formatMoney(value, moneyOptions)}
                 />
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                 <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
@@ -285,8 +313,8 @@ export default function Dashboard() {
                     key={deal.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => navigate(`/pipeline?dealId=${deal.id}`)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${deal.id}`); } }}
+                    onClick={() => navigate(filteredPath(`/pipeline?dealId=${deal.id}`))}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(filteredPath(`/pipeline?dealId=${deal.id}`)); } }}
                     className="table-row-hover"
                     style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px', userSelect: 'none' }}
                     title={`Open ${deal.title} in pipeline`}

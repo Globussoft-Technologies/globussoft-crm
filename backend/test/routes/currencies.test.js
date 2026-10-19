@@ -55,7 +55,7 @@
  *   route would otherwise hit.
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import prisma from '../../lib/prisma.js';
 
@@ -73,6 +73,8 @@ prisma.currency = {
 };
 prisma.deal = prisma.deal || {};
 prisma.deal.findMany = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 // verifyToken does a revokedToken lookup; stub it cleanly so JWTs don't
 // hit a real DB.
 prisma.revokedToken = prisma.revokedToken || {};
@@ -142,6 +144,7 @@ beforeEach(() => {
   prisma.currency.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.currency.delete.mockReset();
   prisma.deal.findMany.mockReset().mockResolvedValue([]);
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ defaultCurrency: 'USD' });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.$transaction.mockClear();
 });
@@ -189,6 +192,59 @@ describe('GET /api/currencies', () => {
     const usd = res.body.find((r) => r.code === 'USD');
     expect(usd.isBase).toBe(true);
     expect(usd.exchangeRate).toBe(1.0);
+  });
+
+  test('uses INR as the preview base when the tenant defaults to INR', async () => {
+    prisma.currency.findMany.mockResolvedValue([]);
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+
+    const res = await request(makeApp())
+      .get('/api/currencies')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.find((currency) => currency.isBase)).toMatchObject({ code: 'INR', exchangeRate: 1 });
+    expect(res.body.find((currency) => currency.code === 'USD').exchangeRate).toBeCloseTo(1 / 94.96);
+    expect(res.body.find((currency) => currency.code === 'EUR').exchangeRate).toBeCloseTo(0.8887 / 94.96);
+  });
+});
+
+describe('GET /api/currencies/catalog', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test('returns names, symbols, and rates relative to the tenant base', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'CAD' }]);
+    vi.stubGlobal('fetch', vi.fn(async (url) => ({
+      ok: true,
+      json: async () => url.includes('/v2/currencies')
+        ? [{ iso_code: 'JPY', name: 'Japanese Yen', symbol: '¥' }, { iso_code: 'ZZZ', name: 'Unsupported', symbol: '?' }]
+        : { date: '2026-10-19', rates: { JPY: 110 } },
+    })));
+
+    const res = await request(makeApp())
+      .get('/api/currencies/catalog')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      baseCode: 'CAD',
+      asOf: '2026-10-19',
+      currencies: [{ code: 'JPY', name: 'Japanese Yen', symbol: '¥', exchangeRate: 110 }],
+    });
+    expect(prisma.currency.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, isBase: true },
+      select: { code: true },
+    });
+    expect(globalThis.fetch.mock.calls[1][0]).toContain('base=CAD');
+  });
+
+  test('returns 502 when the rate provider is unavailable', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD' }]);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
+    const res = await request(makeApp())
+      .get('/api/currencies/catalog')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(502);
   });
 });
 
@@ -364,6 +420,27 @@ describe('POST /api/currencies', () => {
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 
+  test('adding a new base recalculates existing rates before saving it at 1', async () => {
+    prisma.currency.findMany.mockResolvedValue([
+      { id: 1, exchangeRate: 1 },
+      { id: 2, exchangeRate: 0.86 },
+    ]);
+    prisma.currency.update.mockResolvedValue({});
+    prisma.currency.create.mockImplementation(async ({ data }) => ({ id: 3, ...data }));
+
+    const res = await request(makeApp())
+      .post('/api/currencies')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ code: 'JPY', symbol: '¥', name: 'Japanese Yen', exchangeRate: 150, isBase: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.exchangeRate).toBe(1);
+    expect(prisma.currency.update.mock.calls.map(([arg]) => arg)).toEqual([
+      { where: { id: 1 }, data: { exchangeRate: 1 / 150 } },
+      { where: { id: 2 }, data: { exchangeRate: 0.86 / 150 } },
+    ]);
+  });
+
   test('validation: missing code/symbol/name returns 400', async () => {
     const res = await request(makeApp())
       .post('/api/currencies')
@@ -430,6 +507,19 @@ describe('POST /api/currencies/seed', () => {
     for (const call of prisma.currency.create.mock.calls) {
       expect(call[0].data.tenantId).toBe(1);
     }
+  });
+
+  test('initializes INR as base for an INR tenant', async () => {
+    prisma.currency.count.mockResolvedValue(0);
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+    prisma.currency.create.mockImplementation(async ({ data }) => ({ id: 1, ...data }));
+
+    const res = await request(makeApp())
+      .post('/api/currencies/seed')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(201);
+    expect(res.body.find((currency) => currency.isBase)).toMatchObject({ code: 'INR', exchangeRate: 1 });
   });
 
   test('400 when any currency already exists for the tenant', async () => {
@@ -655,7 +745,7 @@ describe('POST /api/currencies/convert', () => {
     expect(res.body.converted).toBe(42.5);
   });
 
-  test('uses DEFAULTS when tenant has no Currency rows (USD → EUR @ 0.92)', async () => {
+  test('uses DEFAULTS when tenant has no Currency rows (USD → EUR @ 0.8887)', async () => {
     prisma.currency.findMany.mockResolvedValue([]);
 
     const res = await request(makeApp())
@@ -664,8 +754,8 @@ describe('POST /api/currencies/convert', () => {
       .send({ amount: 100, from: 'USD', to: 'EUR' });
 
     expect(res.status).toBe(200);
-    expect(res.body.rate).toBe(0.92);
-    expect(res.body.converted).toBe(92);
+    expect(res.body.rate).toBe(0.8887);
+    expect(res.body.converted).toBe(88.87);
   });
 
   test('400 when amount/from/to are missing', async () => {

@@ -733,7 +733,8 @@ router.post(
   },
 );
 
-// PUT /api/roles/:id — update role (not key/isSystem). landingPath IS
+// PUT /api/roles/:id — update role. Unassigned non-system role keys may change.
+// landingPath IS
 // editable on system roles so admins can re-point ADMIN / CUSTOMER landings
 // without recreating the row. Bug 2 — Key + userType on a system role
 // are explicitly rejected here even though the destructure ignores
@@ -746,7 +747,7 @@ router.put(
   async (req, res) => {
     try {
       const roleId = parseInt(req.params.id);
-      const { name, description, landingPath, dataScope, subBrandScope } = req.body;
+      const { name, description, key, landingPath, dataScope, subBrandScope } = req.body;
 
       const role = await prisma.role.findUnique({
         where: { id: roleId },
@@ -782,6 +783,27 @@ router.put(
               Boolean,
             ),
           });
+        }
+      }
+
+      const nextKey = typeof key === "string" ? key.trim() : key === undefined ? role.key : key;
+      if (key !== undefined && key !== role.key) {
+        const keyError = validateRoleKey(nextKey);
+        if (keyError) return res.status(400).json({ error: keyError, code: "INVALID_ROLE_KEY" });
+        const assignedUsers = await prisma.userRole.count({ where: { roleId } });
+        if (assignedUsers > 0) {
+          return res.status(409).json({
+            error: "Role key cannot change while users are assigned",
+            code: "ROLE_KEY_IN_USE",
+            userCount: assignedUsers,
+          });
+        }
+        const duplicate = await prisma.role.findFirst({
+          where: { tenantId: role.tenantId, key: nextKey, id: { not: roleId } },
+          select: { id: true },
+        });
+        if (duplicate) {
+          return res.status(409).json({ error: "Role key already exists in this tenant", code: "ROLE_KEY_EXISTS" });
         }
       }
 
@@ -823,8 +845,12 @@ router.put(
       }
 
       const updated = await prisma.role.update({
-        where: { id: roleId },
+        where: {
+          id: roleId,
+          ...(nextKey !== role.key ? { userRoles: { none: {} } } : {}),
+        },
         data: {
+          ...(nextKey !== role.key ? { key: nextKey } : {}),
           name: name !== undefined ? name : role.name,
           description:
             description !== undefined ? description : role.description,
@@ -851,7 +877,7 @@ router.put(
         {
           roleId: updated.id,
           key: updated.key,
-          changes: { name, description, landingPath, dataScope, subBrandScope },
+          changes: { name, key: nextKey !== role.key ? { from: role.key, to: nextKey } : undefined, description, landingPath, dataScope, subBrandScope },
         },
       );
 
@@ -863,6 +889,12 @@ router.put(
       });
     } catch (err) {
       console.error("[roles] update error:", err);
+      if (err?.code === "P2002") {
+        return res.status(409).json({ error: "Role key already exists in this tenant", code: "ROLE_KEY_EXISTS" });
+      }
+      if (err?.code === "P2025" && req.body?.key !== undefined) {
+        return res.status(409).json({ error: "Role key cannot change while users are assigned", code: "ROLE_KEY_IN_USE" });
+      }
       res.status(500).json({ error: "Failed to update role" });
     }
   },

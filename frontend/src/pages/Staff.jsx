@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useContext, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPortal } from "react-dom";
 import { fetchApi } from "../utils/api";
@@ -311,6 +311,24 @@ function GenericStaffActionsMenu({
   onDelete,
   onPermissions,
 }) {
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!anchor || !menuRef.current) return;
+    const gap = 4;
+    const margin = 8;
+    const menu = menuRef.current.getBoundingClientRect();
+    const availableBelow = window.innerHeight - anchor.bottom - gap - margin;
+    const availableAbove = anchor.top - gap - margin;
+    const openAbove = menu.height > availableBelow && availableAbove > availableBelow;
+    const top = openAbove ? anchor.top - menu.height - gap : anchor.bottom + gap;
+    setMenuPosition({
+      top: Math.max(margin, Math.min(top, window.innerHeight - menu.height - margin)),
+      left: Math.max(margin, Math.min(anchor.left, window.innerWidth - menu.width - margin)),
+    });
+  }, [anchor]);
+
   const run = (callback) => {
     onClose();
     callback();
@@ -318,17 +336,19 @@ function GenericStaffActionsMenu({
 
   return (
     <div
+      ref={menuRef}
       role="menu"
       aria-label={`Actions for ${member.name || member.email}`}
       data-staff-generic-actions="true"
       onMouseDown={(event) => event.stopPropagation()}
       style={{
         position: "fixed",
-        top: (anchor?.bottom || 0) + 4,
-        left: anchor?.left || 0,
+        top: menuPosition?.top ?? (anchor?.bottom || 0) + 4,
+        left: menuPosition?.left ?? anchor?.left ?? 0,
+        visibility: menuPosition ? "visible" : "hidden",
         zIndex: 2000,
         minWidth: "9.5rem",
-        maxHeight: "min(70vh, 20rem)",
+        maxHeight: "min(70vh, 20rem, calc(100dvh - 16px))",
         overflowY: "auto",
         display: "flex",
         flexDirection: "column",
@@ -2267,6 +2287,7 @@ export default function Staff() {
                                   setGenericActionsAnchor(null);
                                 } else {
                                   setGenericActionsAnchor({
+                                    top: rect.top,
                                     bottom: rect.bottom,
                                     left: rect.left,
                                   });

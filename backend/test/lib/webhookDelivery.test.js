@@ -43,7 +43,7 @@ describe('lib/webhookDelivery — deliverWebhooks', () => {
     const arg = prisma.webhook.findMany.mock.calls[0][0];
     expect(arg.where.tenantId).toBe(9);
     expect(arg.where.isActive).toBe(true);
-    expect(arg.where.event.in).toEqual(['deal.won', 'deal.*']);
+    expect(arg.where.event.in).toEqual(['deal.won', 'deal.*', 'deal_won']);
   });
 
   test('iterates all matching webhooks and calls fetch for each', async () => {

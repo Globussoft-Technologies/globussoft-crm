@@ -198,7 +198,7 @@ async function deliverWebhooks(event, payload, tenantId) {
     const webhooks = await prisma.webhook.findMany({
       where: {
         tenantId,
-        event: { in: [event, event.split(".")[0] + ".*"] },
+        event: { in: [event, event.split(".")[0] + ".*", ...Object.entries(require('./zapierDelivery').EVENTS).filter(([, canonical]) => canonical === event).map(([legacy]) => legacy)] },
         isActive: true,
       },
     });
@@ -225,6 +225,11 @@ async function deliverWebhooks(event, payload, tenantId) {
     const { secret } = await resolveTenantWebhookSecret(tenantId);
 
     for (const wh of webhooks) {
+      if (String(wh.targetUrl).startsWith('https://hooks.zapier.com/')) {
+        try { await require('./zapierDelivery').deliverZapier(wh, event, payload, tenantId, secret); }
+        catch { console.error('[Zapier] Delivery failed; subscription', wh.id); }
+        continue;
+      }
       await deliverSingle(wh.targetUrl, event, payload, tenantId, secret);
     }
   } catch (e) {

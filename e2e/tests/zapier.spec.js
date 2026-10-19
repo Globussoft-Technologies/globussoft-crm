@@ -98,13 +98,13 @@ test.describe('zapier.js — Zapier metadata + webhook ingress + subscriptions',
       headers: auth(),
       data: {
         event: 'contact_created',
-        targetUrl: `https://hooks.zapier.com/hooks/catch/E2E_AUDIT_${Date.now()}`,
+        targetUrl: `https://hooks.zapier.com/hooks/catch/E2E_AUDIT/${Date.now()}/`,
       },
     });
     expect(res.status()).toBe(201);
     const body = await res.json();
     expect(body.id).toBeTruthy();
-    expect(body.event).toBe('contact_created');
+    expect(body.event).toBe('contact.created');
     createdSubscriptionIds.push(body.id);
   });
 

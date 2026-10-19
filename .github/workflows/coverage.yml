@@ -177,6 +177,7 @@ jobs:
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \
+            tests/zapier-setup-api.spec.js \
             tests/generic-dashboard-fx-api.spec.js \
             tests/travel-email-provider-api.spec.js \
             tests/travel-meeting-forms-api.spec.js \

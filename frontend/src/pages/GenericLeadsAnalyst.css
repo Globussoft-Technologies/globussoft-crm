@@ -147,3 +147,32 @@
   /* Fit short lists to their rows, but still shrink and scroll for long lists. */
   flex: 0 1 auto !important;
 }
+.generic-lead-field-dialog {
+  padding: 18px !important;
+  width: min(640px, calc(100vw - 24px)) !important;
+}
+.generic-lead-field-dialog form { gap: 12px !important; }
+.generic-lead-field-dialog .input-field {
+  min-height: 34px;
+  padding: 7px 10px !important;
+  font-size: 13px !important;
+  line-height: 1.35;
+}
+.generic-lead-field-dialog small { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.lead-field-guidance, .lead-field-preview {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+  font-size: 13px;
+}
+.lead-field-guidance p { margin: 5px 0; color: var(--text-secondary); line-height: 1.45; }
+.lead-field-guidance a { color: var(--primary-color, var(--accent-color)); }
+.lead-field-preview { display: grid; gap: 8px; }
+.lead-field-option { display: inline-block; margin: 0 6px 4px 0; padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 5px; }
+.lead-field-table-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.generic-lead-create-details { border: 1px solid var(--border-color); border-radius: 8px; margin: 0; padding: 12px; display: grid; gap: 12px; min-width: 0; }
+.generic-lead-create-details legend { font-size: 13px; font-weight: 600; padding: 0 6px; }
+.generic-lead-create-details label { display: grid; gap: 5px; font-size: 13px; }
+.generic-lead-create-details small { color: var(--text-secondary); font-size: 12px; }
+.generic-lead-create-details .input-field { width: 100%; min-width: 0; padding: 8px 10px; font-size: 13px; }

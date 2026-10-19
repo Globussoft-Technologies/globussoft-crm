@@ -124,7 +124,7 @@ describe('Zapier page — header and static instructions', () => {
     expect(screen.getByText(/authenticate/i)).toBeInTheDocument();
     // Marketplace status banner pinned
     expect(screen.getByText(/marketplace status/i)).toBeInTheDocument();
-    expect(screen.getByText(/private beta/i)).toBeInTheDocument();
+    expect(screen.getByText(/listing has not been verified/i)).toBeInTheDocument();
   });
 });
 

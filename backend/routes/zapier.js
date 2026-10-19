@@ -1,8 +1,44 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
+const { EVENTS, validateCatchHook, deliverZapier } = require('../lib/zapierDelivery');
+const { isTenantWebhookEntitled, resolveTenantWebhookSecret } = require('../lib/webhookEntitlement');
+const rateLimit = require('express-rate-limit');
+const testLimiter = rateLimit({ windowMs: 60000, max: 5, keyGenerator: req => `${req.user.tenantId}:${req.user.userId}`, standardHeaders: true, legacyHeaders: false });
 
 const router = express.Router();
+
+// Catch Hook setup works without a marketplace app or a CRM API key.
+// These management endpoints never claim to verify downstream Zap actions.
+router.get('/connection', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const subscriptions = await prisma.webhook.findMany({ where: { tenantId: req.user.tenantId, userId: req.user.userId, isActive: true } });
+    const ownedIds = subscriptions.filter(sub => String(sub.targetUrl).startsWith('https://hooks.zapier.com/')).map(sub => sub.id);
+    const events = await prisma.webhookEvent.findMany({ where: { tenantId: req.user.tenantId, source: 'zapier_outbound' }, orderBy: { receivedAt: 'desc' }, take: 200 });
+    const deliveries = events.flatMap(row => {
+      let data; try { data = JSON.parse(row.rawPayload); } catch { return []; }
+      if (data.ownerId !== req.user.userId || !ownedIds.includes(data.subscriptionId)) return [];
+      return [{ id: row.id, ...data, status: row.status, receivedAt: row.receivedAt, error: row.errorMessage }];
+    }).slice(0, 50);
+    const entitlement = await isTenantWebhookEntitled(req.user.tenantId);
+    return res.json({ entitlement, configured: ownedIds.length, deliveries, logLimit: 50,
+      note: 'Recent deliveries only; acceptance does not prove a downstream Zap action ran.' });
+  } catch { return res.status(500).json({ error: 'Could not load connection status', code: 'CONNECTION_STATUS_FAILED' }); }
+});
+
+router.post('/subscriptions/:id/test', verifyToken, verifyRole(['ADMIN']), testLimiter, async (req, res) => {
+  try {
+    const sub = await prisma.webhook.findFirst({ where: { id: Number(req.params.id), tenantId: req.user.tenantId, userId: req.user.userId, isActive: true } });
+    if (!sub) return res.status(404).json({ error: 'Subscription not found', code: 'NOT_FOUND' });
+    const entitlement = await isTenantWebhookEntitled(req.user.tenantId);
+    if (!entitlement.entitled) return res.status(403).json({ error: 'An active subscription or trial is required', code: 'WEBHOOK_NOT_ENTITLED' });
+    const { secret } = await resolveTenantWebhookSecret(req.user.tenantId);
+    const event = EVENTS[sub.event] || sub.event;
+    if (!Object.values(EVENTS).includes(event)) return res.status(400).json({ error: 'This legacy event is not supported by the setup tester', code: 'INVALID_EVENT' });
+    const result = await deliverZapier(sub, event, { id: 'sample-only', contactId: 'sample-contact', dealId: 'sample-deal', taskId: 'sample-task', name: 'Priya Sharma', email: 'priya@example.invalid', company: 'Example Demo', title: 'CRM integration test', amount: 0, completedAt: new Date().toISOString() }, req.user.tenantId, secret, true);
+    return res.status(result.ok ? 200 : 502).json(result);
+  } catch { return res.status(400).json({ error: 'Unable to send test; check the Catch Hook URL', code: 'TEST_DELIVERY_FAILED' }); }
+});
 
 // ---------------------------------------------------------------------------
 // Zapier-friendly metadata
@@ -339,16 +375,23 @@ router.get("/subscriptions", verifyToken, async (req, res) => {
   }
 });
 
-router.post("/subscribe", verifyToken, async (req, res) => {
+router.post("/subscribe", verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
     const { event, targetUrl } = req.body || {};
     if (!event || !targetUrl) {
       return res.status(400).json({ error: "event and targetUrl are required" });
     }
+    const canonicalEvent = EVENTS[event] || event;
+    if (!Object.values(EVENTS).includes(canonicalEvent)) return res.status(400).json({ error: 'Choose one of the supported release-one events', code: 'INVALID_EVENT' });
+    let catchUrl;
+    try { catchUrl = validateCatchHook(targetUrl); }
+    catch { return res.status(400).json({ error: 'Use the HTTPS Catch Hook URL provided by Zapier', code: 'INVALID_CATCH_HOOK' }); }
+    const existing = await prisma.webhook.findFirst({ where: { tenantId: req.user.tenantId, userId: req.user.userId, event: canonicalEvent, targetUrl: catchUrl, isActive: true } });
+    if (existing) return res.status(200).json(existing);
     const sub = await prisma.webhook.create({
       data: {
-        event,
-        targetUrl,
+        event: canonicalEvent,
+        targetUrl: catchUrl,
         isActive: true,
         userId: req.user.userId,
         tenantId: req.user.tenantId,

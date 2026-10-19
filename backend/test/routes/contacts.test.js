@@ -1021,6 +1021,16 @@ describe('GET /api/contacts/:id — travel contact-timeline merge', () => {
 
 // ─────────────────────────────────────────────────────────────────────
 describe('POST /api/contacts — create', () => {
+  test('Generic Leads may omit email while other verticals retain required email', async () => {
+    prisma.contact.create.mockResolvedValue({ ...SAMPLE_CONTACT, email: null, status: 'Lead' });
+    const response = await request(makeApp()).post('/api/contacts').send({ name: 'Priya Sharma', status: 'Lead', email: null });
+    expect(response.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ email: null }) }));
+    const travel = await request(makeApp({ vertical: 'travel' })).post('/api/contacts').send({ name: 'Priya Sharma', status: 'Lead' });
+    expect(travel.status).toBe(400);
+    expect(travel.body.code).toBe('EMAIL_REQUIRED');
+  });
+
   test('happy create → 201 + tenantId injected + writeAudit + emitEvent(contact.created)', async () => {
     const created = {
       id: 12345,

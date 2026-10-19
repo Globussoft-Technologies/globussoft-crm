@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
+import { AuthContext } from '../App';
+import ZapierSetup from '../components/ZapierSetup';
 import { Code, Plug, Zap, ChevronRight, Trash2, ExternalLink, Eye, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
 export default function Zapier() {
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = tenant?.vertical === 'generic';
+  const releaseEvents = { contact_created: 'contact.created', deal_won: 'deal.won', task_completed: 'task.completed' };
   const notify = useNotify();
   const [triggers, setTriggers] = useState([]);
   const [actions, setActions] = useState([]);
@@ -13,7 +18,7 @@ export default function Zapier() {
 
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [isGeneric]);
 
   const loadAll = async () => {
     setLoading(true);
@@ -23,7 +28,7 @@ export default function Zapier() {
         fetchApi('/api/zapier/actions').catch(() => []),
         fetchApi('/api/zapier/subscriptions').catch(() => []),
       ]);
-      setTriggers(Array.isArray(t) ? t : []);
+      setTriggers(Array.isArray(t) ? (isGeneric ? t.filter(item => releaseEvents[item.key]) : t) : []);
       setActions(Array.isArray(a) ? a : []);
       setSubs(Array.isArray(s) ? s : []);
     } catch (err) {
@@ -89,7 +94,7 @@ export default function Zapier() {
           <div>
             <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Zapier Integration</h1>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-              Connect Globussoft CRM to 6,000+ apps via Zapier triggers and actions.
+              Connect CRM events to your external workflows through Zapier.
             </p>
           </div>
         </div>
@@ -105,7 +110,8 @@ export default function Zapier() {
       </header>
 
       {/* Section 1: Connect Instructions */}
-      <div className="card" style={cardStyle}>
+      {isGeneric && <ZapierSetup subscriptions={subs} onChanged={loadAll} />}
+      {!isGeneric && <div className="card" style={cardStyle}>
         <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Plug size={20} color="var(--accent-color)" /> Connect to Zapier
         </h3>
@@ -150,10 +156,9 @@ export default function Zapier() {
           border: '1px solid rgba(255, 191, 0, 0.3)',
           borderRadius: 8, fontSize: '0.875rem', color: 'var(--text-secondary)'
         }}>
-          <strong style={{ color: 'var(--text-primary)' }}>Marketplace status:</strong> Our Zapier app is currently in private beta.
-          Apply for public marketplace listing at <a href="https://zapier.com/developer" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-color)' }}>zapier.com/developer</a>.
+          <strong style={{ color: 'var(--text-primary)' }}>Marketplace status:</strong> A marketplace listing has not been verified. Use a configured webhook integration or contact your administrator for installation details.
         </div>
-      </div>
+      </div>}
 
       {/* Section 2: Triggers */}
       <div className="card" style={cardStyle}>
@@ -176,7 +181,7 @@ export default function Zapier() {
           <tbody>
             {triggers.map(t => (
               <tr key={t.key}>
-                <td style={{ ...tableCellStyle, fontFamily: 'monospace', color: 'var(--accent-color)' }}>{t.key}</td>
+                <td style={{ ...tableCellStyle, fontFamily: 'monospace', color: 'var(--accent-color)' }}>{isGeneric ? releaseEvents[t.key] : t.key}</td>
                 <td style={{ ...tableCellStyle, fontWeight: 600 }}>{t.name}</td>
                 <td style={{ ...tableCellStyle, color: 'var(--text-secondary)' }}>{t.description}</td>
                 <td style={{ ...tableCellStyle, textAlign: 'right' }}>
@@ -202,7 +207,7 @@ export default function Zapier() {
       </div>
 
       {/* Section 3: Actions */}
-      <div className="card" style={cardStyle}>
+      {!isGeneric && <div className="card" style={cardStyle}>
         <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <ChevronRight size={20} color="#a855f7" /> Available Actions
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
@@ -247,14 +252,14 @@ export default function Zapier() {
           </tbody>
         </table>
         </div>
-      </div>
+      </div>}
 
       {/* Section 4: Active Subscriptions */}
       <div className="card" style={cardStyle}>
         <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Plug size={20} color="var(--success-color)" /> Active Subscriptions
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
-            ({subs.length}) — webhooks Zapier registered for your account
+            ({subs.length}) — webhook subscriptions saved for your account
           </span>
         </h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -273,7 +278,7 @@ export default function Zapier() {
                   borderRadius: 4, fontSize: '0.75rem', fontFamily: 'monospace', marginBottom: '0.5rem'
                 }}>{s.event}</div>
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', margin: 0, wordBreak: 'break-all' }}>
-                  POST {s.targetUrl}
+                  POST {isGeneric ? 'https://hooks.zapier.com/hooks/catch/•••/••• (hidden)' : s.targetUrl}
                 </p>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
                   Created {new Date(s.createdAt).toLocaleString()}

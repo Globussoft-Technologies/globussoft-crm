@@ -1805,7 +1805,7 @@ function BuiltInInlineCellEditor({
   );
 }
 
-function LeadFieldCreateModal({ onClose, onCreated, notify }) {
+function LeadFieldCreateModal({ onClose, onCreated, notify, isGeneric = false, existingFields = [] }) {
   const [label, setLabel] = useState("");
   const [fieldType, setFieldType] = useState("text");
   const [optionsText, setOptionsText] = useState("");
@@ -1813,6 +1813,10 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
   const [placeholder, setPlaceholder] = useState("");
   const [isRequired, setIsRequired] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showInTable, setShowInTable] = useState(true);
+  const [validationError, setValidationError] = useState("");
+  const fieldKey = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  const previewOptions = [...new Set(optionsText.split(/[,\n]/).map(value => value.trim()).filter(Boolean))];
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -1825,13 +1829,17 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
   const handleSubmit = async (event) => {
     event.preventDefault();
     const trimmedLabel = label.trim();
+    if (isGeneric && existingFields.some(field => field.fieldKey === fieldKey || field.label?.trim().toLowerCase() === trimmedLabel.toLowerCase())) {
+      setValidationError("A field with this label already exists. Use Manage existing fields to edit it.");
+      return;
+    }
     if (!trimmedLabel) {
       notify.error("Label is required");
       return;
     }
 
     const options = optionsText
-      .split(",")
+      .split(isGeneric ? /[,\n]/ : ",")
       .map((option) => option.trim())
       .filter(Boolean);
     if (
@@ -1842,6 +1850,12 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
       return;
     }
 
+    if (isGeneric && (options.length > 50 || new Set(options.map(value => value.toLowerCase())).size !== options.length)) {
+      setValidationError("Use up to 50 unique options. Remove duplicate options before saving.");
+      return;
+    }
+
+    setValidationError("");
     setSaving(true);
     try {
       const body = {
@@ -1860,7 +1874,7 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
         body: JSON.stringify(body),
       });
       notify.success("Field created");
-      onCreated(created);
+      onCreated(created, { showInTable: isGeneric ? showInTable : true });
     } catch (err) {
       notify.error(err?.message || "Failed to create field");
     } finally {
@@ -1888,6 +1902,7 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
     >
       <div
         role="dialog"
+        className={isGeneric ? "generic-lead-field-dialog" : undefined}
         aria-modal="true"
         aria-labelledby="lead-field-modal-title"
         onMouseDown={(event) => event.stopPropagation()}
@@ -1962,6 +1977,11 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
             minWidth: 0,
           }}
         >
+          {isGeneric && <div className="lead-field-guidance">
+            <strong>Define the data, then use it across your leads.</strong>
+            <p>Text is useful for notes; dropdowns keep categories consistent; numbers capture quantities and dates support date ranges.</p>
+            <a href="/settings/lead-fields">Manage existing fields</a>
+          </div>}
           <label
             style={{
               display: "flex",
@@ -2043,6 +2063,16 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
             </label>
           )}
 
+          {isGeneric && <section className="lead-field-preview" aria-label="Field preview">
+            <strong>Preview · {label.trim() || "Your field label"}{isRequired ? " *" : ""}</strong>
+            {fieldType === "checkbox" ? <label><input type="checkbox" disabled /> Yes / No</label>
+              : ["dropdown", "radio", "multiselect"].includes(fieldType)
+                ? <div>{previewOptions.length ? previewOptions.map(option => <span className="lead-field-option" key={option}>{option}</span>) : "Add options to preview choices"}</div>
+                : <input className="input-field" readOnly aria-label="Field preview value" placeholder={placeholder || "Enter a value"} type={fieldType === "number" ? "number" : fieldType === "date" ? "date" : "text"} />}
+            {tooltip && <small>{tooltip}</small>}
+            <small>Filter by: {fieldType === "date" ? "date range, empty or not empty" : "values, empty or not empty"}. Available automatically after saving.</small>
+          </section>}
+
           <label
             style={{
               display: "flex",
@@ -2120,6 +2150,12 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
             />
             Required
           </label>
+
+          {isGeneric && <>
+            <label className="lead-field-table-toggle"><input type="checkbox" checked={showInTable} onChange={event => setShowInTable(event.target.checked)} /> Show as a table column after saving</label>
+            <small>Use Filter by or the column menu to filter this field. Required fields apply when entering lead data; existing records are not backfilled.</small>
+            {validationError && <p role="alert" style={{ color: "var(--danger-color, #ef4444)", margin: 0 }}>{validationError}</p>}
+          </>}
 
           <div
             style={{
@@ -2771,6 +2807,8 @@ const Leads = () => {
     preferredPractitionerId: "",
     customFields: {},
   });
+  const [leadDetails, setLeadDetails] = useState({ owner: "", requirement: "", interest: "", tags: "", followUp: "" });
+  const canCreateLeadFollowUp = isAdmin || (permissionsReady && hasPermission("tasks", "write"));
   const [createFieldErrors, setCreateFieldErrors] = useState({
     name: "",
     phone: "",
@@ -4316,7 +4354,7 @@ const Leads = () => {
         notify.error("Please enter a valid email address");
         return;
       }
-    } else if (!email || !EMAIL_RE.test(email)) {
+    } else if ((!isGeneric && !email) || (email && !EMAIL_RE.test(email))) {
       notify.error("Please enter a valid email address");
       return;
     }
@@ -4398,7 +4436,7 @@ const Leads = () => {
         : newLead.phone
           ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
           : "";
-      await fetchApi("/api/contacts", {
+      const createdLead = await fetchApi("/api/contacts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4407,8 +4445,30 @@ const Leads = () => {
           phone: phoneOut,
           countryCode: undefined,
           skipInitialAssignee: isGeneric ? true : undefined,
+          ...(isGeneric ? {
+            email: email || null,
+            description: leadDetails.requirement.trim() || null,
+            ...(canAssignLead && leadDetails.owner ? { assignedToId: Number(leadDetails.owner) } : {}),
+            tags: [...new Set([...leadDetails.tags.split(",").map(tag => tag.trim()).filter(Boolean),
+              ...(leadDetails.interest.trim() ? [`Interest: ${leadDetails.interest.trim()}`] : [])])],
+          } : {}),
         }),
       });
+      if (isGeneric && leadDetails.followUp && canCreateLeadFollowUp) {
+        try {
+          if (!createdLead?.id) throw new Error("Lead ID unavailable");
+          await fetchApi("/api/tasks", { method: "POST", body: JSON.stringify({
+            title: `Follow up with ${trimmedName}`,
+            contactId: createdLead.id,
+            targetUserId: canAssignLead && leadDetails.owner ? Number(leadDetails.owner) : auth?.user?.userId,
+            dueDate: new Date(leadDetails.followUp).toISOString(),
+            notes: leadDetails.requirement.trim() || undefined,
+          }) });
+        } catch {
+          notify.error("Lead was saved, but the follow-up task could not be created. Add it from Tasks; do not create the lead again.");
+        }
+      }
+      setLeadDetails({ owner: "", requirement: "", interest: "", tags: "", followUp: "" });
       setNewLead({
         name: "",
         email: "",
@@ -5968,7 +6028,7 @@ const Leads = () => {
         "leads-split-table--density-compact",
       );
       const minimumHeight = isCompact ? 32 : 52;
-      const fallbackMaximumHeight = isCompact ? 48 : 64;
+      const fallbackMaximumHeight = isCompact ? 36 : 64;
       const naturalHeight = (row) => Math.max(
         row.offsetHeight,
         Math.min(Math.ceil(row.getBoundingClientRect().height), fallbackMaximumHeight),
@@ -7448,7 +7508,7 @@ const Leads = () => {
     : headerSubmenuLeft;
   const headerSubmenuMaxHeight = headerMenuRect ? headerMenuMaxHeight : 0;
 
-  const handleLeadFieldCreated = (createdField) => {
+  const handleLeadFieldCreated = (createdField, { showInTable = true } = {}) => {
     const fieldKey = createdField?.fieldKey;
     if (fieldKey) {
       const columnKey = `cf_${fieldKey}`;
@@ -7481,7 +7541,7 @@ const Leads = () => {
               },
             ],
       );
-      setVisibleColumns((current) =>
+      if (showInTable) setVisibleColumns((current) =>
         Array.isArray(current) && !current.includes(columnKey)
           ? [...current, columnKey]
           : current,
@@ -12764,6 +12824,7 @@ const Leads = () => {
                 gap: "0.875rem",
               }}
             >
+              {isGeneric && <small style={{ color: "var(--text-secondary)" }}>Only Full Name is required by default. Email, sales details and follow-up are optional. Any required custom fields follow your organisation’s settings.</small>}
               <div>
                 <input
                   type="text"
@@ -12797,7 +12858,7 @@ const Leads = () => {
               <input
                 type="email"
                 placeholder="Email Address"
-                required={!isWellness}
+                required={!isWellness && !isGeneric}
                 maxLength={191}
                 className="input-field"
                 value={newLead.email}
@@ -12946,6 +13007,31 @@ const Leads = () => {
                         </option>
                       ))}
               </select>
+
+              {isGeneric && <fieldset className="generic-lead-create-details">
+                <legend>Sales details · optional</legend>
+                {canAssignLead && <label>Assigned salesperson
+                  <select className="input-field" value={leadDetails.owner} onChange={event => setLeadDetails(current => ({ ...current, owner: event.target.value }))}>
+                    <option value="">Leave unassigned</option>
+                    {staff.map(member => <option key={member.id} value={member.id}>{staffOptionLabel(member)}</option>)}
+                  </select>
+                </label>}
+                <label>Product / service of interest
+                  <input className="input-field" maxLength={80} value={leadDetails.interest} onChange={event => setLeadDetails(current => ({ ...current, interest: event.target.value }))} placeholder="e.g. CRM implementation" />
+                  <small>Saved as an Interest tag so you can filter and segment leads.</small>
+                </label>
+                <label>Requirement / enquiry notes
+                  <textarea className="input-field" rows={3} maxLength={4000} value={leadDetails.requirement} onChange={event => setLeadDetails(current => ({ ...current, requirement: event.target.value }))} placeholder="What does this lead need?" />
+                </label>
+                <label>Tags
+                  <input className="input-field" maxLength={500} value={leadDetails.tags} onChange={event => setLeadDetails(current => ({ ...current, tags: event.target.value }))} placeholder="Demo requested, Enterprise" />
+                  <small>Separate tags with commas.</small>
+                </label>
+                {canCreateLeadFollowUp && <label>Next follow-up
+                  <input className="input-field" type="datetime-local" value={leadDetails.followUp} onChange={event => setLeadDetails(current => ({ ...current, followUp: event.target.value }))} />
+                  <small>Creates a linked task using your browser’s local time. Leave blank to skip.</small>
+                </label>}
+              </fieldset>}
 
               {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the
@@ -13277,6 +13363,8 @@ const Leads = () => {
 
       {leadFieldModalOpen && supportsLeadCustomFields && isAdmin && (
         <LeadFieldCreateModal
+          isGeneric={isGeneric}
+          existingFields={customFieldDefs}
           notify={notify}
           onClose={() => setLeadFieldModalOpen(false)}
           onCreated={handleLeadFieldCreated}

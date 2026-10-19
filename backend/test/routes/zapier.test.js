@@ -110,6 +110,9 @@ function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
 }
 
 const zapierRouter = requireCJS('../../routes/zapier');
+prisma.subscription = { findFirst: vi.fn().mockResolvedValue({ id: 1 }) };
+prisma.webhookCredential = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.webhookEvent = { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({ id: 1 }), update: vi.fn() };
 
 function makeApp() {
   const app = express();
@@ -130,6 +133,40 @@ beforeEach(() => {
   prisma.webhook.findFirst.mockReset();
   prisma.webhook.create.mockReset();
   prisma.webhook.delete.mockReset();
+  prisma.subscription.findFirst.mockResolvedValue({ id: 1 });
+  prisma.webhookEvent.findMany.mockResolvedValue([]);
+});
+
+describe('release-one connection management', () => {
+  test('status exposes only the current user subscriptions and delivery records', async () => {
+    prisma.webhook.findMany.mockResolvedValue([{ id: 8, targetUrl: 'https://hooks.zapier.com/hooks/catch/1/a/' }]);
+    prisma.webhookEvent.findMany.mockResolvedValue([
+      { id: 1, rawPayload: JSON.stringify({ subscriptionId: 8, ownerId: 7, event: 'contact.created' }), status: 'PROCESSED' },
+      { id: 2, rawPayload: JSON.stringify({ subscriptionId: 9, ownerId: 99 }), status: 'PROCESSED' },
+    ]);
+    const res = await request(makeApp()).get('/api/zapier/connection').set('Authorization', makeBearer());
+    expect(res.status).toBe(200);
+    expect(res.body.configured).toBe(1);
+    expect(res.body.deliveries.map(row => row.id)).toEqual([1]);
+    expect(prisma.webhook.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 1, userId: 7, isActive: true } }));
+    expect(prisma.webhookEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 1, source: 'zapier_outbound' } }));
+  });
+  test('requires authentication and admin access', async () => {
+    expect((await request(makeApp()).get('/api/zapier/connection')).status).toBe(401);
+    expect((await request(makeApp()).get('/api/zapier/connection').set('Authorization', makeBearer({ role: 'USER' }))).status).toBe(403);
+  });
+  test('cannot test another user or tenant subscription', async () => {
+    prisma.webhook.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp()).post('/api/zapier/subscriptions/42/test').set('Authorization', makeBearer());
+    expect(res.status).toBe(404);
+    expect(prisma.webhook.findFirst).toHaveBeenCalledWith({ where: { id: 42, tenantId: 1, userId: 7, isActive: true } });
+  });
+  test('rejects unsupported events and private webhook destinations', async () => {
+    for (const body of [{ event: 'contact.created', targetUrl: 'http://127.0.0.1/admin' }, { event: 'tenant.*', targetUrl: 'https://hooks.zapier.com/hooks/catch/1/a/' }]) {
+      expect((await request(makeApp()).post('/api/zapier/subscribe').set('Authorization', makeBearer()).send(body)).status).toBe(400);
+    }
+    expect(prisma.webhook.create).not.toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -474,14 +511,14 @@ describe('POST /subscribe — create webhook subscription', () => {
     const res = await request(makeApp())
       .post('/api/zapier/subscribe')
       .set('Authorization', makeBearer({ userId: 7, tenantId: 1 }))
-      .send({ event: 'contact_created', targetUrl: 'https://hooks.example/x' });
+      .send({ event: 'contact_created', targetUrl: 'https://hooks.zapier.com/hooks/catch/123/abc/' });
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual(expect.objectContaining({ id: 77 }));
     expect(prisma.webhook.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        event: 'contact_created',
-        targetUrl: 'https://hooks.example/x',
+        event: 'contact.created',
+        targetUrl: 'https://hooks.zapier.com/hooks/catch/123/abc/',
         isActive: true,
         userId: 7,
         tenantId: 1,

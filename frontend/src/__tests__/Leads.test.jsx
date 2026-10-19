@@ -125,6 +125,23 @@ function defaultFetchMock(url, opts) {
 }
 
 describe('Leads  Create Lead form client-side hardening (#557)', () => {
+  it('creates a Generic lead without email and saves optional sales details and follow-up', async () => {
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, token: 'test-token' });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+    fireEvent.change(screen.getByPlaceholderText('Full Name'), { target: { value: 'Priya Sharma' } });
+    fireEvent.change(screen.getByLabelText('Product / service of interest', { exact: false }), { target: { value: 'CRM' } });
+    fireEvent.change(screen.getByLabelText('Requirement / enquiry notes'), { target: { value: 'Needs a demonstration' } });
+    fireEvent.change(screen.getByPlaceholderText('Demo requested, Enterprise'), { target: { value: 'Enterprise, Demo' } });
+    fireEvent.change(screen.getByLabelText('Next follow-up', { exact: false }), { target: { value: '2027-01-15T10:00' } });
+    submitForm();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tasks', expect.objectContaining({ method: 'POST' })));
+    const contact = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts' && opts?.method === 'POST');
+    expect(JSON.parse(contact[1].body)).toMatchObject({ email: null, description: 'Needs a demonstration', tags: ['Enterprise', 'Demo', 'Interest: CRM'] });
+    const task = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/tasks' && opts?.method === 'POST');
+    expect(JSON.parse(task[1].body)).toMatchObject({ contactId: 999, title: 'Follow up with Priya Sharma' });
+  });
+
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -4089,6 +4106,35 @@ describe('Leads Web Form column (generic CRM only)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
     expect(await screen.findByRole('dialog', { name: /Add Lead Field/i })).toBeInTheDocument();
+  });
+
+  it('shows Generic field preview, management shortcut and optional table visibility', async () => {
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+    fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    expect(dialog).toHaveClass('generic-lead-field-dialog');
+    expect(within(dialog).getByRole('link', { name: 'Manage existing fields' })).toHaveAttribute('href', '/settings/lead-fields');
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Referral Source'), { target: { value: 'Preferred Location' } });
+    expect(within(dialog).getByRole('region', { name: 'Field preview' })).toHaveTextContent('Preferred Location');
+    expect(within(dialog).getByText(/Available automatically after saving/)).toBeInTheDocument();
+    const toggle = within(dialog).getByRole('checkbox', { name: 'Show as a table column after saving' });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+  });
+
+  it('rejects duplicate Generic choices before sending a field definition', async () => {
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+    fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Referral Source'), { target: { value: 'Budget Group' } });
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'dropdown' } });
+    fireEvent.change(within(dialog).getByPlaceholderText('Google, Referral, Event'), { target: { value: 'Small, small' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('unique options');
+    expect(fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/lead-custom-fields' && opts?.method === 'POST')).toHaveLength(0);
   });
 
   it('creates a tenant-scoped field from the in-place modal', async () => {

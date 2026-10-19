@@ -9,6 +9,7 @@ import TopScrollSync from '../components/TopScrollSync';
 import Pagination from '../components/ui/Pagination';
 import { useLeadCalling } from '../hooks/useLeadCalling';
 import { LeadCallButton, LeadCallDialog } from '../components/wellness/LeadCallAction';
+import './ConvertedLeadsDense.css';
 
 // #366: include Junk so the chip can show its count if the tenant uses it.
 const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
@@ -458,7 +459,7 @@ const ConvertedLeads = () => {
   };
 
   return (
-    <div className="converted-leads-page" style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+    <div className={`converted-leads-page${!isWellness && !isTravel ? ' converted-leads-page--dense' : ''}`} style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <UserPlus size={24} style={{ color: 'var(--accent-color)' }} />
@@ -623,7 +624,7 @@ const ConvertedLeads = () => {
 
         {/* overflow-x wrapper the dynamic Lead-custom-field columns can push this table wider than the viewport. */}
         <TopScrollSync scrollWidth={`${tableMinWidth}px`}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: `${tableMinWidth}px`, tableLayout: 'fixed' }}>
+          <table className={!isWellness && !isTravel ? 'generic-record-dense converted-leads-dense-table' : undefined} style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: `${tableMinWidth}px`, tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: `${TABLE_WIDTHS.checkbox}px` }} />
               <col style={{ width: `${TABLE_WIDTHS.name}px` }} />

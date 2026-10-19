@@ -12,7 +12,7 @@ vi.mock('../components/Sidebar', () => ({
 }));
 vi.mock('../components/Omnibar', () => ({ default: () => <div data-testid="omnibar-stub" /> }));
 vi.mock('../components/Presence', () => ({ default: () => <div data-testid="presence-stub" /> }));
-vi.mock('../components/Softphone', () => ({ default: () => <div data-testid="softphone-stub" /> }));
+vi.mock('../components/Softphone', () => ({ default: ({ docked }) => <div data-testid="softphone-stub" data-docked={String(Boolean(docked))} /> }));
 vi.mock('../components/NotificationBell', () => ({ default: () => <div data-testid="bell-stub" /> }));
 const notifyMock = {
   success: vi.fn(),
@@ -267,11 +267,16 @@ describe('Layout', () => {
   // switcher widget is gone; in its place is a read-only chip that
   // shows the active tenant prominently. To switch tenants, users log
   // out and log back in.
-  it('renders the read-only tenant chip with the tenant name', () => {
+  it('omits the duplicate header tenant chip for Generic CRM', () => {
     renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    expect(screen.queryByTestId('tenant-chip')).not.toBeInTheDocument();
+  });
+
+  it('keeps the read-only tenant chip for Travel CRM', () => {
+    renderLayout({ tenant: { id: 1, name: 'Travel Org', vertical: 'travel' } });
     const chip = screen.getByTestId('tenant-chip');
     expect(chip).toBeInTheDocument();
-    expect(chip).toHaveTextContent('Default Org');
+    expect(chip).toHaveTextContent('Travel Org');
   });
 
   it('marks the chip as wellness when the tenant vertical is wellness', () => {
@@ -288,7 +293,7 @@ describe('Layout', () => {
   });
 
   it('chip is non-interactive (no click handler dispatches a switch)', () => {
-    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    renderLayout({ tenant: { id: 1, name: 'Travel Org', vertical: 'travel' } });
     const chip = screen.getByTestId('tenant-chip');
     fireEvent.click(chip);
     // No /api/auth/tenant-switch call should ever fire from clicking the chip.
@@ -307,7 +312,7 @@ describe('Layout', () => {
   // mode. We assert the inline style references the var so a future regression
   // (re-introducing a hex literal) is caught by this test.
   it('TenantChip background uses var(--accent-bg) — no hardcoded #f0f4ff fallback', () => {
-    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    renderLayout({ tenant: { id: 1, name: 'Travel Org', vertical: 'travel' } });
     const chip = screen.getByTestId('tenant-chip');
     const inlineBg = chip.getAttribute('style') || '';
     expect(inlineBg).toMatch(/var\(--accent-bg/);
@@ -512,6 +517,15 @@ describe('Layout', () => {
     const footer = screen.getByTestId('app-build-footer');
     expect(footer).toBeInTheDocument();
     expect(footer.textContent).toMatch(/v[\w.-]+/);
+    expect(footer).toHaveTextContent('v1.8.0');
+    expect(document.querySelector('.app-shell')).toHaveClass('app-shell--generic');
+    expect(footer).toContainElement(screen.getByTestId('softphone-stub'));
+    expect(screen.getByTestId('softphone-stub')).toHaveAttribute('data-docked', 'true');
+  });
+
+  it.each(['wellness', 'travel'])('does not enable shared Generic table density for %s', (vertical) => {
+    renderLayout({ tenant: { vertical } });
+    expect(document.querySelector('.app-shell')).not.toHaveClass('app-shell--generic');
   });
 
   // Push setup is gated on a truthy token; without a token, setupPush is

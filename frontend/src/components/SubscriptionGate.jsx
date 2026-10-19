@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Lock, CreditCard, AlertTriangle, LogOut } from 'lucide-react';
 import { AuthContext } from '../appContexts';
 import { fetchApi } from '../utils/api';
+import WorkspacePreloader from './WorkspacePreloader';
 
 // Hard subscription paywall.
 //
@@ -50,7 +51,7 @@ function isPathAllowed(pathname) {
 }
 
 export default function SubscriptionGate({ children }) {
-  const { user, setUser, setToken, token } = useContext(AuthContext);
+  const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
   const navigate = useNavigate();
   const location = useLocation();
   const [status, setStatus] = useState(null);
@@ -104,7 +105,9 @@ export default function SubscriptionGate({ children }) {
 
   // Do not mount protected pages until the access check completes: their
   // effects would otherwise retry blocked APIs while the gate is loading.
-  if (!loaded) return <div role="status" style={{ padding: 24 }}>Checking subscription...</div>;
+  if (!loaded) return tenant?.vertical === 'generic'
+    ? <WorkspacePreloader fullScreen label="Checking subscription..." />
+    : <div role="status" style={{ padding: 24 }}>Checking subscription...</div>;
   if (!status) return children;
 
   const subStatus = status.subscriptionStatus;

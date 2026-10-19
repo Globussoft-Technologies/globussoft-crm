@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Grid, Loader2, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
-export default function Softphone() {
+export default function Softphone({ docked = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [number, setNumber] = useState('');
   const [contactId, setContactId] = useState('');
@@ -202,10 +202,10 @@ export default function Softphone() {
   };
 
   return (
-    <div style={{ position: 'fixed', ...(fabPosition || { bottom: '2rem', right: '2rem' }), zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem' }}>
+    <div style={{ position: docked ? 'relative' : 'fixed', ...(!docked && (fabPosition || { bottom: '2rem', right: '2rem' })), zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem' }}>
 
       {isOpen && (
-        <div className="card" style={{ width: '320px', padding: '1.5rem', background: 'rgba(15, 23, 42, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid var(--accent-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8), 0 0 30px rgba(59, 130, 246, 0.2)', borderRadius: '16px', animation: 'fadeIn 0.2s ease-out' }}>
+        <div className="card" style={{ ...(docked && { position: 'fixed', right: 16, bottom: 60, maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100dvh - 84px)', overflowY: 'auto' }), width: '320px', padding: '1.5rem', background: 'rgba(15, 23, 42, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid var(--accent-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8), 0 0 30px rgba(59, 130, 246, 0.2)', borderRadius: '16px', animation: 'fadeIn 0.2s ease-out' }}>
 
           {demoMode && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.7rem', color: '#fbbf24' }}>
@@ -284,12 +284,13 @@ export default function Softphone() {
           }
           togglePhone();
         }}
-        onPointerDown={handleFabPointerDown}
-        onPointerMove={handleFabPointerMove}
-        onPointerUp={handleFabPointerUp}
-        style={{ width: 56, height: 56, border: 'none', borderRadius: '50%', background: 'var(--primary-color, var(--accent-color, #3b82f6))', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 8px 24px rgba(0,0,0,0.25)' }}
+        onPointerDown={docked ? undefined : handleFabPointerDown}
+        onPointerMove={docked ? undefined : handleFabPointerMove}
+        onPointerUp={docked ? undefined : handleFabPointerUp}
+        style={{ width: docked ? 'auto' : 56, height: docked ? 34 : 56, padding: docked ? '0 12px' : 0, gap: 8, border: 'none', borderRadius: docked ? 8 : '50%', background: 'var(--primary-color, var(--accent-color, #3b82f6))', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: docked ? 'none' : '0 8px 24px rgba(0,0,0,0.25)' }}
       >
         {isOpen ? <PhoneOff size={24} /> : <Phone size={24} />}
+        {docked && <span>{isOpen ? 'Close dialer' : 'Call'}</span>}
       </button>
 
     </div>

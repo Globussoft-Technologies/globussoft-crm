@@ -37,9 +37,6 @@ import {
   Copy,
   Check,
   MapPin,
-  Table2,
-  Rows3,
-  AlignJustify,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import ColumnPicker from "../components/ColumnPicker";
@@ -66,6 +63,9 @@ import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
 import DuplicateContactModal from "../components/DuplicateContactModal";
 import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
+import GenericLeadDetailPanel from "../components/GenericLeadDetailPanel";
+import './GenericLeadsAnalyst.css';
+import useLeadPanelPresence from '../hooks/useLeadPanelPresence';
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
@@ -195,7 +195,6 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
   "createdAt",
 ]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
-const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
 const LEADS_FILTERS_STORAGE_PREFIX = "globuscrm.leads.filters.v1";
@@ -1616,6 +1615,8 @@ function BuiltInInlineCellEditor({
   showEditButton = true,
   disableTruncation = false,
 }) {
+  const { tenant } = useContext(AuthContext) || {};
+  const genericCopy = !tenant?.vertical || tenant.vertical === 'generic';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
   const [saving, setSaving] = useState(false);
@@ -1631,7 +1632,7 @@ function BuiltInInlineCellEditor({
     if (editing && inputRef.current) inputRef.current.focus();
   }, [editing]);
 
-  const copyable = (field === "email" || field === "phone") && value;
+  const copyable = (field === "email" || field === "phone" || (genericCopy && ['name', 'company'].includes(field))) && value;
   const handleCopy = async (event) => {
     event.stopPropagation();
     try {
@@ -2161,19 +2162,7 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
-  const [leadTableDensity, setLeadTableDensity] = useState(() => {
-    if (!isGeneric || typeof window === "undefined") return "comfortable";
-    try {
-      return window.localStorage.getItem(LEADS_TABLE_DENSITY_STORAGE_KEY) ===
-        "compact"
-        ? "compact"
-        : "comfortable";
-    } catch {
-      return "comfortable";
-    }
-  });
-  const [leadTableDensityMenuOpen, setLeadTableDensityMenuOpen] =
-    useState(false);
+  const leadTableDensity = isGeneric ? 'compact' : 'comfortable';
   // Generic and Travel share tenant-scoped lead custom fields and column
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
@@ -2291,17 +2280,6 @@ const Leads = () => {
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
 
-  useEffect(() => {
-    if (!isGeneric || typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        LEADS_TABLE_DENSITY_STORAGE_KEY,
-        leadTableDensity,
-      );
-    } catch {
-      // Storage can be unavailable in privacy-restricted browser contexts.
-    }
-  }, [isGeneric, leadTableDensity]);
   const [columnLayout, setColumnLayout] = useState(() => {
     try {
       const saved = window.localStorage.getItem(
@@ -2327,6 +2305,7 @@ const Leads = () => {
   const leadsFrozenTableRef = useRef(null);
   const leadsScrollableTableRef = useRef(null);
   const leadsHorizontalTouchRef = useRef(null);
+  const leadsScrollSurfaceRef = useRef(null);
   const [bulkAgent, setBulkAgent] = useState("");
   const [, setBulkCampaignId] = useState("");
   const [bulkCampaignDropdownOpen, setBulkCampaignDropdownOpen] =
@@ -2584,7 +2563,8 @@ const Leads = () => {
     [],
   );
   const getColumnDefaultWidth = (key) =>
-    LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
+    (isGeneric ? { name: 148, email: 200, company: 160, phone: 140, whatsappPhone: 130, aiScore: 96, source: 130, assignedTo: 160 }[key] : null)
+    || LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
   const autoFitLeadColumnWidths = useMemo(() => {
     const canvas =
       typeof document !== "undefined" ? document.createElement("canvas") : null;
@@ -2596,7 +2576,7 @@ const Leads = () => {
           )
         : null;
     const sampleStyle = sampleText ? window.getComputedStyle(sampleText) : null;
-    const fontSize = sampleStyle?.fontSize || "13px";
+    const fontSize = isGeneric ? '12px' : sampleStyle?.fontSize || "13px";
     const fontFamily = sampleStyle?.fontFamily || "sans-serif";
     const letterSpacing = Number.parseFloat(sampleStyle?.letterSpacing) || 0;
     const textWidth = (value, weight = 400) => {
@@ -2624,14 +2604,13 @@ const Leads = () => {
       6 +
       18 +
       16 +
-      10 +
-      (isGeneric ? 40 : 0);
+      10;
     const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
     const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
     return {
       name: Math.ceil(
-        Math.max(LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
+        Math.max(isGeneric ? 148 : LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
       ),
       phone: Math.ceil(
         Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth),
@@ -2665,11 +2644,11 @@ const Leads = () => {
     const configuredWidth =
       Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
     if (key === "name") {
-      const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
+      const manuallySizedWidth = isGeneric && !columnLayout.genericNameWidthUserSet ? 0 : Number(columnLayout.widths?.[key]) || 0;
       return Math.max(
         autoFitLeadColumnWidths[key],
         manuallySizedWidth,
-        isGeneric ? 320 : 0,
+        isGeneric ? 148 : 0,
       );
     }
     if (key === "phone") {
@@ -2684,10 +2663,10 @@ const Leads = () => {
       return Math.max(configuredWidth, LEADS_ACTIONS_COLUMN_WIDTH);
     }
     if (key === "source") {
-      return Math.max(configuredWidth, LEADS_SOURCE_COLUMN_MIN_WIDTH);
+      return Math.max(configuredWidth, isGeneric ? 130 : LEADS_SOURCE_COLUMN_MIN_WIDTH);
     }
     if (key === "assignedTo") {
-      return Math.max(configuredWidth, LEADS_ASSIGNED_COLUMN_MIN_WIDTH);
+      return Math.max(configuredWidth, isGeneric ? 160 : LEADS_ASSIGNED_COLUMN_MIN_WIDTH);
     }
     if (isGeneric && LEADS_GENERIC_LABEL_MIN_WIDTHS[key]) {
       return Math.max(
@@ -2709,13 +2688,13 @@ const Leads = () => {
       key === "actions"
         ? LEADS_ACTIONS_COLUMN_WIDTH
         : key === "name"
-          ? LEADS_NAME_COLUMN_MIN_WIDTH
+          ? isGeneric ? 148 : LEADS_NAME_COLUMN_MIN_WIDTH
           : key === "phone"
             ? autoFitLeadColumnWidths[key]
             : key === "source"
-              ? LEADS_SOURCE_COLUMN_MIN_WIDTH
+              ? isGeneric ? 130 : LEADS_SOURCE_COLUMN_MIN_WIDTH
               : key === "assignedTo"
-                ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
+                ? isGeneric ? 160 : LEADS_ASSIGNED_COLUMN_MIN_WIDTH
                 : LEADS_COLUMN_MIN_WIDTH;
     const maxWidth =
       isGeneric && key === "name" ? 1400 : Number.POSITIVE_INFINITY;
@@ -5864,8 +5843,8 @@ const Leads = () => {
     ? columnLayout.genericNameWidthUserSet &&
       Number.isFinite(savedGenericNameWidth) &&
       savedGenericNameWidth > 0
-      ? `${Math.min(Math.max(savedGenericNameWidth, 320), 1400)}px`
-      : "clamp(320px, 22%, 380px)"
+      ? `${Math.min(Math.max(savedGenericNameWidth, 148), 1400)}px`
+      : `${getColumnWidth('name')}px`
     : `${leadsFrozenTableWidth}px`;
   const leadsTableClassName = isTravel
     ? "leads-table leads-table--fit"
@@ -5988,11 +5967,7 @@ const Leads = () => {
       const isCompact = densityTable.classList.contains(
         "leads-split-table--density-compact",
       );
-      const minimumHeight = isCompact
-        ? densityTable.classList.contains("leads-split-table--sparse")
-          ? 48
-          : 40
-        : 52;
+      const minimumHeight = isCompact ? 32 : 52;
       const fallbackMaximumHeight = isCompact ? 48 : 64;
       const naturalHeight = (row) => Math.max(
         row.offsetHeight,
@@ -7396,6 +7371,7 @@ const Leads = () => {
   const previewLeadCurrent = previewLead
     ? leads.find((lead) => lead.id === previewLead.id) || previewLead
     : null;
+  const displayedPreviewLead = useLeadPanelPresence(isGeneric ? previewLeadCurrent : null);
   const previewCampaign =
     previewLeadCurrent &&
     callifiedCampaigns.find(
@@ -7405,6 +7381,10 @@ const Leads = () => {
     ? getCallStatusMeta(previewLeadCurrent.callifiedLeadStatus)
     : null;
   const headerMenuRect = headerMenuState?.rect || null;
+  const headerMenuWidth = isGeneric ? Math.min(280, window.innerWidth - 24) : LEADS_HEADER_MENU_WIDTH;
+  const headerFilterActive = headerMenuState && advancedFilters.some(
+    (filter) => filter.field === getHeaderFilterConfig(headerMenuState)?.fieldKey,
+  );
   const headerMenuOpenUp = Boolean(
     headerMenuRect &&
     window.innerHeight - headerMenuRect.bottom - 12 < 260 &&
@@ -7423,14 +7403,14 @@ const Leads = () => {
     ? Math.max(
         12,
         Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
+          window.innerWidth - headerMenuWidth - 12,
           headerMenuRect.left,
         ),
       )
     : 0;
   const headerMenuMaxHeight = headerMenuRect
     ? Math.max(
-        220,
+        isGeneric ? 0 : 220,
         Math.min(
           headerMenuOpenUp
             ? headerMenuRect.top - 12
@@ -7444,14 +7424,14 @@ const Leads = () => {
         12,
         Math.min(
           window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
-          headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
+          headerMenuLeft + headerMenuWidth + LEADS_HEADER_MENU_GAP,
         ),
       )
     : 0;
   const headerSubmenuOpenLeft =
     headerMenuRect &&
     headerMenuLeft +
-      LEADS_HEADER_MENU_WIDTH +
+      headerMenuWidth +
       LEADS_HEADER_MENU_SUBMENU_WIDTH +
       LEADS_HEADER_MENU_GAP * 2 >
       window.innerWidth;
@@ -7512,7 +7492,7 @@ const Leads = () => {
 
   return (
     <div
-      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}`}
+      className={`leads-page-root${isGeneric ? ` leads-page-root--generic${leadTableDensity === 'compact' ? ' leads-page-root--analyst' : ''}` : ""}`}
       style={{
         padding: "2rem",
         animation: "fadeIn 0.3s ease",
@@ -8931,6 +8911,7 @@ const Leads = () => {
         </div>
       )}
 
+      <div className={isGeneric ? `generic-leads-workspace${previewLeadCurrent ? ' generic-leads-workspace--with-detail' : ''}` : undefined} style={isGeneric ? undefined : { display: 'contents' }}>
       <div
         className={isGeneric ? "leads-content-shell" : "card"}
         style={
@@ -8972,7 +8953,7 @@ const Leads = () => {
           }}
         >
           <div
-            className={isTravel ? "travel-leads-search-controls" : undefined}
+            className={isGeneric ? "generic-leads-search-controls" : isTravel ? "travel-leads-search-controls" : undefined}
             style={{
               display: "flex",
               alignItems: "center",
@@ -9050,102 +9031,6 @@ const Leads = () => {
                 fontSize: "0.85rem",
               }}
             />
-            {isGeneric && (
-              <div style={{ position: "relative" }}>
-                <button
-                  type="button"
-                  className="btn-secondary leads-density-trigger"
-                  onClick={() => setLeadTableDensityMenuOpen((open) => !open)}
-                  aria-haspopup="menu"
-                  aria-expanded={leadTableDensityMenuOpen}
-                  aria-label={`Table density: ${leadTableDensity}`}
-                  style={{
-                    ...compactToolbarButtonStyle,
-                    height: 38,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.4rem",
-                  }}
-                >
-                  <Table2 size={15} />
-                  Table density
-                  {leadTableDensityMenuOpen ? (
-                    <ChevronUp size={13} />
-                  ) : (
-                    <ChevronDown size={13} />
-                  )}
-                </button>
-                {leadTableDensityMenuOpen && (
-                  <>
-                    <div
-                      aria-hidden="true"
-                      onClick={() => setLeadTableDensityMenuOpen(false)}
-                      style={{ position: "fixed", inset: 0, zIndex: 1088 }}
-                    />
-                    <div
-                      role="menu"
-                      aria-label="Table density"
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 6px)",
-                        left: 0,
-                        zIndex: 1089,
-                        minWidth: 172,
-                        padding: "0.35rem",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: 8,
-                        background: "var(--surface-color)",
-                        boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
-                      }}
-                    >
-                      {[
-                        { value: "compact", label: "Compact", icon: Rows3 },
-                        {
-                          value: "comfortable",
-                          label: "Comfortable",
-                          icon: AlignJustify,
-                        },
-                      ].map(({ value, label, icon: DensityIcon }) => {
-                        const selected = leadTableDensity === value;
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={selected}
-                            onClick={() => {
-                              setLeadTableDensity(value);
-                              setLeadTableDensityMenuOpen(false);
-                            }}
-                            style={{
-                              width: "100%",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.6rem",
-                              padding: "0.55rem 0.65rem",
-                              border: 0,
-                              borderRadius: 6,
-                              background: selected
-                                ? "var(--surface-hover)"
-                                : "transparent",
-                              color: "var(--text-primary)",
-                              font: "inherit",
-                              fontSize: "0.875rem",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                          >
-                            <DensityIcon size={15} />
-                            <span style={{ flex: 1 }}>{label}</span>
-                            {selected && <Check size={15} aria-hidden="true" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
           </div>
 
           <div
@@ -9212,7 +9097,7 @@ const Leads = () => {
                         aria-hidden="true"
                       />
                       <div
-                        className="call-settings-dialog"
+                        className={`call-settings-dialog${isGeneric ? ' call-settings-dialog--dense' : ''}`}
                         role="dialog"
                         aria-label="Call settings"
                         aria-modal="true"
@@ -10026,6 +9911,7 @@ const Leads = () => {
           )}
         </div>
         <div
+          ref={leadsScrollSurfaceRef}
           className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${filteredLeads.length > 0 && filteredLeads.length <= 10 ? " leads-split-table--sparse" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
           onWheel={isGeneric ? (event) => {
             const grid = event.currentTarget;
@@ -10078,6 +9964,7 @@ const Leads = () => {
                   // The inner TopScrollSync wrapper owns horizontal overflow.
                   // Generic order: toolbar (1) → table (2) → pagination (3).
                   order: 2,
+                  overscrollBehaviorX: "contain",
                 }
               : undefined
           }
@@ -10168,7 +10055,8 @@ const Leads = () => {
                         onClick={() => {
                           // Travel Leads: keep this row on the list for now.
                           // navigate(leadDetailPath(lead));
-                          if (!isTravel) navigate(leadDetailPath(lead));
+                          if (isGeneric) setPreviewLead(lead);
+                          else if (!isTravel) navigate(leadDetailPath(lead));
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
@@ -10227,7 +10115,7 @@ const Leads = () => {
                                       e.stopPropagation();
                                       // Travel Leads: keep the profile link inactive for now.
                                       // navigate(leadDetailPath(lead));
-                                      if (isTravel) setPreviewLead(lead);
+                                      if (isTravel || isGeneric) setPreviewLead(lead);
                                       else navigate(leadDetailPath(lead));
                                     }}
                                     title={
@@ -10470,7 +10358,8 @@ const Leads = () => {
                         onClick={() => {
                           // Travel Leads: keep this row on the list for now.
                           // navigate(leadDetailPath(lead));
-                          if (!isTravel) navigate(leadDetailPath(lead));
+                          if (isGeneric) setPreviewLead(lead);
+                          else if (!isTravel) navigate(leadDetailPath(lead));
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
@@ -11640,14 +11529,26 @@ const Leads = () => {
               />
               <div
                 role="menu"
+                className={isGeneric ? "generic-column-menu" : undefined}
                 aria-label={`${headerMenuState.label} column menu`}
+                onKeyDown={(event) => {
+                  if (!isGeneric || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                  if (event.target.closest('[role="menu"]') !== event.currentTarget) return;
+                  const buttons = [...event.currentTarget.querySelectorAll('button:not(:disabled)')]
+                    .filter((button) => button.closest('[role="menu"]') === event.currentTarget);
+                  const index = buttons.indexOf(document.activeElement);
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+                    : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+                  event.preventDefault();
+                  buttons[next]?.focus();
+                }}
                 onMouseDown={(e) => e.stopPropagation()}
                 style={{
                   position: "fixed",
                   left: headerMenuLeft,
                   top: headerMenuOpenUp ? undefined : headerMenuTop,
                   bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
-                  width: LEADS_HEADER_MENU_WIDTH,
+                  width: headerMenuWidth,
                   maxHeight: headerMenuMaxHeight,
                   overflowY: "auto",
                   zIndex: 1095,
@@ -11685,6 +11586,7 @@ const Leads = () => {
                     type="button"
                     onClick={closeHeaderMenu}
                     aria-label="Close column menu"
+                    autoFocus={isGeneric}
                     style={{
                       ...actionIconBtn,
                       width: 26,
@@ -11727,7 +11629,8 @@ const Leads = () => {
                       className="table-row-hover"
                     >
                       <ChevronUp size={15} />
-                      <span>Sort ascending A to Z</span>
+                      <span>{isGeneric ? "Sort A–Z" : "Sort ascending A to Z"}</span>
+                      {isGeneric && sortConfig.key === headerMenuState.key && sortConfig.direction === "asc" && <span aria-label="Active sort">✓</span>}
                     </button>
                     <button
                       type="button"
@@ -11755,12 +11658,14 @@ const Leads = () => {
                       className="table-row-hover"
                     >
                       <ChevronDown size={15} />
-                      <span>Sort descending Z to A</span>
+                      <span>{isGeneric ? "Sort Z–A" : "Sort descending Z to A"}</span>
+                      {isGeneric && sortConfig.key === headerMenuState.key && sortConfig.direction === "desc" && <span aria-label="Active sort">✓</span>}
                     </button>
                   </>
                 )}
                 {isGeneric && !headerMenuState.fixedExtra && (
                   <>
+                    <div role="separator" />
                     <button
                       type="button"
                       onClick={() => setHeaderMenuSubmenu({ side: "right" })}
@@ -11789,7 +11694,7 @@ const Leads = () => {
                         }}
                       >
                         <Plus size={15} />
-                        <span>Add column to the right</span>
+                        <span>Insert right</span>
                       </span>
                       <ChevronRight size={14} />
                     </button>
@@ -11822,7 +11727,7 @@ const Leads = () => {
                           }}
                         >
                           <Plus size={15} />
-                          <span>Add column to the left</span>
+                          <span>Insert left</span>
                         </span>
                         <ChevronLeft size={14} />
                       </button>
@@ -11889,7 +11794,7 @@ const Leads = () => {
                         className="table-row-hover"
                       >
                         <X size={15} />
-                        <span>Remove column</span>
+                        <span>Hide column</span>
                       </button>
                     )}
                   </>
@@ -11915,10 +11820,10 @@ const Leads = () => {
                     className="table-row-hover"
                   >
                     <SlidersHorizontal size={15} />
-                    <span>Edit all columns</span>
+                    <span>Manage columns</span>
                   </button>
                 )}
-                <button
+                {(!isGeneric || headerMenuState.customField) && <button
                   type="button"
                   onClick={() => {
                     if (!headerMenuState.customField) return;
@@ -11952,7 +11857,8 @@ const Leads = () => {
                 >
                   <Pencil size={15} />
                   <span>Rename field</span>
-                </button>
+                </button>}
+                {isGeneric && getHeaderFilterConfig(headerMenuState) && <div role="separator" />}
                 {getHeaderFilterConfig(headerMenuState) && (
                   <button
                     type="button"
@@ -11975,6 +11881,7 @@ const Leads = () => {
                   >
                     <Filter size={15} />
                     <span>Add as filter</span>
+                    {isGeneric && headerFilterActive && <span aria-label="Active filter">✓</span>}
                   </button>
                 )}
                 {headerMenuSubmenu &&
@@ -12469,7 +12376,18 @@ const Leads = () => {
         )}
       </div>
 
-      {previewLeadCurrent && (
+      {isGeneric && displayedPreviewLead && <GenericLeadDetailPanel
+        lead={displayedPreviewLead}
+        closing={!previewLeadCurrent}
+        sourceLabel={leadSourceLabel(displayedPreviewLead, true)}
+        onClose={() => setPreviewLead(null)}
+        onOpen={() => navigate(leadDetailPath(displayedPreviewLead))}
+        canEdit={canLeadUpdate}
+        onEdit={() => { openEdit(displayedPreviewLead); setPreviewLead(null); }}
+      />}
+      </div>
+
+      {!isGeneric && previewLeadCurrent && (
         <div
           onClick={(e) => {
             if (e.target === e.currentTarget) setPreviewLead(null);
@@ -13380,6 +13298,7 @@ const Leads = () => {
 
       <GenericLeadsAssistant
         isGeneric={isGeneric}
+        docked={isGeneric}
         selectedLeadId={selectedLeads.length === 1 ? selectedLeads[0] : null}
         activeFilters={{
           search: searchTerm,

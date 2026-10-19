@@ -60,6 +60,19 @@ describe('<Softphone />', () => {
     expect(fab).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('supports an inline footer launcher without a floating button', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<Softphone docked />);
+    const launcher = screen.getByRole('button', { name: /open softphone dialer/i });
+    expect(launcher).toHaveTextContent('Call');
+    expect(launcher.parentElement).toHaveStyle({ position: 'relative' });
+    expect(launcher).toHaveStyle({ borderRadius: '8px', height: '34px' });
+    await user.click(launcher);
+    expect(screen.getByText('VoIP Softphone')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /close softphone dialer/i }));
+    expect(screen.queryByText('VoIP Softphone')).not.toBeInTheDocument();
+  });
+
   it('clicking the FAB opens the dialer card', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<Softphone />);

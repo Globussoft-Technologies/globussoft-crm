@@ -16,7 +16,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock fetchApi BEFORE importing the component
@@ -68,8 +68,43 @@ function renderDashboard(userOverride) {
 }
 
 describe('<Dashboard />', () => {
+  it('shows rate provenance and stale/missing warnings without displaying misleading totals', async () => {
+    fetchApi.mockImplementation(url => Promise.resolve(url.startsWith('/api/deals/stats') ? {
+      wonValue: null, totalDeals: 3,
+      fx: { baseCurrency: 'INR', source: 'Frankfurter', asOf: '2026-10-16', stale: true, incomplete: true, missingCurrencies: ['XYZ'] },
+    } : []));
+    renderDashboard({ tenant: { id: 1, vertical: 'generic', defaultCurrency: 'INR' } });
+    expect(await screen.findByText(/Dashboard currency: INR/)).toHaveTextContent('Reference rates as of 2026-10-16');
+    expect(screen.getByRole('status')).toHaveTextContent('Rates may be out of date');
+    expect(screen.getByRole('status')).toHaveTextContent('missing rates for XYZ');
+    expect(screen.getByText(/Pipeline valuation unavailable/)).toBeInTheDocument();
+    expect(screen.getAllByText('—')).toHaveLength(2);
+  });
+
+  it('refreshes Generic stats on tab return and every 15 minutes, cleaning up on unmount', async () => {
+    fetchApi.mockResolvedValue([]);
+    const interval = vi.spyOn(window, 'setInterval');
+    const clear = vi.spyOn(window, 'clearInterval');
+    const { unmount } = renderDashboard({ tenant: { id: 1, vertical: 'generic' } });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/deals/stats?currencyMode=latest'));
+    expect(interval).toHaveBeenCalledWith(expect.any(Function), 900000);
+    fetchApi.mockClear();
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/deals/stats?currencyMode=latest'));
+    unmount();
+    expect(clear).toHaveBeenCalled();
+    interval.mockRestore(); clear.mockRestore();
+  });
+
   beforeEach(() => {
     fetchApi.mockReset();
+  });
+
+  it.each(['wellness', 'travel'])('does not add chart navigation to the %s theme', async (vertical) => {
+    fetchApi.mockResolvedValue([]);
+    renderDashboard({ tenant: { vertical } });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalled());
+    expect(screen.queryByRole('navigation', { name: 'Pipeline chart navigation' })).not.toBeInTheDocument();
   });
 
   it('renders Closed Revenue from stats.wonValue (not a list reduce of /api/deals)', async () => {
@@ -114,6 +149,10 @@ describe('<Dashboard />', () => {
     await waitFor(() => expect(screen.getByText('Closed Revenue')).toBeInTheDocument());
     // Intl.NumberFormat for $5B in en-US is "$5,000,000,000".
     await waitFor(() => expect(screen.getByText('$5,000,000,000')).toBeInTheDocument());
+    const kpis = screen.getByText('Closed Revenue').closest('.dashboard-kpis');
+    expect(kpis.style.getPropertyValue('--dashboard-kpi-count')).toBe('5');
+    expect(kpis.querySelectorAll('.dashboard-kpi-card')).toHaveLength(5);
+    expect(kpis.style.gridTemplateColumns).toBe('');
     // Expected Revenue tile reflects stats.expectedValue.
     expect(screen.getByText('$1,200,000,000')).toBeInTheDocument();
     // Total Deals tile reflects stats.totalDeals.
@@ -138,7 +177,7 @@ describe('<Dashboard />', () => {
     expect(fetchApi).not.toHaveBeenCalledWith('/api/contacts');
   });
 
-  it('Recent Deals widget reads from /api/deals?limit=10 (separate fetchApi call)', async () => {
+  it('requests won and lost deals separately and renders compact closed-deal cards only', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) {
         return Promise.resolve({
@@ -150,6 +189,7 @@ describe('<Dashboard />', () => {
         return Promise.resolve([
           { id: 100, title: 'Most-recent X', stage: 'lead', amount: 1000, createdAt: new Date().toISOString() },
           { id: 101, title: 'Most-recent Y', stage: 'won', amount: 2000, createdAt: new Date().toISOString() },
+          { id: 102, title: 'Lost deal Z', stage: 'lost', amount: 3000, contact: { name: 'Maria Santos' }, owner: { name: 'Priya Sharma' }, createdAt: new Date().toISOString() },
         ]);
       }
       if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
@@ -162,12 +202,20 @@ describe('<Dashboard />', () => {
     await waitFor(() => {
       const calls = fetchApi.mock.calls.map((c) => c[0]);
       expect(calls.some((u) => u.startsWith('/api/deals/stats'))).toBe(true);
-      expect(calls.some((u) => /^\/api\/deals\?.*limit=10/.test(u))).toBe(true);
+      expect(calls).toContain('/api/deals?limit=4&stage=won');
+      expect(calls).toContain('/api/deals?limit=4&stage=lost');
     });
 
     // Recent Deals widget shows the rows the limit=10 call returned.
-    await waitFor(() => expect(screen.getByText('Most-recent X')).toBeInTheDocument());
-    expect(screen.getByText('Most-recent Y')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Most-recent Y')).toBeInTheDocument());
+    expect(screen.queryByText('Most-recent X')).not.toBeInTheDocument();
+    expect(screen.getByText('Lost deal Z')).toBeInTheDocument();
+    expect(screen.getByText('Contact: Maria Santos')).toBeInTheDocument();
+    expect(screen.getByText('Owner: Priya Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Owner: Unassigned')).toBeInTheDocument();
+    expect(screen.getByText('Won')).toBeInTheDocument();
+    expect(screen.getByText('Lost')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Most-recent Y/ })).toHaveAttribute('href', '/pipeline?dealId=101');
   });
 
   it('renders 0 (not "—" or NaN) when /api/deals/stats returns all-zero aggregates', async () => {
@@ -202,7 +250,7 @@ describe('<Dashboard />', () => {
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
-  it('Recent Deals widget shows "No deals in pipeline." when /api/deals returns []', async () => {
+  it('shows a closed-deal empty state when there are no won or lost deals', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) {
         return Promise.resolve({
@@ -216,6 +264,6 @@ describe('<Dashboard />', () => {
     });
 
     renderDashboard();
-    await waitFor(() => expect(screen.getByText('No deals in pipeline.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No won or lost deals yet.')).toBeInTheDocument());
   });
 });

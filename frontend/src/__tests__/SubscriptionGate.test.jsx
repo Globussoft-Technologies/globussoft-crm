@@ -8,9 +8,9 @@ import { fetchApi } from '../utils/api';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
 
-function renderGate(user = { role: 'ADMIN' }) {
+function renderGate(user = { role: 'ADMIN' }, vertical) {
   return render(
-    <AuthContext.Provider value={{ user, token: 'test-token', setUser: vi.fn(), setToken: vi.fn() }}>
+    <AuthContext.Provider value={{ user, token: 'test-token', tenant: { vertical }, setUser: vi.fn(), setToken: vi.fn() }}>
       <MemoryRouter initialEntries={['/dashboard']}>
         <Routes>
           <Route path="/dashboard" element={<SubscriptionGate><div>Protected dashboard</div></SubscriptionGate>} />
@@ -23,6 +23,18 @@ function renderGate(user = { role: 'ADMIN' }) {
 
 describe('SubscriptionGate', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it.each(['generic', 'travel', 'wellness', undefined])('scopes the branded pending state to Generic (%s)', async (vertical) => {
+    let resolveAccess;
+    fetchApi.mockReturnValue(new Promise((resolve) => { resolveAccess = resolve; }));
+    renderGate({ role: 'ADMIN' }, vertical);
+    const status = screen.getByRole('status');
+    expect(status.classList.contains('workspace-preloader')).toBe(vertical === 'generic');
+    expect(screen.queryByText('Protected dashboard')).not.toBeInTheDocument();
+    resolveAccess({ subscriptionStatus: 'ACTIVE' });
+    expect(await screen.findByText('Protected dashboard')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
 
   it('holds protected pages until access is checked and offers renewal when expired', async () => {
     let resolveAccess;

@@ -37,6 +37,7 @@ import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
 import { confirmActiveFormExit } from "../utils/formNavigationGuard";
 import { useProductTour } from "../tours/useProductTour";
+import './GenericDenseTables.css';
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
 // read-only; clicking it does NOT dispatch a tenant switch. To switch
@@ -179,6 +180,7 @@ const Layout = () => {
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
+  const isGenericTheme = tenant?.vertical === "generic";
   const isGenericLeadsPage =
     !isWellness && !isTravel && location.pathname === "/leads";
   // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat,
@@ -378,7 +380,7 @@ const Layout = () => {
 
   return (
     <div
-      className={`app-shell${desktopFrame ? " app-shell--scaled" : ""}`}
+      className={`app-shell${desktopFrame ? " app-shell--scaled" : ""}${isGenericTheme ? ' app-shell--generic' : ''}`}
       style={{
         // Anchor the application to all four viewport edges instead of
         // relying on viewport units. Some desktop Chrome/display-scaling
@@ -507,7 +509,7 @@ const Layout = () => {
               </button>
             )}
           </div>
-          <TenantChip tenant={tenant} />
+          {!isGenericTheme && <TenantChip tenant={tenant} />}
           <NotificationBell />
           {toursAvailable && toursEnabled && currentFeature && (
             <button
@@ -694,20 +696,23 @@ const Layout = () => {
             color: "var(--text-secondary)",
             fontSize: "0.7rem",
             opacity: 0.7,
+            ...(isGenericTheme && { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 16, minHeight: 44, opacity: 1 }),
           }}
         >
           <small>
             v
-            {typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0"}
+            {isGenericTheme ? "1.8.0" : typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0"}
             {user?.role === "ADMIN" &&
             typeof __APP_GIT_SHA__ !== "undefined" &&
             __APP_GIT_SHA__
               ? ` · ${__APP_GIT_SHA__}`
               : ""}
           </small>
+          {isGenericTheme && <span id="generic-footer-chat-launcher" style={{ display: "inline-flex" }} />}
+          {isGenericTheme && !isWhatsAppChat && !isGenericLeadsPage && <Softphone docked />}
         </footer>
       </div>
-      {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
+      {!isGenericTheme && !isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
       {/* Wellness Admin Support Chatbot — the component itself also guards
           on tenant.vertical === 'wellness' + authenticated user; the layout
           check avoids mounting it at all for other verticals. */}

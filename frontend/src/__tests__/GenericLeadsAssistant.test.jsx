@@ -17,6 +17,21 @@ describe("GenericLeadsAssistant", () => {
     expect(screen.queryByTestId("generic-leads-assistant-fab")).not.toBeInTheDocument();
   });
 
+  it('docks the chat launcher in the footer and keeps its conversation working', () => {
+    const { unmount } = render(<><span id="generic-footer-chat-launcher" /><GenericLeadsAssistant isGeneric docked /></>);
+    const launcher = screen.getByRole('button', { name: 'Open leads assistant' });
+    expect(launcher.parentElement.id).toBe('generic-footer-chat-launcher');
+    expect(launcher).toHaveTextContent('Chat');
+    expect(launcher).toHaveStyle({ position: 'static' });
+    fireEvent.click(launcher);
+    expect(screen.getByTestId('generic-leads-assistant-panel')).toHaveStyle({ bottom: '60px', right: '16px' });
+    fireEvent.change(screen.getByTestId('generic-leads-assistant-input'), { target: { value: 'hi' } });
+    fireEvent.click(screen.getByTestId('generic-leads-assistant-send'));
+    expect(screen.getByText('Hi! How can I help you with your leads today?')).toBeInTheDocument();
+    unmount();
+    expect(screen.queryByRole('button', { name: 'Close leads assistant' })).not.toBeInTheDocument();
+  });
+
   it("answers greetings immediately without showing CRM loading or calling the API", () => {
     render(<GenericLeadsAssistant isGeneric />);
     fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));

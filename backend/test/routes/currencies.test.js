@@ -94,7 +94,23 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+const fxService = requireCJS('../../lib/dashboardExchangeRates');
+fxService.getDashboardRates = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 const currenciesRouter = requireCJS('../../routes/currencies');
+
+test('Generic market-rate view preserves configured rates and scopes tenant lookup', async () => {
+  prisma.currency.findMany.mockResolvedValue([{ id: 1, code: 'USD', isBase: true, exchangeRate: 1 }, { id: 2, code: 'INR', exchangeRate: 83 }]);
+  prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+  fxService.getDashboardRates.mockResolvedValue({ baseCurrency: 'USD', rates: { USD: 1, INR: 1 / 85 }, incomplete: false });
+  const { body, status } = await request(makeApp()).get('/api/currencies?includeMarket=1').set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 42 })}`);
+  expect(status).toBe(200);
+  expect(body.currencies[1].exchangeRate).toBe(83);
+  expect(body.marketRates.INR).toBeCloseTo(85);
+  expect(prisma.tenant.findUnique).toHaveBeenCalledWith({ where: { id: 42 }, select: { vertical: true, defaultCurrency: true } });
+  expect(prisma.currency.update).not.toHaveBeenCalled();
+});
 
 // In production, server.js mounts a global auth guard that decodes the JWT
 // and sets req.user BEFORE per-route middleware runs. The currencies route

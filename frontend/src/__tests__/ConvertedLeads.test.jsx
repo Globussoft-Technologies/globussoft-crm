@@ -54,6 +54,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../App';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
@@ -175,6 +176,18 @@ function renderPage() {
 }
 
 describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
+  it.each(['travel', 'wellness'])('does not apply Generic density to %s', async (vertical) => {
+    const { container } = render(<AuthContext.Provider value={{ tenant: { vertical }, user: { role: 'ADMIN' } }}><MemoryRouter><ConvertedLeads /></MemoryRouter></AuthContext.Provider>);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    expect(container.querySelector('.converted-leads-page')).not.toHaveClass('converted-leads-page--dense');
+    expect(container.querySelector('table')).not.toHaveClass('converted-leads-dense-table');
+  });
+  it('uses the dense Generic record table styling', async () => {
+    const { container } = renderPage();
+    await screen.findByText('Rohan Kapoor');
+    expect(container.querySelector('.converted-leads-page')).toHaveClass('converted-leads-page--dense');
+    expect(container.querySelector('table')).toHaveClass('generic-record-dense', 'converted-leads-dense-table');
+  });
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);

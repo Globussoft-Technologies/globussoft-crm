@@ -2,6 +2,7 @@ import { useContext, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { AuthContext } from "../appContexts";
 import { fetchApi } from "../utils/api";
+import WorkspacePreloader from "./WorkspacePreloader";
 
 function pathIsHidden(pathname, hiddenPaths) {
   if (!pathname || !Array.isArray(hiddenPaths)) return false;
@@ -93,6 +94,9 @@ export default function TenantPageGuard({ children }) {
   }
 
   if (!isLoaded) {
+    if (tenant?.vertical === "generic") {
+      return <WorkspacePreloader label="Loading organization access..." />;
+    }
     return (
       <div
         role="status"
@@ -112,4 +116,3 @@ export default function TenantPageGuard({ children }) {
 
   return children;
 }
-

@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { getDashboardRates } = require('../lib/dashboardExchangeRates');
 const { verifyToken, verifyRole } = require("../middleware/auth");
 // #527 (CRIT-02 hardening): currency CRUD is admin-only. GET stays open
 // (USERs need rates to render deal/invoice values). POST /convert is also
@@ -48,6 +49,15 @@ router.get("/", async (req, res) => {
       };
     }
     const rows = await prisma.currency.findMany(findManyArgs);
+    if (req.query.includeMarket === '1') {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true, defaultCurrency: true } });
+      if (tenant?.vertical === 'generic') {
+        const currencies = rows.length ? rows : DEFAULTS.map((row, index) => ({ ...row, id: -(index + 1), tenantId }));
+        const base = currencies.find(row => row.isBase)?.code || tenant.defaultCurrency || 'USD';
+        const fx = await getDashboardRates(base, currencies.map(row => row.code));
+        return res.json({ currencies, fx, marketRates: Object.fromEntries(currencies.map(row => [row.code, fx.rates[row.code] ? 1 / fx.rates[row.code] : null])) });
+      }
+    }
     if (rows.length === 0) {
       const defaults = DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
       if (isSummary) {

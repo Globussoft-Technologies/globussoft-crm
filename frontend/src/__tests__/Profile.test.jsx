@@ -97,7 +97,7 @@ function renderProfile(meResponse, opts = {}) {
     <AuthContext.Provider value={{
       user: meResponse ? { ...meResponse, userId: meResponse.id } : null,
       setUser,
-      token: 'tk', tenant: { id: 1 }, loading: false,
+      token: 'tk', tenant: { id: 1, vertical: opts.vertical }, loading: false,
       subscription,
     }}>
       <Profile />
@@ -106,6 +106,14 @@ function renderProfile(meResponse, opts = {}) {
 }
 
 describe('<Profile /> - practitioner section gating (#641)', () => {
+  it.each(['generic', 'wellness', 'travel'])('scopes compact profile styling to Generic only (%s)', async (vertical) => {
+    const { container } = renderProfile({ id: 99, name: 'Test User', email: 'test@example.com', role: 'USER' }, { vertical });
+    await screen.findByText('Test User');
+    expect(Boolean(container.querySelector('.profile-page--dense'))).toBe(vertical === 'generic');
+    expect(screen.getByPlaceholderText('Your name').closest('form')).toHaveClass('profile-edit-form');
+    expect(screen.getByPlaceholderText('Enter current password').closest('form')).toHaveClass('profile-password-form');
+  });
+
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -597,4 +605,3 @@ describe('<Profile /> - Change Password form', () => {
     expect(putCalls).toHaveLength(0);
   });
 });
-

@@ -40,6 +40,8 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom';
 import Leads from '../pages/Leads';
 import { AuthContext } from '../App';
+import { copyToClipboard } from '../utils/clipboard';
+vi.mock('../utils/clipboard', () => ({ copyToClipboard: vi.fn().mockResolvedValue(undefined) }));
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -878,40 +880,28 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('switches and persists table density for Generic CRM leads', async () => {
+  it('always uses ultra-dense rows even with an old Comfortable preference', async () => {
+    window.localStorage.setItem('globuscrm.leads.tableDensity.v1', 'comfortable');
     const firstRender = renderLeads(authValue);
     await screen.findByText('Alice Lead');
 
-    await waitFor(() => {
-      const comfortableRows = Array.from(document.querySelectorAll('.leads-split-table tbody tr'));
-      const comfortableHeights = comfortableRows.map((row) => row.style.height);
-      expect(comfortableRows.length).toBeGreaterThan(0);
-      expect(new Set(comfortableHeights).size).toBe(1);
-      expect(Number.parseInt(comfortableHeights[0], 10)).toBeGreaterThanOrEqual(52);
-      expect(Number.parseInt(comfortableHeights[0], 10)).toBeLessThanOrEqual(64);
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /Table density: comfortable/i }));
-    const densityMenu = screen.getByRole('menu', { name: 'Table density' });
-    expect(within(densityMenu).getByRole('menuitemradio', { name: 'Comfortable' })).toHaveAttribute('aria-checked', 'true');
-
-    fireEvent.click(within(densityMenu).getByRole('menuitemradio', { name: 'Compact' }));
+    expect(screen.queryByRole('button', { name: /Table density/i })).not.toBeInTheDocument();
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
+    expect(document.querySelector('.leads-page-root')).toHaveClass('leads-page-root--analyst');
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--sparse');
-    expect(window.localStorage.getItem('globuscrm.leads.tableDensity.v1')).toBe('compact');
     await waitFor(() => {
       const bodyRows = Array.from(document.querySelectorAll('.leads-split-table tbody tr'));
       expect(bodyRows.length).toBeGreaterThan(0);
       const rowHeights = bodyRows.map((row) => row.style.height);
       expect(new Set(rowHeights).size).toBe(1);
-      expect(Number.parseInt(rowHeights[0], 10)).toBeGreaterThanOrEqual(40);
-      expect(Number.parseInt(rowHeights[0], 10)).toBeLessThanOrEqual(48);
+      expect(Number.parseInt(rowHeights[0], 10)).toBeGreaterThanOrEqual(32);
+      expect(Number.parseInt(rowHeights[0], 10)).toBeLessThanOrEqual(36);
     });
 
     firstRender.unmount();
     renderLeads(authValue);
     await screen.findByText('Alice Lead');
-    expect(screen.getByRole('button', { name: /Table density: compact/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Table density/i })).not.toBeInTheDocument();
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
   });
 
@@ -924,6 +914,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     await screen.findByPlaceholderText('Search leads...');
     expect(screen.queryByRole('button', { name: /Table density/i })).not.toBeInTheDocument();
     expect(document.querySelector('.leads-split-table')).not.toHaveClass('leads-split-table--density-compact');
+    expect(document.querySelector('.leads-page-root')).not.toHaveClass('leads-page-root--analyst');
 
     fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
     const travelFilterDialog = await screen.findByRole('dialog', { name: /Filters/i });
@@ -1019,8 +1010,21 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(aliceLink).toHaveAttribute('href', '/leads/101');
 
     fireEvent.click(aliceLink);
-    expect(navigateMock).toHaveBeenCalledWith('/leads/101');
+    expect(screen.getByRole('complementary', { name: 'Selected lead details' })).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
+  });
+
+  it('copies Name and Company without editing or navigating away', async () => {
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy Name', exact: true })[0]);
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('Alice Lead'));
+    const companyButtons = screen.getAllByRole('button', { name: 'Copy Company', exact: true });
+    fireEvent.click(companyButtons[0]);
+    expect(copyToClipboard.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('complementary', { name: 'Selected lead details' })).not.toBeInTheDocument();
   });
 
   it('keeps the Name column edit icon as the only way to inline-edit the name', async () => {
@@ -1205,15 +1209,22 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('opens an in-place lead preview drawer from the list actions', async () => {
+  it('defaults to dense rows and opens a non-modal selected-lead detail panel', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
 
-    expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
+    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
+    const panel = screen.getByRole('complementary', { name: 'Selected lead details' });
+    expect(panel).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
     expect(screen.getByText('Contact information')).toBeInTheDocument();
     expect(screen.getByText('Open full detail')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open full detail' }));
+    expect(navigateMock).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close lead preview' }));
+    expect(screen.queryByRole('complementary', { name: 'Selected lead details' })).not.toBeInTheDocument();
   });
 
   it('keeps the Name column fixed for generic CRM and renders saved visible columns in order', async () => {
@@ -1329,7 +1340,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
-      expect(saved.widths.email).toBe(300);
+      expect(saved.widths.email).toBe(280);
       expect(saved.collapsed.email).toBe(false);
     });
   });
@@ -1363,7 +1374,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     await screen.findByText('Alice Lead');
     const genericEmailHeader = genericRender.container.querySelector('th[aria-label="Email column"]');
     const genericEmailCol = genericRender.container.querySelectorAll('.leads-table--scrollable colgroup col')[genericEmailHeader.cellIndex];
-    expect(genericEmailCol.style.width).toBe('220px');
+    expect(genericEmailCol.style.width).toBe('200px');
 
     genericRender.unmount();
     const travelRender = renderLeads({
@@ -1376,15 +1387,18 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(travelEmailCol.style.width).toBe('80px');
   });
 
-  it('starts the Generic Name pane at the reference width and allows resizing', async () => {
+  it('starts the Generic Name pane at a compact measured width and allows resizing', async () => {
+    window.localStorage.setItem('globuscrm.leads.columnLayout.v1', JSON.stringify({ widths: { name: 600 }, collapsed: {}, genericNameWidthUserSet: false }));
     const { container } = renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     const frozenPane = container.querySelector('.leads-table-frozen-pane');
     const nameResizeHandle = screen.getByRole('separator', { name: 'Resize Name column' });
-    const renderedStartWidth = nameResizeHandle.closest('th').getBoundingClientRect().width || 320;
-    expect(frozenPane.style.getPropertyValue('--leads-name-pane-width'))
-      .toBe('clamp(320px, 22%, 380px)');
+    const renderedStartWidth = nameResizeHandle.closest('th').getBoundingClientRect().width
+      || Number.parseFloat(frozenPane.style.getPropertyValue('--leads-name-pane-width'));
+    const defaultWidth = Number.parseFloat(frozenPane.style.getPropertyValue('--leads-name-pane-width'));
+    expect(defaultWidth).toBeGreaterThanOrEqual(148);
+    expect(defaultWidth).toBeLessThan(320);
 
     fireEvent.mouseDown(nameResizeHandle, { clientX: 200 });
     fireEvent.mouseMove(window, { clientX: 300 });
@@ -1876,6 +1890,28 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       minWidth: '0px',
       boxSizing: 'border-box',
     });
+  });
+
+  it('shows a compact Generic column menu with keyboard navigation and active sorting', async () => {
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: /Open Email column menu/i }));
+    const menu = await screen.findByRole('menu', { name: 'Email column menu' });
+    expect(menu).toHaveClass('generic-column-menu');
+    expect(menu).toHaveStyle({ width: '280px' });
+    expect(within(menu).queryByRole('button', { name: 'Rename field' })).not.toBeInTheDocument();
+    expect(within(menu).getByRole('button', { name: 'Hide column' })).toBeInTheDocument();
+    expect(within(menu).getByRole('button', { name: 'Manage columns' })).toBeInTheDocument();
+    expect(within(menu).getAllByRole('separator')).toHaveLength(2);
+    const close = within(menu).getByRole('button', { name: 'Close column menu' });
+    close.focus();
+    fireEvent.keyDown(close, { key: 'ArrowDown' });
+    expect(within(menu).getByRole('button', { name: 'Sort A–Z' })).toHaveFocus();
+    fireEvent.click(document.activeElement);
+    fireEvent.click(screen.getByRole('button', { name: /Open Email column menu/i }));
+    expect(screen.getByLabelText('Active sort')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Email column menu' })).not.toBeInTheDocument();
   });
 
   it('opens the Source column menu and applies a source-only filter query', async () => {

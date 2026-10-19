@@ -7,6 +7,7 @@ import { useNotify } from '../utils/notify';
 import { formatDateLong } from '../utils/date';
 import PasswordInput from '../components/PasswordInput';
 import SelfWorkProfile from '../components/SelfWorkProfile';
+import './ProfileDense.css';
 
 // #641  practitioner-specific profile sections (specialty, license, etc.)
 // must ONLY render for users whose wellnessRole identifies them as a
@@ -27,7 +28,8 @@ function profileRoleLabel(profile) {
 }
 
 const Profile = () => {
-  const { user: authUser, setUser: setAuthUser, setToken, subscription } = useContext(AuthContext);
+  const { user: authUser, setUser: setAuthUser, setToken, subscription, tenant } = useContext(AuthContext);
+  const isGeneric = tenant?.vertical === 'generic';
   const notify = useNotify();
   const navigate = useNavigate();
   const [profile, setProfile] = useState(null);
@@ -364,7 +366,7 @@ const Profile = () => {
   }
 
   return (
-    <div style={{ padding: '2rem', maxWidth: '720px', margin: '0 auto' }}>
+    <div className={isGeneric ? 'profile-page--dense' : undefined} style={{ padding: '2rem', maxWidth: '720px', margin: '0 auto' }}>
       <h1 style={{ fontSize: '1.75rem', fontWeight: 'bold', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
         My Profile
       </h1>
@@ -374,7 +376,7 @@ const Profile = () => {
 
       {/* Subscription Info Badge */}
       {subscription?.subscriptionStatus === 'TRIAL' ? (
-        <div style={{
+        <div className="profile-subscription-summary" style={{
           background: 'rgba(255, 193, 7, 0.1)',
           border: '1px solid #ffc107',
           borderRadius: '8px',
@@ -403,7 +405,7 @@ const Profile = () => {
           </a>
         </div>
       ) : subscription?.subscriptionStatus === 'ACTIVE' && subscription?.subscription ? (
-        <div style={{
+        <div className="profile-subscription-summary" style={{
           background: 'rgba(34, 197, 94, 0.1)',
           border: '1px solid #22c55e',
           borderRadius: '8px',
@@ -517,9 +519,9 @@ const Profile = () => {
       )}
 
       {/* Profile Info Card */}
-      <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-          <div style={{ position: 'relative', width: 80, height: 80, flexShrink: 0 }}>
+      <div className="card glass profile-identity-card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+        <div className="profile-identity-row" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+          <div className="profile-avatar" style={{ position: 'relative', width: 80, height: 80, flexShrink: 0 }}>
             {profile?.profilePicture ? (
               <img
                 src={profile.profilePicture}
@@ -652,7 +654,7 @@ const Profile = () => {
         <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <User size={18} /> Edit Profile
         </h3>
-        <form onSubmit={handleUpdateProfile}>
+        <form className="profile-edit-form" onSubmit={handleUpdateProfile}>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               <User size={14} /> Name
@@ -713,7 +715,7 @@ const Profile = () => {
           </div>
 
           {profileMsg.text && (
-            <div style={{
+            <div className="profile-form-message" role="status" style={{
               padding: '0.6rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.85rem',
               background: profileMsg.type === 'success'
                 ? 'rgba(16,185,129,0.12)'
@@ -743,7 +745,7 @@ const Profile = () => {
         <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Key size={18} /> Change Password
         </h3>
-        <form onSubmit={handleChangePassword}>
+        <form className="profile-password-form" onSubmit={handleChangePassword}>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Current Password
@@ -779,7 +781,7 @@ const Profile = () => {
           </div>
 
           {passwordMsg.text && (
-            <div style={{
+            <div className="profile-form-message" role="status" style={{
               padding: '0.6rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', fontSize: '0.85rem',
               background: passwordMsg.type === 'success' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
               color: passwordMsg.type === 'success' ? '#10b981' : '#ef4444'
@@ -935,6 +937,5 @@ const Profile = () => {
 };
 
 export default Profile;
-
 
 

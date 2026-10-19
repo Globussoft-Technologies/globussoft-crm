@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
+import { AuthContext } from '../App';
 import { DollarSign, Plus, Edit, Star, Trash2, RefreshCw, X, TrendingUp } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatCurrency } from '../utils/currency';
 import TopScrollSync from '../components/TopScrollSync';
+import './Currencies.css';
 
 export default function Currencies() {
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = tenant?.vertical === 'generic';
+  const [market, setMarket] = useState(null);
   const notify = useNotify();
   const [currencies, setCurrencies] = useState([]);
   const [pivot, setPivot] = useState(null);
@@ -32,10 +37,11 @@ export default function Currencies() {
     setLoading(true);
     try {
       const [c, p] = await Promise.all([
-        fetchApi('/api/currencies'),
+        fetchApi(isGeneric ? '/api/currencies?includeMarket=1' : '/api/currencies'),
         fetchApi('/api/currencies/pivot/deals').catch(() => null),
       ]);
-      setCurrencies(c || []);
+      setCurrencies(Array.isArray(c) ? c : c?.currencies || []);
+      setMarket(c?.fx ? c : null);
       setPivot(p);
     } catch (e) {
       setError(e.message || 'Failed to load currencies');
@@ -44,7 +50,7 @@ export default function Currencies() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [isGeneric, tenant?.id]);
 
   const handleSeed = async () => {
     try {
@@ -126,6 +132,14 @@ export default function Currencies() {
           </button>
         </div>
       </header>
+      {isGeneric && market && <p role="status" style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+        Market reference rates: {market.fx.source || 'unavailable'}, as of {market.fx.asOf || 'unavailable'}.
+        {market.fx.stale && ' Rates may be out of date.'}
+        {' '}Dashboard valuations use market rates in the organization currency ({tenant?.defaultCurrency || 'USD'}).
+        Configured rates below remain manual; existing financial records are not changed.
+        {' '}Market column: 1 {market.fx.baseCurrency} = shown currency units.
+        {' '}{isPersisted ? 'To change a configured rate, use the pencil action and Save. Market rates are read-only.' : 'Click Initialize Defaults to enable configured-rate editing; then use the pencil action and Save.'}
+      </p>}
 
       {/* Stats */}
       {/* #473: when in preview mode (banner showing), labelling the stat as
@@ -133,7 +147,30 @@ export default function Currencies() {
           "not initialized" banner above it. Append "(preview)" so the two
           statements agree — they're showing the default set, not persisted
           tenant data. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      {isGeneric ? (
+        <section className="currency-command-bar" aria-label="Currency overview">
+          <div className="currency-command-bar__metric">
+            <span className="currency-command-bar__label">{isPersisted ? 'Currencies' : 'Currencies · preview'}</span>
+            <strong>{currencies.length} {isPersisted ? 'active' : 'available'}</strong>
+          </div>
+          <div className="currency-command-bar__metric currency-command-bar__base">
+            <span className="currency-command-bar__icon"><Star size={18} aria-hidden="true" /></span>
+            <div>
+              <span className="currency-command-bar__label">{isPersisted ? 'Base currency' : 'Default base · preview'}</span>
+              <strong>{baseCurrency ? `${baseCurrency.code} · ${baseCurrency.name}` : '—'}</strong>
+            </div>
+          </div>
+          <div className="currency-command-bar__metric">
+            <span className="currency-command-bar__label">Open deals</span>
+            <strong>{pivot ? pivot.dealCount : '—'}</strong>
+          </div>
+          <div className="currency-command-bar__pipeline">
+            <span className="currency-command-bar__label">Open pipeline · {pivot?.baseCode || baseCurrency?.code || 'base'}</span>
+            <strong>{pivot ? formatCurrency(pivot.totalInBase, pivot.baseCode) : '—'}</strong>
+            <span className="currency-command-bar__hint">Configured-rate valuation</span>
+          </div>
+        </section>
+      ) : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
           icon={<DollarSign size={18} />}
           label={isPersisted ? 'Active Currencies' : 'Available Currencies (preview)'}
@@ -153,7 +190,7 @@ export default function Currencies() {
           subtitle={pivot ? `${pivot.dealCount} open deals` : ''}
           accent="#6366f1"
         />
-      </div>
+      </div>}
 
       {!isPersisted && (
         <div className="card" style={{ padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderLeft: '3px solid #f59e0b' }}>
@@ -205,7 +242,8 @@ export default function Currencies() {
                 <th style={th}>Code</th>
                 <th style={th}>Symbol</th>
                 <th style={th}>Name</th>
-                <th style={th}>Exchange Rate</th>
+                <th style={th}>{isGeneric ? 'Configured Rate' : 'Exchange Rate'}</th>
+                {isGeneric && <th style={th}>Market Rate</th>}
                 <th style={{ ...th, textAlign: 'center' }}>Base</th>
                 <th style={{ ...th, textAlign: 'right' }}>Actions</th>
               </tr>
@@ -218,7 +256,7 @@ export default function Currencies() {
                     <td style={td}><strong>{c.code}</strong></td>
                     <td style={td}><span style={{ fontSize: '1.05rem' }}>{c.symbol}</span></td>
                     <td style={td}>{c.name}</td>
-                    <td style={td}>
+                    <td className={isGeneric ? 'currency-rate' : undefined} style={td}>
                       {editingId === c.id ? (
                         <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center' }}>
                           <input
@@ -233,9 +271,10 @@ export default function Currencies() {
                           <button onClick={() => setEditingId(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>Cancel</button>
                         </div>
                       ) : (
-                        <span style={{ fontFamily: 'monospace' }}>{Number(c.exchangeRate).toFixed(4)}</span>
+                        <span style={{ fontFamily: isGeneric ? 'inherit' : 'monospace' }}>{Number(c.exchangeRate).toFixed(4)}</span>
                       )}
                     </td>
+                    {isGeneric && <td className="currency-rate" style={td}>{market?.marketRates?.[c.code] != null ? Number(market.marketRates[c.code]).toFixed(4) : 'Unavailable'}</td>}
                     <td style={{ ...td, textAlign: 'center' }}>
                       {/* #719 — radio reads from the same `baseCode` the
                           header tile uses; this guarantees the two surfaces
@@ -278,7 +317,7 @@ export default function Currencies() {
                 );
               })}
               {currencies.length === 0 && (
-                <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No currencies configured.</td></tr>
+                <tr><td colSpan={isGeneric ? 7 : 6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No currencies configured.</td></tr>
               )}
             </tbody>
           </table>

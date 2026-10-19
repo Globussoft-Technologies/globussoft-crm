@@ -226,6 +226,7 @@ function renderSidebar({
   userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
   hiddenPagePaths = [],
   expandTravelGroups = true, // legacy fixture convenience; production defaults collapsed
+  sidebarProps = {},
 } = {}) {
   // Capture the catalog into a closure variable read by the default
   // mock impl set in beforeEach. This lets per-test overrides (e.g.
@@ -272,7 +273,7 @@ function renderSidebar({
         }}
       >
         <ActiveSubBrandProvider>
-          <Sidebar />
+          <Sidebar {...sidebarProps} />
         </ActiveSubBrandProvider>
       </AuthContext.Provider>
     </MemoryRouter>,
@@ -335,6 +336,28 @@ afterEach(() => {
 
 describe('Sidebar — load-bearing render surface', () => {
   describe('Generic vertical', () => {
+    it('uses the official Callified logo only in the generic sidebar', () => {
+      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const launcher = screen.getByRole('button', { name: 'Open Callified dashboard' });
+      expect(launcher.querySelector('img')).toHaveAttribute('src', '/callified-logo-square.png');
+      expect(launcher.querySelector('img')).toHaveAttribute('width', '20');
+      generic.unmount();
+
+      renderSidebar({ vertical: 'wellness', role: 'ADMIN' });
+      expect(screen.getByRole('button', { name: 'Open Callified dashboard' }).querySelector('img')).toBeNull();
+    });
+
+    it('uses the official AdsGPT logo only in the generic sidebar', () => {
+      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const launcher = screen.getByRole('button', { name: 'Open AdsGPT' });
+      expect(launcher.querySelector('img')).toHaveAttribute('src', '/adsgpt-logo-square.png');
+      expect(launcher.querySelector('img')).toHaveAttribute('width', '20');
+      generic.unmount();
+
+      renderSidebar({ vertical: 'wellness', role: 'ADMIN' });
+      expect(screen.getByRole('button', { name: 'Open AdsGPT' }).querySelector('img')).toBeNull();
+    });
+
     it('renders core generic nav items (Dashboard / Contacts / Pipeline / Leads / Tickets)', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       // Core links visible to all roles — pin a representative few.
@@ -447,6 +470,14 @@ describe('Sidebar — load-bearing render surface', () => {
         'Administration',
         'Platform',
       ]);
+    });
+
+    it('lets short Generic submenus fit naturally instead of imposing the old 220px limit', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      fireEvent.click(screen.getByRole('button', { name: 'Team & Access' }));
+      const menu = screen.getByRole('menu', { name: 'Team & Access submodules' });
+      expect(menu).toHaveStyle({ maxHeight: 'calc(100dvh - 24px)', overflowY: 'auto' });
+      expect(menu.querySelectorAll('a').length).toBeGreaterThan(0);
     });
 
     it('keeps only one generic submenu open at a time', () => {
@@ -1625,6 +1656,20 @@ describe('Sidebar — load-bearing render surface', () => {
   // for cases 4-5 which are the equivalent "automation cluster" navs.
 
   describe('Generic Reports cluster sub-items', () => {
+    it('opens Generic groups on mouse hover in the zoomed-width drawer while retaining click toggles', async () => {
+      const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN', path: '/dashboard', sidebarProps: { isMobileViewport: true, mobileOpen: true, onMobileClose: vi.fn() } });
+      const leads = screen.getByRole('button', { name: 'Leads', exact: true });
+      fireEvent.mouseEnter(leads);
+      await waitFor(() => expect(leads).toHaveAttribute('aria-expanded', 'true'));
+      const menu = screen.getByRole('menu', { name: 'Leads submodules' });
+      expect(container.querySelector('#app-sidebar')).toContainElement(menu);
+      fireEvent.mouseLeave(leads);
+      await waitFor(() => expect(leads).toHaveAttribute('aria-expanded', 'false'));
+      fireEvent.click(leads);
+      expect(leads).toHaveAttribute('aria-expanded', 'true');
+      fireEvent.click(leads);
+      expect(leads).toHaveAttribute('aria-expanded', 'false');
+    });
     it('renders all five Reports cluster items for MANAGER (Reports / Agent Reports / Dashboards / Custom Reports / Funnel)', () => {
       // The five report-style navs all live under `managerOnly` in
       // renderGenericNav. MANAGER role should see every one of them.

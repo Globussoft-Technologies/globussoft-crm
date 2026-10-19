@@ -1,0 +1,57 @@
+.dashboard-page {
+  container-type: inline-size;
+}
+
+.generic-recent-deal { display: flex; gap: .75rem; align-items: center; color: inherit; text-decoration: none; border-top: 1px solid var(--border-color); padding: 1rem 0; min-width: 0; }
+.generic-recent-deal:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 4px; }
+.generic-recent-deal-avatar { flex-shrink: 0; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--subtle-bg); color: var(--accent-color); }
+.generic-recent-deal-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
+.generic-recent-deal-info strong { font-size: .875rem; overflow-wrap: anywhere; }
+.generic-recent-deal-info span { color: var(--text-secondary); font-size: .75rem; overflow-wrap: anywhere; }
+.generic-recent-deal-value { display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; min-width: 0; }
+.generic-recent-deal-value strong { font-size: .875rem; overflow-wrap: anywhere; }
+.generic-recent-deal-stage { border-radius: 6px; padding: 4px 8px; font-size: .7rem; font-weight: 600; }
+.generic-recent-deal-stage--won { color: var(--success-color, #16845e); background: color-mix(in srgb, var(--success-color, #16845e) 15%, transparent); }
+.generic-recent-deal-stage--lost { color: var(--danger-color, #d64b66); background: color-mix(in srgb, var(--danger-color, #d64b66) 15%, transparent); }
+
+.dashboard-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+.dashboard-kpis > a {
+  min-width: 0;
+}
+
+.dashboard-kpi-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-kpi-card h2 {
+  overflow-wrap: anywhere;
+}
+
+@container (min-width: 1000px) {
+  .dashboard-kpis {
+    grid-template-columns: repeat(var(--dashboard-kpi-count), minmax(0, 1fr));
+  }
+
+  .dashboard-kpi-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@container (min-width: 1300px) {
+  .dashboard-kpi-card {
+    flex-direction: row;
+    align-items: center;
+  }
+}

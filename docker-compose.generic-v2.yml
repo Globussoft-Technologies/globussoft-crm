@@ -1,0 +1,89 @@
+# Isolated Generic 2.0 local stack. See docs/GENERIC_V2_DOCKER.md.
+# External volumes deliberately survive even `docker compose down --volumes`.
+name: gbscrm-generic-v2
+
+x-backend-image: &backend-image
+  image: gbscrm-generic-v2-backend:local
+  build: ./backend
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: generic_v2_local_only
+      MYSQL_DATABASE: gbscrm_generic_v2
+    ports:
+      - "127.0.0.1:3308:3306"
+    volumes:
+      - database:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pgeneric_v2_local_only"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  # Schema synchronization only: never resets or seeds an existing database.
+  # Prisma refuses destructive changes requiring --accept-data-loss.
+  db-init:
+    <<: *backend-image
+    restart: "no"
+    environment:
+      DATABASE_URL: mysql://root:generic_v2_local_only@mysql:3306/gbscrm_generic_v2
+    command: ["npx", "prisma", "db", "push", "--skip-generate"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  backend:
+    <<: *backend-image
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql://root:generic_v2_local_only@mysql:3306/gbscrm_generic_v2
+      JWT_SECRET: generic-v2-local-only-jwt-not-for-production
+      PORTAL_JWT_SECRET: generic-v2-local-only-portal-not-for-production
+      NODE_ENV: development
+      PORT: "3000"
+      FRONTEND_URL: ${GENERIC_V2_TUNNEL_ORIGIN:-http://localhost:5174}
+      CORS_ALLOWED_ORIGINS: http://localhost:5174,http://127.0.0.1:5174,${GENERIC_V2_TUNNEL_ORIGIN:-http://localhost:5174}
+      DISABLE_CRONS: "1"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5174:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Public, temporary test URL is printed to this service's logs at startup.
+  # No account/token required. Only the frontend proxy is tunneled, not MySQL.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--url", "http://frontend:80", "--protocol", "http2"]
+    depends_on:
+      frontend:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  database:
+    external: true
+    name: gbscrm_generic_v2_database
+  uploads:
+    external: true
+    name: gbscrm_generic_v2_uploads

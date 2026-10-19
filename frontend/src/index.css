@@ -4114,8 +4114,12 @@ table.leads-table thead th {
   height: 38px;
 }
 
+.leads-page-root--generic .leads-split-table--density-compact .generic-lead-avatar {
+  display: none;
+}
+
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table tbody tr {
-  height: 40px;
+  height: 36px;
 }
 
 .leads-page-root--generic
@@ -4123,14 +4127,15 @@ table.leads-table thead th {
   table.leads-table
   tbody
   tr {
-  height: 48px;
+  height: 36px;
 }
 
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table th,
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table td {
-  height: 40px !important;
-  padding-top: 0.3rem !important;
-  padding-bottom: 0.3rem !important;
+  height: 36px !important;
+  padding-top: 0.2rem !important;
+  padding-bottom: 0.2rem !important;
+  font-size: 0.75rem !important;
 }
 
 .leads-page-root--generic

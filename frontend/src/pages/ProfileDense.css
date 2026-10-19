@@ -1,0 +1,112 @@
+.profile-page--dense {
+  padding: 16px !important;
+  max-width: 1000px !important;
+  font-size: 12px;
+}
+
+.profile-page--dense > h1 {
+  font-size: 22px !important;
+  margin: 0 0 4px !important;
+}
+
+.profile-page--dense > p {
+  font-size: 12px !important;
+  margin: 0 0 12px !important;
+}
+
+.profile-page--dense > .card,
+.profile-page--dense > .profile-subscription-summary {
+  padding: 12px !important;
+  margin-bottom: 12px !important;
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.profile-page--dense > .profile-subscription-summary {
+  display: flex !important;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.profile-page--dense > .profile-subscription-summary > div {
+  margin-bottom: 0 !important;
+}
+
+.profile-page--dense > .profile-subscription-summary > a {
+  margin-left: auto;
+}
+
+.profile-page--dense .profile-identity-row {
+  gap: 12px !important;
+  margin-bottom: 6px !important;
+}
+
+.profile-page--dense .profile-identity-row > div:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-page--dense .profile-avatar,
+.profile-page--dense .profile-avatar > img,
+.profile-page--dense .profile-avatar > div {
+  width: 48px !important;
+  height: 48px !important;
+  font-size: 20px !important;
+}
+
+.profile-page--dense h2 { font-size: 16px !important; }
+.profile-page--dense h3 {
+  font-size: 14px !important;
+  margin-top: 0;
+  margin-bottom: 10px !important;
+}
+.profile-page--dense .profile-identity-card > p { margin: 6px 0 0; }
+
+.profile-page--dense :is(.profile-edit-form, .profile-password-form) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px 14px;
+}
+
+/* Two balanced rows: Name / Email, then Phone / Role. The phone hint
+   belongs to the last row, so it cannot leave a blank row below Name. */
+.profile-page--dense .profile-edit-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.profile-page--dense :is(.profile-edit-form, .profile-password-form) > div {
+  min-width: 0;
+  margin-bottom: 0 !important;
+}
+
+.profile-page--dense label {
+  font-size: 12px !important;
+  margin-bottom: 4px !important;
+}
+
+.profile-page--dense :is(input:not([type="file"]):not([type="checkbox"]), select) {
+  box-sizing: border-box;
+  min-height: 32px;
+  height: 32px;
+  padding-top: 5px !important;
+  padding-bottom: 5px !important;
+  font-size: 12px !important;
+}
+
+.profile-page--dense :is(.btn-primary, .btn-secondary, .btn-danger) {
+  min-height: 32px;
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+  justify-self: start;
+}
+
+.profile-page--dense :is(.profile-form-message, form > button[type="submit"]) {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 600px) {
+  .profile-page--dense { padding: 10px !important; }
+  .profile-page--dense .profile-edit-form { grid-template-columns: minmax(0, 1fr); }
+}

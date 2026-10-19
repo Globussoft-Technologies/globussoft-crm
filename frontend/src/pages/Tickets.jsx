@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
-import { Ticket, Plus, Trash2, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle } from 'lucide-react';
+import { CrmSupport as Ticket } from '../icons/crmIcons';
 
 const PRIORITY_CONFIG = {
   Urgent:  { color: '#ef4444', bg: 'rgba(239,68,68,0.08)' },

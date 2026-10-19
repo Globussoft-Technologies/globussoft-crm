@@ -164,6 +164,13 @@ describe('<RoleGuard /> — lock-panel copy precedence', () => {
 });
 
 describe('<RoleGuard /> — auth-loading safety (#721)', () => {
+  it('shows the Generic preloader while waiting without mounting protected content', () => {
+    renderGuard({ role: 'ADMIN', loading: true });
+    expect(screen.getByRole('status', { name: 'Checking page access…' })).toHaveClass('workspace-preloader');
+    expect(screen.queryByTestId('audit-heading')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('role-guard-locked-panel')).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     notifyError.mockReset();
   });

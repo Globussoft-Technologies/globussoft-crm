@@ -35,6 +35,7 @@ const TopScrollSync = ({
   stickyBottom = false,
   topBarLeadingWidth = 0,
   bottomBarLeadingWidth = 0,
+  wheelTargetRef,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -105,24 +106,68 @@ const TopScrollSync = ({
       syncingFrom.current = null;
     };
 
+    // In translated-content mode the rows are not a native horizontal scroll
+    // container. Forward horizontal gestures over the table (including frozen
+    // columns when a surface ref is provided) to the real scrollbar instead.
+    const wheelTarget = wheelTargetRef?.current || bottom;
+    const onWheel = (event) => {
+      const scroller = stickyBottom ? stickyBottomElement : bottom;
+      if (!scroller || event.ctrlKey || event.defaultPrevented) return;
+      // Native tables already handle gestures over their scrolling half.
+      // An optional wider surface only bridges sibling frozen columns.
+      if (!stickyBottom && bottom.contains(event.target)) return;
+      const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+      if (!delta) return;
+      // Leave wheel events over the actual bars to native scrolling.
+      if (top?.contains(event.target) || stickyBottomElement?.contains(event.target)) return;
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientWidth : 1;
+      const max = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      if (max === 0) return;
+      const previous = scroller.scrollLeft;
+      const next = Math.max(0, Math.min(max, previous + delta * scale));
+      scroller.scrollLeft = next;
+      if (stickyBottom) onStickyBottomScroll();
+      else onBottomScroll();
+      // A trackpad gesture can contain both axes, especially while reversing.
+      // Do not discard its horizontal component merely because Y is larger.
+      // Since we prevent native handling, preserve its vertical component on
+      // the nearest eligible vertical scroller (including the document).
+      if (!event.shiftKey && event.deltaY) {
+        for (let node = event.target instanceof Element ? event.target : wheelTarget; node; node = node.parentElement) {
+          if (node.scrollHeight <= node.clientHeight) continue;
+          if (node !== document.scrollingElement && !/(auto|scroll)/.test(getComputedStyle(node).overflowY)) continue;
+          const verticalScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? node.clientHeight : 1;
+          const before = node.scrollTop;
+          node.scrollTop += event.deltaY * verticalScale;
+          if (node.scrollTop !== before) break;
+        }
+      }
+      // Consume horizontal gestures even at the limits. Otherwise the browser
+      // can scroll an outer container or navigate history instead of letting
+      // the next reverse gesture move the same table back to the left.
+      if (event.cancelable) event.preventDefault();
+    };
+
     if (top) top.addEventListener("scroll", onTopScroll);
     bottom.addEventListener("scroll", onBottomScroll);
     if (stickyBottomElement) {
       stickyBottomElement.addEventListener("scroll", onStickyBottomScroll);
     }
+    if (stickyBottom || wheelTargetRef) wheelTarget.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => {
       if (top) top.removeEventListener("scroll", onTopScroll);
       bottom.removeEventListener("scroll", onBottomScroll);
       if (stickyBottomElement) {
         stickyBottomElement.removeEventListener("scroll", onStickyBottomScroll);
       }
+      if (stickyBottom || wheelTargetRef) wheelTarget.removeEventListener("wheel", onWheel, true);
       if (content && originalContentStyle) {
         content.style.position = originalContentStyle.position;
         content.style.left = originalContentStyle.left;
         content.style.transform = originalContentStyle.transform;
       }
     };
-  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar, stickyBottom, detachedBottomBar]);
+  }, [measuredWidth, scrollWidth, forceScrollbar, disabled, hideTopBar, stickyBottom, detachedBottomBar, wheelTargetRef]);
 
   useEffect(() => {
     if (scrollWidth !== undefined) return undefined;

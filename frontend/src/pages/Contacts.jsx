@@ -314,6 +314,7 @@ const Contacts = () => {
   const resizeStateRef = useRef(null);
   const contactsFrozenTableRef = useRef(null);
   const contactsScrollableTableRef = useRef(null);
+  const contactsScrollSurfaceRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -951,6 +952,10 @@ const Contacts = () => {
 
     const syncTablePairHeight = (leftRow, rightRow) => {
       if (!leftRow || !rightRow) return;
+      if (isGeneric) {
+        leftRow.style.height = '';
+        rightRow.style.height = '';
+      }
       const height = Math.max(
         Math.ceil(leftRow.getBoundingClientRect().height),
         Math.ceil(rightRow.getBoundingClientRect().height),
@@ -987,7 +992,15 @@ const Contacts = () => {
     };
 
     syncSplitTableRowHeights();
+    let disposed = false;
+    const syncGeneric = () => { if (!disposed && isGeneric) syncSplitTableRowHeights(); };
+    if (isGeneric) {
+      window.addEventListener('resize', syncGeneric);
+      document.fonts?.ready?.then(syncGeneric);
+    }
     return () => {
+      disposed = true;
+      window.removeEventListener('resize', syncGeneric);
       frozenTable?.querySelectorAll('thead tr, tbody tr').forEach((row) => {
         row.style.height = '';
       });
@@ -995,7 +1008,7 @@ const Contacts = () => {
         row.style.height = '';
       });
     };
-  }, [contactsRowSyncSignature, sortedContacts.length]);
+  }, [contactsRowSyncSignature, sortedContacts.length, isGeneric]);
 
   const getContactHeaderCellStyle = (extra = {}) => ({
     padding: '1rem',
@@ -1764,7 +1777,7 @@ const Contacts = () => {
         {/* Split-table layout: freeze the name column, keep the rest in a
             synced scrollable pane, and preserve the existing filters and
             row actions without changing the fetch or CRUD flows. */}
-        <div className={`contacts-split-table${isGeneric && !loading && sortedContacts.length === 0 ? ' contacts-split-table--generic-empty' : ''}`}>
+        <div ref={contactsScrollSurfaceRef} className={`contacts-split-table${isGeneric && !loading && sortedContacts.length === 0 ? ' contacts-split-table--generic-empty' : ''}`}>
           <div
             className="contacts-table-frozen-pane"
             style={{ width: contactsFrozenTableWidthPx }}
@@ -1858,6 +1871,7 @@ const Contacts = () => {
               stickyTop
               stickyTopOffset={0}
               hideBottomScrollbar
+              wheelTargetRef={isGeneric ? contactsScrollSurfaceRef : undefined}
             >
               <table
                 className="stable-table"

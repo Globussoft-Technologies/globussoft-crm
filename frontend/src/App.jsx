@@ -24,10 +24,13 @@ import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
 import SubscriptionGate from "./components/SubscriptionGate";
+import WorkspacePreloader from "./components/WorkspacePreloader";
+import WorkspaceLoadingProvider from "./components/WorkspaceLoadingProvider";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
 import GenericAccessGuard from "./components/GenericAccessGuard";
 import { NotifyProvider } from "./utils/notify";
+import { IconThemeContext } from './icons/IconThemeContext';
 import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
 import { SearchQueryProvider } from "./components/search/SearchQueryContext";
@@ -1054,6 +1057,10 @@ function CalendarRedirect() {
 }
 
 export default function App() {
+  return <WorkspaceLoadingProvider><AppContent /></WorkspaceLoadingProvider>;
+}
+
+function AppContent() {
   useEffect(() => {
     applyDomainBranding();
   }, []);
@@ -1492,6 +1499,9 @@ export default function App() {
   // frame splash on cold-start, invisible in normal nav. Lives BELOW the
   // hooks so the hook count is consistent across renders (rules-of-hooks).
   if (loading) {
+    if (token && tenant?.vertical === "generic" && !isTmcHost()) {
+      return <WorkspacePreloader fullScreen />;
+    }
     return (
       <div
         style={{
@@ -1510,29 +1520,34 @@ export default function App() {
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       <AuthContext.Provider value={authValue}>
+        <IconThemeContext.Provider value={Boolean(token && tenant?.vertical === 'generic')}>
         <SearchQueryProvider
           resetKey={`${user?.userId ?? "anonymous"}:${tenant?.id ?? "none"}`}
         >
           <NotifyProvider>
             <ActiveSubBrandProvider>
               <BrowserRouter>
-                <ProductTourProvider>
                   <RouteErrorBoundary>
                   <Suspense
                     fallback={
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "center",
-                          alignItems: "center",
-                          height: "100vh",
-                          color: "var(--text-primary)",
-                        }}
-                      >
-                        Loading...
-                      </div>
+                      token && tenant?.vertical === "generic" && !isTmcHost() ? (
+                        <WorkspacePreloader fullScreen label="Loading your page…" />
+                      ) : (
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "center",
+                            height: "100vh",
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          Loading...
+                        </div>
+                      )
                     }
                   >
+                    <ProductTourProvider>
                     <Routes>
                     <Route
                       path="/login"
@@ -4078,13 +4093,14 @@ export default function App() {
                       <Route path="*" element={<NotFound />} />
                     </Route>
                     </Routes>
+                    </ProductTourProvider>
                   </Suspense>
                   </RouteErrorBoundary>
-                </ProductTourProvider>
               </BrowserRouter>
             </ActiveSubBrandProvider>
           </NotifyProvider>
         </SearchQueryProvider>
+        </IconThemeContext.Provider>
       </AuthContext.Provider>
     </ThemeContext.Provider>
   );

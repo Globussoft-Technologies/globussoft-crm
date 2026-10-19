@@ -3,6 +3,7 @@ const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
 const { formatMoney } = require("../utils/formatMoney");
+const { getDashboardRates } = require('../lib/dashboardExchangeRates');
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed since v3.x but was never wired into any route — rules saved via
 // the FieldPermissions UI had zero effect on read/write payloads. The
@@ -39,7 +40,7 @@ function addDealSearch(where, rawSearch) {
   const clause = {
     OR: [
       { title: { contains: search } },
-      { company: { contains: search } },
+      { contact: { is: { company: { contains: search } } } },
       { contact: { is: { name: { contains: search } } } },
       { owner: { is: { name: { contains: search } } } },
     ],
@@ -256,7 +257,20 @@ router.get("/stats", async (req, res) => {
         ],
       };
     }
-    const deals = await prisma.deal.findMany({ where });
+    let deals = await prisma.deal.findMany({ where });
+    let fx;
+    if (req.query.currencyMode === 'latest') {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tid }, select: { vertical: true, defaultCurrency: true },
+      });
+      if (tenant?.vertical === 'generic') {
+        const baseCurrency = tenant.defaultCurrency || 'USD';
+        fx = await getDashboardRates(baseCurrency, deals.map(deal => deal.currency || baseCurrency));
+        deals = deals.map(deal => ({ ...deal,
+          amount: Number(deal.amount || 0) * (fx.rates[deal.currency || baseCurrency] ?? 0),
+        }));
+      }
+    }
 
     const totalDeals = deals.length;
     const totalValue = deals.reduce((s, d) => s + (d.amount || 0), 0);
@@ -303,6 +317,7 @@ router.get("/stats", async (req, res) => {
     ).length;
 
     res.json({
+      ...(fx ? { fx } : {}),
       totalDeals,
       totalValue,
       avgDealSize,
@@ -314,6 +329,10 @@ router.get("/stats", async (req, res) => {
       lostCount,
       lostValue,
       expectedValue,
+      ...(fx?.incomplete ? {
+        totalValue: null, avgDealSize: null, wonValue: null, lostValue: null, expectedValue: null,
+        byStage: byStage.map(row => ({ ...row, value: null, expectedValue: null })),
+      } : {}),
     });
   } catch (error) {
     console.error("[deals] stats error:", error.message);

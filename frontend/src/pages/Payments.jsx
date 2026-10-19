@@ -739,6 +739,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
       >
         <TopScrollSync hideTopBar>
           <table
+            className="generic-record-dense"
             style={{
               width: "100%",
               minWidth: 1100,

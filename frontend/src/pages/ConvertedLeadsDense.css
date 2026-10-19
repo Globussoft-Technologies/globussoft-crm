@@ -1,0 +1,13 @@
+.converted-leads-page--dense { padding: 12px !important; }
+.converted-leads-page--dense .converted-leads__controls-row { padding: 8px 10px !important; gap: 8px !important; }
+.converted-leads-page--dense .converted-leads__controls-row :is(button, input, select) { min-height: 30px !important; height: 30px; font-size: 12px !important; padding-top: 4px !important; padding-bottom: 4px !important; }
+.converted-leads-page--dense table.converted-leads-dense-table :is(th, td) { height: 32px; padding: 2px 8px !important; font-size: 12px !important; line-height: 16px; }
+.converted-leads-page--dense table.converted-leads-dense-table td :is(button, select) { height: 26px !important; min-height: 26px !important; padding-top: 2px !important; padding-bottom: 2px !important; font-size: 12px !important; }
+.converted-leads-page--dense table.converted-leads-dense-table td:nth-child(2) > div > span:first-child { display: none !important; }
+.converted-leads-page--dense table.converted-leads-dense-table td:nth-child(2) :is(a, span) { font-size: 12px !important; }
+.converted-leads-page--dense table.converted-leads-dense-table td:nth-child(2) > div { gap: 0 !important; }
+.converted-leads-page--dense table.converted-leads-dense-table tbody tr:nth-child(even) td { background: #edf2f8 !important; }
+.converted-leads-page--dense table.converted-leads-dense-table tbody tr:nth-child(odd) td { background: #fff !important; }
+[data-theme="dark"] .converted-leads-page--dense table.converted-leads-dense-table tbody tr:nth-child(even) td { background: #192536 !important; }
+[data-theme="dark"] .converted-leads-page--dense table.converted-leads-dense-table tbody tr:nth-child(odd) td { background: #0e1622 !important; }
+.converted-leads-page--dense table.converted-leads-dense-table tbody tr:hover td { background: var(--surface-hover) !important; }

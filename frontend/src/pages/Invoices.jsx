@@ -1,7 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useContext, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
-  Receipt,
   Plus,
   CheckCircle2,
   Trash2,
@@ -23,6 +22,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
+import { CrmInvoice as Receipt } from '../icons/crmIcons';
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 import { useSearchParams } from "react-router-dom";

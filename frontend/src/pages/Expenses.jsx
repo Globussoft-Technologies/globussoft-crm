@@ -917,7 +917,7 @@ export default function Expenses() {
                 background: 'var(--surface-color)',
               }}
             >
-              <table style={{ width: '100%', minWidth: '1200px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
+              <table className="generic-record-dense" style={{ width: '100%', minWidth: '1200px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>

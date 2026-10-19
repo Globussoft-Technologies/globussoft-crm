@@ -1,0 +1,68 @@
+.workspace-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  overflow: auto;
+  opacity: 1;
+  background: var(--bg-color, #f5f7fc);
+  transition: opacity 180ms ease-out;
+}
+
+.workspace-loading-overlay--closing {
+  opacity: 0;
+}
+
+.workspace-preloader {
+  display: grid;
+  place-items: center;
+  min-height: min(60vh, 480px);
+  width: 100%;
+  padding: clamp(16px, 4vw, 40px);
+  box-sizing: border-box;
+}
+
+.workspace-preloader--fullscreen {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg-color, #f5f7fc);
+}
+
+.workspace-preloader__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  width: min(100%, 580px);
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.workspace-preloader__card > picture {
+  width: min(100%, 320px);
+}
+
+.workspace-preloader__logo {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  object-fit: contain;
+}
+
+.workspace-preloader__label {
+  max-width: 100%;
+  margin: 22px 0 0;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-loading-overlay {
+    transition: none;
+  }
+}

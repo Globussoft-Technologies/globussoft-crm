@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import { Lock } from "lucide-react";
 import { AuthContext } from "../App";
 import { usePermissions } from "../hooks/usePermissions";
+import WorkspacePreloader from "./WorkspacePreloader";
 
 /**
  * RoleGuard — route-level RBAC gate.
@@ -82,7 +83,7 @@ export default function RoleGuard({
   lockedInPlace = false,
 }) {
   const auth = useContext(AuthContext) || {};
-  const { user, loading, token } = auth;
+  const { user, loading, token, tenant } = auth;
   const { hasAllPermissions, isReady: permissionsReady } = usePermissions();
   const role = user?.role;
 
@@ -128,6 +129,9 @@ export default function RoleGuard({
     // toasting a misleading role denial.
     if (!token && !loading) {
       return null;
+    }
+    if (token && tenant?.vertical === "generic") {
+      return <WorkspacePreloader label="Checking page access…" />;
     }
     return null;
   }

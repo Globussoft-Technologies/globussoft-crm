@@ -23,10 +23,13 @@
  * to produce a coherent personal dashboard without any backend change.
  */
 import React, { useState, useEffect, useContext } from 'react';
+import './Dashboard.css';
+import GenericPipelineAnalytics from '../components/GenericPipelineAnalytics';
+import { CrmDeals, CrmContacts } from '../icons/crmIcons';
 import { Users, IndianRupee, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
-import { formatMoney, formatMoneyCompact } from '../utils/money';
+import { formatMoney as formatCurrencyMoney, formatMoneyCompact } from '../utils/money';
 import { formatPercent } from '../utils/percent';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useNavigate, Link } from 'react-router-dom';
@@ -45,7 +48,8 @@ const DEFAULT_STATS = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   // Secure-by-default: when AuthContext hasn't populated `user` yet (a one-
   // frame race during the login → navigate handoff, or a unit-test render
   // without a provider), treat the viewer as a USER so the org-wide P&L
@@ -59,16 +63,40 @@ export default function Dashboard() {
   const [recentDeals, setRecentDeals] = useState([]);
   const [contactCount, setContactCount] = useState(0);
   const [myPendingTasks, setMyPendingTasks] = useState([]);
+  const [fxRefreshError, setFxRefreshError] = useState(false);
+  const formatMoney = amount => stats.fx?.incomplete ? '—' : formatCurrencyMoney(amount,
+    stats.fx?.baseCurrency ? { currency: stats.fx.baseCurrency } : {});
 
   useEffect(() => {
     // KPI numbers — full-population aggregates from the server.
     // For role=USER the backend auto-scopes to ownerId=userId, so the same
     // call produces personal-pipeline numbers without a query change here.
-    fetchApi('/api/deals/stats')
-      .then((d) => setStats({ ...DEFAULT_STATS, ...(d || {}) }))
-      .catch(() => setStats(DEFAULT_STATS));
-    // Row list for the Recent Deals widget — newest 10 only.
-    fetchApi('/api/deals?limit=10&orderBy=createdAt:desc')
+    let active = true;
+    let pending = false;
+    const loadStats = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const data = await fetchApi(isGeneric ? '/api/deals/stats?currencyMode=latest' : '/api/deals/stats');
+        if (active) { setStats({ ...DEFAULT_STATS, ...(data || {}) }); setFxRefreshError(false); }
+      } catch { if (active) setFxRefreshError(true); }
+      finally { pending = false; }
+    };
+    loadStats();
+    const interval = isGeneric ? window.setInterval(loadStats, 15 * 60 * 1000) : null;
+    const onVisible = () => { if (document.visibilityState === 'visible') loadStats(); };
+    if (isGeneric) document.addEventListener('visibilitychange', onVisible);
+    // Generic: fetch each terminal stage before limiting, then merge the latest
+    // four by creation date. Other verticals retain their existing request.
+    const recentRequest = isGeneric
+      ? Promise.all(['won', 'lost'].map(stage => fetchApi(`/api/deals?limit=4&stage=${stage}`)
+        .then(rows => (Array.isArray(rows) ? rows : []).filter(deal => deal.stage === stage))))
+        .then(results => results.flat()
+          .filter(deal => deal.stage === 'won' || deal.stage === 'lost')
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt) || b.id - a.id)
+          .slice(0, 4))
+      : fetchApi('/api/deals?limit=10&orderBy=createdAt:desc');
+    recentRequest
       .then((d) => setRecentDeals(Array.isArray(d) ? d : []))
       .catch(() => setRecentDeals([]));
     // Count all visible contacts, not the API's default first page of 100.
@@ -86,7 +114,12 @@ export default function Dashboard() {
         .then((d) => setMyPendingTasks(Array.isArray(d) ? d : []))
         .catch(() => setMyPendingTasks([]));
     }
-  }, [isUser]);
+    return () => {
+      active = false;
+      if (interval) window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [isUser, isGeneric, tenant?.id]);
 
   // KPIs derived purely from `stats` (server aggregates), not from any list.
   const totalRevenue = stats.wonValue || 0;
@@ -133,7 +166,7 @@ export default function Dashboard() {
         path: '/reports',
       },
       {
-        label: 'My Open Deals', value: dealCount.toString(), icon: <Calendar size={24} />, color: '#a855f7',
+        label: 'My Open Deals', value: dealCount.toString(), icon: isGeneric ? <CrmDeals size={24} /> : <Calendar size={24} />, color: '#a855f7',
         path: '/pipeline',
       },
     ]
@@ -147,7 +180,7 @@ export default function Dashboard() {
         path: '/pipeline',
       },
       {
-        label: 'Total Contacts', value: contactCount.toLocaleString(), icon: <Users size={24} />, color: '#3b82f6',
+        label: 'Total Contacts', value: contactCount.toLocaleString(), icon: isGeneric ? <CrmContacts size={24} /> : <Users size={24} />, color: '#3b82f6',
         path: '/contacts',
       },
       {
@@ -155,7 +188,7 @@ export default function Dashboard() {
         path: '/reports',
       },
       {
-        label: 'Total Deals', value: dealCount.toString(), icon: <Calendar size={24} />, color: '#a855f7',
+        label: 'Total Deals', value: dealCount.toString(), icon: isGeneric ? <CrmDeals size={24} /> : <Calendar size={24} />, color: '#a855f7',
         path: '/pipeline',
       },
     ];
@@ -191,8 +224,16 @@ export default function Dashboard() {
         {/* #128: this button only navigates — rename so the label matches the action */}
         <button className="btn-primary" onClick={() => navigate(ctaPath)}>{ctaLabel}</button>
       </header>
+      {isGeneric && (stats.fx || fxRefreshError) && (
+        <p role="status" className="dashboard-fx-status" style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          {stats.fx ? `Dashboard currency: ${stats.fx.baseCurrency}. Reference rates as of ${stats.fx.asOf || 'unavailable'} (${stats.fx.source || 'provider unavailable'}).` : 'Exchange-rate information unavailable.'}
+          {stats.fx?.checkedAt && ` Last checked: ${new Date(stats.fx.checkedAt).toLocaleString()}.`}
+          {(stats.fx?.stale || fxRefreshError) && ' Rates may be out of date; last successful values are retained.'}
+          {stats.fx?.incomplete && ` Totals unavailable: missing rates for ${stats.fx.missingCurrencies.join(', ')}.`}
+        </p>
+      )}
 
-      <div className="dashboard-kpis" data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+      <div className="dashboard-kpis" data-tour="dashboard-kpis" style={{ '--dashboard-kpi-count': tiles.length }}>
         {tiles.map((stat, i) => (
           <Link key={i}
             to={stat.path}
@@ -201,11 +242,11 @@ export default function Dashboard() {
               color: 'inherit',
               display: 'block',
             }}>
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
+            <div className="card dashboard-kpi-card">
+              <div style={{ width: '48px', height: '48px', flexShrink: 0, borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
                 {stat.icon}
               </div>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
                 <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stat.value}</h2>
               </div>
@@ -219,7 +260,7 @@ export default function Dashboard() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
           </div>
-          <div className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px' }}>
+          {isGeneric ? <GenericPipelineAnalytics stats={stats} /> : <div className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
@@ -238,12 +279,12 @@ export default function Dashboard() {
                 <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
               </AreaChart>
             </ResponsiveContainer>
-          </div>
+          </div>}
         </div>
 
         <div className="card dashboard-recent-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '500', marginBottom: '1.5rem' }}>
-            {isUser ? 'My Pending Tasks' : 'Recent Deals'}
+            {isUser ? 'My Pending Tasks' : isGeneric ? 'Recent Closed Deals' : 'Recent Deals'}
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {isUser ? (
@@ -270,6 +311,24 @@ export default function Dashboard() {
                   </div>
                 ))}
                 {myPendingTasks.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>No pending tasks. 🎉</p>}
+              </>
+            ) : isGeneric ? (
+              <>
+                {recentDeals.map(deal => (
+                  <Link key={deal.id} to={`/pipeline?dealId=${deal.id}`} className="generic-recent-deal">
+                    <span className="generic-recent-deal-avatar" aria-hidden="true">{(deal.title || 'D').charAt(0).toUpperCase()}</span>
+                    <div className="generic-recent-deal-info">
+                      <strong>{deal.title}</strong>
+                      {deal.contact?.name && <span>Contact: {deal.contact.name}</span>}
+                      <span>Owner: {deal.owner?.name || 'Unassigned'}</span>
+                    </div>
+                    <div className="generic-recent-deal-value">
+                      <strong>{formatCurrencyMoney(deal.amount || 0, { currency: deal.currency || stats.fx?.baseCurrency || tenant?.defaultCurrency || 'USD' })}</strong>
+                      <span className={`generic-recent-deal-stage generic-recent-deal-stage--${deal.stage}`}>{deal.stage === 'won' ? 'Won' : 'Lost'}</span>
+                    </div>
+                  </Link>
+                ))}
+                {recentDeals.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>No won or lost deals yet.</p>}
               </>
             ) : (
               <>

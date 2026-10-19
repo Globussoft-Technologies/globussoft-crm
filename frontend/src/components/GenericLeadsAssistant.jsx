@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   Download,
@@ -143,6 +144,7 @@ function confirmationSummary(pending) {
 
 export default function GenericLeadsAssistant({
   isGeneric,
+  docked = false,
   selectedLeadId = null,
   activeFilters = {},
   onApplyFilters,
@@ -152,6 +154,10 @@ export default function GenericLeadsAssistant({
 }) {
   const savedSession = readSavedSession(sessionStorageKey);
   const [open, setOpen] = useState(false);
+  const [footerTarget, setFooterTarget] = useState(null);
+  useEffect(() => {
+    setFooterTarget(docked && isGeneric ? document.getElementById('generic-footer-chat-launcher') : null);
+  }, [docked, isGeneric]);
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState(() => savedSession?.messages || [initialMessage]);
   const [pendingAction, setPendingAction] = useState(() => savedSession?.pendingAction || null);
@@ -391,6 +397,7 @@ export default function GenericLeadsAssistant({
   const panelPosition = panelAbove
     ? { bottom: Math.max(POSITION_GAP, viewportHeight - position.top + 12) }
     : { top: Math.min(viewportHeight - POSITION_GAP, position.top + FAB_SIZE + 12) };
+  const renderLauncher = element => footerTarget ? createPortal(element, footerTarget) : element;
 
   return (
     <>
@@ -402,6 +409,7 @@ export default function GenericLeadsAssistant({
             position: "fixed",
             left: panelLeft,
             ...panelPosition,
+            ...(footerTarget && { left: 'auto', top: 'auto', right: 16, bottom: 60 }),
             width: "min(410px, calc(100vw - 2rem))",
             height: "min(620px, calc(100vh - 7rem))",
             display: "flex",
@@ -492,15 +500,16 @@ export default function GenericLeadsAssistant({
           </form>
         </section>
       )}
-      <button
+      {renderLauncher(<button
         type="button"
         data-testid="generic-leads-assistant-fab"
         aria-label={open ? "Close leads assistant" : "Open leads assistant"}
-        title="Drag to reposition"
-        onPointerDown={startDragging}
-        onPointerMove={moveDragging}
-        onPointerUp={stopDragging}
-        onPointerCancel={stopDragging}
+        aria-expanded={open}
+        title={footerTarget ? 'Chat with the leads assistant' : 'Drag to reposition'}
+        onPointerDown={footerTarget ? undefined : startDragging}
+        onPointerMove={footerTarget ? undefined : moveDragging}
+        onPointerUp={footerTarget ? undefined : stopDragging}
+        onPointerCancel={footerTarget ? undefined : stopDragging}
         onClick={() => {
           if (suppressClickRef.current) {
             suppressClickRef.current = false;
@@ -508,10 +517,11 @@ export default function GenericLeadsAssistant({
           }
           setOpen((value) => !value);
         }}
-        style={{ position: "fixed", left: position.left, top: position.top, zIndex: 1201, width: FAB_SIZE, height: FAB_SIZE, border: 0, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: dragging ? "grabbing" : "grab", color: "#fff", background: "linear-gradient(135deg, #4338ca, #6366f1)", boxShadow: "0 10px 24px rgba(67, 56, 202, 0.35)", touchAction: "none", userSelect: "none" }}
+        style={{ position: "fixed", left: position.left, top: position.top, zIndex: 1201, width: FAB_SIZE, height: FAB_SIZE, border: 0, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: dragging ? "grabbing" : "grab", color: "#fff", background: "linear-gradient(135deg, #4338ca, #6366f1)", boxShadow: "0 10px 24px rgba(67, 56, 202, 0.35)", touchAction: "none", userSelect: "none", ...(footerTarget && { position: 'static', left: 'auto', top: 'auto', width: 'auto', height: 34, padding: '0 12px', gap: 8, borderRadius: 8, boxShadow: 'none', cursor: 'pointer', touchAction: 'auto' }) }}
       >
         {open ? <X size={23} /> : <MessageCircle size={23} />}
-      </button>
+        {footerTarget && <span>{open ? 'Close chat' : 'Chat'}</span>}
+      </button>)}
     </>
   );
 }

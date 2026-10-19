@@ -15,12 +15,17 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { IconThemeContext } from '../icons/IconThemeContext';
 
 vi.mock("../utils/lazyWithRetry", () => ({
-  lazyWithRetry: () => () => <div data-testid="lazy-route">route loaded</div>,
+  lazyWithRetry: () => function RouteProbe() {
+    const antIcons = React.useContext(IconThemeContext);
+    return <div data-testid="lazy-route" data-icon-family={antIcons ? 'ant-design' : 'lucide'}>route loaded</div>;
+  },
 }));
 
 import App from "../App";
+import { clearAuthToken } from "../utils/api";
 
 function setupFetch(mockImpl) {
   const fetchMock = vi.fn((url, options) => {
@@ -44,6 +49,7 @@ function createMatchMedia(matches) {
 }
 
 beforeEach(() => {
+  clearAuthToken();
   sessionStorage.clear();
   localStorage.clear();
   // jsdom does not implement matchMedia; App uses it for theme detection.
@@ -51,10 +57,34 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearAuthToken();
   vi.unstubAllGlobals();
 });
 
 describe("<App /> — auth-sync on mount", () => {
+  it.each(['generic', 'travel', 'wellness'])('selects the correct icon family for the authenticated %s tenant', async (vertical) => {
+    sessionStorage.setItem('token', 'icon-family-session');
+    window.history.pushState({}, '', '/profile');
+    setupFetch(url => Promise.resolve({ ok: true, status: 200, json: async () => {
+      if (url === '/api/auth/me') return { id: 1, name: 'Icon tester', role: 'ADMIN', tenant: { id: 1, vertical } };
+      if (url === '/api/subscriptions/status' || url === '/api/subscriptions/access') return { subscriptionStatus: 'ACTIVE', daysRemaining: 30, status: 'active' };
+      return {};
+    } }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('lazy-route')).toHaveAttribute('data-icon-family', vertical === 'generic' ? 'ant-design' : 'lucide'));
+  });
+
+  it.each(['generic', 'travel', 'wellness'])('only brands the Generic session-validation splash (%s)', (vertical) => {
+    sessionStorage.setItem('token', 'pending-session');
+    localStorage.setItem('tenant', JSON.stringify({ id: 1, vertical }));
+    setupFetch(() => new Promise(() => {}));
+    window.history.pushState({}, '', '/dashboard');
+    const { container, unmount } = render(<App />);
+    expect(Boolean(container.querySelector('.workspace-preloader--fullscreen'))).toBe(vertical === 'generic');
+    expect(screen.queryByTestId('lazy-route')).not.toBeInTheDocument();
+    unmount();
+  });
+
   it("renders the login page when no token is present", async () => {
     setupFetch();
     // BrowserRouter uses the real URL; point it at /login so the public

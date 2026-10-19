@@ -127,7 +127,44 @@ prisma.pipelineStage = {
 
 import express from 'express';
 import request from 'supertest';
+const fxService = requireCJS('../../lib/dashboardExchangeRates');
+fxService.getDashboardRates = vi.fn();
 const dealsRouter = requireCJS('../../routes/deals');
+
+describe('Generic current-rate dashboard valuation', () => {
+  test('normalizes currencies before summing and retains tenant/owner scope', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.deal.findMany.mockResolvedValue([
+      { amount: 100, currency: 'USD', stage: 'won', probability: 100 },
+      { amount: 8000, currency: 'INR', stage: 'won', probability: 100 },
+      { amount: 80, currency: 'EUR', stage: 'proposal', probability: 70 },
+    ]);
+    fxService.getDashboardRates.mockResolvedValue({ baseCurrency: 'USD', rates: { USD: 1, INR: 1 / 80, EUR: 1.25 }, incomplete: false });
+    const response = await request(makeApp({ tenantId: 42, role: 'USER', userId: 7 })).get('/api/deals/stats?currencyMode=latest&search=Acme');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ totalValue: 300, wonValue: 200, expectedValue: 270 });
+    expect(prisma.deal.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: 42, ownerId: 7 });
+    expect(prisma.deal.findMany.mock.calls[0][0].where.AND[0].OR).toContainEqual({ contact: { is: { company: { contains: 'Acme' } } } });
+  });
+
+  test('suppresses incomplete valuations rather than showing partial totals', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.deal.findMany.mockResolvedValue([{ amount: 100, currency: 'XYZ', stage: 'won' }]);
+    fxService.getDashboardRates.mockResolvedValue({ rates: { USD: 1 }, incomplete: true, missingCurrencies: ['XYZ'] });
+    const { body } = await request(makeApp()).get('/api/deals/stats?currencyMode=latest');
+    expect(body).toMatchObject({ totalDeals: 1, wonCount: 1, totalValue: null, wonValue: null, expectedValue: null });
+    expect(body.byStage[0].value).toBeNull();
+  });
+
+  test.each(['wellness', 'travel'])('leaves %s aggregation unchanged', async (vertical) => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical, defaultCurrency: 'INR' });
+    prisma.deal.findMany.mockResolvedValue([{ amount: 123, stage: 'won' }]);
+    const { body } = await request(makeApp()).get('/api/deals/stats?currencyMode=latest');
+    expect(body.wonValue).toBe(123);
+    expect(body.fx).toBeUndefined();
+    expect(fxService.getDashboardRates).not.toHaveBeenCalled();
+  });
+});
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
@@ -141,6 +178,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 }
 
 beforeEach(() => {
+  fxService.getDashboardRates.mockReset();
   prisma.deal.findMany.mockReset();
   prisma.deal.findFirst.mockReset();
   prisma.deal.create.mockReset();

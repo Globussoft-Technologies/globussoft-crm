@@ -1,5 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { registerGlobalNotify } from './api';
+import { Check, X, Info } from 'lucide-react';
+import { IconThemeContext } from '../icons/IconThemeContext';
 
 /**
  * useNotify — drop-in replacement for window.alert / confirm / prompt.
@@ -173,6 +175,7 @@ const TOAST_COLORS = {
 };
 
 function ToastStack({ toasts, onDismiss }) {
+  const useAntIcons = useContext(IconThemeContext);
   if (toasts.length === 0) return null;
   return (
     // #399: bumped `top` from 24px (~1.5rem) to 80px (~5rem) so the toast
@@ -190,6 +193,7 @@ function ToastStack({ toasts, onDismiss }) {
     >
       {toasts.map((t) => {
         const c = TOAST_COLORS[t.kind] || TOAST_COLORS.info;
+        const ToastIcon = t.kind === 'success' ? Check : t.kind === 'error' ? X : Info;
         return (
           <div
             key={t.id}
@@ -216,7 +220,7 @@ function ToastStack({ toasts, onDismiss }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0, marginTop: 1,
               }}
-            >{c.icon}</span>
+            >{useAntIcons ? <ToastIcon size={13} /> : c.icon}</span>
             <span style={{ flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.message}</span>
             <button
               type="button"

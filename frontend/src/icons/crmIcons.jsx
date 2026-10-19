@@ -1,0 +1,47 @@
+import { Briefcase, Ticket, Users, Receipt, UserCheck, Database, Code, Award, Map, MapPin, Handshake, MessageSquare, CheckSquare, FileText } from 'lucide-react/dist/esm/lucide-react.js';
+import SnippetsOutlined from '@ant-design/icons-svg/es/asn/SnippetsOutlined.js';
+import FileProtectOutlined from '@ant-design/icons-svg/es/asn/FileProtectOutlined.js';
+import OrderedListOutlined from '@ant-design/icons-svg/es/asn/OrderedListOutlined.js';
+import SafetyCertificateOutlined from '@ant-design/icons-svg/es/asn/SafetyCertificateOutlined.js';
+import WhatsAppOutlined from '@ant-design/icons-svg/es/asn/WhatsAppOutlined.js';
+import CommentOutlined from '@ant-design/icons-svg/es/asn/CommentOutlined.js';
+import BorderOuterOutlined from '@ant-design/icons-svg/es/asn/BorderOuterOutlined.js';
+import CarOutlined from '@ant-design/icons-svg/es/asn/CarOutlined.js';
+import PartitionOutlined from '@ant-design/icons-svg/es/asn/PartitionOutlined.js';
+import SolutionOutlined from '@ant-design/icons-svg/es/asn/SolutionOutlined.js';
+import EnvironmentOutlined from '@ant-design/icons-svg/es/asn/EnvironmentOutlined.js';
+import IdcardOutlined from '@ant-design/icons-svg/es/asn/IdcardOutlined.js';
+import FundOutlined from '@ant-design/icons-svg/es/asn/FundOutlined.js';
+import ExperimentOutlined from '@ant-design/icons-svg/es/asn/ExperimentOutlined.js';
+import BuildOutlined from '@ant-design/icons-svg/es/asn/BuildOutlined.js';
+import ThunderboltOutlined from '@ant-design/icons-svg/es/asn/ThunderboltOutlined.js';
+import ProjectOutlined from '@ant-design/icons-svg/es/asn/ProjectOutlined.js';
+import CustomerServiceOutlined from '@ant-design/icons-svg/es/asn/CustomerServiceOutlined.js';
+import ContactsOutlined from '@ant-design/icons-svg/es/asn/ContactsOutlined.js';
+import ReconciliationOutlined from '@ant-design/icons-svg/es/asn/ReconciliationOutlined.js';
+import CheckCircleOutlined from '@ant-design/icons-svg/es/asn/CheckCircleOutlined.js';
+import { createThemedIcon } from './createThemedIcon';
+
+// Context-specific meanings: support is not a sales tag, and a deal is not a
+// shop or calendar event. Other verticals still render the original glyphs.
+export const CrmDeals = /* @__PURE__ */ createThemedIcon(Briefcase, ProjectOutlined, 'Briefcase');
+export const CrmSupport = /* @__PURE__ */ createThemedIcon(Ticket, CustomerServiceOutlined, 'Ticket');
+export const CrmContacts = /* @__PURE__ */ createThemedIcon(Users, ContactsOutlined, 'Users');
+export const CrmInvoice = /* @__PURE__ */ createThemedIcon(Receipt, ReconciliationOutlined, 'Receipt');
+export const CrmConvertedLead = /* @__PURE__ */ createThemedIcon(UserCheck, CheckCircleOutlined, 'UserCheck');
+export const CrmSandbox = /* @__PURE__ */ createThemedIcon(Database, ExperimentOutlined, 'Database');
+export const CrmAppBuilder = /* @__PURE__ */ createThemedIcon(Database, BuildOutlined, 'Database');
+export const CrmZapier = /* @__PURE__ */ createThemedIcon(Code, ThunderboltOutlined, 'Code');
+export const CrmCommissionProfiles = /* @__PURE__ */ createThemedIcon(Award, IdcardOutlined, 'Award');
+export const CrmCommissionData = /* @__PURE__ */ createThemedIcon(Award, FundOutlined, 'Award');
+export const CrmPlotInventory = /* @__PURE__ */ createThemedIcon(Map, BorderOuterOutlined, 'Map');
+export const CrmPickupInventory = /* @__PURE__ */ createThemedIcon(MapPin, CarOutlined, 'MapPin');
+export const CrmCustomerWorkflows = /* @__PURE__ */ createThemedIcon(MapPin, PartitionOutlined, 'MapPin');
+export const CrmSalesExecutives = /* @__PURE__ */ createThemedIcon(Handshake, SolutionOutlined, 'Handshake');
+export const CrmSiteVisits = /* @__PURE__ */ createThemedIcon(Handshake, EnvironmentOutlined, 'Handshake');
+export const CrmWhatsApp = /* @__PURE__ */ createThemedIcon(MessageSquare, WhatsAppOutlined, 'MessageSquare');
+export const CrmLiveChat = /* @__PURE__ */ createThemedIcon(MessageSquare, CommentOutlined, 'MessageSquare');
+export const CrmTaskQueue = /* @__PURE__ */ createThemedIcon(CheckSquare, OrderedListOutlined, 'CheckSquare');
+export const CrmApprovals = /* @__PURE__ */ createThemedIcon(CheckSquare, SafetyCertificateOutlined, 'CheckSquare');
+export const CrmDocTemplates = /* @__PURE__ */ createThemedIcon(FileText, SnippetsOutlined, 'FileText');
+export const CrmContracts = /* @__PURE__ */ createThemedIcon(FileText, FileProtectOutlined, 'FileText');

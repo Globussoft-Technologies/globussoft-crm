@@ -35,9 +35,12 @@ const APP_GIT_SHA = readGitSha();
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      // Exact match: the adapter imports Lucide's original ESM subpath for
+      // other verticals. Named exports keep both families tree-shakable.
+      { find: /^lucide-react$/, replacement: path.resolve(__dirname, './src/icons/index.jsx') },
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+    ],
   },
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
@@ -89,7 +92,8 @@ export default defineConfig({
           "vendor-react": ["react", "react-dom", "react-router-dom"],
           "vendor-charts": ["recharts"],
           "vendor-flow": ["reactflow"],
-          "vendor-icons": ["lucide-react"],
+          "vendor-icons": ["lucide-react/dist/esm/lucide-react.js"],
+          "generic-icons": [path.resolve(__dirname, './src/icons/index.jsx')],
         },
       },
     },

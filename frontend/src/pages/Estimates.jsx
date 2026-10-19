@@ -774,7 +774,7 @@ export default function Estimates() {
               }}
             >
               <table
-                className="estimates-ledger-table"
+                className="estimates-ledger-table generic-record-dense"
                 style={{ width: '100%', minWidth: 1120, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
                 role="table"
                 aria-label="Estimates table"

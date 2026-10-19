@@ -1,0 +1,149 @@
+/* Ultra-dense analyst is the fixed Generic Leads layout. */
+.leads-page-root--generic.leads-page-root--analyst {
+  padding: 12px !important;
+  --analyst-row-odd: #ffffff;
+  --analyst-row-even: #edf2f8;
+  --analyst-row-hover: #e2ebfa;
+}
+[data-theme="dark"] .leads-page-root--generic.leads-page-root--analyst {
+  --analyst-row-odd: #0e1622;
+  --analyst-row-even: #192536;
+  --analyst-row-hover: #24364e;
+}
+.leads-page-root--analyst .leads-page-header { margin-bottom: 10px !important; }
+.leads-page-root--analyst .leads-page-header h1 { font-size: 1.4rem !important; }
+.leads-page-root--analyst .leads-toolbar-shell {
+  min-height: 0 !important;
+  padding: 8px !important;
+  gap: 6px !important;
+  justify-content: flex-start !important;
+}
+.leads-page-root--analyst .generic-leads-search-controls {
+  display: contents !important;
+}
+.leads-page-root--analyst .generic-leads-search-controls > div:first-child {
+  width: min(100%, 210px) !important;
+}
+.leads-page-root--analyst .leads-toolbar-shell .btn-secondary,
+.leads-page-root--analyst .leads-toolbar-shell .input-field {
+  min-height: 30px !important;
+  height: 30px !important;
+  font-size: 11px !important;
+}
+.leads-page-root--analyst .leads-toolbar-shell button.btn-secondary {
+  padding: 4px 8px !important;
+  gap: 4px !important;
+}
+.leads-page-root--analyst .leads-toolbar-shell .crm-search-input {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+.leads-page-root--analyst .leads-generic-actions-host {
+  display: contents !important;
+}
+.leads-page-root--analyst .leads-actions-toolbar {
+  display: contents !important;
+}
+.leads-page-root--analyst .leads-mobile-actions-toggle { display: none !important; }
+.leads-page-root--analyst .leads-table thead th {
+  font-size: 11px !important;
+  height: 32px !important;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-split-table table.leads-table tbody td {
+  height: 32px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+  line-height: 16px !important;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-split-table table.leads-table tbody tr {
+  height: 32px;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-split-table table.leads-table thead th {
+  height: 32px !important;
+  padding: 0 8px !important;
+}
+.leads-page-root--analyst .leads-table tbody td > div { margin-top: 0 !important; margin-bottom: 0 !important; }
+.leads-page-root--analyst .leads-table .inline-cell-editor-display {
+  justify-content: flex-start !important;
+  width: fit-content !important;
+  max-width: 100%;
+  gap: 4px !important;
+  padding-inline: 0 !important;
+}
+.leads-page-root--analyst .leads-table .inline-cell-editor-display > span:first-child {
+  width: auto !important;
+  flex: 0 1 auto !important;
+}
+.leads-page-root--analyst .leads-table tbody td button { min-height: 24px !important; padding-top: 0 !important; padding-bottom: 0 !important; }
+.leads-page-root--analyst .leads-table td button:is([aria-label^="Copy "], [aria-label$=" copied"], [aria-label^="Edit Name for "], [aria-label^="Edit Company for "]) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 150ms ease;
+}
+.leads-page-root--analyst .leads-table td:is(:hover, :focus-within) button:is([aria-label^="Copy "], [aria-label$=" copied"], [aria-label^="Edit Name for "], [aria-label^="Edit Company for "]) {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+@media (hover: none) {
+  .leads-page-root--analyst .leads-table td button:is([aria-label^="Copy "], [aria-label$=" copied"], [aria-label^="Edit Name for "], [aria-label^="Edit Company for "]) {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}
+.leads-page-root--analyst .leads-table .generic-overall-status-content { gap: 0 6px !important; line-height: 12px !important; }
+.leads-page-root--analyst .leads-table .generic-overall-status-date { font-size: 10px !important; }
+.leads-page-root--analyst .leads-table tbody td :is(a, p, strong, span) {
+  font-size: inherit !important;
+}
+.leads-page-root--analyst .leads-table tbody td .input-field {
+  min-height: 26px !important;
+  height: 26px !important;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-table tbody tr:nth-child(odd) td {
+  background: var(--analyst-row-odd) !important;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-table tbody tr:nth-child(even) td {
+  background: var(--analyst-row-even) !important;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-table tbody tr:hover td {
+  background: var(--analyst-row-hover) !important;
+}
+.leads-page-root--analyst .leads-pagination-footer {
+  padding: 6px 10px !important;
+  font-size: 11px !important;
+}
+@media (max-width: 899px) {
+  .leads-page-root--analyst .leads-generic-actions-host { display: block !important; flex-basis: 100%; }
+  .leads-page-root--analyst .leads-mobile-actions-toggle { display: inline-flex !important; }
+  .leads-page-root--analyst .leads-actions-toolbar { display: none !important; }
+  .leads-page-root--analyst .leads-generic-actions-host--open .leads-actions-toolbar { display: flex !important; flex-wrap: wrap; gap: 6px; }
+}
+.generic-column-menu > button {
+  min-height: 32px;
+  padding: 5px 8px !important;
+  font-size: 12px !important;
+  line-height: 20px;
+  gap: 8px !important;
+  border-radius: 6px !important;
+}
+
+.generic-column-menu > button svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.generic-column-menu [role="separator"] {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-color);
+}
+
+.generic-column-menu button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+.leads-page-root--generic.leads-page-root--analyst .leads-split-table--no-topbar {
+  /* Fit short lists to their rows, but still shrink and scroll for long lists. */
+  flex: 0 1 auto !important;
+}

@@ -12,10 +12,16 @@ import {
 } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
+import { CrmDeals, CrmSupport, CrmContacts, CrmInvoice, CrmConvertedLead, CrmSandbox, CrmAppBuilder, CrmZapier, CrmCommissionProfiles, CrmCommissionData } from '../icons/crmIcons';
+import { CrmPlotInventory, CrmPickupInventory, CrmCustomerWorkflows, CrmSalesExecutives, CrmSiteVisits } from '../icons/crmIcons';
+import { CrmWhatsApp, CrmLiveChat } from '../icons/crmIcons';
+import { CrmTaskQueue, CrmApprovals } from '../icons/crmIcons';
+import { CrmDocTemplates, CrmContracts } from '../icons/crmIcons';
 import { io } from "socket.io-client";
 import {
   Users,
   LayoutDashboard,
+  LayoutGrid,
   Briefcase,
   Settings,
   Send,
@@ -95,7 +101,6 @@ import {
   Compass,
   ClipboardCheck,
   Map as MapIcon,
-  MapPin,
   Luggage,
   Plane,
   Key,
@@ -1039,6 +1044,15 @@ const Sidebar = ({
       >
         {adsLoading ? (
           <Loader2 size={20} className="spin" />
+        ) : tenant?.vertical === "generic" ? (
+          <img
+            src="/adsgpt-logo-square.png"
+            alt=""
+            aria-hidden="true"
+            width={20}
+            height={20}
+            style={{ objectFit: "contain", flexShrink: 0 }}
+          />
         ) : (
           <Icon size={20} />
         )}
@@ -1101,6 +1115,15 @@ const Sidebar = ({
       >
         {callifiedLoading ? (
           <Loader2 size={20} className="spin" />
+        ) : tenant?.vertical === "generic" ? (
+          <img
+            src="/callified-logo-square.png"
+            alt=""
+            aria-hidden="true"
+            width={20}
+            height={20}
+            style={{ objectFit: "contain", flexShrink: 0 }}
+          />
         ) : (
           <Icon size={20} />
         )}
@@ -1478,8 +1501,8 @@ const WELLNESS_CATEGORY_ICON = {
   "Inventory Admin": ClipboardList,
   User: UserCircle,
   Admin: Shield,
-  // Generic CRM flyout categories. WellnessNavGroup is shared so both
-  // verticals retain identical mouse, keyboard and mobile behavior.
+  // Generic CRM flyout categories share the Wellness group renderer.
+  // Generic additionally supports mouse hover in the zoom-width drawer.
   Sales: Briefcase,
   Communication: MessageSquare,
   "Work Management": CheckSquare,
@@ -1500,6 +1523,8 @@ function WellnessNavGroup({
   children,
   moduleColor,
   isMobileViewport = false,
+  allowDrawerHover = false,
+  fitPanelToViewport = false,
   activeGroup = null,
   onActivate = () => { },
 }) {
@@ -1513,7 +1538,8 @@ function WellnessNavGroup({
   const triggerHoverRef = useRef(false);
   const panelHoverRef = useRef(false);
   const pinnedRef = useRef(false);
-  const Icon = WELLNESS_CATEGORY_ICON[label] || LayoutDashboard;
+  const genericIcons = { Sales: CrmDeals, 'Customer Support': CrmSupport, Platform: LayoutGrid };
+  const Icon = (fitPanelToViewport && genericIcons[label]) || WELLNESS_CATEGORY_ICON[label] || LayoutDashboard;
   const panelId = `wellness-nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   const isActive = paths.some(
     (path) =>
@@ -1523,16 +1549,23 @@ function WellnessNavGroup({
 
   const updatePanelPosition = useCallback(() => {
     if (isMobileViewport) {
-      setPanelPosition({ top: 72 });
+      setPanelPosition(current => current.top === 72 ? current : { top: 72 });
       return;
     }
     const trigger = triggerRef.current;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    setPanelPosition({
-      top: Math.max(12, Math.min(rect.top, window.innerHeight - 232)),
-    });
-  }, [isMobileViewport]);
+    const availableHeight = Math.max(0, window.innerHeight - 24);
+    const panelHeight = fitPanelToViewport
+      ? Math.min((panelRef.current?.scrollHeight || 220) + 2, availableHeight)
+      : 220;
+    const top = Math.max(12, Math.min(rect.top, window.innerHeight - panelHeight - 12));
+    setPanelPosition(current => current.top === top ? current : { top });
+  }, [isMobileViewport, fitPanelToViewport]);
+
+  useLayoutEffect(() => {
+    if (isOpen && fitPanelToViewport) updatePanelPosition();
+  }, [isOpen, fitPanelToViewport, children, updatePanelPosition]);
 
   const clearCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
@@ -1616,7 +1649,7 @@ function WellnessNavGroup({
         left: isMobileViewport ? "auto" : 254,
         width: isMobileViewport ? "100%" : 252,
         maxWidth: isMobileViewport ? "100%" : "calc(100vw - 24px)",
-        maxHeight: isMobileViewport ? "none" : 220,
+        maxHeight: isMobileViewport ? "none" : fitPanelToViewport ? "calc(100dvh - 24px)" : 220,
         overflowY: isMobileViewport ? "visible" : "auto",
         display: isOpen ? "flex" : "none",
         flexDirection: "column",
@@ -1640,16 +1673,16 @@ function WellnessNavGroup({
       <div
         ref={triggerRef}
         onMouseEnter={() => {
-          if (isMobileViewport) return;
+          if (isMobileViewport && !allowDrawerHover) return;
           triggerHoverRef.current = true;
           openPanel();
         }}
         onMouseLeave={() => {
-          if (isMobileViewport) return;
+          if (isMobileViewport && !allowDrawerHover) return;
           triggerHoverRef.current = false;
           scheduleClose();
         }}
-        onFocusCapture={isMobileViewport ? undefined : openPanel}
+        onFocusCapture={isMobileViewport && !allowDrawerHover ? undefined : openPanel}
         onBlurCapture={(event) => {
           if (
             !event.currentTarget.contains(event.relatedTarget) &&
@@ -2681,6 +2714,8 @@ function renderGenericNav({
         dataTour={dataTour}
         paths={paths}
         isMobileViewport={isMobileViewport}
+        allowDrawerHover
+        fitPanelToViewport
         activeGroup={openGenericGroup}
         onActivate={onOpenGenericGroup}
       >
@@ -2704,9 +2739,9 @@ function renderGenericNav({
       {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
       {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
       {renderGroup("Sales", <>
-        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/contacts" icon={CrmContacts} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/pipeline" icon={CrmDeals} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
         <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
         <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
@@ -2717,7 +2752,7 @@ function renderGenericNav({
 
       {renderGroup("Leads", <>
         <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
-        <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/converted-leads" icon={CrmConvertedLead} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly requiredPermission={{ module: "lead_scoring", action: "read" }} />
         <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
@@ -2725,14 +2760,14 @@ function renderGenericNav({
 
       {renderGroup("Communication", <>
         <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
-        <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+        <Link to="/whatsapp" icon={CrmWhatsApp} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
         <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
-        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
+        <Link to="/live-chat" icon={CrmLiveChat} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
       </>)}
 
       {renderGroup("Work Management", <>
-        <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
-        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
+        <Link to="/tasks" icon={CrmTaskQueue} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/approvals" icon={CrmApprovals} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
         <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
       </>)}
 
@@ -2755,14 +2790,14 @@ function renderGenericNav({
 
       {renderGroup("Documents & Delivery", <>
         <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
-        <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
+        <Link to="/document-templates" icon={CrmDocTemplates} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
         <Link to="/document-tracking" icon={Eye} label="Doc Tracking" requiredPermission={{ module: "documents", action: "read" }} />
-        <Link to="/contracts" icon={FileText} label="Contracts" requiredPermission={{ module: "contracts", action: "read" }} />
+        <Link to="/contracts" icon={CrmContracts} label="Contracts" requiredPermission={{ module: "contracts", action: "read" }} />
         <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} />
       </>)}
 
       {renderGroup("Finance", <>
-        <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/invoices" icon={CrmInvoice} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
         <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} />
         <Link to="/expenses" icon={IndianRupee} label="Expenses" requiredPermission={{ module: "expenses", action: "read" }} />
         <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
@@ -2788,15 +2823,15 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Pickup & Plot", <>
-        <Link to="/pickup-plot-inventory" icon={MapIcon} label="Plot Inventory" adminOnly />
-        <Link to="/pickup-inventory" icon={MapPin} label="Pickup Inventory" adminOnly />
-        <Link to="/pickup-customers" icon={MapPin} label="Customer Workflows" requiredPermission={{ module: "billing_workspace", action: "read" }} />
+        <Link to="/pickup-plot-inventory" icon={CrmPlotInventory} label="Plot Inventory" adminOnly />
+        <Link to="/pickup-inventory" icon={CrmPickupInventory} label="Pickup Inventory" adminOnly />
+        <Link to="/pickup-customers" icon={CrmCustomerWorkflows} label="Customer Workflows" requiredPermission={{ module: "billing_workspace", action: "read" }} />
         <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
-        <Link to="/plot-brokers" icon={Handshake} label="Sales Executives" adminOnly />
+        <Link to="/plot-brokers" icon={CrmSalesExecutives} label="Sales Executives" adminOnly />
         <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
         <Link to="/pickup-work-assignments" icon={ClipboardCheck} label="Assign Staff Work" adminOnly />
         <Link to="/transport-workspace" icon={Truck} label="Transport Work" requiredPermission={{ module: "transport_workspace", action: "read" }} />
-        <Link to="/sales-workspace" icon={Handshake} label="Site Visits" requiredPermission={{ module: "broker_workspace", action: "read" }} />
+        <Link to="/sales-workspace" icon={CrmSiteVisits} label="Site Visits" requiredPermission={{ module: "broker_workspace", action: "read" }} />
       </>)}
 
       {renderGroup("Administration", <>
@@ -2805,8 +2840,8 @@ function renderGenericNav({
         <Link to="/admin/csp-violations" icon={ShieldAlert} label="CSP Violations" adminOnly />
         <Link to="/admin/embed-allowlist" icon={Shield} label="Embed Allowlist" adminOnly />
         <Link to="/admin/status" icon={Activity} label="Status" adminOnly />
-        <Link to="/commission-profiles" icon={Award} label="Commission Profiles" adminOnly />
-        <Link to="/commission-data" icon={Award} label="Commission Data" adminOnly />
+        <Link to="/commission-profiles" icon={CrmCommissionProfiles} label="Commission Profiles" adminOnly />
+        <Link to="/commission-data" icon={CrmCommissionData} label="Commission Data" adminOnly />
         <Link to="/channels" icon={Radio} label="Channels" adminOnly />
         <Link to="/industry-templates" icon={Building2} label="Industry Templates" adminOnly />
         <Link to="/currencies" icon={IndianRupee} label="Currencies" adminOnly />
@@ -2814,9 +2849,9 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Platform", <>
-        <Link to="/sandbox" icon={Database} label="Sandbox" adminOnly />
-        <Link to="/objects" icon={Database} label="App Builder" adminOnly />
-        <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
+        <Link to="/sandbox" icon={CrmSandbox} label="Sandbox" adminOnly />
+        <Link to="/objects" icon={CrmAppBuilder} label="App Builder" adminOnly />
+        <Link to="/zapier" icon={CrmZapier} label="Zapier" adminOnly />
         <Link to="/developer" icon={Code} label="Developers" adminOnly />
       </>)}
 

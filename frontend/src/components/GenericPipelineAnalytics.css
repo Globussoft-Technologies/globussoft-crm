@@ -1,0 +1,14 @@
+.generic-pipeline-analytics { min-width: 0; }
+.generic-pipeline-heading h4 { margin: 0; font-size: 1rem; }
+.generic-pipeline-heading p { color: var(--text-secondary); font-size: .85rem; margin: .5rem 0 1rem; }
+.generic-pipeline-canvas { height: 280px; min-width: 0; }
+.generic-pipeline-navigation { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: 1rem; }
+.generic-pipeline-navigation button { min-height: 40px; }
+.generic-pipeline-navigation button:disabled { opacity: .45; cursor: not-allowed; }
+.generic-pipeline-navigation span { color: var(--text-secondary); font-size: .85rem; }
+.generic-pipeline-empty { display: grid; place-content: center; text-align: center; height: 100%; padding: 1rem; color: var(--text-secondary); line-height: 1.6; }
+.generic-pipeline-funnel { height: 100%; overflow: auto; display: flex; flex-direction: column; justify-content: center; gap: 1rem; }
+.generic-pipeline-funnel-row { display: grid; grid-template-columns: minmax(0, 100px) minmax(0, 1fr) 40px; gap: .75rem; align-items: center; font-size: .85rem; }
+.generic-pipeline-funnel-row > span { overflow-wrap: anywhere; text-transform: capitalize; }
+.generic-pipeline-funnel-row > div { background: var(--subtle-bg); border-radius: 6px; overflow: hidden; }
+.generic-pipeline-funnel-row > div > span { display: block; height: 28px; border-radius: 6px; }

@@ -33,7 +33,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -55,6 +55,27 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import Currencies from '../pages/Currencies';
+import { AuthContext } from '../App';
+
+it('distinguishes automatic market rates from manual configuration for Generic tenants', async () => {
+  fetchApiMock.mockImplementation(url => Promise.resolve(url.includes('includeMarket=1') ? {
+    currencies: persistedCurrencies,
+    fx: { source: 'Frankfurter', asOf: '2026-10-16', baseCurrency: 'USD', stale: true },
+    marketRates: { USD: 1, INR: 85.5, EUR: 0.9 },
+  } : null));
+  render(<AuthContext.Provider value={{ tenant: { id: 1, vertical: 'generic', defaultCurrency: 'USD' } }}><Currencies /></AuthContext.Provider>);
+  expect(await screen.findByText('85.5000')).toBeInTheDocument();
+  expect(screen.getByText('83.2500')).toBeInTheDocument();
+  expect(screen.getByText('Configured Rate')).toBeInTheDocument();
+  expect(screen.getByText('Market Rate')).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('Rates may be out of date');
+  expect(screen.getByRole('status')).toHaveTextContent('use the pencil action and Save');
+  const configured = screen.getByText('83.2500');
+  const market = screen.getByText('85.5000');
+  expect(configured.style.fontFamily).toBe('inherit');
+  expect(configured.closest('td')).toHaveClass('currency-rate');
+  expect(market.closest('td')).toHaveClass('currency-rate');
+});
 
 const persistedCurrencies = [
   { id: 1, code: 'USD', symbol: '$',  name: 'US Dollar',    exchangeRate: 1.0,    isBase: true },
@@ -77,6 +98,26 @@ const samplePivot = {
     INR: { count: 2, amount: 200000 },
   },
 };
+
+it.each([true, false])('renders the Generic command bar with accurate preview state (%s)', async (preview) => {
+  fetchApiMock.mockImplementation(url => Promise.resolve(url.includes('includeMarket=1')
+    ? { currencies: preview ? previewCurrencies : persistedCurrencies }
+    : samplePivot));
+  render(<AuthContext.Provider value={{ tenant: { id: 1, vertical: 'generic' } }}><Currencies /></AuthContext.Provider>);
+  const bar = screen.getByRole('region', { name: 'Currency overview' });
+  await waitFor(() => expect(within(bar).getByText(preview ? '2 available' : '4 active')).toBeInTheDocument());
+  expect(within(bar).getByText(preview ? 'Default base · preview' : 'Base currency')).toBeInTheDocument();
+  expect(within(bar).getByText('USD · US Dollar')).toBeInTheDocument();
+  expect(within(bar).getByText('5')).toBeInTheDocument();
+  expect(within(bar).getByText('Configured-rate valuation')).toBeInTheDocument();
+});
+
+it.each(['wellness', 'travel'])('retains the existing summary cards for %s', async (vertical) => {
+  fetchApiMock.mockImplementation(defaultFetchMock);
+  render(<MemoryRouter><AuthContext.Provider value={{ tenant: { id: 1, vertical } }}><Currencies /></AuthContext.Provider></MemoryRouter>);
+  await screen.findByText('Active Currencies');
+  expect(screen.queryByRole('region', { name: 'Currency overview' })).not.toBeInTheDocument();
+});
 
 function defaultFetchMock(url, opts) {
   if (url === '/api/currencies' && (!opts || !opts.method || opts.method === 'GET')) {

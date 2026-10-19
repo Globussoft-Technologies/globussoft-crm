@@ -6,7 +6,7 @@ import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
-import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound, Mail, MessageCircle } from 'lucide-react';
+import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound, Mail, MessageCircle, Target, Flag, FileText } from 'lucide-react';
 import TagPickerPopover from './wellness/patients/TagPickerPopover';
 import { tagChipStyle, chipRemoveStyle, modalInputStyle, filterLabelStyle } from './wellness/patients/styles';
 import { tagColour } from './wellness/patients/constants';
@@ -171,6 +171,7 @@ export default function Tasks() {
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const isGeneric = tenant?.vertical === 'generic';
   const role = String(user?.role || '').toUpperCase();
   const currentUserId = user?.userId || user?.id || null;
   const roleFallbackCanManage = ['ADMIN', 'MANAGER', 'OWNER'].includes(role);
@@ -1273,9 +1274,9 @@ export default function Tasks() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
               {/* Status */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
+                {isGeneric ? <Target size={13} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
                   <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="3" />
-                </svg>
+                </svg>}
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Status:</span>
                 <select
                   id="task-status-select"
@@ -1306,9 +1307,9 @@ export default function Tasks() {
 
               {/* Priority */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
+                {isGeneric ? <Flag size={13} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
                   <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" />
-                </svg>
+                </svg>}
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Priority:</span>
                 <select
                   id="task-priority-select"
@@ -1440,9 +1441,9 @@ export default function Tasks() {
             {/* Assignees — label + full-width select */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                {isGeneric ? <UserRound size={12} /> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
-                </svg>
+                </svg>}
                 Assignees:
               </label>
               <select
@@ -1575,12 +1576,12 @@ export default function Tasks() {
             {/* Description */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                {isGeneric ? <FileText size={12} /> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                   <polyline points="14 2 14 8 20 8" />
                   <line x1="16" y1="13" x2="8" y2="13" />
                   <line x1="16" y1="17" x2="8" y2="17" />
-                </svg>
+                </svg>}
                 Description:
               </label>
               <textarea

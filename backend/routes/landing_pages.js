@@ -6257,6 +6257,9 @@ publicRouter.get("/:slug/payment-balance", async (req, res) => {
     if (!config.enabled || !config.installments.length) {
       return res.status(409).json({ error: "Payment is unavailable", code: "PAYMENT_UNAVAILABLE" });
     }
+    if (!(new Date(draft.draftTokenExpiresAt).getTime() > Date.now())) {
+      return res.status(400).json({ error: "Registration link has expired. Use the parent portal.", code: "DRAFT_EXPIRED" });
+    }
     const balance = await getLandingPagePaymentBalance({
       tripId: page.tripId, draft, installments: config.installments, currency: config.currency,
     });
@@ -6333,6 +6336,25 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       page, tenantId, selection, draft: paymentDraft,
     });
     if (pendingPayment) {
+      const metadata = safeJsonParse(pendingPayment.metadata, {});
+      // Only the holder of this exact draft may resume its exact checkout.
+      // A matching person on a different draft must not expose the link.
+      if (metadata.draftToken === draftToken && Number(metadata.pageId) === Number(page.id)
+        && metadata.paymentMode === selection.mode && metadata.currency === selection.currency
+        && JSON.stringify(metadata.installmentIndexes) === JSON.stringify(selection.installmentIndexes)) {
+        const gateway = await getTenantRazorpayClient(tenantId);
+        const link = pendingPayment.gatewayId && gateway?.client?.paymentLink?.fetch
+          ? await gateway.client.paymentLink.fetch(pendingPayment.gatewayId) : null;
+        if (link?.id === pendingPayment.gatewayId && link.status === "created" && link.short_url
+          && Number(link.amount) === Number(metadata.amountPaise) && link.currency === selection.currency
+          && (!link.expire_by || Number(link.expire_by) * 1000 > Date.now())) {
+          return res.status(200).json({ paymentId: pendingPayment.id, orderId: link.id,
+            paymentUrl: link.short_url, hostedPaymentLink: true, resumed: true,
+            amount: Number(link.amount), amountMajor: Number(link.amount) / 100, currency: link.currency,
+            paymentMode: selection.mode, installmentIndex: selection.installmentIndex,
+            installmentIndexes: selection.installmentIndexes });
+        }
+      }
       return res.status(409).json({
         error: "A payment is already in progress for this registration",
         code: "PAYMENT_IN_PROGRESS",

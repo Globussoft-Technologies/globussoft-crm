@@ -1710,6 +1710,41 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 });
 
 describe('POST /p/:slug/payment-order + payment submit', () => {
+  test.each(['PAYMENT_PENDING', 'CONVERTED'])('resumes a persisted pending link for a %s draft without creating a new link', async (status) => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
+      landingPageId: 51, status, draftToken: 'draft-payment-1', convertedToParticipantId: status === 'CONVERTED' ? 77 : null,
+      draftTokenExpiresAt: new Date(Date.now() + 3600000) });
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 901, status: 'PENDING', gatewayId: 'plink_existing',
+      metadata: JSON.stringify({ kind: 'landing-page-registration', tripId: 7, pageId: 51,
+        draftToken: 'draft-payment-1', paymentMode: 'complete', installmentIndexes: [0, 1],
+        amountPaise: 950000, currency: 'INR' }),
+    }]);
+    paymentLinksFetchMock.mockResolvedValue({ id: 'plink_existing', status: 'created',
+      amount: 950000, currency: 'INR', short_url: 'https://rzp.io/i/existing',
+      expire_by: Math.floor(Date.now() / 1000) + 3600 });
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'complete', draftToken: 'draft-payment-1' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ resumed: true, paymentUrl: 'https://rzp.io/i/existing', amount: 950000 });
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.updateMany).not.toHaveBeenCalled();
+  });
+
+  test.each([new Date(0), null, 'invalid-date'])('rejects expired or invalid balance credentials: %s', async (draftTokenExpiresAt) => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ tenantId: 1, tripId: 7,
+      landingPageId: 51, draftToken: 'expired-token', draftTokenExpiresAt });
+    const res = await request(makeApp()).get('/p/australia-2026/payment-balance')
+      .query({ draftToken: 'expired-token' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('DRAFT_EXPIRED');
+    expect(prisma.tripInstalmentPayment.findMany).not.toHaveBeenCalled();
+    expect(prisma.payment.findMany).not.toHaveBeenCalled();
+  });
+
   test('opens the next installment for a converted participant and keeps registration converted', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
     prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
@@ -1769,6 +1804,7 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
       status: 'DRAFT',
       draftToken: 'draft-payment-1',
       parentName: 'Ravi Iyer',
+      draftTokenExpiresAt: new Date(Date.now() + 3600000),
       parentEmail: 'parent@example.com',
       parentPhone: '+919876543210',
       studentName: 'Student Iyer',

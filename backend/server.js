@@ -152,7 +152,7 @@ const ALLOWED_ORIGINS = buildAllowedOrigins();
 // their CORS preflights for the requesting origin without widening any
 // authenticated API surface.
 app.use((req, res, next) => {
-  const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status)\/?$/.test(req.path);
+  const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status|payment-balance)\/?$/.test(req.path);
   const publicLandingPath = req.path.startsWith("/p/")
     || publicPageRuntimePath
     || req.path.startsWith("/api/landing-pages/public/")

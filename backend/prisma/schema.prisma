@@ -8012,6 +8012,7 @@ model TmcTrip {
   microsite             TripMicrosite?
   landingPage           LandingPage?
   pendingRegistrations  PendingTripRegistration[]
+  supplierPayables      TravelSupplierPayable[]
   parentPortalLinks     TmcParentTrip[]
   teacherReviews        TmcTripTeacherReview[]
   parentReviews         TravelTripReview[]
@@ -10032,6 +10033,7 @@ model TravelSupplierPayable {
   id                  Int                                @id @default(autoincrement())
   tenantId            Int                                @default(1)
   itineraryId         Int?
+  tripId              Int?
   supplierId          Int
   poNumber            String? // free-form purchase-order or booking reference
   description         String // "50 PNRs Apr 2026" / "Hotel block 25-28 May" etc.
@@ -10062,6 +10064,7 @@ model TravelSupplierPayable {
   supplier            TravelSupplier                     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   tenant              Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   itinerary           Itinerary?                         @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
+  trip                TmcTrip?                            @relation(fields: [tripId], references: [id], onDelete: SetNull)
   purchaseOrder       TravelPurchaseOrder?               @relation(fields: [purchaseOrderId], references: [id])
   invoiceLine         TravelInvoiceLine?                 @relation(fields: [invoiceLineId], references: [id], onDelete: SetNull)
   payableBatch        TravelSupplierPayableBatch?        @relation(fields: [payableBatchId], references: [id], onDelete: SetNull)
@@ -10078,6 +10081,7 @@ model TravelSupplierPayable {
   updatedAt           DateTime                           @updatedAt
 
   @@index([tenantId, supplierId])
+  @@index([tripId])
   @@index([tenantId, itineraryId])
   @@index([tenantId, supplierId, status])
   @@index([tenantId, dueDate])

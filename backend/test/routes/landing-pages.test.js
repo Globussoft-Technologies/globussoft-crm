@@ -115,6 +115,7 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.pendingTripRegistration = prisma.pendingTripRegistration || {};
 prisma.pendingTripRegistration.create = vi.fn();
 prisma.pendingTripRegistration.findUnique = vi.fn();
+prisma.pendingTripRegistration.findFirst = vi.fn();
 prisma.pendingTripRegistration.updateMany = vi.fn();
 // PR #1399 — payment-linked submits mark the draft converted/OTP-verified.
 prisma.pendingTripRegistration.update = vi.fn().mockResolvedValue({ id: 1 });
@@ -122,6 +123,8 @@ prisma.tripParticipant = prisma.tripParticipant || {};
 prisma.tripParticipant.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tripParticipant.update = vi.fn().mockResolvedValue({ id: 1 });
+prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
+prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
 prisma.tripMicrosite = prisma.tripMicrosite || {};
 prisma.tripMicrosite.findUnique = vi.fn();
 prisma.tenant = prisma.tenant || {};
@@ -275,10 +278,12 @@ beforeEach(() => {
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.pendingTripRegistration.create.mockReset();
   prisma.pendingTripRegistration.findUnique.mockReset().mockResolvedValue(null);
+  prisma.pendingTripRegistration.findFirst.mockReset().mockResolvedValue(null);
   prisma.pendingTripRegistration.updateMany.mockReset().mockResolvedValue({ count: 1 });
   prisma.tripParticipant.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripParticipant.update.mockReset().mockResolvedValue({ id: 1 });
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.tripMicrosite.findUnique.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.tmcTrip.findFirst.mockReset();
@@ -1705,6 +1710,69 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 });
 
 describe('POST /p/:slug/payment-order + payment submit', () => {
+  test.each(['PAYMENT_PENDING', 'CONVERTED'])('resumes a persisted pending link for a %s draft without creating a new link', async (status) => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
+      landingPageId: 51, status, draftToken: 'draft-payment-1', convertedToParticipantId: status === 'CONVERTED' ? 77 : null,
+      draftTokenExpiresAt: new Date(Date.now() + 3600000) });
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 901, status: 'PENDING', gatewayId: 'plink_existing',
+      metadata: JSON.stringify({ kind: 'landing-page-registration', tripId: 7, pageId: 51,
+        draftToken: 'draft-payment-1', paymentMode: 'complete', installmentIndexes: [0, 1],
+        amountPaise: 950000, currency: 'INR' }),
+    }]);
+    paymentLinksFetchMock.mockResolvedValue({ id: 'plink_existing', status: 'created',
+      amount: 950000, currency: 'INR', short_url: 'https://rzp.io/i/existing',
+      expire_by: Math.floor(Date.now() / 1000) + 3600 });
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'complete', draftToken: 'draft-payment-1' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ resumed: true, paymentUrl: 'https://rzp.io/i/existing', amount: 950000 });
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.updateMany).not.toHaveBeenCalled();
+  });
+
+  test.each([new Date(0), null, 'invalid-date'])('rejects expired or invalid balance credentials: %s', async (draftTokenExpiresAt) => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ tenantId: 1, tripId: 7,
+      landingPageId: 51, draftToken: 'expired-token', draftTokenExpiresAt });
+    const res = await request(makeApp()).get('/p/australia-2026/payment-balance')
+      .query({ draftToken: 'expired-token' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('DRAFT_EXPIRED');
+    expect(prisma.tripInstalmentPayment.findMany).not.toHaveBeenCalled();
+    expect(prisma.payment.findMany).not.toHaveBeenCalled();
+  });
+
+  test('opens the next installment for a converted participant and keeps registration converted', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
+      landingPageId: 51, status: 'CONVERTED', convertedToParticipantId: 77,
+      draftToken: 'converted-draft', draftTokenExpiresAt: new Date(Date.now() + 3600000),
+      studentName: 'Student Iyer', parentEmail: 'parent@example.com', parentName: 'Ravi Iyer' });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: 'paid' },
+      { instalmentIndex: 1, amount: 4500, paidAmount: 0, status: 'pending' },
+    ]);
+    prisma.payment.create.mockResolvedValue({ id: 902 });
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'installment', installmentIndex: 1, draftToken: 'converted-draft' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ paymentId: 902, paymentUrl: 'https://rzp.io/i/test', amount: 450000 });
+    expect(prisma.pendingTripRegistration.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 700, status: 'CONVERTED' }),
+      data: { status: 'PAYMENT_PENDING' },
+    }));
+    expect(prisma.pendingTripRegistration.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 700, status: 'PAYMENT_PENDING', convertedToParticipantId: 77 }),
+      data: { status: 'CONVERTED' },
+    }));
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+  });
+
   test.each(['open', 'expired', 'cancelled', 'wrong-selection', 'other-draft', 'missing'])('pending draft recovery: %s', async (scenario) => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
     prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
@@ -1736,6 +1804,7 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
       status: 'DRAFT',
       draftToken: 'draft-payment-1',
       parentName: 'Ravi Iyer',
+      draftTokenExpiresAt: new Date(Date.now() + 3600000),
       parentEmail: 'parent@example.com',
       parentPhone: '+919876543210',
       studentName: 'Student Iyer',
@@ -1878,6 +1947,146 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
     });
     expect(paymentLinksCreateMock).not.toHaveBeenCalled();
     expect(prisma.payment.create).not.toHaveBeenCalled();
+  });
+
+  test('a new draft cannot repay an installment already paid by the same participant', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: 'paid' },
+      { instalmentIndex: 1, amount: 4500, paidAmount: 0, status: 'pending' },
+    ]);
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'installment', installmentIndex: 0, draftToken: 'draft-payment-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_PAID');
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('a confirmed payment from another draft blocks repayment before ledger reconciliation', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 905, gatewayId: 'plink_paid_elsewhere', status: 'SUCCESS', amount: 5000,
+      metadata: JSON.stringify({ kind: 'landing-page-registration', tripId: 7,
+        studentName: 'Student Iyer', parentEmail: 'parent@example.com',
+        installmentIndexes: [0], draftToken: 'earlier-draft' }),
+    }]);
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'installment', installmentIndex: 0, draftToken: 'draft-payment-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_PAID');
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('payment status returns the confirmed link for the parent portal handoff', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
+      landingPageId: 51, draftToken: 'draft-payment-1' });
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 907, gatewayId: 'plink_confirmed_first', status: 'SUCCESS', amount: 5000,
+      metadata: JSON.stringify({ kind: 'landing-page-registration', pageId: 51,
+        tripId: 7, draftToken: 'draft-payment-1', installmentIndexes: [0] }),
+    }]);
+
+    const res = await request(makeApp()).get('/p/australia-2026/payment-status')
+      .query({ draftToken: 'draft-payment-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ paid: true, paymentLinkId: 'plink_confirmed_first' });
+  });
+
+  test('an open payment link from another draft blocks a duplicate checkout', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 906, gatewayId: 'plink_open_elsewhere', status: 'PENDING', amount: 5000,
+      metadata: JSON.stringify({ kind: 'landing-page-registration', tripId: 7,
+        studentName: 'Student Iyer', parentEmail: 'parent@example.com',
+        installmentIndexes: [0], draftToken: 'earlier-draft' }),
+    }]);
+    paymentLinksFetchMock.mockResolvedValue({ status: 'created' });
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'installment', installmentIndex: 0, draftToken: 'draft-payment-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PAYMENT_IN_PROGRESS');
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('complete payment charges only the remaining balance and exposes it to the page', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: 'paid' },
+      { instalmentIndex: 1, amount: 4500, paidAmount: 1000, status: 'partial' },
+    ]);
+    prisma.payment.create.mockResolvedValue({ id: 904 });
+
+    const balance = await request(makeApp()).get('/p/australia-2026/payment-balance')
+      .query({ draftToken: 'draft-payment-1' });
+    expect(balance.status).toBe(200);
+    expect(balance.body).toMatchObject({ totalPaise: 950000, paidPaise: 600000, remainingPaise: 350000 });
+    expect(balance.body.installments).toEqual([
+      { index: 0, amountPaise: 500000, paidPaise: 500000, duePaise: 0 },
+      { index: 1, amountPaise: 450000, paidPaise: 100000, duePaise: 350000 },
+    ]);
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'complete', draftToken: 'draft-payment-1' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ amount: 350000, amountMajor: 3500, installmentIndexes: [1] });
+    expect(paymentLinksCreateMock).toHaveBeenCalledWith(expect.objectContaining({ amount: 350000 }));
+  });
+
+  test('complete payment cannot create a link after every installment is paid', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: 'paid' },
+      { instalmentIndex: 1, amount: 4500, paidAmount: 4500, status: 'paid' },
+    ]);
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'complete', draftToken: 'draft-payment-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_PAID');
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('duplicate successful payment links count as credit against the entire trip', async () => {
+    const page = wanderluxPaymentPage({ content: JSON.stringify({ investment: {
+      payment: { enabled: true, currency: 'INR' },
+      installments: [{ amount: '10000' }, { amount: '10000' }, { amount: '5000' }],
+    } }) });
+    prisma.landingPage.findFirst.mockResolvedValue(page);
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { instalmentIndex: 0, amount: 10000, paidAmount: 10000, status: 'paid' },
+      { instalmentIndex: 1, amount: 10000, paidAmount: 0, status: 'pending' },
+      { instalmentIndex: 2, amount: 5000, paidAmount: 0, status: 'pending' },
+    ]);
+    prisma.payment.findMany.mockResolvedValue([8, 9, 11].map((id) => ({
+      id, gatewayId: `plink_${id}`, status: 'SUCCESS', amount: 10000,
+      metadata: JSON.stringify({ kind: 'landing-page-registration', tripId: 7,
+        participantId: 77, installmentIndexes: [0], draftToken: `other-draft-${id}` }),
+    })));
+
+    const balance = await request(makeApp()).get('/p/australia-2026/payment-balance')
+      .query({ draftToken: 'draft-payment-1' });
+    expect(balance.status).toBe(200);
+    expect(balance.body).toMatchObject({ totalPaise: 2500000, paidPaise: 2500000,
+      remainingPaise: 0, overpaidPaise: 500000 });
+
+    const res = await request(makeApp()).post('/p/australia-2026/payment-order')
+      .send({ mode: 'complete', draftToken: 'draft-payment-1' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_PAID');
+    expect(paymentLinksCreateMock).not.toHaveBeenCalled();
   });
 
   test('payment-order atomically rejects a concurrent request before creating a provider link', async () => {
@@ -2023,6 +2232,65 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
 });
 
 describe('POST /p/:slug/registration-draft', () => {
+  test('reuses a converted registration token for its next installment', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 700, tenantId: 1, tripId: 7,
+      landingPageId: 51, status: 'CONVERTED', convertedToParticipantId: 77,
+      studentName: 'Student Iyer', parentEmail: 'parent@example.com',
+      draftToken: 'converted-draft', draftTokenExpiresAt: new Date(Date.now() + 3600000) });
+
+    const res = await request(makeApp()).post('/p/australia-2026/registration-draft')
+      .send({ draftToken: 'converted-draft', fields: { student_name: 'Student Iyer', email: 'parent@example.com' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ draftToken: 'converted-draft', draftId: 700 });
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('sends an existing trip participant to their portal without creating another draft', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77, parentEmail: 'parent@example.com' });
+    prisma.contact.findFirst.mockResolvedValue({ portalRole: 'CUSTOMER', subBrand: 'tmc', portalPasswordHash: 'hash' });
+
+    const res = await request(makeApp()).post('/p/australia-2026/registration-draft')
+      .send({ fields: { student_name: 'Student Iyer', name: 'Ravi Iyer',
+        email: 'parent@example.com', phone: '+919876543210' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.redirect).toMatchObject({ type: 'existing-participant',
+      url: expect.stringContaining('/travel/portal') });
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+  });
+
+  test('uses the dedicated TMC portal for an existing parent account', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77, parentEmail: 'parent@example.com' });
+    prisma.contact.findFirst.mockResolvedValue({ portalRole: 'PARENT', subBrand: 'tmc', portalPasswordHash: 'hash' });
+
+    const res = await request(makeApp()).post('/p/australia-2026/registration-draft')
+      .send({ fields: { student_name: 'Student Iyer', email: 'parent@example.com' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.redirect.url).toContain('/tmc/parent-portal');
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+  });
+
+  test('sends a paid participant parent without portal credentials to TMC account setup', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage({ subBrand: 'tmc' }));
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77, parentEmail: 'deepak@replyloop.com' });
+    prisma.contact.findFirst.mockResolvedValue({ portalRole: 'CUSTOMER', subBrand: 'tmc', portalPasswordHash: null });
+    prisma.tmcTrip.findFirst.mockResolvedValue({ teacherContactId: 101 });
+
+    const res = await request(makeApp()).post('/p/australia-2026/registration-draft')
+      .send({ fields: { student_name: 'Deepu', email: 'deepak@replyloop.com' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.redirect).toMatchObject({ type: 'customer-registration',
+      url: expect.stringContaining('/tmc/register/parent?token=') });
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+  });
+
   test('rejects an edit when payment claimed the draft after it was read', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
     prisma.pendingTripRegistration.findUnique.mockResolvedValue({ id: 702, tenantId: 1, tripId: 7,
@@ -2159,6 +2427,24 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
   // block-array pages can also trigger via formProps.mode (covered below).
   const wanderluxContent = JSON.stringify({
     register: { mode: 'registration-draft', steps: [{ id: 'student' }] },
+  });
+
+  test('an already registered student opens the parent portal without another registration', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({ id: 50, slug: 'trip-bali2026',
+      status: 'PUBLISHED', title: 'Bali Trip', content: wanderluxContent,
+      templateType: 'wanderlux-v1', tenantId: 1, tripId: 100, subBrand: 'tmc' });
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77, parentEmail: 'rohan@example.com' });
+    prisma.contact.findFirst.mockResolvedValue({ portalRole: 'CUSTOMER', subBrand: 'tmc', portalPasswordHash: 'hash' });
+
+    const res = await request(makeApp()).post('/p/trip-bali2026/submit')
+      .send({ student: { name: 'Aarav Iyer' },
+        parent: { name: 'Rohan Iyer', email: 'rohan@example.com', phone: '+919876543210' } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.redirect).toMatchObject({ type: 'existing-participant',
+      url: expect.stringContaining('/travel/portal') });
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+    expect(prisma.deal.create).not.toHaveBeenCalled();
   });
 
   test('happy path: trip-linked Wanderlux page creates a portal-registration redirect', async () => {

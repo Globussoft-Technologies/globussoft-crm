@@ -103,5 +103,5 @@
 .cd-basic-field .cd-empty-value { color: var(--text-secondary); font-weight: 400; }
 .cd-telephone-group { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border-color); }
 .cd-telephone-label { display: inline-block; margin-bottom: 0.8rem; padding: 0.35rem 0.5rem; border-radius: 4px; background: var(--subtle-bg-2); color: var(--text-primary); font-size: 0.7rem; }
-@media (max-width: 900px) { .cd-basic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 899px) { .cd-basic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .cd-drawer { width: 100vw; min-width: 0; } .cd-header-top { align-items: flex-start; } .cd-header-actions .cd-secondary-btn { display: none; } .cd-tools { align-items: flex-start; flex-direction: column; } .cd-basic-grid { grid-template-columns: 1fr; } }

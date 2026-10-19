@@ -4629,7 +4629,7 @@ router.get(
 );
 
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
-// Required: description, amount. Optional: quoteId, poNumber, currency, dueDate, notes, status.
+// Required: description, amount. Optional: quoteId, tripId (TMC), poNumber, currency, dueDate, notes, status.
 router.post(
   "/suppliers/:id/payables",
   verifyToken,
@@ -4641,7 +4641,7 @@ router.post(
       if (!supplier) return;
 
       const {
-        quoteId, description, amount, poNumber, currency, dueDate, notes, status,
+        quoteId, tripId, description, amount, poNumber, currency, dueDate, notes, status,
       } = req.body || {};
 
       if (!description || !String(description).trim() || amount == null) {
@@ -4657,6 +4657,17 @@ router.post(
       if (parsedQuoteId != null && !Number.isFinite(parsedQuoteId)) {
         return res.status(400).json({ error: "quoteId must be a valid Quote ID", code: "INVALID_QUOTE_ID" });
       }
+      const parsedTripId = tripId == null || tripId === "" ? null : Number(tripId);
+      if (parsedTripId != null) {
+        if (supplier.subBrand !== "tmc" || !Number.isInteger(parsedTripId) || parsedTripId <= 0 || parsedQuoteId != null) {
+          return res.status(400).json({ error: "Select a valid TMC trip", code: "INVALID_TRIP_ID" });
+        }
+        const trip = await prisma.tmcTrip.findFirst({
+          where: { id: parsedTripId, tenantId: req.travelTenant.id, NOT: { tripCode: { startsWith: "QUOTE-" } } },
+          select: { id: true },
+        });
+        if (!trip) return res.status(404).json({ error: "TMC trip not found", code: "TRIP_NOT_FOUND" });
+      }
       const storedNotes = parsedQuoteId != null
         ? `QUOTE_ID:${parsedQuoteId}${notes ? `\n${String(notes)}` : ""}`
         : (notes ? String(notes) : null);
@@ -4664,6 +4675,7 @@ router.post(
         data: {
           tenantId: req.travelTenant.id,
           supplierId: supplier.id,
+          tripId: parsedTripId,
           description: String(description).trim(),
           amount: String(amount),
           poNumber: poNumber ? String(poNumber) : null,

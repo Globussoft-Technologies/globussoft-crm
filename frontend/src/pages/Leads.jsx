@@ -2091,8 +2091,8 @@ const Leads = () => {
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
-  // The Freshsales-style generic grid keeps horizontal movement at the bottom
-  // of the records. Other verticals retain their existing top scrollbar.
+  // The Generic CRM grid keeps horizontal movement at the bottom of the
+  // records. Other verticals retain their existing top scrollbar.
   const showLeadsTopScrollbar = !isGeneric;
   // Assignment/deletion UI is driven by the effective Leads grants. Travel
   // non-admins can still use the separate owner-scoped assignment flow below.
@@ -5694,20 +5694,14 @@ const Leads = () => {
       ".leads-split-table--density-compact, .leads-split-table--density-comfortable",
     );
     if (densityTable) {
-      // Measure every density-controlled row without a previously assigned
-      // height, then use one bounded shared height for both panes. Unbounded
-      // measurements can feed expanded flex-table rows back into the next
-      // layout pass and progressively inflate comfortable rows.
+      // Each lead is rendered in two separate tables. Measure its two halves
+      // without their previous inline heights, then give both the height the
+      // taller half actually needs. A fixed upper limit left their borders
+      // out of line whenever one cell needed more than that limit.
       rowPairs.forEach(([frozenRow, scrollRow]) => {
         frozenRow.style.height = "";
         scrollRow.style.height = "";
       });
-      const measuredHeight = Math.max(
-        ...rowPairs.flatMap(([frozenRow, scrollRow]) => [
-          Math.ceil(frozenRow.getBoundingClientRect().height),
-          Math.ceil(scrollRow.getBoundingClientRect().height),
-        ]),
-      );
       const isCompact = densityTable.classList.contains(
         "leads-split-table--density-compact",
       );
@@ -5716,13 +5710,20 @@ const Leads = () => {
           ? 48
           : 40
         : 52;
-      const maximumHeight = isCompact ? 48 : 64;
-      const uniformHeight = Math.min(
-        maximumHeight,
-        Math.max(minimumHeight, measuredHeight),
+      const fallbackMaximumHeight = isCompact ? 48 : 64;
+      const naturalHeight = (row) => Math.max(
+        row.offsetHeight,
+        Math.min(Math.ceil(row.getBoundingClientRect().height), fallbackMaximumHeight),
       );
-      const nextHeight = `${uniformHeight}px`;
-      rowPairs.forEach(([frozenRow, scrollRow]) => {
+      const rowHeights = rowPairs.map(([frozenRow, scrollRow]) =>
+        Math.max(
+          minimumHeight,
+          naturalHeight(frozenRow),
+          naturalHeight(scrollRow),
+        ),
+      );
+      rowPairs.forEach(([frozenRow, scrollRow], index) => {
+        const nextHeight = `${rowHeights[index]}px`;
         frozenRow.style.height = nextHeight;
         scrollRow.style.height = nextHeight;
       });
@@ -9737,6 +9738,22 @@ const Leads = () => {
         </div>
         <div
           className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${filteredLeads.length > 0 && filteredLeads.length <= 10 ? " leads-split-table--sparse" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          onWheel={isGeneric ? (event) => {
+            const grid = event.currentTarget;
+            const scrollbar = grid.querySelector(".top-scroll-sync__sticky-bottom");
+            if (!scrollbar || scrollbar.scrollWidth <= scrollbar.clientWidth) return;
+
+            const verticalRoom = grid.scrollHeight - grid.clientHeight;
+            const canScrollVertically = verticalRoom > 1 &&
+              (event.deltaY < 0 ? grid.scrollTop > 0 : grid.scrollTop < verticalRoom - 1);
+            // Trackpads can send horizontal deltas directly. With a mouse,
+            // use the wheel for columns when there are no more rows to scroll.
+            const horizontalDelta = event.deltaX ||
+              (event.shiftKey || !canScrollVertically ? event.deltaY : 0);
+            if (!horizontalDelta) return;
+            const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? grid.clientWidth : 1;
+            scrollbar.scrollLeft += horizontalDelta * multiplier;
+          } : undefined}
           onTouchStart={isGeneric ? (event) => {
             const touch = event.touches[0];
             const scrollbar = event.currentTarget.querySelector(".top-scroll-sync__sticky-bottom");
@@ -9970,9 +9987,8 @@ const Leads = () => {
               stickyTopOffset={0}
               hideTopBar={isGeneric}
               stickyBottom={isGeneric}
-              // Generic CRM mirrors Freshsales: one scrollbar stays at the
-              // bottom of the record viewport while the header stays fixed.
-              // Other verticals retain their existing native table scroll.
+              // Generic CRM retains its bottom scrollbar; other verticals
+              // retain their existing native table scroll.
               hideBottomScrollbar={isGeneric}
               verticalOverflow="visible"
             >

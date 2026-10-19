@@ -1013,10 +1013,22 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
-  // Registrations are the source of the uploaded document records. Keep
-  // completed registrations in this single participant surface so conversion
-  // into TripParticipant does not make the documents disappear.
-  const reviewableRegs = pendingRegs;
+  // Completed registrations already have participant rows. Show only work in
+  // progress here, and use the converted record for its uploaded documents.
+  const normalizeName = (value) => String(value || "").trim().toLowerCase();
+  const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+  const normalizePhone = (value) => String(value || "").replace(/\D/g, "");
+  const alreadyRegistered = (registration) => (trip.participants || []).some((participant) =>
+    String(participant.applicationStatus || "").toLowerCase() !== "rejected"
+    && normalizeName(participant.fullName) === normalizeName(registration.studentName)
+    && Boolean((registration.parentEmail && normalizeEmail(participant.parentEmail) === normalizeEmail(registration.parentEmail))
+      || (registration.parentPhone && normalizePhone(participant.parentPhone) === normalizePhone(registration.parentPhone)))
+  );
+  const reviewableRegs = pendingRegs.filter((r) => !["CONVERTED", "REJECTED"].includes(r.status) && !alreadyRegistered(r));
+  const convertedRegsByParticipantId = new Map(
+    pendingRegs.filter((r) => r.status === "CONVERTED" && r.convertedToParticipantId)
+      .map((r) => [Number(r.convertedToParticipantId), r]),
+  );
   const consentDocumentsByEmail = new Map(
     (trip.parentConsentDocuments || []).map((row) => [
       String(row.parentEmail || "").trim().toLowerCase(),
@@ -1255,8 +1267,8 @@ function ParticipantsTab({ trip, onChange, notify }) {
         <div style={{ background: "var(--surface-color, #fff)", borderRadius: 14, border: "1px solid var(--border-color)", overflow: "hidden", marginBottom: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)" }} data-testid="pending-registrations-list">
           <div style={{ ...participantTableHeader, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Registered participants</div>
-              <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Registration is automatic. Uploaded documents are available below.</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Pending registrations</div>
+              <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Completed registrations and their documents appear in the participant list below.</div>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#2F7A4D", background: "rgba(47,122,77,0.12)", padding: "6px 10px", borderRadius: 999 }}>{reviewableRegs.length} total</span>
           </div>
@@ -1303,7 +1315,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         padding: "2px 8px", borderRadius: 999, textTransform: "uppercase",
                       }}
                     >
-                      Registered
+                      {r.status === "DRAFT" ? "Draft" : r.status === "OTP_VERIFIED" ? "Verified" : r.status === "APPROVED" ? "Approved" : String(r.status || "Pending").replaceAll("_", " ")}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
@@ -1385,7 +1397,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 }}>
-                  Registered automatically
+                  Awaiting completion
                 </div>
               </div>
             );
@@ -1426,6 +1438,11 @@ function ParticipantsTab({ trip, onChange, notify }) {
             const parentDocuments = p.parentDocuments?.length
               ? p.parentDocuments
               : parentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || [];
+            const convertedReg = convertedRegsByParticipantId.get(Number(p.id));
+            let registrationDocs = {};
+            try { registrationDocs = JSON.parse(convertedReg?.extrasJson || "{}")?.documents || {}; } catch { registrationDocs = {}; }
+            const registrationConsentType = ["parentConsent", "consentLetter", "medicalConsent"]
+              .find((type) => registrationDocs[type]);
             return (
               <div key={p.id} style={row}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
@@ -1471,11 +1488,24 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     >
                       <FileText size={11} aria-hidden /> Consent form - View
                     </button>
+                  ) : registrationConsentType ? (
+                    <button type="button" style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12 }}
+                      onClick={() => viewRegistrationDoc(convertedReg.id, registrationConsentType)}>
+                      <FileText size={11} aria-hidden /> Consent form - View
+                    </button>
                   ) : (
                     <span style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "var(--text-secondary)", cursor: "default" }} data-testid={`participant-consent-missing-${p.id}`}>
                       <FileText size={11} aria-hidden /> Consent form not uploaded
                     </span>
                   )}
+                  {convertedReg && ["passport", "aadhaar"].filter((type) => registrationDocs[type]).map((type) => (
+                    <button key={type} type="button"
+                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12 }}
+                      onClick={() => viewRegistrationDoc(convertedReg.id, type)}
+                      data-testid={`view-participant-registration-${type}-${p.id}`}>
+                      <FileText size={11} aria-hidden /> {type === "aadhaar" ? "Aadhaar" : "Registration passport"} - View
+                    </button>
+                  ))}
                   {/* Approve/Reject CTAs — visible only when an action makes sense.
                       Pending → both. Approved → "Reject" so a wrongly-approved
                       row can be reversed. Rejected → "Approve" so a re-review

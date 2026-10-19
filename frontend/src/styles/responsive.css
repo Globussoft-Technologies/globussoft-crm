@@ -457,7 +457,7 @@
 /* CRM pages use rem sizes throughout, including many inline styles. Scale the
    rem unit only while the authenticated shell is mounted, so every vertical
    responds without changing public pages. Keep a narrow-screen floor. */
-@media (max-width: 1199px) {
+@media (max-width: 899px) {
   html:has(.app-shell) {
     font-size: clamp(0.90625rem, calc(0.84375rem + 0.2vw), 1rem);
   }
@@ -505,7 +505,7 @@
   font-size: clamp(0.9375rem, calc(0.75rem + 0.5vw), 1rem);
 }
 
-@media (max-width: 1199px) {
+@media (max-width: 899px) {
   .app-main > main h1 {
     font-size: clamp(1.45rem, calc(1rem + 1.2vw), 2rem) !important;
     line-height: 1.25;
@@ -519,33 +519,6 @@
   .app-main > main h3 {
     font-size: clamp(1rem, calc(0.85rem + 0.5vw), 1.25rem) !important;
     line-height: 1.35;
-  }
-}
-
-/* The compact laptop drawer runs through 1439px. Grow content spacing
-   gradually across the same range so 1024px screens do not jump straight
-   from tablet spacing to full desktop sizing. */
-@media (min-width: 900px) and (max-width: 1439px) {
-  .app-main > main {
-    --crm-laptop-padding: clamp(1rem, 2.2vw, 2rem);
-  }
-
-  .app-main > main > :is([style*="2rem"], [style*="24px"], [style*="32px"]):not([style*="padding: 0"]):not([style*="padding:0"]),
-  .app-main > main :is(.card, .glass):is([style*="1.5rem"], [style*="2rem"], [style*="24px"], [style*="28px"], [style*="32px"]):not([style*="padding: 0"]):not([style*="padding:0"]) {
-    padding: var(--crm-laptop-padding) !important;
-  }
-
-  .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, .input-field:not(.crm-search-input)) {
-    padding: clamp(0.5rem, 0.6vw, 0.65rem) clamp(0.75rem, 1vw, 1rem) !important;
-  }
-
-  .app-main > main table :is(th, td):not([style*="padding: 0"]) {
-    padding: clamp(0.5rem, 0.65vw, 0.75rem) clamp(0.625rem, 0.8vw, 0.75rem) !important;
-  }
-
-  .app-main > main :is(button, a.btn-primary, a.btn-secondary, a.btn-danger) > svg {
-    width: clamp(16px, 1.25vw, 18px) !important;
-    height: clamp(16px, 1.25vw, 18px) !important;
   }
 }
 
@@ -839,61 +812,18 @@
   }
 }
 
-/* On compact laptops the sidebar leaves too little room for forms and data
-   grids. Use the existing accessible drawer for every CRM vertical. */
-@media (min-width: 900px) and (max-width: 1439px) {
-  .app-sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 280px !important;
-    max-width: 85vw;
-    height: 100dvh !important;
-    z-index: 999;
-    transform: translateX(-100%);
-    transition: transform 240ms cubic-bezier(0.25, 0.8, 0.25, 1);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
-  }
+/* Laptops retain the desktop sidebar and top bar. Layout.jsx scales the
+   1440px design frame to the available viewport width. */
+.app-shell--scaled {
+  max-width: none;
+}
 
-  .app-sidebar.is-open {
-    transform: translateX(0);
-  }
+.app-shell--scaled .app-main > main {
+  font-size: 1rem;
+}
 
-  .sidebar-backdrop {
-    display: block;
-    pointer-events: none;
-  }
-
-  .sidebar-backdrop.is-open {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .app-main {
-    width: 100% !important;
-    min-width: 0 !important;
-  }
-
-  .sidebar-toggle {
-    display: inline-flex !important;
-    width: 44px !important;
-    height: 44px !important;
-    flex-shrink: 0;
-  }
-
-  .app-topbar {
-    flex-wrap: wrap !important;
-  }
-
-  .app-header-search {
-    flex: 1 1 280px;
-  }
-
-  .app-main > main > * {
-    min-width: 0;
-    max-width: 100%;
-    box-sizing: border-box;
-  }
+.app-shell--scaled .app-sidebar {
+  height: 100% !important;
 }
 
 /* --------------------------------------------------------------------------
@@ -1109,7 +1039,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
 /* Quote Builder has several fixed two-column grids. Keep its summary and
    pricing controls readable when the sidebar has consumed tablet width. */
-@media (max-width: 1100px) {
+@media (max-width: 899px) {
   [data-vertical="travel"] .travel-quote-hero,
   [data-vertical="travel"] .travel-quote-totals {
     grid-template-columns: minmax(0, 1fr) !important;
@@ -1202,7 +1132,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
 /* Page chrome needs deliberate rows. Blanket wrapping of every flex child
    makes filters and actions land at unrelated horizontal positions. */
-@media (max-width: 1100px) {
+@media (max-width: 899px) {
   .app-main > main .contacts-page__header,
   .app-main > main .travel-audit-page__header {
     display: grid !important;
@@ -2047,7 +1977,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 }
 
 /* Lead Intelligence cards and lead lists need tracks wide enough for labels. */
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .lead-intelligence-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 0.75rem !important;
@@ -2125,7 +2055,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 }
 
 /* Deal Insights needs readable KPI tiles when four desktop columns cannot fit. */
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .deal-insights-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 0.75rem !important;
@@ -2326,7 +2256,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 899px) {
   .landing-builder__toolbar {
     flex-wrap: wrap;
     gap: 0.5rem !important;
@@ -2743,7 +2673,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
 /* At tablet widths a two-column panel layout leaves the Recent Deals card
    too narrow for readable names, even with the sidebar in drawer mode. */
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .dashboard-page {
     padding-bottom: 6rem !important;
   }
@@ -2861,7 +2791,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .estimates-ledger-scroll {
     max-width: 100%;
     overscroll-behavior-x: contain;
@@ -3004,7 +2934,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .agent-reports-page {
     box-sizing: border-box;
     width: 100%;

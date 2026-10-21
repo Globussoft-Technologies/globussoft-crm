@@ -192,6 +192,28 @@ describe('buildWebFormEmbedCode', () => {
   });
 });
 
+describe('external embed attribution without third-party storage', () => {
+  const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+  const body = html.match(/function resolveTrackingValue\(key, query, attribution\) \{([\s\S]*?)\n        \}/)[1];
+  const resolve = (cookieReader) => Function('readCookie', `return function(key, query, attribution) {${body}}`)(cookieReader);
+
+  test('retains host UTM and Google click IDs when iframe cookies are blocked', () => {
+    const getValue = resolve(() => { throw new Error('Storage blocked'); });
+    const query = new URLSearchParams('utm_source=google&gclid=query-click&gbraid=braid');
+    expect(getValue('utm_source', query, {})).toBe('google');
+    expect(getValue('gclid', query, { gclid: 'host-click' })).toBe('host-click');
+    expect(getValue('gbraid', query, {})).toBe('braid');
+    expect(getValue('wbraid', query, {})).toBe('');
+    expect(html).toContain('tracking[key] = resolveTrackingValue(key, query, hostContext.attribution)');
+  });
+
+  test('host attribution wins over stale cookies from another embedding website', () => {
+    const getValue = resolve(() => 'another-site');
+    expect(getValue('utm_campaign', new URLSearchParams(), { utm_campaign: 'external-campaign' })).toBe('external-campaign');
+    expect(getValue('utm_campaign', new URLSearchParams(), {})).toBe('another-site');
+  });
+});
+
 describe('buildWebFormScriptEmbedCode', () => {
   test('builds a script-only Generic CRM embed that creates the iframe and retains tracking', () => {
     const code = buildWebFormScriptEmbedCode(

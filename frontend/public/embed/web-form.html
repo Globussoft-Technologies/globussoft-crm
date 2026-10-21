@@ -1551,6 +1551,7 @@
             : gbsCustomCss.sanitizeCustomCss(value);
         }
         function readCookie(name) {
+          try {
           var prefix = name + "=";
           var found = document.cookie
             .split(";")
@@ -1563,6 +1564,7 @@
           return found
             ? decodeURIComponent(found.substring(prefix.length))
             : "";
+          } catch (e) { return ""; }
         }
         var TRACKING_COOKIE_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
         var TRACKING_QUERY_KEYS = [
@@ -1595,14 +1597,25 @@
           "hsa_ver",
         ];
         function rememberCookie(name, value) {
-          if (!value || readCookie(name)) return;
-          document.cookie =
+          try {
+            if (!value || readCookie(name)) return;
+            document.cookie =
             name +
             "=" +
             encodeURIComponent(String(value).slice(0, 2000)) +
             "; Max-Age=" +
             TRACKING_COOKIE_MAX_AGE_SECONDS +
             "; Path=/; SameSite=Lax";
+          } catch (e) { /* Cross-site storage may be unavailable. */ }
+        }
+        function resolveTrackingValue(key, query, attribution) {
+          // Host context is first-party attribution. Never depend on a
+          // third-party iframe cookie accepting writes or reuse another host's cookie.
+          var value = (attribution && attribution[key]) || query.get(key);
+          if (!value) {
+            try { value = readCookie("gbs_" + key); } catch (e) {}
+          }
+          return String(value || "").slice(0, 2000);
         }
         function pageUrlWithoutQueryOrHash(value) {
           try {
@@ -2283,6 +2296,7 @@
         }
         window.addEventListener("message", function (event) {
           if (
+            event.source === window.parent &&
             event.data &&
             event.data.source === "gbs-web-form-host" &&
             event.data.type === "context"
@@ -4883,8 +4897,7 @@
                 : "desktop",
             };
             TRACKING_QUERY_KEYS.forEach(function (key) {
-              var value = readCookie("gbs_" + key);
-              if (value) tracking[key] = value;
+              tracking[key] = resolveTrackingValue(key, query, hostContext.attribution);
             });
             Object.keys(detectedLocationMetadata).forEach(function (key) {
               tracking[key] = detectedLocationMetadata[key];

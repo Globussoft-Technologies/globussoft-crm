@@ -402,7 +402,7 @@ export default function DealInsights() {
   ];
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.4s ease-out' }}>
+    <div className="deal-insights-page" style={{ padding: '2rem', minHeight: '100%', animation: 'fadeIn 0.4s ease-out' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.75rem', gap: '1rem', flexWrap: 'wrap' }}>
         <div>

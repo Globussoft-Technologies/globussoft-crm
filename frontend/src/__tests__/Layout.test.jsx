@@ -134,7 +134,7 @@ describe('Layout', () => {
   });
 
   it.each(['generic', 'travel', 'wellness'])(
-    'keeps the desktop sidebar and scales the frame at compact laptop widths for %s',
+    'keeps compact laptop layout scoped to the active vertical for %s',
     async (vertical) => {
       window.innerWidth = 1024;
       const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
@@ -149,8 +149,14 @@ describe('Layout', () => {
         await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'false'));
         expect(matchMedia).toHaveBeenCalledWith('(max-width: 899px)');
         const shell = document.querySelector('.app-shell');
-        expect(shell).toHaveClass('app-shell--scaled');
-        expect(shell).toHaveStyle({ width: '1440px', height: '1265.625px', transform: `scale(${1024 / 1440})` });
+        if (vertical === 'generic') {
+          expect(shell).not.toHaveClass('app-shell--scaled');
+          expect(shell).toHaveStyle({ inset: '0' });
+          expect(document.querySelector('main.page-fade-in')).toHaveClass('generic-page-content');
+        } else {
+          expect(shell).toHaveClass('app-shell--scaled');
+          expect(shell).toHaveStyle({ width: '1440px', height: '1265.625px', transform: `scale(${1024 / 1440})` });
+        }
       } finally {
         matchMedia.mockRestore();
       }
@@ -159,7 +165,7 @@ describe('Layout', () => {
 
   it('updates desktop scale when a laptop window is resized', () => {
     window.innerWidth = 1024;
-    renderLayout();
+    renderTravelLayout();
     const shell = document.querySelector('.app-shell');
     window.innerWidth = 1280;
     fireEvent.resize(window);

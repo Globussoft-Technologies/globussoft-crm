@@ -1082,6 +1082,12 @@ export default function Expenses() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .finance-page__table-card:hover {
+          transform: none;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+          border-color: var(--border-color);
+        }
+        .finance-page__table-card::before { display: none; }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
            Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the
            desktop grid prevents form-field min-content from forcing the column

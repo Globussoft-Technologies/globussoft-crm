@@ -238,7 +238,7 @@ function normalizeXlsxCell(value) {
 // parseXlsxBuffer(buffer) -> { headers, rows } matching parseCsv's contract.
 // Reads the first sheet, treats row 1 as headers, coerces every cell to a
 // string so the row callbacks (which assume CSV semantics) keep working.
-function parseXlsxBuffer(buffer) {
+function parseXlsxBuffer(buffer, { rawColumns = [] } = {}) {
   if (!Buffer.isBuffer(buffer)) {
     throw new Error("parseXlsxBuffer: input must be a Buffer");
   }
@@ -252,6 +252,7 @@ function parseXlsxBuffer(buffer) {
   const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
   if (!aoa.length) return { headers: [], rows: [] };
   const headers = (aoa[0] || []).map((h) => String(h ?? "").trim());
+  const rawColumnIndexes = new Set(rawColumns.map((name) => headers.indexOf(name)).filter((index) => index >= 0));
   const rows = [];
   for (let r = 1; r < aoa.length; r += 1) {
     const cells = aoa[r] || [];
@@ -262,7 +263,12 @@ function parseXlsxBuffer(buffer) {
     for (let h = 0; h < headers.length; h += 1) {
       const key = headers[h];
       if (!key) continue;
-      const cell = h < cells.length ? cells[h] : "";
+      let cell = h < cells.length ? cells[h] : "";
+      if (rawColumnIndexes.has(h)) {
+        const address = XLSX.utils.encode_cell({ r, c: h });
+        const rawValue = ws[address]?.v;
+        if (rawValue !== null && rawValue !== undefined) cell = rawValue;
+      }
       obj[key] = cell === null || cell === undefined ? "" : String(cell);
     }
     Object.defineProperty(obj, "__row", { value: r + 1, enumerable: false });

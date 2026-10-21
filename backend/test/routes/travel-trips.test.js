@@ -1070,16 +1070,18 @@ describe('Participants', () => {
     expect(prisma.tripParticipant.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          tenantId: 1,
           tripId: 100,
           fullName: 'Ravi Mehta',
           applicationStatus: 'waitlisted',
         }),
       }),
     );
+    // TripParticipant inherits tenant isolation through its scoped trip;
+    // the model itself has no tenantId column.
+    expect(prisma.tripParticipant.create.mock.calls[0][0].data).not.toHaveProperty('tenantId');
   });
 
-  test('GET participant import template returns the parser headers as CSV', async () => {
+  test('GET participant import template returns only the required headers as CSV', async () => {
     const res = await request(makeApp())
       .get('/api/travel/trips/100/participants/import-template?format=csv')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
@@ -1092,12 +1094,6 @@ describe('Participants', () => {
       'parentName',
       'parentPhone',
       'parentEmail',
-      'applicationStatus',
-      'passportNumber',
-      'passportExpiry',
-      'aadhaarLast4',
-      'medicalNotes',
-      'reviewNotes',
     ].join(','));
   });
 
@@ -2103,7 +2099,6 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });
-
 
 
 

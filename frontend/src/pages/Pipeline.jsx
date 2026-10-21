@@ -89,9 +89,13 @@ export default function Pipeline() {
     tenantId: tenant?.id ?? user?.tenantId,
     userId: user?.userId,
   });
+  const viewKey = scopedStorageKey('deals-pipeline-view', {
+    tenantId: tenant?.id ?? user?.tenantId,
+    userId: user?.userId,
+  });
   const [deals, setDeals] = useState([]); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]);
   const [staff, setStaff] = useState([]); const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [view, setView] = useState('kanban'); const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [view, setView] = useState(() => { try { return localStorage.getItem(viewKey) === 'list' ? 'list' : 'kanban'; } catch { return 'kanban'; } }); const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(50); const [total, setTotal] = useState(0); const [totalPages, setTotalPages] = useState(1);
   const [pipelineMenuOpen, setPipelineMenuOpen] = useState(false);
   const pipelineMenuRef = useRef(null);
@@ -99,6 +103,8 @@ export default function Pipeline() {
   const [stageFilter, setStageFilter] = useState(''); const [ownerFilter, setOwnerFilter] = useState(''); const [pipelineId, setPipelineId] = useState(() => searchParams.get('pipelineId') || ''); const [showFilters, setShowFilters] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false); const [showCardCustomizer, setShowCardCustomizer] = useState(false); const [cardFields, setCardFields] = useState(() => { try { return JSON.parse(localStorage.getItem(cardFieldsKey)) || { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } catch { return { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } });
   const [expandedStageIds, setExpandedStageIds] = useState([]);
   const [showCreate, setShowCreate] = useState(false); const [createDealDefaults, setCreateDealDefaults] = useState({}); const [selectedDeal, setSelectedDeal] = useState(null); const [dragged, setDragged] = useState(null);
+
+  useEffect(() => { try { localStorage.setItem(viewKey, view); } catch { /* Storage may be unavailable. */ } }, [view, viewKey]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
@@ -246,7 +252,7 @@ export default function Pipeline() {
   };
 
   return <div style={isGeneric
-    ? { width: '100%', boxSizing: 'border-box', padding: 'clamp(1rem, 3vw, 2rem)' }
+    ? { width: '100%', minWidth: 0, boxSizing: 'border-box' }
     : { padding: '24px 28px', maxWidth: 1500, margin: '0 auto' }}>
     {isGeneric && <button type="button" aria-label="Go back" title="Back" style={{ ...backButton, display: 'inline-flex', marginBottom: 12 }} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>}
     <style>{'.deals-kanban-list { scrollbar-width: thin; scrollbar-color: #94a3b8 #e2e8f0; } .deals-kanban-list::-webkit-scrollbar { width: 10px; } .deals-kanban-list::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 6px; } .deals-kanban-list::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #e2e8f0; }'}</style>

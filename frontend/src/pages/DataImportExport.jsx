@@ -87,7 +87,7 @@ export default function DataImportExport() {
     : 'One place to bulk-import or download any dataset as CSV. Pick the data type below, then use the buttons on the right.';
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out', maxWidth: 900 }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Database size={24} /> {pageTitle}

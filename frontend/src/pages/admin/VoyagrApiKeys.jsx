@@ -275,7 +275,7 @@ export default function VoyagrApiKeys() {
   });
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 0, width: "100%", minWidth: 0, boxSizing: "border-box" }}>
       <header style={{ marginBottom: "1.5rem" }}>
         <h1
           style={{

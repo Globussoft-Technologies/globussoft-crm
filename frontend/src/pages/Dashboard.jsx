@@ -106,7 +106,7 @@ export default function Dashboard() {
   // KPIs derived purely from `stats` (server aggregates), not from any list.
   const totalRevenue = stats.wonValue;
   const expectedRevenue = stats.expectedValue;
-  const displayRevenue = (value) => value === null ? 'Unavailable' : formatMoney(value, moneyOptions);
+  const displayRevenue = (value) => value === null ? 'Unavailable' : formatMoneyCompact(value, moneyOptions);
   // #639 — keep the raw numeric so formatPercent renders a 1-decimal "0.0%"
   // consistently. Pre-fix this was Math.round-d to an integer and rendered
   // as bare "0%" / "12%", out of sync with Funnel + Reports which used 1dp.
@@ -196,7 +196,7 @@ export default function Dashboard() {
   const shortcutKey = isMac ? 'Cmd' : 'Ctrl';
 
   return (
-    <div className="dashboard-page" style={{ padding: '2rem', width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="dashboard-page" style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header data-tour="dashboard-header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, var(--text-primary), var(--text-secondary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
@@ -207,7 +207,7 @@ export default function Dashboard() {
           </p>
         </div>
         {/* #128: this button only navigates — rename so the label matches the action */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div className="dashboard-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <CalendarRangePicker value={dateRange} onChange={updateDateRange} label="Dashboard date range" align="right" compact width={190} height={38} />
           <button className="btn-primary" onClick={() => navigate(filteredPath(ctaPath))}>{ctaLabel}</button>
         </div>
@@ -228,13 +228,13 @@ export default function Dashboard() {
               color: 'inherit',
               display: 'block',
             }}>
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div className="card dashboard-kpi-card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
                 {stat.icon}
               </div>
-              <div>
+              <div className="dashboard-kpi-copy" style={{ minWidth: 0, flex: 1 }}>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stat.value}</h2>
+                <h2 title={stat.label.includes('Revenue') && stat.value !== 'Unavailable' ? formatMoney(stat.label.includes('Expected') ? expectedRevenue : totalRevenue, moneyOptions) : undefined} style={{ fontSize: 'clamp(1.15rem, 1.5vw, 1.5rem)', fontWeight: 'bold', lineHeight: 1.2, overflowWrap: 'anywhere' }}>{stat.value}</h2>
               </div>
             </div>
           </Link>
@@ -242,8 +242,8 @@ export default function Dashboard() {
       </div>
 
       <div className="dashboard-panels" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
-        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minHeight: '350px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
           </div>
           <div className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px' }}>
@@ -256,7 +256,7 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
+                <YAxis width={56} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
                 <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}

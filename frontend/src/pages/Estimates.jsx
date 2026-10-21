@@ -729,7 +729,7 @@ export default function Estimates() {
       )}
 
       {/* Estimates Table */}
-      <div className="card" style={{ padding: '2rem' }}>
+      <div className="card estimate-ledger-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileSpreadsheet size={20} color="var(--success-color)" /> Estimate Ledger
           </h3>
@@ -942,6 +942,12 @@ export default function Estimates() {
         </div>
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .estimate-ledger-card:hover {
+          transform: none;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+          border-color: var(--border-color);
+        }
+        .estimate-ledger-card::before { display: none; }
         .estimates-ledger-table th,
         .estimates-ledger-table td {
           white-space: nowrap;

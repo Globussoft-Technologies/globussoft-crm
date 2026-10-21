@@ -390,6 +390,37 @@ body,
   overflow-x: hidden !important;
 }
 
+/* Generic CRM pages share the same fluid inset as the Deals and Pipelines
+   reference view. Keep verticalized modules on their existing page spacing. */
+.app-main > main.generic-page-content {
+  padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 3vw, 2rem);
+}
+
+/* Page components have accumulated their own centered max-width wrappers and
+   horizontal padding over time. Normalize only the first page-content root;
+   dialogs and nested cards retain their intentional sizing. */
+.app-main > main.generic-page-content > :nth-child(1 of :not(style)) {
+  width: 100% !important;
+  min-width: 0;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  margin-top: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  padding-top: 0 !important;
+  box-sizing: border-box;
+}
+
+/* Let the app's main viewport scroll Deal Insights while clipping any
+   horizontal card overflow without creating another scroll container. */
+body[data-vertical="generic"] .deal-insights-page {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: clip;
+}
+
 .expenses-page > .card,
 .expenses-page .card {
   max-width: 100%;
@@ -2060,6 +2091,24 @@ body[data-vertical="generic"] .generic-clients-page-size:focus {
   outline: none;
   border-color: var(--accent-color);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+}
+
+body[data-vertical="generic"] .generic-clients-table tbody tr:hover,
+body[data-vertical="generic"] .generic-clients-table tbody tr:hover > td {
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+body[data-vertical="generic"] .generic-clients-card:hover {
+  transform: none !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+  border-color: var(--border-color) !important;
+}
+
+body[data-vertical="generic"] .generic-clients-card:hover::before {
+  left: -100% !important;
+  transition: none !important;
 }
 
 .pipelines-modal-only > :not(:last-child) {

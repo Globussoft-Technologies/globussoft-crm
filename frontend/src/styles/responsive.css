@@ -774,9 +774,16 @@
     grid-template-columns: 1fr !important;
   }
 
-  /* Page-level main padding sanity. */
-  main {
-    padding: 0 !important;
+  /* Give every authenticated page a consistent outer inset. Page roots that
+     own their own spacing can still add room inside this shared gutter. */
+  .app-main > main {
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-main > main {
+    padding: 0.75rem !important;
   }
 }
 
@@ -2132,6 +2139,16 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   overflow: hidden !important;
 }
 
+.inbox-list-card--generic:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+.inbox-list-card--generic::before {
+  display: none;
+}
+
 .inbox-list-card--generic > .inbox-list-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -2686,10 +2703,6 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
 /* Dashboard controls need tighter spacing on phones. */
 @media (max-width: 600px) {
-  .dashboard-page {
-    padding: 0.75rem !important;
-  }
-
   .dashboard-page > header {
     align-items: flex-start !important;
     margin-bottom: 1rem !important;
@@ -3246,5 +3259,68 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   .staff-directory-availability-toggle > button {
     width: 100%;
     padding: 0.4rem 0.5rem !important;
+  }
+}
+/* KPI cards can shrink without letting long formatted totals push the grid wider. */
+.dashboard-kpis > a,
+.dashboard-kpi-card,
+.dashboard-kpi-card > div:first-child {
+  min-width: 0;
+}
+
+@media (max-width: 899px) {
+  .dashboard-page > header {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .dashboard-page .dashboard-header-actions {
+    margin-left: auto;
+  }
+}
+
+.dashboard-kpi-card > div:first-child {
+  flex-shrink: 0;
+}
+
+.dashboard-kpi-copy h2 {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 600px) {
+  .dashboard-page > header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .dashboard-page > header > div:first-child {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .dashboard-page > header h1 {
+    font-size: 1.5rem !important;
+    line-height: 1.15;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .dashboard-page .dashboard-header-actions {
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch !important;
+    margin-left: 0;
+  }
+
+  .dashboard-page .dashboard-header-actions > div {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .dashboard-page .dashboard-header-actions button {
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
   }
 }

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render as renderWithTestingLibrary, screen, waitFor, within } from "@testing-library/react";
+import { BrowserRouter } from "react-router-dom";
 import TmcTeacherPortal from "../pages/travel/TmcTeacherPortal";
+
+function render(ui) {
+  return renderWithTestingLibrary(<BrowserRouter>{ui}</BrowserRouter>);
+}
 
 describe("TmcTeacherPortal", () => {
   let fetchSpy;

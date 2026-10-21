@@ -13610,6 +13610,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           color: var(--text-secondary);
         }
         .wf-forms-library {
+          container-type: inline-size;
           display: grid;
           gap: 16px;
           padding: 18px;
@@ -13689,18 +13690,24 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           container-type: inline-size;
           display: grid;
           width: 100%;
-          grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 380px));
-          justify-content: start;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 14px;
+        }
+        @container (max-width: 1399px) {
+          .wf-library-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @container (max-width: 1040px) {
+          .wf-library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @container (max-width: 650px) {
+          .wf-library-grid { grid-template-columns: minmax(0, 1fr); }
         }
         .wf-library-card {
           container-type: inline-size;
           width: 100%;
-          max-width: 380px;
           display: grid;
           grid-template-rows: auto auto 1fr;
           gap: 16px;
-          flex: 0 1 380px;
           box-sizing: border-box;
           min-width: 0;
           min-height: 306px;
@@ -13709,7 +13716,6 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           border-radius: 16px;
           background: var(--surface-2, var(--surface-color));
           color: var(--text-primary);
-          transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
         }
         .wf-library-card[draggable="true"] { cursor: grab; }
         .wf-library-card.dragging { opacity: 0.55; cursor: grabbing; }
@@ -13718,12 +13724,6 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         .wf-form-drag-preview-copy { display: grid; min-width: 0; gap: 2px; }
         .wf-form-drag-preview-copy small { color: var(--text-secondary); font-size: 0.7rem; line-height: 1.2; }
         .wf-form-drag-preview-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; line-height: 1.2; }
-        .wf-library-card:hover,
-        .wf-library-card.active {
-          border-color: rgba(91, 107, 255, 0.72);
-          box-shadow: 0 18px 40px rgba(91, 107, 255, 0.14);
-          transform: translateY(-1px);
-        }
         .wf-library-card.menu-open { position: relative; z-index: 2; }
         .wf-library-card-top {
           display: grid;
@@ -13784,6 +13784,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           padding: 0.55rem 0.6rem;
           white-space: nowrap;
           font-size: 0.85rem;
+        }
+        .wf-library-primary-row > .btn-primary::after { display: none; }
+        .wf-library-primary-row > .btn-primary:hover {
+          transform: none;
+          box-shadow: 0 4px 15px var(--accent-glow);
         }
         .wf-library-action-buttons > .wf-danger-action {
           grid-column: 2;

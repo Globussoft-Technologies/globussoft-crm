@@ -214,6 +214,23 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByText('Probability')).toBeInTheDocument();
   });
 
+  it('restores the chosen view after leaving and returning to the page', async () => {
+    const firstVisit = renderPipeline();
+    await screen.findByLabelText('Deal pipeline board');
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    expect(screen.getByText('Deal')).toBeInTheDocument();
+
+    firstVisit.unmount();
+    const returnVisit = renderPipeline();
+    expect(await screen.findByText('Deal')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Deal pipeline board')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    returnVisit.unmount();
+    renderPipeline();
+    expect(await screen.findByLabelText('Deal pipeline board')).toBeInTheDocument();
+  });
+
   it('filters deals by title and company search', async () => {
     renderPipeline();
     await screen.findByText('Acme Corp Renewal');

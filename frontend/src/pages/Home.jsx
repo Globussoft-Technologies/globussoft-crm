@@ -311,7 +311,7 @@ function EmptyState({ quickActions }) {
 
 // ── Styles ───────────────────────────────────────────────────────
 
-const pageStyle = { padding: '1.5rem', maxWidth: 1400, margin: '0 auto' };
+const pageStyle = { padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box' };
 
 const heroSection = {
   display: 'flex',

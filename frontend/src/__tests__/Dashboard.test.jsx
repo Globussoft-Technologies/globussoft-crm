@@ -154,10 +154,12 @@ describe('<Dashboard />', () => {
     // Closed Revenue tile reflects stats.wonValue ($5B), not a sum over the
     // newest-10 list (which would render $0).
     await waitFor(() => expect(screen.getByText('Closed Revenue')).toBeInTheDocument());
-    // Intl.NumberFormat for $5B in en-US is "$5,000,000,000".
-    await waitFor(() => expect(screen.getByText('$5,000,000,000')).toBeInTheDocument());
+    // Revenue tiles display compact amounts and expose the full value in their title.
+    await waitFor(() => expect(screen.getByText('Closed Revenue').nextElementSibling).toHaveTextContent('$5B'));
+    expect(screen.getByText('Closed Revenue').nextElementSibling).toHaveAttribute('title', '$5,000,000,000');
     // Expected Revenue tile reflects stats.expectedValue.
-    expect(screen.getByText('$1,200,000,000')).toBeInTheDocument();
+    expect(screen.getByText('Expected Revenue').nextElementSibling).toHaveTextContent('$1.2B');
+    expect(screen.getByText('Expected Revenue').nextElementSibling).toHaveAttribute('title', '$1,200,000,000');
     // Total Deals tile reflects stats.totalDeals.
     expect(screen.getByText('5381')).toBeInTheDocument();
     // #639 — Conversion Rate is now formatted by formatPercent (1 decimal,

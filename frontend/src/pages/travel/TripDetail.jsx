@@ -1183,7 +1183,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {PARTICIPANT_IMPORT_SCHEMA.filter((column) => column.required).map((column) => (
+                    {PARTICIPANT_IMPORT_SCHEMA.map((column) => (
                       <tr key={column.key}>
                         <td style={importSchemaTd}><code>{column.key}</code></td>
                         <td style={{ ...importSchemaTd, color: column.required ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)", fontWeight: column.required ? 700 : 400 }}>

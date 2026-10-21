@@ -275,7 +275,7 @@ describe('<WinLoss /> — KPI tiles + populated payloads', () => {
 
     // Win Rate label + the "60%" tile value.
     expect(await screen.findByText(/Win Rate/i)).toBeInTheDocument();
-    expect(screen.getByText(/^60%$/)).toBeInTheDocument();
+    expect(await screen.findByText(/^60%$/)).toBeInTheDocument();
 
     // Sub-text shows "12 won · 8 lost".
     expect(screen.getByText(/12 won · 8 lost/i)).toBeInTheDocument();

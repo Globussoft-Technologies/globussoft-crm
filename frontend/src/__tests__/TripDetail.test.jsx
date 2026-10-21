@@ -633,7 +633,7 @@ describe('<TripDetail /> — Participants tab', () => {
 
     const schema = await screen.findByTestId('participant-import-schema');
     expect(schema).toHaveTextContent('fullName');
-    expect(schema).toHaveTextContent('fullName, parentName, parentPhone, and parentEmail are required');
+    expect(schema).toHaveTextContent('Templates contain only the required columns');
     expect(screen.getByRole('button', { name: /CSV template/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /XLSX template/i })).toBeInTheDocument();
     expect(screen.getByText('applicationStatus')).toBeInTheDocument();

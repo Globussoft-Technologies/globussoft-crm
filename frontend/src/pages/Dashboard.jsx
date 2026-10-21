@@ -242,13 +242,13 @@ export default function Dashboard() {
       </div>
 
       <div className="dashboard-panels" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
-        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minHeight: '350px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
           </div>
           <div className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 8, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
@@ -256,7 +256,7 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis width={82} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
+                <YAxis width={56} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
                 <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}

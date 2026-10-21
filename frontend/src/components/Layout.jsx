@@ -201,18 +201,22 @@ const Layout = () => {
   // sidebar is actually rendering as a drawer. SSR-safe initial value: assume
   // desktop, then sync on mount via the resize listener below.
   const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const [desktopFrame, setDesktopFrame] = useState(getDesktopFrame);
+  // Preserve the legacy design frame for verticalized modules. Generic CRM
+  // uses the available viewport width directly so laptop zoom stays natural.
+  const [desktopFrame, setDesktopFrame] = useState(() =>
+    isWellness || isTravel ? getDesktopFrame() : null,
+  );
   // Keep a ref to the hamburger so we can return focus to it when the drawer
   // closes — required for keyboard / screen-reader users (WAI-ARIA APG dialog
   // pattern: focus must return to the trigger).
   const toggleRef = useRef(null);
 
   useEffect(() => {
-    if (typeof window === "undefined") return undefined;
+    if (!isWellness && !isTravel) return undefined;
     const updateFrame = () => setDesktopFrame(getDesktopFrame());
     window.addEventListener("resize", updateFrame);
     return () => window.removeEventListener("resize", updateFrame);
-  }, []);
+  }, [isWellness, isTravel]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -645,7 +649,7 @@ const Layout = () => {
         </header>
         <main
           data-tour="page-content"
-          className="page-fade-in"
+          className={`page-fade-in${isWellness || isTravel ? "" : " generic-page-content"}`}
           style={{
             flex: 1,
             minWidth: 0,
@@ -653,7 +657,6 @@ const Layout = () => {
             overflowX: "hidden",
             overflowY:
               popupScrollLocked || isGenericLeadsPage ? "hidden" : "auto",
-            padding: "0",
             backgroundColor: "transparent",
           }}
         >

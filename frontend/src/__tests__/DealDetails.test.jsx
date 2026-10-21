@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -73,13 +73,14 @@ describe('<DealDetails />', () => {
     renderPage();
 
     expect(await screen.findByText('Lead')).toBeInTheDocument();
-    expect(screen.getByText('Contacted')).toBeInTheDocument();
-    expect(screen.getByText('Proposal')).toBeInTheDocument();
-    expect(screen.getByText('Won')).toBeInTheDocument();
-    expect(screen.getByText('Lost')).toBeInTheDocument();
+    const tracker = within(document.querySelector('.deal-reference-tracker'));
+    expect(tracker.getByText('Contacted')).toBeInTheDocument();
+    expect(tracker.getByText('Proposal')).toBeInTheDocument();
+    expect(tracker.getByText('Won')).toBeInTheDocument();
+    expect(tracker.getByText('Lost')).toBeInTheDocument();
     expect(fetchApiMock).toHaveBeenCalledWith('/api/pipeline_stages?pipelineId=7', { silent: true });
-    expect(screen.getByText('Proposal')).toHaveClass('current');
-    expect(screen.getByText('Lead')).not.toHaveClass('current');
+    expect(tracker.getByText('Proposal')).toHaveClass('current');
+    expect(tracker.getByText('Lead')).not.toHaveClass('current');
   });
 
   it('keeps the Add tag button available when a tag already exists', async () => {

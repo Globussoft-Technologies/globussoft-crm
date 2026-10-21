@@ -217,7 +217,7 @@ export default function ManagePlans() {
   const sectionTitle = { fontSize: '0.85rem', fontWeight: 700, color: C.text, margin: '20px 0 12px', paddingBottom: 6, borderBottom: `1px solid ${C.borderLight}` };
 
   return (
-    <div style={{ padding: '24px 28px', maxWidth: 1100, margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', fontFamily: "'Inter', sans-serif" }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <Link to="/settings" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', color: C.text3, textDecoration: 'none' }}>
           <ArrowLeft size={14} /> Back to Settings

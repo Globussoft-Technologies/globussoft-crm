@@ -275,7 +275,7 @@ const ENTITY_SECTIONS = [
   },
   {
     key: "deals",
-    label: "Pipeline",
+    label: "Deals and Pipeline",
     icon: Briefcase,
     color: "#10b981",
     bg: "rgba(16, 185, 129, 0.12)",

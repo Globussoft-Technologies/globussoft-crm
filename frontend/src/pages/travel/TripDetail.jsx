@@ -718,13 +718,15 @@ const APP_STATUS_STYLES = {
   waitlisted: { label: "WAITLISTED",     bg: "rgba(38,88,85,0.16)",   color: "#265855" },
 };
 
-function StatusPill() {
+function StatusPill({ hasFirstPayment }) {
+  const paid = Boolean(hasFirstPayment);
   return (
     <span style={{
-      background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
+      background: paid ? "rgba(47,122,77,0.14)" : "rgba(200,154,78,0.18)",
+      color: paid ? "#2F7A4D" : "#9A6F2E",
       padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
       letterSpacing: 0.4, whiteSpace: "nowrap",
-    }}>REGISTERED</span>
+    }}>{paid ? "REGISTERED" : "AWAITING FIRST PAYMENT"}</span>
   );
 }
 
@@ -816,6 +818,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
     const fd = new FormData();
     fd.append("file", bulkFile);
+    setBulkImportResult(null);
     setBulkImporting(true);
     try {
       const token = getAuthToken();
@@ -1081,8 +1084,13 @@ function ParticipantsTab({ trip, onChange, notify }) {
               Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
             </div>
             {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                First issue: row {bulkImportResult.errors[0].row || "?"} - {bulkImportResult.errors[0].reason || "Unknown error"}
+              <div style={{ fontSize: 12, color: "var(--danger-color, #b91c1c)" }}>
+                <strong>Rows with errors</strong>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                  {bulkImportResult.errors.map((item, index) => (
+                    <li key={`${item.row}-${index}`}>Row {item.row || "?"}: {item.reason || "Unknown error"}</li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
@@ -1163,7 +1171,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                <code style={{ color: "var(--text-primary)" }}>fullName</code>, <code>parentName</code>, <code>parentPhone</code>, and <code>parentEmail</code> are required in every row. Keep phone numbers as text in Excel. Use the Participants sheet for XLSX; the Instructions sheet explains each column.
+                Templates contain only the required columns: <code style={{ color: "var(--text-primary)" }}>fullName</code>, <code>parentName</code>, <code>parentPhone</code>, and <code>parentEmail</code>. Keep phone numbers as text in Excel.
               </div>
               <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
                 <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -1175,7 +1183,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {PARTICIPANT_IMPORT_SCHEMA.map((column) => (
+                    {PARTICIPANT_IMPORT_SCHEMA.filter((column) => column.required).map((column) => (
                       <tr key={column.key}>
                         <td style={importSchemaTd}><code>{column.key}</code></td>
                         <td style={{ ...importSchemaTd, color: column.required ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)", fontWeight: column.required ? 700 : 400 }}>
@@ -1188,7 +1196,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </table>
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                Matching uses <code style={{ color: "var(--text-primary)" }}>fullName + parentPhone + parentEmail</code>. Leave unused optional cells blank. Never include a full Aadhaar number; only the last four digits are accepted.
+                Matching uses <code style={{ color: "var(--text-primary)" }}>fullName + parentPhone + parentEmail</code>. Optional columns can still be added using their exact names. Never include a full Aadhaar number; only the last four digits are accepted.
               </div>
             </div>
 
@@ -1443,9 +1451,9 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
-                    <StatusPill />
+                    <StatusPill hasFirstPayment={p.hasFirstPayment} />
                   </div>
-                  {(p.parentName || p.parentPhone) && (
+                  {(p.parentName || p.parentPhone || p.parentEmail) && (
                     <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
                       {p.parentName && (
                         <span>
@@ -1453,6 +1461,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         </span>
                       )}
                       {p.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.parentPhone}</span>}
+                      {p.parentEmail && <span>{p.parentEmail}</span>}
                     </div>
                   )}
                   {p.reviewNotes && (

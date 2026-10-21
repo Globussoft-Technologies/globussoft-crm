@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { registerGlobalNotify } from './api';
 
 /**
@@ -264,7 +265,7 @@ function ModalSlot({ modal, close }) {
   const cancelValue = modal.kind === 'confirm' ? (modal.cancelValue ?? false) : null;
   const confirmValue = modal.kind === 'confirm' ? (modal.confirmValue ?? true) : value;
 
-  return (
+  return createPortal((
     <div
       role="dialog"
       aria-modal="true"
@@ -272,7 +273,8 @@ function ModalSlot({ modal, close }) {
       data-notify-modal={modal.kind}
       onClick={() => close(modal.dismissValue ?? (modal.dismissible ? false : cancelValue))}
       style={{
-        position: 'fixed', inset: 0, zIndex: 10001,
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        width: '100vw', height: '100vh', minHeight: '100dvh', zIndex: 10001,
         boxSizing: 'border-box', maxWidth: 'none', maxHeight: 'none',
         background: 'rgba(0,0,0,0.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -377,5 +379,5 @@ function ModalSlot({ modal, close }) {
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }

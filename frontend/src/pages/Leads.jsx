@@ -12,6 +12,8 @@ import {
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
+import IntlTelInput from "@intl-tel-input/react";
+import "intl-tel-input/styles";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import ReturnToBanner from "../components/ReturnToBanner";
 import {
@@ -2792,6 +2794,48 @@ const Leads = () => {
     preferredPractitionerId: "",
     customFields: {},
   });
+  const [travelPhoneValid, setTravelPhoneValid] = useState(false);
+  const travelPhoneInputRef = useRef(null);
+  const createLeadModalRef = useRef(null);
+  const travelModalScrollBeforePickerRef = useRef(0);
+  const [travelCountryOpen, setTravelCountryOpen] = useState(false);
+  const handleTravelCountryOpen = useCallback(() => {
+    const modal = createLeadModalRef.current;
+    travelModalScrollBeforePickerRef.current = modal?.scrollTop ?? 0;
+    setTravelCountryOpen(true);
+  }, []);
+  const handleTravelCountryClose = useCallback(() => {
+    setTravelCountryOpen(false);
+    window.requestAnimationFrame(() => {
+      const modal = createLeadModalRef.current;
+      if (modal) modal.scrollTop = travelModalScrollBeforePickerRef.current;
+    });
+  }, []);
+  useLayoutEffect(() => {
+    if (!travelCountryOpen) return;
+    const modal = createLeadModalRef.current;
+    const input = travelPhoneInputRef.current?.getInput();
+    const selector = input?.closest(".iti")?.querySelector(".iti__country-selector");
+    const phoneField = input?.closest(".create-lead-travel-phone");
+    if (!modal || !selector || !phoneField) return;
+
+    // The library positions its menu absolutely. Reserve its measured height
+    // in the form so the source field and actions follow directly beneath it.
+    const reserveMenuSpace = () => {
+      const menuHeight = selector.getBoundingClientRect().height;
+      // The form already has a 14px row gap; subtract it so this reservation
+      // leaves only a small visual gap after the menu.
+      if (menuHeight > 0) phoneField.style.marginBottom = `${Math.max(0, menuHeight - 6)}px`;
+    };
+    const frame = window.requestAnimationFrame(reserveMenuSpace);
+    const countryList = selector.querySelector(".iti__country-list");
+    if (countryList) countryList.scrollTop = 0;
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      phoneField.style.marginBottom = "";
+    };
+  }, [travelCountryOpen]);
   const [createFieldErrors, setCreateFieldErrors] = useState({
     name: "",
     phone: "",
@@ -4199,18 +4243,20 @@ const Leads = () => {
   const openCreate = () => {
     genericPhoneCountryUserChangedRef.current = false;
     genericPhoneCountryDetectionRunRef.current = false;
+    setTravelCountryOpen(false);
     setCreateFieldErrors({ name: "", phone: "" });
     setCreating(true);
   };
   const closeCreate = () => {
     setCreating(false);
+    setTravelCountryOpen(false);
     setLeadDuplicate(null);
     genericPhoneCountryDetectionRunRef.current = false;
     setCreateFieldErrors({ name: "", phone: "" });
   };
 
   const createSeparateProductLead = async () => {
-    const phoneOut = isWellness
+    const phoneOut = isWellness || isTravel
       ? String(newLead.phone || "").trim()
       : newLead.phone
         ? `${newLead.countryCode} ${newLead.phone}`
@@ -4382,6 +4428,15 @@ const Leads = () => {
         return;
       }
       phone = phoneClean;
+    } else if (isTravel && phone) {
+      const phoneInstance = travelPhoneInputRef.current?.getInstance();
+      const phoneType = phoneInstance?.getNumberType();
+      const isMobileType =
+        phoneType === "MOBILE" || phoneType === "FIXED_LINE_OR_MOBILE";
+      if (!travelPhoneValid || !phoneInstance?.isValidNumber() || !isMobileType) {
+        notify.error("Enter a valid mobile number");
+        return;
+      }
     }
 
     // Generic CRM uses targeted feedback because this form disables native
@@ -4414,7 +4469,7 @@ const Leads = () => {
       // Generic CRM: prepend the picker's country code (the input field
       // is the local-part). Wellness: phone is already canonicalised by
       // the +91-optional regex above  store as-is.
-      const phoneOut = isWellness
+      const phoneOut = isWellness || isTravel
         ? phone
         : newLead.phone
           ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
@@ -4435,7 +4490,7 @@ const Leads = () => {
         email: "",
         company: "",
         title: "",
-        countryCode: "+1",
+        countryCode: isTravel ? "+91" : "+1",
         phone: "",
         source: "Organic",
         status: "Lead",
@@ -12794,7 +12849,8 @@ const Leads = () => {
           aria-label="Create Lead"
         >
           <div
-            className={`card${isGeneric ? " create-lead-modal--generic" : ""}`}
+            ref={createLeadModalRef}
+            className={`card${isGeneric ? " create-lead-modal--generic" : ""}${isTravel ? " create-lead-modal--travel" : ""}`}
             style={{
               background: "var(--bg-color)",
               color: "var(--text-primary)",
@@ -12837,7 +12893,7 @@ const Leads = () => {
                   HTML strip, email shape). Native HTML5 validation would block
                   submit without giving us a chance to surface the targeted toasts. */}
             <form
-              className={isGeneric ? "create-lead-form--generic" : undefined}
+              className={isGeneric ? "create-lead-form--generic" : isTravel ? "create-lead-form--travel" : undefined}
               onSubmit={handleCreateLead}
               noValidate
               style={{
@@ -12849,7 +12905,7 @@ const Leads = () => {
               <div>
                 <input
                   type="text"
-                  placeholder="Full Name"
+                  placeholder={isTravel ? "Full Name *" : "Full Name"}
                   required
                   maxLength={191}
                   className="input-field"
@@ -12878,7 +12934,7 @@ const Leads = () => {
               </div>
               <input
                 type="email"
-                placeholder="Email Address"
+                placeholder={isTravel ? "Email Address *" : "Email Address"}
                 required={!isWellness}
                 maxLength={191}
                 className="input-field"
@@ -12909,6 +12965,34 @@ const Leads = () => {
               )}
               {/* Phone field — required for wellness, optional for generic and travel. */}
               <div>
+                {isTravel ? (
+                  <div className="create-lead-travel-phone">
+                    <IntlTelInput
+                      ref={travelPhoneInputRef}
+                      value={newLead.phone}
+                      initialCountry="in"
+                      countrySearch
+                      separateDialCode
+                      countrySelectorMode="DROPDOWN"
+                      onOpenCountrySelector={handleTravelCountryOpen}
+                      onCloseCountrySelector={handleTravelCountryClose}
+                      uiTranslations={{
+                        searchPlaceholder: "Search country or calling code",
+                      }}
+                      formatAsYouType
+                      strictMode
+                      loadUtils={() => import("intl-tel-input/utils")}
+                      inputProps={{
+                        className: "input-field travel-lead-phone-input",
+                        placeholder: "Mobile number (optional)",
+                        autoComplete: "tel-national",
+                        "aria-label": "Mobile number (optional)",
+                      }}
+                      onChangeNumber={(value) => handleChange("phone", value)}
+                      onChangeValidity={setTravelPhoneValid}
+                    />
+                  </div>
+                ) : (
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   {isGeneric ? (
                     <>
@@ -12990,6 +13074,7 @@ const Leads = () => {
                     style={{ flex: 1 }}
                   />
                 </div>
+                )}
                 {createFieldErrors.phone && (
                   <div
                     id="create-lead-phone-error"

@@ -1110,9 +1110,9 @@ export default function Inbox() {
       className={isGeneric ? "inbox-page-shell--generic" : undefined}
       style={{
         width: "100%",
-        maxWidth: 1480,
-        margin: "0 auto",
-        padding: "2rem",
+        maxWidth: isGeneric ? "100%" : 1480,
+        margin: isGeneric ? 0 : "0 auto",
+        padding: isGeneric ? 0 : "2rem",
         boxSizing: "border-box",
         overflowX: "hidden",
         animation: "fadeIn 0.5s ease-out",

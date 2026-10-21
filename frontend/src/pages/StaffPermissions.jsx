@@ -78,7 +78,7 @@ export default function StaffPermissions() {
   const grouped = groupByModule(permissions);
 
   return (
-    <div style={{ padding: '1.5rem', maxWidth: 960 }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
       <button
         type="button"
         onClick={() => navigate('/staff')}

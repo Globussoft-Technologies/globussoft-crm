@@ -34,7 +34,7 @@ function parseSpreadsheetBuffer(buffer, file) {
     throw new Error("parseSpreadsheetBuffer: buffer is required");
   }
   return isXlsxUpload(file)
-    ? parseXlsxBuffer(buffer)
+    ? parseXlsxBuffer(buffer, { rawColumns: ["parentPhone"] })
     : parseCsv(buffer.toString("utf8"));
 }
 
@@ -42,14 +42,14 @@ function buildParticipantImportTemplate(format) {
   if (format === "xlsx") {
     const XLSX = require("xlsx");
     const workbook = XLSX.utils.book_new();
-    const sheet = XLSX.utils.aoa_to_sheet([PARTICIPANT_IMPORT_HEADERS]);
-    sheet["!cols"] = PARTICIPANT_IMPORT_HEADERS.map((header) => ({ wch: Math.max(18, header.length + 2) }));
+    const sheet = XLSX.utils.aoa_to_sheet([PARTICIPANT_REQUIRED_HEADERS]);
+    sheet["!cols"] = PARTICIPANT_REQUIRED_HEADERS.map((header) => ({ wch: Math.max(18, header.length + 2) }));
     XLSX.utils.book_append_sheet(workbook, sheet, "Participants");
     const guide = XLSX.utils.aoa_to_sheet([
       ["Column", "Required", "Format"],
       ["fullName", "Yes", "Participant's full name"],
       ["parentName", "Yes", "Parent or guardian's full name"],
-      ["parentPhone", "Yes", "10-digit Indian mobile or E.164 number; format cells as text"],
+      ["parentPhone", "Yes", "10-digit Indian mobile or E.164 number; Excel numeric values are read without scientific-notation rounding"],
       ["parentEmail", "Yes", "Valid parent or guardian email address"],
       ["applicationStatus", "No", "pending, approved, rejected, or waitlisted"],
       ["passportNumber", "No", "International trips only"],
@@ -64,7 +64,7 @@ function buildParticipantImportTemplate(format) {
   }
   const { serializeRows } = require("./csvHelpers");
   return serializeRows(
-    PARTICIPANT_IMPORT_HEADERS.map((header) => ({ key: header, header })),
+    PARTICIPANT_REQUIRED_HEADERS.map((header) => ({ key: header, header })),
     [],
   );
 }

@@ -1241,6 +1241,15 @@ router.get(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      const firstInstalmentPayments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: trip.id, instalmentIndex: 0 },
+        select: { participantId: true, paidAmount: true },
+      });
+      const participantsWithFirstPayment = new Set(
+        firstInstalmentPayments
+          .filter((payment) => Number(payment.paidAmount) > 0)
+          .map((payment) => Number(payment.participantId)),
+      );
       const pendingParentRows = await prisma.pendingTripRegistration.findMany({
         where: { tenantId: req.travelTenant.id, tripId: trip.id },
         select: { parentEmail: true },
@@ -1257,6 +1266,7 @@ router.get(
       );
       trip.participants = (trip.participants || []).map((participant) => ({
         ...participant,
+        hasFirstPayment: participantsWithFirstPayment.has(Number(participant.id)),
         parentDocuments: (parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [])
           .map(projectStaffParentDocument),
         consentDocument: projectStaffConsentDocument(
@@ -2431,6 +2441,7 @@ router.post(
 
       const seen = new Map();
       const errors = [];
+      const importedRows = [];
       let inserted = 0;
       let updated = 0;
       let skipped = 0;
@@ -2489,22 +2500,25 @@ router.post(
             data,
           });
           updated += 1;
+          importedRows.push({ row: rowNumber, fullName: parsedRow.data.fullName, action: "updated" });
         } else {
           await prisma.tripParticipant.create({
             data: {
-              tenantId: req.travelTenant.id,
               tripId: trip.id,
               ...parsedRow.data,
             },
           });
           inserted += 1;
+          importedRows.push({ row: rowNumber, fullName: parsedRow.data.fullName, action: "imported" });
         }
+
       }
 
       res.status(200).json({
         inserted,
         updated,
         skipped,
+        importedRows,
         errors,
         total: rows.length,
       });

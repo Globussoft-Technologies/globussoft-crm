@@ -106,7 +106,7 @@ export default function AiSubscription() {
   const hasByok = Boolean(status?.byokConfigured);
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(1rem, 3vw, 2rem)" }}>
+    <div style={{ width: "100%", minWidth: 0, boxSizing: "border-box" }}>
       <button
         type="button"
         onClick={() => navigate(-1)}

@@ -43,7 +43,7 @@ export default function MyPermissions() {
   const grouped = groupByModule(permissions);
 
   return (
-    <div style={{ padding: '1.5rem', maxWidth: 960 }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
       <h1 style={{ marginBottom: '0.25rem' }}>My permissions</h1>
       <p
         style={{

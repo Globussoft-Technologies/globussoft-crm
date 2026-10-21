@@ -3343,6 +3343,12 @@ export default function Invoices() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .invoice-ledger-card:hover {
+          transform: none;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+          border-color: var(--border-color);
+        }
+        .invoice-ledger-card::before { display: none; }
         .invoices-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
         .invoices-grid > .card { align-self: start; }
         .invoice-create-form-scroll {

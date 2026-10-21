@@ -1,5 +1,5 @@
 const {
-  PARTICIPANT_IMPORT_HEADERS,
+  PARTICIPANT_REQUIRED_HEADERS,
   buildParticipantImportTemplate,
   missingParticipantImportHeaders,
   parseSpreadsheetBuffer,
@@ -15,9 +15,26 @@ describe("TMC participant import template", () => {
       file,
     );
 
-    expect(parsed.headers).toEqual(PARTICIPANT_IMPORT_HEADERS);
+    expect(parsed.headers).toEqual(PARTICIPANT_REQUIRED_HEADERS);
+    expect(parsed.headers).toEqual(["fullName", "parentName", "parentPhone", "parentEmail"]);
     expect(parsed.rows).toEqual([]);
     expect(missingParticipantImportHeaders(parsed.headers)).toEqual([]);
+  });
+
+  test("XLSX reads numeric phone values without formatted scientific-notation rounding", () => {
+    const XLSX = require("xlsx");
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([
+      PARTICIPANT_REQUIRED_HEADERS,
+      ["Anaya", "Riya", 9876543210, "riya@example.com"],
+    ]);
+    sheet.C2.z = "0.00E+00";
+    XLSX.utils.book_append_sheet(workbook, sheet, "Participants");
+    const parsed = parseSpreadsheetBuffer(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }), { originalname: "participants.xlsx" });
+    expect(parsed.rows[0].parentPhone).toBe("9876543210");
+    const validated = parseParticipantImportRow(parsed.rows[0], 2);
+    expect(validated.errors).toEqual([]);
+    expect(validated.data.parentPhone).toBe("+919876543210");
   });
 
   test("XLSX includes instructions after the importable Participants sheet", () => {

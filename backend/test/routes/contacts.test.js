@@ -422,6 +422,15 @@ describe('GET /api/contacts — list', () => {
     }) });
   });
 
+  test('rejects malformed or reversed contact date ranges before querying', async () => {
+    for (const query of ['from=invalid', 'from=2026-10-20&to=2026-10-01']) {
+      const res = await request(makeApp()).get(`/api/contacts?count=1&${query}`);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    }
+    expect(prisma.contact.count).not.toHaveBeenCalled();
+  });
+
   test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
     const res = await request(makeApp()).get(
       '/api/contacts?status=Customer&q=Acme&callifiedCampaignIds=41,42&count=1',

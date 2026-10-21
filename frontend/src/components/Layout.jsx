@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
@@ -18,7 +18,7 @@ import {
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
-import Softphone from "./Softphone";
+const Softphone = lazy(() => import("./Softphone"));
 import TravelKeyboardShortcuts, {
   TRAVEL_KEYBOARD_SHORTCUTS_EVENT,
 } from "./travel/TravelKeyboardShortcuts";
@@ -707,7 +707,7 @@ const Layout = () => {
           </small>
         </footer>
       </div>
-      {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
+      {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Suspense fallback={null}><Softphone /></Suspense>}
       {/* Wellness Admin Support Chatbot — the component itself also guards
           on tenant.vertical === 'wellness' + authenticated user; the layout
           check avoids mounting it at all for other verticals. */}

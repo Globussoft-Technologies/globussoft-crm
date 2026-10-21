@@ -1740,6 +1740,16 @@ router.get("/", async (req, res) => {
     // own userId — a rep cannot probe a colleague's book of business by URL.
     // Total Contacts KPI on /dashboard now reflects own-book size for sales reps.
     if (!canViewAllLeads(req)) where.assignedToId = req.user.userId;
+    if (req.query.from || req.query.to) {
+      const from = req.query.from ? new Date(req.query.from) : null;
+      const to = req.query.to ? new Date(req.query.to) : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime())) || (from && to && from > to)) {
+        return res.status(400).json({ error: "Invalid date range", code: "INVALID_DATE_RANGE" });
+      }
+      const dateOnlyTo = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to);
+      if (dateOnlyTo) to.setUTCDate(to.getUTCDate() + 1);
+      where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? (dateOnlyTo ? { lt: to } : { lte: to }) : {}) };
+    }
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === "1") {
       const total = await prisma.contact.count({ where });

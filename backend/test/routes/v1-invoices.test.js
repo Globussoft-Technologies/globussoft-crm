@@ -107,6 +107,7 @@ prisma.invoice.create = vi.fn();
 
 prisma.payment = prisma.payment || {};
 prisma.payment.create = vi.fn();
+prisma.payment.findMany = vi.fn();
 prisma.payment.aggregate = vi.fn();
 
 prisma.auditLog = prisma.auditLog || {};
@@ -148,6 +149,7 @@ beforeEach(() => {
   prisma.invoice.update.mockReset();
   prisma.invoice.create.mockReset();
   prisma.payment.create.mockReset();
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.aggregate.mockReset();
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
@@ -330,6 +332,21 @@ describe('POST /:id/payments — happy paths', () => {
     expect(createArg.gateway).toBe('card'); // method.toLowerCase()
     expect(createArg.status).toBe('SUCCESS');
     expect(createArg.gatewayId).toBeNull(); // reference omitted
+  });
+
+  test('payment currency defaults to the issued invoice currency', async () => {
+    prisma.invoice.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'UNPAID', amount: 200, currency: 'INR',
+    });
+    prisma.payment.create.mockResolvedValue({ id: 1004 });
+    prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 50 } });
+
+    const res = await request(makeApp())
+      .post('/api/v1/invoices/50/payments')
+      .send({ method: 'UPI', amount: 50 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.payment.create.mock.calls[0][0].data.currency).toBe('INR');
   });
 
   test('201 reference truncated to 128 chars when over limit', async () => {

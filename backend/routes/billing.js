@@ -762,6 +762,7 @@ router.get("/", verifyToken, async (req, res) => {
         id: true,
         invoiceNum: true,
         amount: true,
+        currency: true,
         status: true,
         dueDate: true,
         issuedDate: true,
@@ -790,6 +791,28 @@ router.get("/", verifyToken, async (req, res) => {
     }
     if (isWellnessRequest(req) && !isSummary) {
       invoices = await hydrateWellnessInvoiceRows(invoices, req.user.tenantId);
+    }
+    if (!isSummary && invoices.length > 0) {
+      const payments = (await prisma.payment.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          invoiceId: { in: invoices.map((invoice) => invoice.id) },
+          status: "SUCCESS",
+        },
+        select: { invoiceId: true, amount: true, currency: true },
+      })) || [];
+      const receivedByInvoice = new Map();
+      for (const payment of payments) {
+        const byCurrency = receivedByInvoice.get(payment.invoiceId) || new Map();
+        const currency = payment.currency || "USD";
+        byCurrency.set(currency, (byCurrency.get(currency) || 0) + Number(payment.amount || 0));
+        receivedByInvoice.set(payment.invoiceId, byCurrency);
+      }
+      invoices = invoices.map((invoice) => ({
+        ...invoice,
+        receivedPayments: [...(receivedByInvoice.get(invoice.id) || new Map())]
+          .map(([currency, amount]) => ({ currency, amount })),
+      }));
     }
     // #577: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(
@@ -1414,17 +1437,21 @@ router.post(
           ? subBrandRaw
           : null;
 
-      const invoiceTenant = isGenericRequest(req)
-        ? await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { defaultCurrency: true } })
-        : null;
+      const requestedCurrency = req.body.currency == null ? null : String(req.body.currency).trim().toUpperCase();
+      if (requestedCurrency && !/^[A-Z]{3}$/.test(requestedCurrency)) {
+        return res.status(400).json({ error: "currency must be a 3-letter code", code: "INVALID_CURRENCY" });
+      }
+      const tenantCurrency = requestedCurrency || (await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId }, select: { defaultCurrency: true },
+      }))?.defaultCurrency || "USD";
       const baseData = {
         invoiceNum: invNum,
         amount: Math.round((resolvedInvoiceAmount ?? amt) * 100) / 100, // #198: store to-the-paise; reject was above
+        currency: tenantCurrency,
         dueDate: due,
         contactId: resolvedContactId,
         dealId: dealId ? parseInt(dealId) : null,
         tenantId: req.user.tenantId,
-        ...(isGenericRequest(req) ? { currency: invoiceTenant?.defaultCurrency || "USD" } : {}),
         ...wellnessData,
       };
       let invoice;
@@ -1672,6 +1699,7 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
           invoiceId: invoice.id,
           contactId: invoice.contactId,
           amount: Number(invoice.amount),
+          currency: existing.currency || invoice.currency || "USD",
           gateway: paymentMethod || "manual",
           gatewayId: transactionRef || null,
           status: "SUCCESS",
@@ -2950,8 +2978,8 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
       );
     }
 
-    // #286/#330: render currency through formatMoney(tenant.defaultCurrency)
-    // so wellness/INR invoices show ₹ not $.
+    // The issued invoice's currency stays fixed even when the tenant changes
+    // its reporting currency later.
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
       select: {

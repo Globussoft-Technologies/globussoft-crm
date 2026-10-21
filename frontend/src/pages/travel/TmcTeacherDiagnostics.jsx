@@ -261,8 +261,7 @@ function reportFromResult(result) {
       : [],
     chosenInterests: result.chosenInterests || null,
     reportPdfUrl: result.reportPdfUrl || null,
-    reportReady:
-      result.reportReady === true || Boolean(result.reportPdfUrl),
+    reportReady: result.reportReady === true,
   };
 }
 
@@ -559,7 +558,7 @@ export default function TmcTeacherDiagnostics({
       setLatest((current) => ({
         ...current,
         chosenInterests: result,
-        reportReady: result.reportReady === true || Boolean(result.reportPdfUrl),
+        reportReady: result.reportReady === true,
         reportPdfUrl: result.reportPdfUrl || current?.reportPdfUrl || null,
       }));
     } catch (err) {
@@ -750,7 +749,7 @@ export default function TmcTeacherDiagnostics({
                         rel="noreferrer"
                         style={styles.textLink}
                       >
-                        PDF
+                        Download PDF
                       </a>
                     )}
                   </div>
@@ -1110,9 +1109,7 @@ function NativeDiagnosticResult({
           <Award size={20} color="var(--tmc-primary)" />
           <div>
             <strong id="teacher-diagnostic-result">
-              {interestsComplete
-                ? "Your readiness report is ready"
-                : "Your trip recommendations are ready"}
+              Your readiness report is ready
             </strong>
             {interestsComplete && <div style={styles.muted}>
               {latest.classificationLabel} · {formatLabel(latest.engineState)}
@@ -1122,7 +1119,7 @@ function NativeDiagnosticResult({
         <p style={styles.muted}>
           {interestsComplete
             ? "Your selected trips have been saved in this teacher portal."
-            : "Choose the trip options you want to discuss with the travel team, then submit your choices to receive the readiness report."}
+            : "Your report is ready to download. Choose and submit any trips you want to discuss with the travel team."}
         </p>
       </section>
       {recommendations.length > 0 ? (
@@ -1235,19 +1232,11 @@ function NativeDiagnosticResult({
       )}
       <section style={styles.downloadCard}>
         <div>
-          <strong>
-            {interestsComplete
-              ? "Diagnostic complete"
-              : "Choose trips to receive your report"}
-          </strong>
-          <p style={styles.muted}>
-            {interestsComplete
-              ? "Download the PDF report for your school records."
-              : "Your readiness report will be available after you submit your trip choices."}
-          </p>
+          <strong>Readiness report</strong>
+          <p style={styles.muted}>Download the PDF report for your school records.</p>
         </div>
         <div style={styles.inlineActions}>
-          {interestsComplete && latest.reportPdfUrl && (
+          {latest.reportPdfUrl && (
             <a
               href={latest.reportPdfUrl}
               target="_blank"

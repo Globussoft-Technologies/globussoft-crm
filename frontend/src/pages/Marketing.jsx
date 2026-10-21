@@ -108,7 +108,7 @@ function formatWindow(metadata) {
   return `${timezone} (${start}:00–${end}:00)`;
 }
 
-function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDelete, entityLabel = 'campaign' }) {
+function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDelete, selected, onSelect, selectionMode, selectionDisabled, entityLabel = 'campaign' }) {
   const metadata = parseCampaignMetadata(campaign);
   const steps = Array.isArray(metadata.steps) ? metadata.steps : [];
   const statusLabel = campaign.status === 'Active' ? 'Running' : campaign.status || 'Draft';
@@ -119,10 +119,13 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
   return (
     <div
       className="card campaign-card"
+      data-selected={selectionMode && selected ? 'true' : undefined}
       style={{
         padding: '1.25rem 1.35rem',
-        border: '1px solid rgba(79, 93, 255, 0.75)',
-        boxShadow: '0 8px 24px rgba(40, 52, 120, 0.12)',
+        border: selectionMode
+          ? (selected ? '2px solid var(--primary-color, var(--accent-color))' : '1px solid var(--border-color)')
+          : '1px solid rgba(79, 93, 255, 0.75)',
+        boxShadow: selectionMode && !selected ? 'none' : '0 8px 24px rgba(40, 52, 120, 0.12)',
         display: 'flex',
         flexDirection: 'column',
         gap: '0.85rem',
@@ -138,6 +141,12 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
           {description && <p style={{ margin: '0.4rem 0 0', color: 'var(--text-secondary)', fontSize: '0.75rem', lineHeight: 1.45 }}>{description}</p>}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.45rem', flexShrink: 0 }}>
+          {selectionMode && campaign.status === 'Draft' && campaign.channel === 'EMAIL' && (
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '7px', background: selected ? 'var(--subtle-bg-3)' : 'var(--surface-color, #fff)', cursor: selectionDisabled ? 'default' : 'pointer', fontSize: '0.72rem', fontWeight: 600 }}>
+              <input type="checkbox" checked={selected} disabled={selectionDisabled} onChange={onSelect} aria-label={`Select Draft sequence ${campaign.name}`} style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--primary-color, var(--accent-color))' }} />
+              Select
+            </label>
+          )}
           <span style={{ fontSize: '0.7rem', padding: '0.25rem 0.6rem', color: statusLabel === 'Running' ? '#047857' : 'var(--text-primary)', background: statusLabel === 'Running' ? 'rgba(16, 185, 129, 0.12)' : 'var(--subtle-bg-3)', border: statusLabel === 'Running' ? '1px solid rgba(16, 185, 129, 0.35)' : 'none', borderRadius: '6px' }}>
             {statusLabel}
           </span>
@@ -151,7 +160,12 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
         <span style={{ color: 'var(--text-secondary)' }}>Window:</span><strong style={{ textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatWindow(metadata)}</strong>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', paddingTop: '0.15rem', marginTop: 'auto', minHeight: '36px' }}>
+      {selectionMode && campaign.status === 'Draft' && campaign.channel === 'EMAIL' && (
+        <div style={{ marginTop: 'auto', fontSize: '0.74rem', fontWeight: selected ? 600 : 400, color: selected ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)' }}>
+          {selected ? 'Selected for deletion' : 'Select to include in bulk delete'}
+        </div>
+      )}
+      {!selectionMode && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', paddingTop: '0.15rem', marginTop: 'auto', minHeight: '36px' }}>
         {campaign.status === 'Active' ? (
           <span style={{ fontSize: '0.7rem', color: 'var(--primary-color, var(--accent-color))', background: 'rgba(79, 93, 255, 0.08)', borderRadius: '6px', padding: '0.35rem 0.55rem' }}>
             Active Selection
@@ -171,7 +185,7 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
           <Edit3 size={13} /> Edit {entityLabel[0].toUpperCase() + entityLabel.slice(1)}
           </button>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -225,6 +239,11 @@ export default function Marketing() {
   useEffect(() => () => { campaignRequest.current += 1; }, []);
   const [campaignPage, setCampaignPage] = useState(1);
   const [campaignPagination, setCampaignPagination] = useState({ page: 1, pageSize: 8, total: 0, totalPages: 1 });
+  const [selectedDraftIds, setSelectedDraftIds] = useState(() => new Set());
+  const [allDraftsSelected, setAllDraftsSelected] = useState(false);
+  const [selectingDrafts, setSelectingDrafts] = useState(false);
+  const [deletingDrafts, setDeletingDrafts] = useState(false);
+  const draftSelectionVersion = useRef(0);
   const [showCreateCampaign, setShowCreateCampaign] = useState(false);
   const [newCampaignName, setNewCampaignName] = useState('');
   const [editingCampaign, setEditingCampaign] = useState(null); // { id, name, subject, body, ... } open in detail modal
@@ -243,6 +262,20 @@ export default function Marketing() {
       ? visibleCampaigns
       : visibleCampaigns.filter(c => (activeTab === 'sms' ? c.channel === 'SMS' : c.channel === 'WHATSAPP')))
     : visibleCampaigns;
+  const pageDraftIds = isGeneric && activeTab === 'campaigns'
+    ? displayedCampaigns.filter(c => c.status === 'Draft' && c.channel === 'EMAIL').map(c => c.id)
+    : [];
+  const pageDraftsSelected = pageDraftIds.length > 0 && pageDraftIds.every(id => selectedDraftIds.has(id));
+  const clearDraftSelection = () => { draftSelectionVersion.current += 1; setSelectedDraftIds(new Set()); setAllDraftsSelected(false); };
+  const togglePageDrafts = () => {
+    setAllDraftsSelected(false);
+    setSelectedDraftIds(previous => {
+      const next = allDraftsSelected ? new Set(pageDraftIds) : new Set(previous);
+      if (pageDraftsSelected || allDraftsSelected) pageDraftIds.forEach(id => next.delete(id));
+      else pageDraftIds.forEach(id => next.add(id));
+      return next;
+    });
+  };
 
   // ───── SMS Blast Composer State (#502) ─────
   const [smsTo, setSmsTo] = useState('');
@@ -462,10 +495,55 @@ export default function Marketing() {
     try {
       await fetchApi(`/api/marketing/campaigns/${id}`, { method: 'DELETE' });
       notify.success('Campaign deleted');
+      setSelectedDraftIds(previous => { const next = new Set(previous); next.delete(id); return next; });
       setEditingCampaign(null);
       loadCampaigns();
     } catch {
       notify.error('Failed to delete campaign');
+    }
+  };
+
+  const deleteSelectedDrafts = async () => {
+    if (deletingDrafts || (!allDraftsSelected && selectedDraftIds.size === 0)) return;
+    const selectionVersion = draftSelectionVersion.current;
+    setDeletingDrafts(true);
+    try {
+      const dateFilter = campaignRangeStart && campaignRangeEnd
+        ? { createdFrom: campaignRangeStart.toISOString(), createdTo: campaignRangeEnd.toISOString() }
+        : {};
+      let count = selectedDraftIds.size;
+      if (allDraftsSelected) {
+        const dateQuery = Object.entries(dateFilter).map(([key, value]) => `&${key}=${encodeURIComponent(value)}`).join('');
+        const data = await fetchApi(`/api/marketing/campaigns?paginate=1&page=1&limit=1&campaignType=EMAIL&status=Draft${dateQuery}`);
+        count = data?.pagination?.total || 0;
+      }
+      if (selectionVersion !== draftSelectionVersion.current) return;
+      if (count === 0) {
+        clearDraftSelection();
+        setSelectingDrafts(false);
+        loadCampaigns();
+        return;
+      }
+      const ok = await notify.confirm({
+        title: `Delete ${count} Draft sequence${count === 1 ? '' : 's'}?`,
+        message: 'This permanently removes the selected Draft email sequences. Running, scheduled, and completed sequences are excluded.',
+        destructive: true,
+        confirmText: `Delete ${count}`,
+      });
+      if (!ok || selectionVersion !== draftSelectionVersion.current) return;
+      const result = await fetchApi('/api/marketing/campaigns/bulk', {
+        method: 'DELETE',
+        body: JSON.stringify(allDraftsSelected ? { allDrafts: true, ...dateFilter } : { ids: [...selectedDraftIds] }),
+      });
+      notify.success(`${result.deleted} Draft sequence${result.deleted === 1 ? '' : 's'} deleted`);
+      clearDraftSelection();
+      setSelectingDrafts(false);
+      if (campaignPage !== 1) setCampaignPage(1);
+      else loadCampaigns();
+    } catch (error) {
+      notify.error(error?.body?.error || 'Failed to delete Draft sequences');
+    } finally {
+      setDeletingDrafts(false);
     }
   };
 
@@ -824,7 +902,7 @@ ${fields.map(f => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
             {isGeneric || campaigns.length > 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <DateRangeFilter value={campaignDateFilter} onChange={(value) => { setCampaignDateFilter(value); if (isGeneric) setCampaignPage(1); }} label="Filter by created date" />
+                <DateRangeFilter value={campaignDateFilter} onChange={(value) => { setCampaignDateFilter(value); if (isGeneric) { setCampaignPage(1); clearDraftSelection(); } }} label="Filter by created date" />
                     {displayedCampaigns.length !== campaigns.length && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                     {displayedCampaigns.length} of {campaigns.length}
@@ -832,10 +910,38 @@ ${fields.map(f => {
                 )}
               </div>
             ) : <span />}
-            <button className="btn-primary" onClick={startCreateCampaign} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Plus size={18} /> {isGeneric ? 'Create Sequence' : 'Create Campaign'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {isGeneric && activeTab === 'campaigns' && !selectingDrafts && (
+                <button type="button" className="btn-secondary" onClick={() => setSelectingDrafts(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <CheckCircle2 size={15} /> Select drafts
+                </button>
+              )}
+              <button className="btn-primary" onClick={startCreateCampaign} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={18} /> {isGeneric ? 'Create Sequence' : 'Create Campaign'}
+              </button>
+            </div>
           </div>
+
+          {isGeneric && activeTab === 'campaigns' && selectingDrafts && (
+            <div role="group" aria-label="Draft sequence selection" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.25rem', padding: '0.7rem 0.85rem', border: '1px solid var(--border-color)', borderRadius: '10px', background: 'var(--subtle-bg-2)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: '0.84rem' }}>{allDraftsSelected ? 'All Drafts selected' : `${selectedDraftIds.size} selected`}</strong>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>Draft email sequences only</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                <button type="button" className="btn-secondary" disabled={pageDraftIds.length === 0 || deletingDrafts} onClick={togglePageDrafts} aria-pressed={pageDraftsSelected && !allDraftsSelected} style={{ fontSize: '0.78rem' }}>
+                  {pageDraftsSelected && !allDraftsSelected ? 'Clear page' : 'Select page'}
+                </button>
+                <button type="button" className="btn-secondary" disabled={deletingDrafts} onClick={() => { if (allDraftsSelected) clearDraftSelection(); else { setSelectedDraftIds(new Set()); setAllDraftsSelected(true); } }} aria-pressed={allDraftsSelected} title={allDraftsSelected ? 'Clear the Draft selection across all pages' : 'Select every Draft email sequence across all pages in the current date filter'} style={{ fontSize: '0.78rem' }}>
+                  {allDraftsSelected ? 'Clear all Drafts' : 'Select all Drafts'}
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => { clearDraftSelection(); setSelectingDrafts(false); }} disabled={deletingDrafts} style={{ fontSize: '0.78rem' }}>Done</button>
+                <button type="button" onClick={deleteSelectedDrafts} disabled={deletingDrafts || (!allDraftsSelected && selectedDraftIds.size === 0)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.48rem 0.7rem', borderRadius: '7px', border: '1px solid #dc2626', background: '#dc2626', color: '#fff', cursor: deletingDrafts || (!allDraftsSelected && selectedDraftIds.size === 0) ? 'not-allowed' : 'pointer', opacity: deletingDrafts || (!allDraftsSelected && selectedDraftIds.size === 0) ? 0.5 : 1, fontSize: '0.78rem', fontWeight: 600 }}>
+                  <Trash2 size={14} /> {deletingDrafts ? 'Deleting…' : 'Delete selected'}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="marketing-campaign-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
             {displayedCampaigns.map(camp => isGeneric ? (
@@ -847,6 +953,18 @@ ${fields.map(f => {
                 onPlay={() => playCampaign(camp)}
                 onCopy={() => copyCampaign(camp)}
                 onDelete={() => deleteCampaign(camp.id)}
+                selected={camp.status === 'Draft' && camp.channel === 'EMAIL' && (allDraftsSelected || selectedDraftIds.has(camp.id))}
+                selectionMode={selectingDrafts && activeTab === 'campaigns'}
+                selectionDisabled={deletingDrafts}
+                onSelect={() => {
+                  setAllDraftsSelected(false);
+                  setSelectedDraftIds(previous => {
+                    const next = new Set(allDraftsSelected ? pageDraftIds : previous);
+                    if (next.has(camp.id)) next.delete(camp.id);
+                    else next.add(camp.id);
+                    return next;
+                  });
+                }}
                 entityLabel="sequence"
               />
             ) : (

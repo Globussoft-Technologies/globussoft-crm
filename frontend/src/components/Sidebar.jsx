@@ -154,6 +154,7 @@ import { getGenericAccessByPath, isTenantPageHidden } from "../utils/sidebarSear
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
 import { useEffectiveBrand } from "../hooks/useEffectiveBrand";
 import { getDomainBranding } from "../utils/domainBranding";
+import { pathWithDateRange, readDateRange } from "../utils/dateRangeNavigation";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -755,10 +756,14 @@ const Sidebar = ({
                         })()
                         : to;
     const activeTarget = to;
+    const sharedDatePages = ["/dashboard", "/pipeline", "/reports"];
+    const datedTo = sharedDatePages.includes(to) && sharedDatePages.includes(location.pathname)
+      ? pathWithDateRange(resolvedTo, readDateRange(new URLSearchParams(location.search)))
+      : resolvedTo;
     const isTravelDirectLink = isTravel && (activeTarget === "/travel" || activeTarget === "/settings");
     return (
       <NavLink
-        to={resolvedTo}
+        to={datedTo}
         data-tour-nav={activeTarget}
         end={end}
         className={({ isActive }) => {

@@ -159,6 +159,39 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
+describe('role key editing', () => {
+  it('suggests a key from the new role name until the key is edited', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'New role' }));
+    const name = screen.getByPlaceholderText('e.g. Receptionist');
+    const key = screen.getByTestId('create-role-key-input');
+    fireEvent.change(name, { target: { value: 'Travel Broker' } });
+    expect(key.value).toBe('TRAVEL_BROKER');
+    fireEvent.change(key, { target: { value: 'BROKER' } });
+    fireEvent.change(name, { target: { value: 'Senior Travel Broker' } });
+    expect(key.value).toBe('BROKER');
+  });
+
+  it('allows correcting the key of an unassigned custom role', async () => {
+    renderPage([{ ...ADMIN_ROLE, id: 44, key: 'BROKER', name: 'broker', isSystem: false, userCount: 0 }]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit broker' }));
+    const key = screen.getByDisplayValue('BROKER');
+    expect(key.disabled).toBe(false);
+    fireEvent.change(key, { target: { value: 'SENIOR_BROKER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/roles/44', expect.objectContaining({
+      method: 'PUT',
+      body: expect.stringContaining('"key":"SENIOR_BROKER"'),
+    })));
+  });
+
+  it('locks the key when users are assigned', async () => {
+    renderPage([{ ...ADMIN_ROLE, id: 44, key: 'BROKER', name: 'broker', isSystem: false, userCount: 1 }]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit broker' }));
+    expect(screen.getByDisplayValue('BROKER').disabled).toBe(true);
+  });
+});
+
 describe('permission review', () => {
   it('shows exact page impact, flags missing page grants, and filters changed permissions', async () => {
     const role = {

@@ -10,12 +10,28 @@ const adminOnly = [verifyToken, verifyRole(["ADMIN"])];
 // Default currency set used when a tenant has not yet initialized anything.
 const DEFAULTS = [
   { code: "USD", symbol: "$",  name: "US Dollar",        exchangeRate: 1.0,   isBase: true  },
-  { code: "INR", symbol: "₹",  name: "Indian Rupee",     exchangeRate: 83.0,  isBase: false },
-  { code: "EUR", symbol: "€",  name: "Euro",             exchangeRate: 0.92,  isBase: false },
-  { code: "GBP", symbol: "£",  name: "British Pound",    exchangeRate: 0.79,  isBase: false },
-  { code: "CAD", symbol: "C$", name: "Canadian Dollar",  exchangeRate: 1.36,  isBase: false },
-  { code: "AUD", symbol: "A$", name: "Australian Dollar",exchangeRate: 1.52,  isBase: false },
+  // ECB reference rates, 16 Oct 2026, normalized to USD=1.
+  { code: "INR", symbol: "₹",  name: "Indian Rupee",     exchangeRate: 94.96,  isBase: false },
+  { code: "EUR", symbol: "€",  name: "Euro",             exchangeRate: 0.8887, isBase: false },
+  { code: "GBP", symbol: "£",  name: "British Pound",    exchangeRate: 0.7503, isBase: false },
+  { code: "CAD", symbol: "C$", name: "Canadian Dollar",  exchangeRate: 1.4161, isBase: false },
+  { code: "AUD", symbol: "A$", name: "Australian Dollar",exchangeRate: 1.4371, isBase: false },
 ];
+
+// Preview and initialization follow the tenant's reporting currency when it
+// is part of the starter set. Keep the published cross-rates unchanged.
+async function defaultsForTenant(tenantId) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { defaultCurrency: true },
+  });
+  const base = DEFAULTS.find((currency) => currency.code === tenant?.defaultCurrency) || DEFAULTS[0];
+  return DEFAULTS.map((currency) => ({
+    ...currency,
+    exchangeRate: currency.exchangeRate / base.exchangeRate,
+    isBase: currency.code === base.code,
+  }));
+}
 
 // GET /api/currencies — list currencies for tenant (fall back to defaults if none)
 //
@@ -49,7 +65,7 @@ router.get("/", async (req, res) => {
     }
     const rows = await prisma.currency.findMany(findManyArgs);
     if (rows.length === 0) {
-      const defaults = DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
+      const defaults = (await defaultsForTenant(tenantId)).map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
       if (isSummary) {
         // Project DEFAULTS to the same slim keyset for shape parity.
         return res.json(
@@ -73,6 +89,45 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET /api/currencies/catalog — available currencies and published rates
+// relative to this tenant's base. Used to prefill the Add Currency form.
+router.get("/catalog", async (req, res) => {
+  try {
+    const rows = await prisma.currency.findMany({
+      where: { tenantId: req.user.tenantId, isBase: true },
+      select: { code: true },
+    });
+    const baseCode = rows[0]?.code || (await defaultsForTenant(req.user.tenantId)).find((currency) => currency.isBase).code;
+    const [detailsResponse, ratesResponse] = await Promise.all([
+      fetch("https://api.frankfurter.dev/v2/currencies", { signal: AbortSignal.timeout(8000) }),
+      fetch(`https://api.frankfurter.dev/v1/latest?base=${encodeURIComponent(baseCode)}`, { signal: AbortSignal.timeout(8000) }),
+    ]);
+    if (!detailsResponse.ok || !ratesResponse.ok) {
+      return res.status(502).json({ error: "Currency data is temporarily unavailable" });
+    }
+    const [details, latest] = await Promise.all([detailsResponse.json(), ratesResponse.json()]);
+    if (!Array.isArray(details) || !latest?.rates || typeof latest.rates !== "object") {
+      return res.status(502).json({ error: "Currency data is temporarily unavailable" });
+    }
+    const currencies = details
+      .map((currency) => ({
+        code: currency.iso_code,
+        symbol: currency.symbol,
+        name: currency.name,
+        exchangeRate: Number(latest.rates[currency.iso_code]),
+      }))
+      .filter((currency) => /^[A-Z]{3}$/.test(currency.code)
+        && typeof currency.name === "string" && currency.name.trim()
+        && typeof currency.symbol === "string" && currency.symbol.trim()
+        && Number.isFinite(currency.exchangeRate) && currency.exchangeRate > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ baseCode, asOf: latest.date, currencies });
+  } catch (err) {
+    console.error(err);
+    res.status(502).json({ error: "Currency data is temporarily unavailable" });
+  }
+});
+
 // POST /api/currencies — create a new currency for this tenant
 router.post("/", ...adminOnly, async (req, res) => {
   try {
@@ -83,9 +138,22 @@ router.post("/", ...adminOnly, async (req, res) => {
     }
     const rate = exchangeRate != null ? parseFloat(exchangeRate) : 1.0;
     const makeBase = !!isBase;
+    if (!Number.isFinite(rate) || rate <= 0) {
+      return res.status(400).json({ error: "exchangeRate must be greater than zero" });
+    }
 
     const created = await prisma.$transaction(async (tx) => {
       if (makeBase) {
+        const existingRows = await tx.currency.findMany({
+          where: { tenantId },
+          select: { id: true, exchangeRate: true },
+        }) || [];
+        for (const existing of existingRows) {
+          await tx.currency.update({
+            where: { id: existing.id },
+            data: { exchangeRate: Number(existing.exchangeRate) / rate },
+          });
+        }
         await tx.currency.updateMany({
           where: { tenantId, isBase: true },
           data: { isBase: false },
@@ -96,7 +164,7 @@ router.post("/", ...adminOnly, async (req, res) => {
           code: String(code).toUpperCase(),
           symbol,
           name,
-          exchangeRate: rate,
+          exchangeRate: makeBase ? 1 : rate,
           isBase: makeBase,
           tenantId,
         },
@@ -120,8 +188,9 @@ router.post("/seed", ...adminOnly, async (req, res) => {
     if (existing > 0) {
       return res.status(400).json({ error: "Currencies already initialized" });
     }
+    const defaults = await defaultsForTenant(tenantId);
     const created = await prisma.$transaction(
-      DEFAULTS.map((d) =>
+      defaults.map((d) =>
         prisma.currency.create({
           data: { ...d, tenantId },
         })
@@ -149,7 +218,9 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     if (code !== undefined) data.code = String(code).toUpperCase();
     if (symbol !== undefined) data.symbol = symbol;
     if (name !== undefined) data.name = name;
-    if (exchangeRate !== undefined) data.exchangeRate = parseFloat(exchangeRate);
+    if (exchangeRate !== undefined) {
+      data.exchangeRate = parseFloat(exchangeRate);
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       if (isBase === true) {
@@ -201,11 +272,22 @@ router.post("/:id/set-base", ...adminOnly, async (req, res) => {
     const existing = await prisma.currency.findFirst({ where: { id, tenantId } });
     if (!existing) return res.status(404).json({ error: "Currency not found" });
 
+    const allCurrencies = (await prisma.currency.findMany({ where: { tenantId }, select: { id: true, exchangeRate: true } })) || [];
+    const newBaseRate = Number(existing.exchangeRate);
+    if (!Number.isFinite(newBaseRate) || newBaseRate <= 0) {
+      return res.status(400).json({ error: "Base currency must have a positive exchange rate" });
+    }
     const updated = await prisma.$transaction(async (tx) => {
       await tx.currency.updateMany({
         where: { tenantId, isBase: true },
         data: { isBase: false },
       });
+      for (const currency of allCurrencies) {
+        await tx.currency.update({
+          where: { id: currency.id },
+          data: { exchangeRate: currency.id === id ? 1.0 : Number(currency.exchangeRate) / newBaseRate },
+        });
+      }
       return tx.currency.update({
         where: { id },
         data: { isBase: true, exchangeRate: 1.0 },
@@ -232,7 +314,7 @@ router.post("/convert", async (req, res) => {
 
     let currencies = await prisma.currency.findMany({ where: { tenantId } });
     if (currencies.length === 0) {
-      currencies = DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
+      currencies = (await defaultsForTenant(tenantId)).map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
     }
 
     const fromCur = currencies.find((c) => c.code === fromCode);
@@ -267,10 +349,16 @@ router.get("/pivot/deals", async (req, res) => {
     let currencies = await prisma.currency.findMany({ where: { tenantId } });
     let usingDefaults = false;
     if (currencies.length === 0) {
-      currencies = DEFAULTS.map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
+      currencies = (await defaultsForTenant(tenantId)).map((d, i) => ({ id: -(i + 1), tenantId, ...d }));
       usingDefaults = true;
     }
     const base = currencies.find((c) => c.isBase) || currencies[0];
+    let tenant = null;
+    try {
+      if (prisma.tenant?.findUnique) tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { defaultCurrency: true } });
+    } catch (_err) { tenant = null; }
+    const reportingCode = String(tenant?.defaultCurrency || base.code).toUpperCase();
+    const reporting = currencies.find((c) => c.code === reportingCode) || base;
     const rateByCode = Object.fromEntries(currencies.map((c) => [c.code, c.exchangeRate]));
 
     // "Open" = deals not in won or lost stage
@@ -284,6 +372,7 @@ router.get("/pivot/deals", async (req, res) => {
 
     const byCurrency = {};
     let totalInBase = 0;
+    let totalInReporting = 0;
     for (const d of deals) {
       const code = (d.currency || base.code).toUpperCase();
       const amt = d.amount || 0;
@@ -295,6 +384,7 @@ router.get("/pivot/deals", async (req, res) => {
       if (fromRate) {
         const inBase = amt / fromRate; // convert to base
         totalInBase += inBase * base.exchangeRate; // then scale (base.exchangeRate is 1, but keep explicit)
+        totalInReporting += inBase * reporting.exchangeRate;
       }
     }
 
@@ -302,6 +392,9 @@ router.get("/pivot/deals", async (req, res) => {
       baseCode: base.code,
       baseSymbol: base.symbol,
       totalInBase: Math.round(totalInBase * 100) / 100,
+      reportingCode: reporting.code,
+      reportingSymbol: reporting.symbol,
+      totalInReporting: Math.round(totalInReporting * 100) / 100,
       dealCount: deals.length,
       byCurrency,
       usingDefaults,

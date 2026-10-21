@@ -90,7 +90,7 @@ router.post("/:id/payments", verifyToken, async (req, res) => {
     const paidAt = new Date();
     const resolvedCurrency = (typeof currency === "string" && currency.trim())
       ? currency.trim().toUpperCase()
-      : "USD";
+      : invoice.currency || "USD";
     const resolvedGateway = (typeof gateway === "string" && gateway.trim())
       ? gateway.trim().toLowerCase()
       : method.trim().toLowerCase();

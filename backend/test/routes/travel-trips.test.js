@@ -129,9 +129,12 @@ prisma.tripPaymentPlan = {
   findUnique: vi.fn(),
 };
 prisma.tripInstalmentPayment = {
+  findFirst: vi.fn(),
   findMany: vi.fn(),
   createMany: vi.fn(),
 };
+prisma.travelInvoice = prisma.travelInvoice || {};
+prisma.travelInvoice.findFirst = vi.fn();
 prisma.roomingAssignment = {
   findMany: vi.fn(),
 };
@@ -238,7 +241,9 @@ beforeEach(() => {
   prisma.tripDocumentRequirement.delete.mockReset();
   prisma.tripPaymentPlan.findUnique.mockReset().mockResolvedValue(null);
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripInstalmentPayment.createMany.mockReset();
+  prisma.travelInvoice.findFirst.mockReset().mockResolvedValue(null);
   prisma.roomingAssignment.findMany.mockReset().mockResolvedValue([]);
   prisma.digilockerSession.findFirst.mockReset();
   prisma.digilockerSession.create.mockReset();
@@ -795,6 +800,29 @@ describe('PATCH /api/travel/trips/:id', () => {
 // -----------------------------------------------------------------------------
 
 describe('DELETE /api/travel/trips/:id', () => {
+  test.each([
+    ['paid invoice', 'invoice'],
+    ['partially paid instalment', 'instalment'],
+  ])('%s blocks deletion with a clear message', async (_label, source) => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 1382, tenantId: 1 });
+    if (source === 'invoice') prisma.travelInvoice.findFirst.mockResolvedValue({ id: 589 });
+    else prisma.tripInstalmentPayment.findFirst.mockResolvedValue({ id: 42 });
+
+    const res = await request(makeApp())
+      .delete('/api/travel/trips/1382')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: 'This trip cannot be deleted because a payment has been recorded for it.',
+      code: 'TRIP_HAS_PAYMENTS',
+    });
+    expect(prisma.travelInvoice.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 1, tripId: 1382 }),
+    }));
+    expect(prisma.tmcTrip.delete).not.toHaveBeenCalled();
+  });
+
   test('happy delete returns 200 + { deleted: true, id }', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, tenantId: 1 });
     prisma.tmcTrip.delete.mockResolvedValue({ id: 100 });
@@ -1004,7 +1032,7 @@ describe('Participants', () => {
     const csv = [
       'fullName,parentName,parentPhone,parentEmail,applicationStatus,consentCapturedAt,reviewNotes',
       'Anaya Sharma,Riya Sharma,9876543210,parent@example.com,approved,2026-05-01T00:00:00.000Z,Imported row',
-      'Ravi Mehta,,,,waitlisted,,',
+      'Ravi Mehta,Neha Mehta,9876543211,neha@example.com,waitlisted,,',
     ].join('\n');
 
     const res = await request(makeApp())
@@ -1069,13 +1097,22 @@ describe('Participants', () => {
       'passportExpiry',
       'aadhaarLast4',
       'medicalNotes',
-      'consentCapturedAt',
-      'passportExtractedAt',
-      'passportVerifiedAt',
-      'passportRejectedAt',
-      'passportDocId',
       'reviewNotes',
     ].join(','));
+  });
+
+  test('POST participant import explains missing required columns', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/participants/import')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from('fullName,parentPhone\nAnaya,9876543210\n'), 'participants.csv');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'MISSING_COLUMNS',
+      missingColumns: ['parentName', 'parentEmail'],
+    });
+    expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
   });
 
   test('GET participant import template returns an XLSX workbook', async () => {

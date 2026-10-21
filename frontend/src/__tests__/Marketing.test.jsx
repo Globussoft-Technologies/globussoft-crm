@@ -155,6 +155,52 @@ beforeEach(() => {
 });
 
 describe('<Marketing /> — Generic campaign workflow', () => {
+  it('selects Draft email sequences only and bulk deletes selected IDs', async () => {
+    wireFetch();
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === '/api/marketing/campaigns/bulk' && options.method === 'DELETE') return Promise.resolve({ deleted: 1 });
+      if (String(url).includes('paginate=1')) return Promise.resolve({ items: SAMPLE_CAMPAIGNS, pagination: { page: 1, totalPages: 1, total: 2 } });
+      return Promise.resolve([]);
+    });
+    renderMarketing(GENERIC_USER);
+    expect(await screen.findByRole('button', { name: 'Select drafts' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Select drafts' }));
+    const draft = await screen.findByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' });
+    expect(screen.queryByRole('button', { name: 'Delete sequence Q4 Holiday Promo' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Select Draft sequence Spring Newsletter/ })).not.toBeInTheDocument();
+    fireEvent.click(draft);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/marketing/campaigns/bulk', {
+      method: 'DELETE', body: JSON.stringify({ ids: [100] }),
+    }));
+  });
+
+  it('selects Draft email sequences across all pages', async () => {
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === '/api/marketing/campaigns/bulk' && options.method === 'DELETE') return Promise.resolve({ deleted: 20 });
+      if (String(url).includes('status=Draft')) return Promise.resolve({ items: [], pagination: { total: 20, totalPages: 3 } });
+      if (String(url).includes('paginate=1')) return Promise.resolve({ items: SAMPLE_CAMPAIGNS, pagination: { page: 1, total: 20, totalPages: 3 } });
+      return Promise.resolve([]);
+    });
+    renderMarketing(GENERIC_USER);
+    await screen.findByText('Q4 Holiday Promo');
+    fireEvent.click(screen.getByRole('button', { name: 'Select drafts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select all Drafts' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' })).toBeChecked();
+    expect(screen.getByText('Q4 Holiday Promo').closest('.campaign-card')).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByText('Spring Newsletter').closest('.campaign-card')).not.toHaveAttribute('data-selected');
+    expect(screen.queryByText('Only Draft email sequences can be selected')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all Drafts' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Delete selected' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select all Drafts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/marketing/campaigns/bulk', {
+      method: 'DELETE', body: JSON.stringify({ allDrafts: true }),
+    }));
+  });
+
   it('keeps the date filter available after empty results and reloads when cleared', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (String(url).includes('paginate=1')) {

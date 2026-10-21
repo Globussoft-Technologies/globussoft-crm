@@ -4,11 +4,28 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { readDateRange, setDateRangeParams, pathWithDateRange } from '../utils/dateRangeNavigation';
 
 import { PieChart as PieChartIcon, Upload, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
+const STAGE_COLORS = {
+  lead: '#3b82f6', 'new-lead': '#3b82f6', contacted: '#0891b2', negotiation: '#7c3aed',
+  proposal: '#f59e0b', 'proposal-sent': '#f59e0b', won: '#10b981', 'closed-won': '#10b981',
+  lost: '#ef4444', 'closed-lost': '#ef4444',
+};
+function chartColor(name, index) {
+  return STAGE_COLORS[String(name || '').toLowerCase().trim().replace(/\s+/g, '-')] || COLORS[index % COLORS.length];
+}
+function normalizeReportStage(name) {
+  const key = String(name || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+  if (key === 'proposal' || key === 'proposal-sent') return 'PROPOSAL-SENT';
+  if (key === 'won' || key === 'closed-won') return 'WON';
+  if (key === 'lost' || key === 'closed-lost') return 'LOST';
+  return name;
+}
+const REPORT_STAGE_ORDER = ['NEW-LEAD', 'LEAD', 'CONTACTED', 'NEGOTIATION', 'PROPOSAL-SENT', 'WON', 'LOST'];
 
 // #127 followup: respect tenant currency rather than hard-coding "$".
 const METRIC_OPTIONS = [
@@ -38,12 +55,16 @@ const DETAIL_TYPES = [
 
 export default function Reports() {
   const notify = useNotify();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { from: startDate, to: endDate } = readDateRange(searchParams);
+  const updateDate = (key, value) => setSearchParams(
+    setDateRangeParams(searchParams, { from: startDate, to: endDate, [key]: value }),
+    { replace: true },
+  );
   const [data, setData] = useState([]);
   const [metric, setMetric] = useState('revenue');
   const [groupBy, setGroupBy] = useState('stage');
   const [chartType, setChartType] = useState('bar');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('chart'); // chart | table
   const [detailType, setDetailType] = useState('deals');
@@ -90,7 +111,21 @@ export default function Reports() {
         // Dormant) — the chart silently lied about its data model.
         // Empty now stays empty; the empty-state placeholder below the
         // chart explains the situation to the user.
-        setData(Array.isArray(res) ? res : []);
+        const rows = Array.isArray(res) ? res : [];
+        if (groupBy === 'stage') {
+          const merged = new Map();
+          rows.forEach((row) => {
+            const stage = normalizeReportStage(row.name);
+            const current = merged.get(stage) || { ...row, name: stage, value: 0 };
+            current.value += Number(row.value || 0);
+            merged.set(stage, current);
+          });
+          setData([...merged.values()].sort((a, b) => {
+            const ai = REPORT_STAGE_ORDER.indexOf(String(a.name).toUpperCase());
+            const bi = REPORT_STAGE_ORDER.indexOf(String(b.name).toUpperCase());
+            return (ai < 0 ? REPORT_STAGE_ORDER.length : ai) - (bi < 0 ? REPORT_STAGE_ORDER.length : bi);
+          }));
+        } else setData(rows);
         setLoading(false);
       })
       .catch(err => {
@@ -227,7 +262,7 @@ export default function Reports() {
         }}
       >
         <Link
-          to="/dashboard"
+          to={pathWithDateRange('/dashboard', { from: startDate, to: endDate })}
           className="btn-secondary"
           style={{
             display: 'flex',
@@ -252,9 +287,9 @@ export default function Reports() {
           <div className="reports-page__date-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
             <div className="reports-page__date-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Calendar size={16} color="var(--text-secondary)" />
-              <input type="date" className="input-field" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+              <input type="date" className="input-field" value={startDate} onChange={e => updateDate('from', e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
               <span style={{ color: 'var(--text-secondary)' }}>to</span>
-              <input type="date" className="input-field" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+              <input type="date" className="input-field" value={endDate} onChange={e => updateDate('to', e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
             </div>
             {rangeInverted && (
               <span className="report-error-text" style={{ fontSize: '0.7rem', alignSelf: 'flex-start' }}>
@@ -364,7 +399,7 @@ export default function Reports() {
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
                         ))}
                       </Bar>
                     </BarChart>
@@ -372,7 +407,7 @@ export default function Reports() {
                     <PieChart>
                       <Pie data={data} innerRadius={80} outerRadius={140} paddingAngle={5} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                         {data.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
                         ))}
                       </Pie>
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />

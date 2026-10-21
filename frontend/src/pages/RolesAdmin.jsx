@@ -1370,6 +1370,7 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [errors, setErrors] = useState({});
+  const [keyEdited, setKeyEdited] = useState(false);
   const notify = useNotify();
 
   // Bug 6 — blur-time validation. The submit gate below still re-runs
@@ -1429,7 +1430,14 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
             type="text"
             className="input-field"
             value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            onChange={(e) => {
+              const name = e.target.value;
+              setForm((current) => ({
+                ...current,
+                name,
+                key: keyEdited ? current.key : name.trim().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase(),
+              }));
+            }}
             placeholder="e.g. Receptionist"
             disabled={isLoading}
             required
@@ -1444,7 +1452,10 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
             type="text"
             className="input-field"
             value={form.key}
-            onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })}
+            onChange={(e) => {
+              setKeyEdited(true);
+              setForm({ ...form, key: e.target.value.toUpperCase() });
+            }}
             onBlur={handleKeyBlur}
             placeholder="e.g. RECEPTIONIST"
             disabled={isLoading}
@@ -1546,6 +1557,7 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
 function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   const [form, setForm] = useState({
     name: role.name || '',
+    key: role.key || '',
     description: role.description || '',
     landingPath: role.landingPath || '',
     dataScope: role.dataScope || 'ALL',
@@ -1555,12 +1567,17 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   const [error, setError] = useState('');
   const [errors, setErrors] = useState({});
   const notify = useNotify();
+  const canEditKey = !role.isSystem && role.userCount === 0;
 
   const submit = async (ev) => {
     ev.preventDefault();
     setError('');
     const fieldErrors = {};
     if (!form.name.trim()) fieldErrors.name = 'Required';
+    if (canEditKey) {
+      const keyError = validateRoleKey(form.key);
+      if (keyError) fieldErrors.key = keyError;
+    }
     const landingPathErr = validateLandingPathClient(form.landingPath);
     if (landingPathErr) fieldErrors.landingPath = landingPathErr;
     setErrors(fieldErrors);
@@ -1572,6 +1589,7 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
         method: 'PUT',
         body: JSON.stringify({
           name: form.name.trim(),
+          ...(canEditKey ? { key: form.key.trim() } : {}),
           description: form.description.trim() || null,
           landingPath: form.landingPath.trim() || null,
           dataScope: form.dataScope,
@@ -1590,7 +1608,7 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   return (
     <ModalShell
       title={`Edit role: ${role.name}`}
-      subtitle="Key + system flag are immutable. Permissions are edited separately."
+      subtitle="System role identity is fixed. Permissions are edited separately."
       onClose={onClose}
       width={520}
     >
@@ -1605,14 +1623,15 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
             required
           />
         </Field>
-        <Field label="Key" help="Immutable — keys are part of the audit trail.">
+        <Field label="Key" error={errors.key} help={canEditKey ? `Editable until users are assigned. ${ROLE_KEY_DESCRIPTION}` : 'Locked for system roles and roles with assigned users.'}>
           <input
             type="text"
             className="input-field"
-            value={role.key}
-            disabled
-            readOnly
-            style={{ opacity: 0.7 }}
+            value={form.key}
+            onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })}
+            disabled={isLoading || !canEditKey}
+            readOnly={!canEditKey}
+            style={!canEditKey ? { opacity: 0.7 } : undefined}
           />
         </Field>
         <Field label="Description (optional)">

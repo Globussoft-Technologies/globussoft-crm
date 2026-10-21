@@ -209,6 +209,36 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(screen.queryByRole('menu', { name: 'Actions for Rishu Agarwal' })).not.toBeInTheDocument();
   });
 
+  it('opens the generic actions menu above a bottom row and below a top row', async () => {
+    const originalRect = Element.prototype.getBoundingClientRect;
+    const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this.getAttribute('role') === 'menu') return { width: 160, height: 220 };
+      if (this.dataset.testid === 'staff-action-more-2') {
+        return { top: window.innerHeight - 40, bottom: window.innerHeight - 16, left: 100 };
+      }
+      if (this.dataset.testid === 'staff-action-more-1') {
+        return { top: 20, bottom: 44, left: 100 };
+      }
+      return originalRect.call(this);
+    });
+
+    try {
+      renderStaff('ADMIN', {}, 'generic');
+      await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByTestId('staff-action-more-2'));
+      const bottomMenu = screen.getByRole('menu', { name: 'Actions for Dr. Harsh Kumar' });
+      expect(bottomMenu.style.top).toBe(`${window.innerHeight - 264}px`);
+      expect(screen.getByTestId('staff-action-delete-2')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('staff-action-more-1'));
+      const topMenu = screen.getByRole('menu', { name: 'Actions for Rishu Agarwal' });
+      expect(topMenu.style.top).toBe('48px');
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it('expands the visible slice and scrolls a highlighted row into view even near the bottom', async () => {
     const scrollSpy = vi.spyOn(window.Element.prototype, 'scrollIntoView').mockImplementation(() => {});
     const longStaffList = Array.from({ length: 20 }, (_, idx) => {

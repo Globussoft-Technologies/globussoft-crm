@@ -14,13 +14,9 @@ const PARTICIPANT_IMPORT_HEADERS = [
   "passportExpiry",
   "aadhaarLast4",
   "medicalNotes",
-  "consentCapturedAt",
-  "passportExtractedAt",
-  "passportVerifiedAt",
-  "passportRejectedAt",
-  "passportDocId",
   "reviewNotes",
 ];
+const PARTICIPANT_REQUIRED_HEADERS = ["fullName", "parentName", "parentPhone", "parentEmail"];
 
 function isXlsxUpload(file) {
   if (!file) return false;
@@ -44,13 +40,39 @@ function parseSpreadsheetBuffer(buffer, file) {
 
 function buildParticipantImportTemplate(format) {
   if (format === "xlsx") {
-    const { toXlsxBuffer } = require("./csvIO");
-    return toXlsxBuffer(PARTICIPANT_IMPORT_HEADERS, [], "Participants");
+    const XLSX = require("xlsx");
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([PARTICIPANT_IMPORT_HEADERS]);
+    sheet["!cols"] = PARTICIPANT_IMPORT_HEADERS.map((header) => ({ wch: Math.max(18, header.length + 2) }));
+    XLSX.utils.book_append_sheet(workbook, sheet, "Participants");
+    const guide = XLSX.utils.aoa_to_sheet([
+      ["Column", "Required", "Format"],
+      ["fullName", "Yes", "Participant's full name"],
+      ["parentName", "Yes", "Parent or guardian's full name"],
+      ["parentPhone", "Yes", "10-digit Indian mobile or E.164 number; format cells as text"],
+      ["parentEmail", "Yes", "Valid parent or guardian email address"],
+      ["applicationStatus", "No", "pending, approved, rejected, or waitlisted"],
+      ["passportNumber", "No", "International trips only"],
+      ["passportExpiry", "No", "YYYY-MM-DD, e.g. 2027-02-21"],
+      ["aadhaarLast4", "No", "Exactly 4 digits; never enter a full Aadhaar number"],
+      ["medicalNotes", "No", "Free text"],
+      ["reviewNotes", "No", "Free text"],
+    ]);
+    guide["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 68 }];
+    XLSX.utils.book_append_sheet(workbook, guide, "Instructions");
+    return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
   }
   const { serializeRows } = require("./csvHelpers");
   return serializeRows(
     PARTICIPANT_IMPORT_HEADERS.map((header) => ({ key: header, header })),
     [],
+  );
+}
+
+function missingParticipantImportHeaders(headers) {
+  const available = new Set((headers || []).map((header) => String(header).trim()));
+  return PARTICIPANT_REQUIRED_HEADERS.filter((header) =>
+    header === "fullName" ? !available.has("fullName") && !available.has("name") : !available.has(header),
   );
 }
 
@@ -90,6 +112,11 @@ function parseParticipantImportRow(raw, rowNumber) {
 
   const parentName = normalizeText(raw.parentName);
   const parentEmail = normalizeEmail(raw.parentEmail);
+  if (!parentName) errors.push({ rowNumber, reason: "parentName is required" });
+  if (!parentEmail) errors.push({ rowNumber, reason: "parentEmail is required" });
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parentEmail)) {
+    errors.push({ rowNumber, reason: "invalid parentEmail" });
+  }
 
   let parentPhone = normalizeText(raw.parentPhone);
   if (parentPhone) {
@@ -101,6 +128,7 @@ function parseParticipantImportRow(raw, rowNumber) {
     }
   } else {
     parentPhone = "";
+    errors.push({ rowNumber, reason: "parentPhone is required" });
   }
 
   let applicationStatus = normalizeApplicationStatus(raw.applicationStatus || raw.status);
@@ -165,6 +193,8 @@ function parseParticipantImportRow(raw, rowNumber) {
 
 module.exports = {
   PARTICIPANT_IMPORT_HEADERS,
+  PARTICIPANT_REQUIRED_HEADERS,
+  missingParticipantImportHeaders,
   isXlsxUpload,
   parseSpreadsheetBuffer,
   buildParticipantImportTemplate,

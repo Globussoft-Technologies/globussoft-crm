@@ -12,6 +12,7 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+const { seedDemoCurrencies } = require('../lib/seedDemoCurrencies');
 
 // S91 — POI catalog seeder wrapper (PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.5).
 // Fixture-mode by default so `prisma db seed` runs offline (no OPENTRIPMAP_API_KEY
@@ -65,11 +66,13 @@ async function main() {
       name: 'NovaCrest Technologies',
       slug: 'novacrest',
       plan: 'enterprise',
+      defaultCurrency: 'INR',
       ownerEmail: 'admin@globussoft.com',
       isActive: true,
     },
   });
   console.log('  Default Org tenant created (id=1).\n');
+  await seedDemoCurrencies(prisma, 1);
 
   // ══════════════════════════════════════════════════════════════
   // STEP 2: SUBSCRIPTION PLANS
@@ -495,8 +498,8 @@ async function main() {
   for (const inv of invoicesData) {
     await prisma.invoice.create({
       data: {
-        invoiceNum: inv.num, amount: inv.amount, status: inv.status, dueDate: inv.due,
-        contactId: contacts[inv.ci].id, dealId: deals[inv.di].id, currency: 'INR',
+        invoiceNum: inv.num, amount: inv.amount, currency: 'INR', status: inv.status, dueDate: inv.due,
+        contactId: contacts[inv.ci].id, dealId: deals[inv.di].id,
       },
     });
   }

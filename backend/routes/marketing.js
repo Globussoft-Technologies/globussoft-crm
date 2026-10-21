@@ -646,6 +646,44 @@ router.put("/campaigns/:id", verifyToken, async (req, res) => {
   }
 });
 
+// DELETE /campaigns/bulk — only Draft email sequences may be removed in bulk.
+// allDrafts applies to the current date filter and covers every page.
+router.delete("/campaigns/bulk", verifyToken, async (req, res) => {
+  try {
+    const { ids, allDrafts, createdFrom, createdTo } = req.body || {};
+    if (allDrafts !== true && (!Array.isArray(ids) || ids.length < 1 || ids.length > 500 || !ids.every(id => Number.isSafeInteger(id) && id > 0))) {
+      return res.status(400).json({ error: "Provide 1 to 500 valid campaign IDs." });
+    }
+    if (allDrafts === true && ids !== undefined) {
+      return res.status(400).json({ error: "Choose IDs or all Draft sequences, not both." });
+    }
+    if (allDrafts !== true && (createdFrom !== undefined || createdTo !== undefined)) {
+      return res.status(400).json({ error: "Date filters require allDrafts." });
+    }
+    const where = { tenantId: req.user.tenantId, channel: "EMAIL", status: "Draft" };
+    if (allDrafts === true) {
+      const from = createdFrom ? new Date(createdFrom) : null;
+      const to = createdTo ? new Date(createdTo) : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime())) || (from && to && from > to)) {
+        return res.status(400).json({ error: "Invalid created date range." });
+      }
+      if (from || to) where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) };
+    } else {
+      const uniqueIds = [...new Set(ids)];
+      const eligible = await prisma.campaign.findMany({ where: { ...where, id: { in: uniqueIds } }, select: { id: true } });
+      if (eligible.length !== uniqueIds.length) {
+        return res.status(409).json({ error: "Selection includes a sequence that is no longer a Draft email sequence. Refresh and try again." });
+      }
+      where.id = { in: uniqueIds };
+    }
+    const result = await prisma.campaign.deleteMany({ where });
+    res.json({ deleted: result.count });
+  } catch (err) {
+    console.error("[Marketing] Bulk delete campaigns error:", err.message);
+    res.status(500).json({ error: "Failed to delete Draft sequences." });
+  }
+});
+
 // DELETE /campaigns/:id
 router.delete("/campaigns/:id", verifyToken, async (req, res) => {
   try {

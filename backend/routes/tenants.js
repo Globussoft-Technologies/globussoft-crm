@@ -20,7 +20,7 @@ router.get("/current", verifyToken, async (req, res) => {
 // PUT /api/tenants/current — update tenant settings (ADMIN only)
 router.put("/current", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const { name, plan, ownerEmail, isActive, emailRetention } = req.body;
+    const { name, plan, ownerEmail, isActive, emailRetention, defaultCurrency } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (plan !== undefined) data.plan = plan;
@@ -29,6 +29,13 @@ router.put("/current", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     // #611: emailRetention boolean — controls whether OUTBOUND email sends
     // persist EmailMessage rows (Sent folder + audit trail) or fire-and-forget.
     if (emailRetention !== undefined) data.emailRetention = !!emailRetention;
+    if (defaultCurrency !== undefined) {
+      const normalizedCurrency = String(defaultCurrency).trim().toUpperCase();
+      if (!/^[A-Z]{3}$/.test(normalizedCurrency)) {
+        return res.status(400).json({ error: "Reporting currency must be a 3-letter currency code" });
+      }
+      data.defaultCurrency = normalizedCurrency;
+    }
 
     const tenant = await prisma.tenant.update({ where: { id: req.user.tenantId }, data });
     res.json(tenant);

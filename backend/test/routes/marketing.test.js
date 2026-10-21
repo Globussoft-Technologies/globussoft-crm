@@ -62,6 +62,13 @@ function makeFakePrisma() {
     deals: [],
     nextId: 1,
   };
+  const matchesCampaign = (campaign, where) =>
+    campaign.tenantId === where.tenantId &&
+    (!where.channel || campaign.channel === where.channel) &&
+    (!where.status || campaign.status === where.status) &&
+    (!where.id?.in || where.id.in.includes(campaign.id)) &&
+    (!where.createdAt?.gte || new Date(campaign.createdAt) >= where.createdAt.gte) &&
+    (!where.createdAt?.lte || new Date(campaign.createdAt) <= where.createdAt.lte);
 
   return {
     state,
@@ -72,14 +79,12 @@ function makeFakePrisma() {
           (c) => c.id === where.id && c.tenantId === where.tenantId,
         ) || null,
       ),
-      findMany: vi.fn(async ({ where }) =>
-        state.campaigns.filter((c) => {
-          if (where.tenantId !== c.tenantId) return false;
-          if (where.channel && c.channel !== where.channel) return false;
-          if (where.status && c.status !== where.status) return false;
-          return true;
-        }),
-      ),
+      findMany: vi.fn(async ({ where }) => state.campaigns.filter(c => matchesCampaign(c, where))),
+      deleteMany: vi.fn(async ({ where }) => {
+        const before = state.campaigns.length;
+        state.campaigns = state.campaigns.filter(c => !matchesCampaign(c, where));
+        return { count: before - state.campaigns.length };
+      }),
       create: vi.fn(async ({ data }) => {
         const row = { id: state.nextId++, status: 'Draft', sent: 0, createdAt: new Date(), ...data };
         state.campaigns.push(row);
@@ -478,6 +483,46 @@ describe('PUT /api/marketing/campaigns/:id — update', () => {
 // ─────────────────────────────────────────────────────────────────────────
 // 5 — DELETE /campaigns/:id: 204 No Content + tenant isolation
 // ─────────────────────────────────────────────────────────────────────────
+
+describe('DELETE /api/marketing/campaigns/bulk — Draft email sequences', () => {
+  const seed = () => fakePrisma.state.campaigns.push(
+    { id: 1, tenantId: 1, channel: 'EMAIL', status: 'Draft', createdAt: '2026-01-10' },
+    { id: 2, tenantId: 1, channel: 'EMAIL', status: 'Draft', createdAt: '2026-02-10' },
+    { id: 3, tenantId: 1, channel: 'EMAIL', status: 'Active', createdAt: '2026-01-10' },
+    { id: 4, tenantId: 1, channel: 'SMS', status: 'Draft', createdAt: '2026-01-10' },
+    { id: 5, tenantId: 99, channel: 'EMAIL', status: 'Draft', createdAt: '2026-01-10' },
+  );
+
+  test('deletes selected Draft email rows and rejects mixed selections atomically', async () => {
+    seed();
+    const rejected = await request(makeApp()).delete('/api/marketing/campaigns/bulk').send({ ids: [1, 3] });
+    expect(rejected.status).toBe(409);
+    expect(fakePrisma.campaign.deleteMany).not.toHaveBeenCalled();
+    const deleted = await request(makeApp()).delete('/api/marketing/campaigns/bulk').send({ ids: [1, 2] });
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.deleted).toBe(2);
+    expect(fakePrisma.state.campaigns.map(c => c.id)).toEqual([3, 4, 5]);
+  });
+
+  test('allDrafts spans pages but respects tenant, channel, status and date', async () => {
+    seed();
+    const response = await request(makeApp()).delete('/api/marketing/campaigns/bulk').send({
+      allDrafts: true, createdFrom: '2026-01-01', createdTo: '2026-01-31',
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.deleted).toBe(1);
+    expect(fakePrisma.state.campaigns.map(c => c.id)).toEqual([2, 3, 4, 5]);
+  });
+
+  test('rejects invalid input without deleting anything', async () => {
+    seed();
+    for (const body of [{ ids: [] }, { ids: [1, 5] }, { allDrafts: true, createdFrom: 'invalid' }]) {
+      const response = await request(makeApp()).delete('/api/marketing/campaigns/bulk').send(body);
+      expect(response.status).toBeGreaterThanOrEqual(400);
+    }
+    expect(fakePrisma.campaign.deleteMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('DELETE /api/marketing/campaigns/:id — delete', () => {
   test('deletes the row and returns 204 No Content (#550)', async () => {

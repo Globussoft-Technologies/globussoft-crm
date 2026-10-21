@@ -55,6 +55,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import Currencies from '../pages/Currencies';
+import { AuthContext } from '../appContexts';
 
 const persistedCurrencies = [
   { id: 1, code: 'USD', symbol: '$',  name: 'US Dollar',    exchangeRate: 1.0,    isBase: true },
@@ -115,6 +116,23 @@ describe('<Currencies /> — page surface', () => {
     notifySuccess.mockReset();
     notifyConfirm.mockReset();
     notifyConfirm.mockResolvedValue(true);
+  });
+
+  it('labels stored base rates explicitly when reporting currency differs and rejects zero', async () => {
+    render(<MemoryRouter><AuthContext.Provider value={{ tenant: { defaultCurrency: 'INR' }, setTenant: vi.fn() }}><Currencies /></AuthContext.Provider></MemoryRouter>);
+    await screen.findByText('Euro');
+    const eurRow = screen.getByText('Euro').closest('tr');
+    fireEvent.click(eurRow.querySelector('[title="Edit rate"]'));
+    const input = screen.getByLabelText('Stored rate: 1 USD = X EUR (table displays per INR)');
+    expect(Number(input.value)).toBe(0.92);
+    expect(screen.getByText('US Dollar').closest('tr').querySelector('[title="Edit rate"]')).toBeNull();
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    expect(notifyError).toHaveBeenCalledWith('Enter an exchange rate greater than zero');
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+    fireEvent.change(input, { target: { value: '0.95' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/currencies/3', expect.objectContaining({ body: JSON.stringify({ exchangeRate: 0.95 }) })));
   });
 
   it('renders heading "Currencies" + Refresh + Add Currency CTAs', async () => {

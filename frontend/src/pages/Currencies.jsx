@@ -101,10 +101,12 @@ export default function Currencies() {
 
   const startEdit = (c) => { setEditingId(c.id); setEditRate(String(c.exchangeRate)); };
   const saveEdit = async (id) => {
+    const rate = Number(editRate);
+    if (!Number.isFinite(rate) || rate <= 0) return notify.error('Enter an exchange rate greater than zero');
     try {
       await fetchApi(`/api/currencies/${id}`, {
         method: 'PUT',
-        body: JSON.stringify({ exchangeRate: parseFloat(editRate) || 1 }),
+        body: JSON.stringify({ exchangeRate: rate }),
       });
       setEditingId(null);
       load();
@@ -327,8 +329,12 @@ export default function Currencies() {
                     <td style={td}>{c.name}</td>
                     <td style={td}>
                       {editingId === c.id ? (
-                        <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <label htmlFor={`currency-rate-${c.id}`} style={{ width: '100%', fontSize: '0.75rem' }}>
+                            Stored rate: 1 {baseCode} = X {c.code} (table displays per {reportingCurrency})
+                          </label>
                           <input
+                            id={`currency-rate-${c.id}`}
                             className="input-field"
                             type="number"
                             step="0.0001"
@@ -374,7 +380,7 @@ export default function Currencies() {
                             <Star size={14} />
                           </button>
                         )}
-                        {persisted && (
+                        {persisted && !c.isBase && (
                           <button onClick={() => startEdit(c)} title="Edit rate" style={iconBtn}>
                             <Edit size={14} />
                           </button>

@@ -45,24 +45,10 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const TEMPLATE_HEADERS = [
   "schoolName",
   "board",
-  "kind",
+  "type",
   "label",
   "startDate",
   "endDate",
-  "source",
-  "isActive",
-];
-const TEMPLATE_ROWS = [
-  {
-    schoolName: "Delhi Public School Bangalore",
-    board: "CBSE",
-    kind: "holiday",
-    label: "Summer Break 2027",
-    startDate: "2027-04-10",
-    endDate: "2027-06-05",
-    source: "manual",
-    isActive: "true",
-  },
 ];
 
 const UPLOAD_DIR = path.join(
@@ -127,11 +113,7 @@ function normaliseBoolean(value, fallback = true) {
 }
 
 function buildTemplateCsv() {
-  const lines = [
-    TEMPLATE_HEADERS.join(","),
-    TEMPLATE_ROWS.map((row) => TEMPLATE_HEADERS.map((h) => row[h] || "").join(",")).join(""),
-  ];
-  return `\uFEFF${lines.join("\r\n")}\r\n`;
+  return `\uFEFF${TEMPLATE_HEADERS.join(",")}\r\n`;
 }
 
 function isXlsxUpload(file) {
@@ -275,7 +257,7 @@ router.get("/template", verifyToken, requirePermission("school_terms", "read"), 
       return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
     }
     if (format === "xlsx") {
-      const buf = toXlsxBuffer(TEMPLATE_HEADERS, TEMPLATE_ROWS, "School Terms");
+      const buf = toXlsxBuffer(TEMPLATE_HEADERS, [], "School Terms");
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", 'attachment; filename="travel-school-terms-template.xlsx"');
       return res.end(buf);
@@ -330,7 +312,7 @@ router.post(
             subBrand: "tmc",
             schoolName: normaliseOptionalText(row.schoolName),
             board: normaliseOptionalText(row.board),
-            kind: normaliseKind(row.kind),
+            kind: normaliseKind(row.type ?? row.kind),
             label,
             startDate: start,
             endDate: end,

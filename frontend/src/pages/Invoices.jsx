@@ -304,7 +304,7 @@ const createInvoiceForm = (subBrand = "", currency = "USD") => ({
   lineItems: [createEmptyLineItem()],
 });
 
-const INVOICE_TABLE_MIN_WIDTH = 940;
+const INVOICE_TABLE_MIN_WIDTH = 870;
 const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1540;
 const WELLNESS_INVOICE_PRODUCTS_COLUMN_WIDTH = "250px";
 const WELLNESS_INVOICE_QTY_COLUMN_WIDTH = "130px";
@@ -2396,7 +2396,7 @@ export default function Invoices() {
             <div className="invoice-table-scroll">
               <TopScrollSync
                 hideTopBar
-                verticalOverflow={isGeneric ? "auto" : "visible"}
+                verticalOverflow="visible"
                 scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
               >
               {/* #243: table-layout fixed + per-column widths so the Contact
@@ -2417,17 +2417,17 @@ export default function Invoices() {
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: isWellness ? "180px" : "110px" }} />
+                  <col style={{ width: isWellness ? "180px" : "100px" }} />
                   {isWellness && <col style={{ width: "190px" }} />}
                   {isWellness && <col style={{ width: WELLNESS_INVOICE_PRODUCTS_COLUMN_WIDTH }} />}
                   {isWellness && <col style={{ width: WELLNESS_INVOICE_QTY_COLUMN_WIDTH }} />}
-                  <col style={{ width: isWellness ? "105px" : "104px" }} />
+                  <col style={{ width: isWellness ? "105px" : "100px" }} />
                   {isWellness && <col style={{ width: "125px" }} />}
-                  <col style={{ width: isWellness ? "100px" : "96px" }} />
-                  <col style={{ width: isWellness ? "105px" : "108px" }} />
-                  <col style={{ width: isWellness ? "105px" : "108px" }} />
-                  {!isWellness && <col style={{ width: "170px" }} />}
-                  <col style={{ width: isWellness ? "250px" : "244px" }} />
+                  <col style={{ width: isWellness ? "100px" : "90px" }} />
+                  <col style={{ width: isWellness ? "105px" : "100px" }} />
+                  <col style={{ width: isWellness ? "105px" : "100px" }} />
+                  {!isWellness && <col style={{ width: "160px" }} />}
+                  <col style={{ width: isWellness ? "250px" : "220px" }} />
                 </colgroup>
                 <thead className="invoice-table-header">
                   <tr

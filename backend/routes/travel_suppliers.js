@@ -475,6 +475,23 @@ const SUPPLIER_IMPORT_HEADERS = [
   "upiId",
   "notes",
 ];
+// The starter template stays focused on fields operators need to create a
+// supplier. The importer continues accepting the full import schema below,
+// including Accounts and payment configuration fields.
+const SUPPLIER_IMPORT_TEMPLATE_HEADERS = [
+  "subBrand",
+  "name",
+  "supplierCategory",
+  "contactPerson",
+  "phone",
+  "email",
+  "gstin",
+  "addressLine",
+  "beneficiaryName",
+  "bankName",
+  "bankAccountNumber",
+  "ifscCode",
+];
 const SUPPLIER_IMPORT_REQUIRED_PAYMENT_FIELDS = [
   "beneficiaryName",
   "bankName",
@@ -507,54 +524,6 @@ const SUPPLIER_EXPORT_HEADERS = [
   "notes",
 ];
 const SUPPLIER_IMPORT_TEMPLATE_ROWS = [
-  {
-    subBrand: "# Required: subBrand, name, supplierCategory, beneficiaryName, bankName, bankAccountNumber, ifscCode",
-    name: "# Optional: contactPerson, phone, email, gstin, addressLine",
-    supplierCategory: "# Optional: status, paymentTermsKind, paymentTermsDays",
-    contactPerson: "# Optional: creditLimit, creditCurrency, taxRegimeCode",
-    phone: "# Optional: primaryContactRole, commissionPercent, notes",
-    email: "# Valid subBrand: tmc, rfu, travelstall, visasure",
-    gstin: "# Valid supplierCategory: hotel, flight, transport, visa-consul, other",
-    addressLine: "# Leave optional cells blank for minimum bulk add",
-    status: "",
-    paymentTermsKind: "",
-    paymentTermsDays: "",
-    creditLimit: "",
-    creditCurrency: "",
-    taxRegimeCode: "",
-    primaryContactRole: "",
-    commissionPercent: "",
-    beneficiaryName: "# Required: accounts payee name",
-    bankName: "# Required: beneficiary bank name",
-    bankAccountNumber: "# Required: bank account number",
-    ifscCode: "# Required: 11-character IFSC (e.g. HDFC0001234)",
-    upiId: "# Accounts: optional UPI ID",
-    notes: "",
-  },
-  {
-    subBrand: "tmc",
-    name: "Ramesh Travel",
-    supplierCategory: "transport",
-    contactPerson: "",
-    phone: "",
-    email: "",
-    gstin: "",
-    addressLine: "",
-    status: "active",
-    paymentTermsKind: "",
-    paymentTermsDays: "",
-    creditLimit: "",
-    creditCurrency: "",
-    taxRegimeCode: "",
-    primaryContactRole: "",
-    commissionPercent: "",
-    beneficiaryName: "Ramesh Travel",
-    bankName: "HDFC Bank",
-    bankAccountNumber: "001234567890",
-    ifscCode: "HDFC0001234",
-    upiId: "",
-    notes: "",
-  },
 ];
 
 function assertValidSupplierCategory(c) {
@@ -678,9 +647,9 @@ function parseSupplierImportBuffer(file) {
 
 function buildSupplierTemplateBuffer(format) {
   if (format === "xlsx") {
-    return toXlsxBuffer(SUPPLIER_IMPORT_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS, "Suppliers");
+    return toXlsxBuffer(SUPPLIER_IMPORT_TEMPLATE_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS, "Suppliers");
   }
-  return withBom(toCsv(SUPPLIER_IMPORT_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS));
+  return withBom(toCsv(SUPPLIER_IMPORT_TEMPLATE_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS));
 }
 
 function buildSupplierExportRows(rows) {

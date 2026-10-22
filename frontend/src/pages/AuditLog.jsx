@@ -4,6 +4,7 @@ import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { ScrollText, Filter, Upload, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
 import TopScrollSync from '../components/TopScrollSync';
+import './AuditLog.css';
 
 const ACTION_COLOR = {
   CREATE: '#10b981',
@@ -670,7 +671,7 @@ export default function AuditLog() {
   };
 
   return (
-    <div className="travel-admin-page travel-audit-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="travel-admin-page travel-audit-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header className="travel-audit-page__header" style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -934,9 +935,17 @@ export default function AuditLog() {
       )}
 
       {/* Table */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card audit-log-table-card" style={{ padding: 0, overflow: 'hidden' }}>
         <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+          <table className="audit-log-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+            <colgroup>
+              <col className="audit-log-expand-column" />
+              <col className="audit-log-timestamp-column" />
+              <col className="audit-log-user-column" />
+              <col className="audit-log-action-column" />
+              <col className="audit-log-entity-column" />
+              <col className="audit-log-id-column" />
+            </colgroup>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
                 <th style={thStyle}></th>
@@ -976,7 +985,7 @@ export default function AuditLog() {
                           }}
                         />
                       </td>
-                      <td style={{ ...tdStyle, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                      <td className="audit-log-timestamp" style={{ ...tdStyle, color: 'var(--text-secondary)' }}>
                         {/* #387: forensic timing must be unambiguous. Render
                             in IST with an explicit timezone label so a row
                             reads "29/04/2026, 14:30:00 IST" rather than a

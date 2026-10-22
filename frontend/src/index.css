@@ -2030,6 +2030,10 @@ button {
   transition: var(--transition);
 }
 
+main[data-testid="staff-work-assignment-page"] .pickup-plot-work-search {
+  padding-left: 48px !important;
+}
+
 .input-field:focus {
   outline: none;
   border-color: var(--accent-color);
@@ -2688,6 +2692,118 @@ body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
   border-radius: 50%;
   background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, #d7dceb);
   transform: translateY(-50%);
+}
+
+/* Generic desktop navigation uses the same inline accordion pattern as the
+   Travel sidebar while keeping the active product theme's colors. */
+body[data-vertical="generic"] .generic-nav-section {
+  margin: 0.22rem 0;
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 400;
+  text-align: left;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger:hover {
+  background: var(--surface-hover);
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger.is-open,
+body[data-vertical="generic"] .generic-nav-section-trigger.is-active {
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color));
+}
+
+body[data-vertical="generic"] .generic-nav-section-label {
+  flex: 1;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger > svg:last-child {
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger > svg:last-child.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+body[data-vertical="generic"] .generic-nav-section-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger.is-open .generic-nav-section-icon,
+body[data-vertical="generic"] .generic-nav-section-trigger.is-active .generic-nav-section-icon {
+  color: var(--accent-color);
+}
+
+body[data-vertical="generic"] .generic-nav-section-items {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  margin: 0.15rem 0 0.3rem 1.15rem;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent-color) 24%, var(--border-color));
+}
+
+body[data-vertical="generic"] .generic-nav-section-items .nav-link {
+  min-height: 34px;
+  padding: 0.32rem 0.5rem !important;
+  border-radius: 6px;
+}
+
+body[data-vertical="generic"] .generic-nav-section-items .nav-link:hover,
+body[data-vertical="generic"] .generic-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color));
+  color: var(--accent-color) !important;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger {
+  background: transparent;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger:hover,
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger:focus-visible {
+  background: var(--surface-hover);
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger.is-open,
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger.is-active {
+  background: color-mix(in srgb, var(--accent-color) 22%, var(--surface-color));
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-items {
+  border-left-color: color-mix(in srgb, var(--accent-color) 32%, var(--border-color));
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-items .nav-link:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--accent-color) 20%, var(--surface-color));
 }
 
 body[data-vertical="travel"] .travel-nav-section-items .nav-link:hover,
@@ -4028,6 +4144,7 @@ table.leads-table thead th {
 
 .leads-page-root--generic .leads-toolbar-shell .crm-search-input {
   height: 34px !important;
+  padding-left: 2.5rem !important;
   border-radius: 6px;
   background: var(--surface-color) !important;
 }
@@ -5473,14 +5590,19 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   padding: 0.95rem 1rem 0.8rem;
   border-bottom: 1px solid var(--border-color);
   display: grid;
-  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
   gap: 1rem;
   align-items: center;
 }
 
 .converted-leads__search-wrap {
   position: relative;
-  width: min(100%, 380px);
+  width: 100%;
+  min-width: 0;
+}
+
+.converted-leads__search-wrap > .input-field {
+  padding-left: 2.5rem !important;
 }
 
 .converted-leads__search-icon {
@@ -5496,7 +5618,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   align-items: center;
   justify-content: flex-end;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 
@@ -5513,6 +5635,75 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 
 .converted-leads__controls-card {
   overflow: hidden;
+}
+
+.calendar-attendee-picker__options {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.calendar-attendee-picker__option:hover,
+.calendar-attendee-picker__option:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+
+@media (min-width: 900px) and (max-width: 1919px) {
+  body[data-vertical="generic"] .converted-leads__overview-card {
+    padding: 0.8rem !important;
+  }
+
+  body[data-vertical="generic"] .converted-leads__overview-grid {
+    grid-template-columns: minmax(190px, 0.75fr) minmax(0, 1.25fr);
+    column-gap: clamp(0.65rem, 1vw, 1rem);
+    align-items: center;
+  }
+
+  body[data-vertical="generic"] .converted-leads__lifecycle-panel {
+    max-width: none;
+    min-height: 0;
+    gap: 0.45rem;
+    justify-content: center;
+  }
+
+  body[data-vertical="generic"] .converted-leads__lifecycle-select {
+    margin-top: 0;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__lifecycle-label {
+    margin-bottom: 0;
+    font-size: 0.74rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-header {
+    gap: 0.45rem;
+    margin-bottom: 0.35rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-title {
+    font-size: 0.82rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-description {
+    font-size: 0.66rem;
+    line-height: 1.35;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-grid {
+    overflow-x: hidden;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-button {
+    min-height: 42px;
+    padding: 0.35rem 0.52rem;
+    font-size: 0.68rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-count {
+    font-size: 0.6rem;
+  }
 }
 
 @media (max-width: 899px) {
@@ -5541,6 +5732,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 
   .converted-leads__controls-actions {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 
@@ -5571,6 +5763,25 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .reports-page__schedule-table td {
   white-space: nowrap;
 }
+
+/* Reports tables are read-only views; keep rows visually steady on hover. */
+.reports-page__table-shell table.stable-table tbody tr,
+.reports-page__table-shell table.stable-table tbody tr:hover,
+.reports-page__table-shell table.stable-table tbody tr:hover > td {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+.reports-page__table-shell.card::before {
+  display: none;
+}
+
+.reports-page__table-shell.card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
 
 /* Keep every Reports table inside its card. The report grids have fixed
    columns, while a long value (or a numeric cell's minimum width) can force
@@ -8284,7 +8495,7 @@ body[data-vertical="generic"] table.pickup-plot-leads-table {
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
-  background-color: var(--table-header-bg, var(--surface-color)) !important;
+  background-color: var(--popover-bg) !important;
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {

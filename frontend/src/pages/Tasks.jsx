@@ -620,7 +620,7 @@ export default function Tasks() {
   ].filter(Boolean);
 
   return (
-    <div className="tasks-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="tasks-page" style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

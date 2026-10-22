@@ -16,6 +16,7 @@ import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
+import './generic-list-laptop.css';
 
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim());

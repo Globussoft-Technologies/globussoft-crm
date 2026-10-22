@@ -162,7 +162,7 @@ export default function Developer() {
   };
 
   return (
-    <div className="developer-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="developer-page" style={{ padding: '2rem', width: '100%', minWidth: 0, minHeight: '100%', boxSizing: 'border-box', overflowX: 'clip', overflowY: 'visible', animation: 'fadeIn 0.5s ease-out' }}>
       <header className="developer-page__header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Developer Ecosystem</h1>

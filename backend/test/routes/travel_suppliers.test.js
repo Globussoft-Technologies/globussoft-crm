@@ -208,15 +208,18 @@ describe('POST /api/travel/suppliers', () => {
 });
 
 describe('GET /api/travel/suppliers/import-template', () => {
-  test('CSV template carries the fields Accounts needs to make payments', async () => {
+  test('CSV template contains only supplier creation and required payment fields', async () => {
     const res = await request(makeApp())
       .get('/api/travel/suppliers/import-template?format=csv')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/csv/);
-    expect(res.text).toContain('beneficiaryName,bankName,bankAccountNumber,ifscCode,upiId');
-    expect(res.text).toContain('# Required: subBrand, name, supplierCategory, beneficiaryName, bankName, bankAccountNumber, ifscCode');
+    expect(res.text.trim()).toBe(
+      '\uFEFFsubBrand,name,supplierCategory,contactPerson,phone,email,gstin,addressLine,beneficiaryName,bankName,bankAccountNumber,ifscCode',
+    );
+    expect(res.text).not.toContain('paymentTermsKind');
+    expect(res.text).not.toContain('commissionPercent');
   });
 });
 

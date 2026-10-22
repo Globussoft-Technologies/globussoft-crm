@@ -221,8 +221,8 @@ export default function KnowledgeBase() {
     <div
       style={{
         padding: "2rem",
-        height: "100%",
-        overflowY: "auto",
+        minHeight: "100%",
+        boxSizing: "border-box",
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -1018,9 +1018,10 @@ export default function KnowledgeBase() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        .kb-grid { display: grid; grid-template-columns: 280px 1fr; gap: 1.5rem; }
+        .kb-grid { display: grid; grid-template-columns: minmax(0, 280px) minmax(0, 1fr); gap: 1.5rem; }
+        .kb-grid > * { min-width: 0; }
         @media (max-width: 768px) {
-          .kb-grid { grid-template-columns: 1fr; gap: 1rem; }
+          .kb-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
         }
       `}</style>
     </div>

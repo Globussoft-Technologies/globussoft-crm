@@ -16,7 +16,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock fetchApi BEFORE importing the component
@@ -67,9 +67,63 @@ function renderDashboard(userOverride, initialEntry = '/dashboard') {
   );
 }
 
+function expectedRange(days) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1);
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const asDate = (date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+  return { from: asDate(start), to: asDate(end) };
+}
+
+function hasRange(url, range) {
+  const params = new URL(url, 'http://localhost').searchParams;
+  return params.get('from') === range.from && params.get('to') === `${range.to}T23:59:59.999Z`;
+}
+
 describe('<Dashboard />', () => {
   beforeEach(() => {
     fetchApi.mockReset();
+    sessionStorage.clear();
+  });
+
+  it('opens directly with Last 7 days and filters dashboard totals, contacts, and recent deals', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 3, wonValue: 300000 });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 2 });
+      return Promise.resolve([]);
+    });
+    renderDashboard();
+
+    const range = expectedRange(7);
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/contacts?count=1') && hasRange(url, range))).toBe(true);
+    });
+    expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('last7');
+    expect(screen.getByText('Total Deals').nextElementSibling).toHaveTextContent('3');
+    expect(screen.getByText('Total Contacts').nextElementSibling).toHaveTextContent('2');
+  });
+
+  it('updates dashboard queries when a date preset changes', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 1 });
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 1 });
+      return Promise.resolve([]);
+    });
+    renderDashboard();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Dashboard date preset' }), { target: { value: 'last30' } });
+
+    const range = expectedRange(30);
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/contacts?count=1') && hasRange(url, range))).toBe(true);
+    });
+    expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('last30');
   });
 
   it('does not show an incomplete forecast as zero when an exchange rate is missing', async () => {
@@ -145,7 +199,7 @@ describe('<Dashboard />', () => {
           { id: 2, title: 'Recent B', stage: 'contacted', amount: 2000, createdAt: new Date().toISOString() },
         ]);
       }
-      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 3 });
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 3 });
       return Promise.resolve([]);
     });
 
@@ -170,15 +224,15 @@ describe('<Dashboard />', () => {
 
   it('shows the full contact count instead of the first 100 contacts', async () => {
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/deals/stats') return Promise.resolve({});
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve({});
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
-      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 2105 });
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 2105 });
       return Promise.resolve([]);
     });
 
     renderDashboard();
     await waitFor(() => expect(screen.getByText('2,105')).toBeInTheDocument());
-    expect(fetchApi).toHaveBeenCalledWith('/api/contacts?count=1');
+    expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/contacts?count=1') && hasRange(url, expectedRange(7)))).toBe(true);
     expect(fetchApi).not.toHaveBeenCalledWith('/api/contacts');
   });
 
@@ -196,7 +250,7 @@ describe('<Dashboard />', () => {
           { id: 101, title: 'Most-recent Y', stage: 'won', amount: 2000, createdAt: new Date().toISOString() },
         ]);
       }
-      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 0 });
       return Promise.resolve([]);
     });
 
@@ -227,7 +281,7 @@ describe('<Dashboard />', () => {
         });
       }
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
-      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 0 });
       return Promise.resolve([]);
     });
 
@@ -255,7 +309,7 @@ describe('<Dashboard />', () => {
         });
       }
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
-      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 0 });
+      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 0 });
       return Promise.resolve([]);
     });
 

@@ -1,0 +1,359 @@
+.projects-page {
+  container-type: inline-size;
+}
+
+.projects-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.projects-create-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex: none;
+  padding: 0.55rem 0.9rem !important;
+  font-size: 0.78rem !important;
+  white-space: nowrap;
+}
+
+.projects-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 1rem !important;
+}
+
+.projects-grid > .card {
+  min-width: 0;
+  padding: 1rem !important;
+}
+
+.projects-board-card {
+  align-self: start;
+}
+
+.projects-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.projects-create-modal {
+  container: projects-form / inline-size;
+  box-sizing: border-box !important;
+  width: min(100%, 480px) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  align-self: center;
+  overflow-x: clip !important;
+  overflow-y: visible !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3);
+}
+
+.projects-create-modal::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.projects-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.projects-modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.projects-modal-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.projects-modal-close:hover {
+  background: var(--subtle-bg-2);
+  color: var(--text-primary);
+}
+
+.projects-modal-submit {
+  margin-top: 0.25rem;
+}
+
+.projects-grid > .card > h3 {
+  font-size: 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+.projects-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem !important;
+  min-width: 0;
+}
+
+.projects-form label {
+  display: block;
+  font-size: 0.7rem !important;
+  margin-bottom: 0.2rem !important;
+}
+
+.projects-form :is(input, select, textarea) {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0.3rem 0.5rem !important;
+  font-size: 0.75rem !important;
+  line-height: 1.2;
+  box-sizing: border-box;
+}
+
+.projects-date-fields {
+  display: flex;
+  gap: 0.5rem !important;
+}
+
+.projects-date-fields > div {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.projects-date-fields input[type="date"] {
+  padding-inline: 0.3rem !important;
+  font-size: 0.68rem !important;
+}
+
+.projects-form textarea.input-field {
+  height: 56px;
+  min-height: 56px;
+  resize: vertical;
+}
+
+.projects-form > div {
+  min-width: 0;
+}
+
+.projects-modal-submit {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.projects-summary {
+  gap: 0.5rem !important;
+  margin-bottom: 1.25rem !important;
+}
+
+.projects-summary > span {
+  padding: 0.3rem 0.7rem !important;
+  font-size: 0.68rem !important;
+}
+
+.projects-table-scroll {
+  min-width: 0;
+  width: 100%;
+}
+
+@container (max-width: 1250px) {
+  .projects-header {
+    margin-bottom: 1.25rem !important;
+  }
+
+  .projects-header h1 {
+    font-size: 1.55rem !important;
+  }
+
+  .projects-header p {
+    font-size: 0.75rem !important;
+  }
+
+  .projects-table-scroll {
+    overflow-x: clip !important;
+  }
+
+  .projects-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .projects-table col:nth-child(1) { width: 17%; }
+  .projects-table col:nth-child(2) { width: 10%; }
+  .projects-table col:nth-child(3) { width: 11%; }
+  .projects-table col:nth-child(4) { width: 9%; }
+  .projects-table col:nth-child(5) { width: 14%; }
+  .projects-table col:nth-child(6) { width: 9%; }
+  .projects-table col:nth-child(7) { width: 16%; }
+  .projects-table col:nth-child(8) { width: 14%; }
+
+  .projects-table :is(th, td),
+  body[data-vertical="generic"] main.generic-page-content .projects-page table.projects-table :is(th, td) {
+    padding: 0.4rem 0.2rem !important;
+    font-size: 0.58rem !important;
+    line-height: 1.2;
+  }
+
+  .projects-table th {
+    letter-spacing: 0 !important;
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(1),
+  .projects-table td:nth-child(2),
+  .projects-table td:nth-child(7) {
+    overflow-wrap: anywhere;
+  }
+
+  .projects-table td:nth-child(3),
+  .projects-table td:nth-child(4) {
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(3) span,
+  .projects-table td:nth-child(4) span {
+    padding: 0.1rem 0.25rem !important;
+    font-size: 0.54rem !important;
+  }
+
+  .projects-table td:nth-child(5) svg,
+  .projects-table td:nth-child(6) svg {
+    width: 11px !important;
+    height: 11px !important;
+    flex: none;
+  }
+
+  .projects-table td:nth-child(8) > div {
+    gap: 0.15rem !important;
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) select {
+    width: 72px !important;
+    min-width: 0 !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    padding: 0.1rem 0.15rem !important;
+    font-size: 0.54rem !important;
+    flex: none !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button {
+    width: 18px !important;
+    height: 18px !important;
+    min-height: 18px !important;
+    padding: 0.15rem !important;
+    justify-content: center;
+    flex: none;
+    color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.08) !important;
+    border-color: rgba(239, 68, 68, 0.32) !important;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button svg {
+    width: 11px !important;
+    height: 11px !important;
+  }
+
+  .projects-table td:nth-child(8) button:hover {
+    background: rgba(239, 68, 68, 0.16) !important;
+    border-color: rgba(239, 68, 68, 0.55) !important;
+  }
+}
+
+@container (max-width: 850px) {
+  .projects-header {
+    flex-wrap: wrap;
+  }
+
+  .projects-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+}
+
+@media (max-width: 600px) {
+  .projects-create-modal {
+    width: min(100%, 480px) !important;
+    padding: 0.75rem;
+  }
+}
+
+/* Only make the dialog scroll internally when the screen is too short for the
+   full form. On ordinary screens, keep every field visible and the panel snug
+   around its contents. */
+@media (max-height: 650px) {
+  .projects-create-modal {
+    max-height: calc(100dvh - 1rem) !important;
+    overflow-y: auto !important;
+  }
+}
+
+@container projects-form (max-width: 280px) {
+  .projects-date-fields {
+    flex-direction: column;
+  }
+}
+
+@container (max-width: 700px) {
+  .projects-grid {
+    gap: 0.75rem !important;
+  }
+
+  .projects-form {
+    gap: 0.55rem !important;
+  }
+
+  .projects-form :is(input, select) {
+    height: 30px;
+    min-height: 30px;
+  }
+
+  .projects-form textarea.input-field {
+    height: 56px;
+    min-height: 56px;
+  }
+
+  .projects-form button[type="submit"] {
+    padding: 0.65rem !important;
+    margin-top: 0 !important;
+  }
+
+  .projects-table-scroll {
+    overflow-x: auto !important;
+  }
+
+  .projects-table {
+    min-width: 700px;
+  }
+}

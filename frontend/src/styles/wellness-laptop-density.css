@@ -1,0 +1,145 @@
+/* Wellness laptop density uses the real content width after the sidebar.
+   The existing drawer/mobile rules continue to own widths below 900px. */
+@media (min-width: 900px) and (max-width: 1919px) {
+  body[data-vertical="wellness"] .app-main > main {
+    --wellness-laptop-text: clamp(0.875rem, calc(0.625rem + 0.35vw), 1rem);
+    --wellness-laptop-control: clamp(0.75rem, calc(0.5rem + 0.4vw), 0.875rem);
+    --wellness-laptop-cell: clamp(0.75rem, calc(0.52rem + 0.35vw), 0.875rem);
+    font-size: var(--wellness-laptop-text);
+  }
+
+  body[data-vertical="wellness"] .app-main > main > [style*="padding: 2rem"],
+  body[data-vertical="wellness"] .wellness-reports-page {
+    padding: clamp(1rem, 2vw, 2rem) !important;
+  }
+
+  body[data-vertical="wellness"] .app-main > main h1 {
+    font-size: clamp(1.25rem, calc(0.65rem + 0.72vw), 1.5rem) !important;
+    line-height: 1.2;
+  }
+
+  body[data-vertical="wellness"] :is(.wellness-owner-page, .wellness-reports-page) h1 {
+    font-size: clamp(1.375rem, calc(0.75rem + 0.8vw), 1.75rem) !important;
+    line-height: 1.2;
+  }
+
+  body[data-vertical="wellness"] .app-main > main :is(button, input, select, textarea) {
+    font-size: var(--wellness-laptop-control) !important;
+    line-height: 1.3;
+  }
+
+  body[data-vertical="wellness"] .app-main > main :is(.btn-primary, .btn-secondary, .input-field) {
+    padding-block: clamp(0.45rem, 0.6vw, 0.8rem) !important;
+    padding-inline: clamp(0.625rem, 0.85vw, 1.25rem) !important;
+  }
+
+  body[data-vertical="wellness"] .app-main > main :is(.btn-primary, .btn-secondary) > svg {
+    width: clamp(14px, 0.95vw, 18px);
+    height: clamp(14px, 0.95vw, 18px);
+    flex-shrink: 0;
+  }
+
+  body[data-vertical="wellness"] .app-main > main table :is(th, td) {
+    font-size: var(--wellness-laptop-cell) !important;
+    line-height: 1.3;
+  }
+
+  body[data-vertical="wellness"] .app-main > main :is(.glass, .card)[style*="padding: 2rem"] {
+    padding: clamp(0.875rem, 1.55vw, 2rem) !important;
+  }
+
+  body[data-vertical="wellness"] .app-main > main :is(.glass, .card)[style*="padding: 1.25rem"] {
+    padding: clamp(0.75rem, 1.1vw, 1.25rem) !important;
+  }
+
+  body[data-vertical="wellness"] .app-main > main .recharts-cartesian-axis-tick-value {
+    font-size: clamp(0.625rem, calc(0.45rem + 0.3vw), 0.75rem) !important;
+  }
+
+  body[data-vertical="wellness"] .wellness-owner-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: clamp(0.5rem, 0.85vw, 1rem) !important;
+    margin-bottom: clamp(0.75rem, 1.2vw, 1.5rem) !important;
+  }
+
+  body[data-vertical="wellness"] .wellness-owner-kpi {
+    min-width: 0;
+    min-height: clamp(94px, 7.5vw, 128px);
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="wellness"] .wellness-owner-kpi > div:first-child {
+    font-size: clamp(0.7rem, calc(0.5rem + 0.35vw), 0.85rem) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  body[data-vertical="wellness"] .wellness-owner-kpi > div:first-child svg {
+    width: clamp(13px, 0.9vw, 16px);
+    height: clamp(13px, 0.9vw, 16px);
+    flex-shrink: 0;
+  }
+
+  body[data-vertical="wellness"] .wellness-owner-kpi > div:nth-child(2) {
+    font-size: clamp(1.125rem, calc(0.7rem + 0.8vw), 1.6rem) !important;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  body[data-vertical="wellness"] .wellness-owner-kpi > div:nth-child(3) {
+    font-size: clamp(0.6875rem, calc(0.5rem + 0.3vw), 0.75rem) !important;
+    line-height: 1.25;
+  }
+}
+
+/* The WhatsApp thread search icon sits inside the field at every viewport.
+   Keep the text inset after tablet/mobile rules adjust general input padding. */
+body[data-vertical="wellness"] .app-main > main
+  input.whatsapp-thread-search.input-field {
+  padding-left: 32px !important;
+}
+
+@media (min-width: 900px) and (max-width: 1023px) {
+  body[data-vertical="wellness"] .wellness-owner-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Without the old 1440px transform, the Wellness brand and search must share
+   the actual laptop header width. Keep all header controls available. */
+@media (min-width: 900px) and (max-width: 1439px) {
+  body[data-vertical="wellness"] .app-topbar {
+    gap: clamp(4px, 0.5vw, 8px) !important;
+    padding-inline: clamp(8px, 1vw, 20px) !important;
+  }
+
+  body[data-vertical="wellness"] .app-header-search {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  body[data-vertical="wellness"] .omnibar-root {
+    width: min(100%, clamp(160px, 23vw, 320px)) !important;
+    min-width: 0 !important;
+  }
+
+  body[data-vertical="wellness"] .app-tenant-chip {
+    max-width: clamp(150px, 17vw, 220px) !important;
+    min-width: 0;
+  }
+
+  body[data-vertical="wellness"] .app-tenant-name,
+  body[data-vertical="wellness"] .app-profile-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body[data-vertical="wellness"] .app-profile-name {
+    max-width: clamp(60px, 7vw, 90px);
+  }
+}

@@ -73,6 +73,7 @@ import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
 import "./Leads.css";
+import "./generic-list-laptop.css";
 import {
   PICKUP_STAGE_LABELS,
   formatPickupStatus,

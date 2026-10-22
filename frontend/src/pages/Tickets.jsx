@@ -3,6 +3,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
 import { Ticket, Plus, Trash2, AlertTriangle } from 'lucide-react';
+import './Tickets.css';
 
 const PRIORITY_CONFIG = {
   Urgent:  { color: '#ef4444', bg: 'rgba(239,68,68,0.08)' },
@@ -258,9 +259,18 @@ export default function Tickets() {
               No tickets found. Create one to get started.
             </p>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <div className="tickets-table-scroll" style={{ overflowX: 'auto' }}>
               {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
-              <table className="stable-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+              <table className="stable-table tickets-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <colgroup>
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '25%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '12%' }} />
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                     {['ID', 'Subject', 'Status', 'Priority', 'Assignee', 'Created', 'Actions'].map(h => (
@@ -278,7 +288,7 @@ export default function Tickets() {
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>#{ticket.id}</td>
-                      <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{ticket.subject}</td>
+                      <td title={ticket.subject} style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{ticket.subject}</td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <select
                           value={ticket.status}

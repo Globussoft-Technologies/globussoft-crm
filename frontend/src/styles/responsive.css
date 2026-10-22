@@ -1984,6 +1984,57 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 }
 
 /* Lead Intelligence cards and lead lists need tracks wide enough for labels. */
+@media (min-width: 900px) and (max-width: 1919px) {
+  .lead-intelligence-page {
+    padding: clamp(1rem, 1.4vw, 1.5rem) !important;
+    overflow-x: clip;
+  }
+
+  .lead-intelligence-header {
+    margin-bottom: 1.25rem !important;
+    gap: 1rem;
+  }
+
+  .lead-intelligence-header h1 {
+    font-size: clamp(1.35rem, 1.7vw, 1.65rem) !important;
+    gap: 0.55rem !important;
+  }
+
+  .lead-intelligence-header p,
+  .lead-intelligence-kpi-card > div:first-child > span {
+    font-size: clamp(0.68rem, 0.72vw, 0.78rem) !important;
+  }
+
+  .lead-intelligence-kpi-grid {
+    gap: clamp(0.65rem, 1vw, 1rem) !important;
+    margin-bottom: 1.25rem !important;
+  }
+
+  .lead-intelligence-kpi-card {
+    min-width: 0;
+    padding: clamp(0.75rem, 1vw, 1rem) !important;
+  }
+
+  .lead-intelligence-kpi-card > div:last-child {
+    font-size: clamp(1.2rem, 1.55vw, 1.5rem) !important;
+  }
+
+  .lead-intelligence-page > .card {
+    min-width: 0;
+    padding: clamp(1rem, 1.3vw, 1.5rem) !important;
+  }
+
+  .lead-intelligence-lead-grid {
+    min-width: 0;
+    gap: clamp(0.75rem, 1.2vw, 1.25rem) !important;
+  }
+
+  .lead-intelligence-lead-grid > .card {
+    min-width: 0;
+    padding: clamp(0.85rem, 1.1vw, 1.25rem) !important;
+  }
+}
+
 @media (max-width: 899px) {
   .lead-intelligence-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -3261,6 +3312,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     padding: 0.4rem 0.5rem !important;
   }
 }
+
 /* KPI cards can shrink without letting long formatted totals push the grid wider. */
 .dashboard-kpis > a,
 .dashboard-kpi-card,
@@ -3318,9 +3370,146 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     min-width: 0;
   }
 
-  .dashboard-page .dashboard-header-actions button {
+  .dashboard-page .dashboard-header-actions > select {
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .dashboard-page .dashboard-header-actions > button,
+  .dashboard-page .dashboard-header-actions > div > button {
     width: 100% !important;
     min-width: 0 !important;
     flex: 1 1 auto !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .dashboard-page .dashboard-header-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center !important;
+  }
+
+  .dashboard-page .dashboard-header-actions > select.dashboard-date-preset {
+    grid-column: 1 / -1;
+    width: 100% !important;
+    height: 42px !important;
+  }
+
+  .dashboard-page .dashboard-header-actions > div {
+    grid-column: 1;
+  }
+
+  .dashboard-page .dashboard-header-actions > button {
+    grid-column: 2;
+    width: auto !important;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 420px) {
+  .dashboard-page .dashboard-header-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-page .dashboard-header-actions > select.dashboard-date-preset,
+  .dashboard-page .dashboard-header-actions > div,
+  .dashboard-page .dashboard-header-actions > button {
+    grid-column: 1;
+  }
+
+  .dashboard-page .dashboard-header-actions > button {
+    width: 100% !important;
+  }
+}
+
+/* On desktop, the Staff page and its short directory fit in the viewport.
+   Remove the extra page scrollbar while allowing the mobile layout to flow. */
+@media (min-width: 901px) {
+  .app-main > main:has(.staff-directory-page) {
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+  }
+
+  .app-main > main:has(.staff-directory-page)::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+  }
+}
+
+/* Keep generic Staff columns resizable on laptops; allow horizontal scrolling
+   when their saved widths exceed the available workspace. */
+@media (min-width: 601px) and (max-width: 1400px) {
+  body[data-vertical="generic"] .staff-team-table-scroll--generic {
+    overflow-x: auto !important;
+  }
+
+  body[data-vertical="generic"] .staff-team-table-scroll--generic .staff-generic-resizable-table {
+    width: max-content !important;
+    min-width: 100% !important;
+    table-layout: fixed !important;
+  }
+
+  body[data-vertical="generic"] .staff-team-table-scroll--generic .staff-generic-resizable-table th,
+  body[data-vertical="generic"] .staff-team-table-scroll--generic .staff-generic-resizable-table td {
+    padding: 0.4rem 0.25rem !important;
+    font-size: 0.66rem !important;
+    line-height: 1.2;
+  }
+
+  body[data-vertical="generic"] .staff-generic-resizable-table td:last-child {
+    overflow: hidden !important;
+    white-space: nowrap !important;
+  }
+
+  body[data-vertical="generic"] .staff-generic-resizable-table [data-staff-action-trigger] {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 4.5rem;
+    padding: 0.2rem 0.3rem !important;
+    font-size: 0.66rem !important;
+  }
+}
+
+/* The permissions matrices fit in the desktop workspace; keep both the page
+   and the matrix cards in normal flow instead of adding nested scrollbars. */
+@media (min-width: 901px) {
+  .app-main > main:has(.field-permissions-page) {
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+  }
+
+  .app-main > main:has(.field-permissions-page)::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+  }
+
+  .field-permissions-page {
+    width: 100%;
+    min-width: 0;
+    overflow: visible !important;
+  }
+
+  .field-permissions-page > .card,
+  .field-permissions-table-scroll,
+  .field-permissions-matrix-card {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+  }
+
+  .field-permissions-table-scroll table,
+  .field-permissions-matrix-card table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed;
+  }
+
+  .field-permissions-table-scroll th,
+  .field-permissions-table-scroll td,
+  .field-permissions-matrix-card th,
+  .field-permissions-matrix-card td {
+    padding: 0.55rem 0.65rem !important;
   }
 }

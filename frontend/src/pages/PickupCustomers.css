@@ -49,6 +49,21 @@
 .pickup-detail-table tr:last-child th,.pickup-detail-table tr:last-child td,.pickup-payment-table tbody tr:last-child td { border-bottom:0; }
 .pickup-detail-table th { width:34%; color:var(--text-secondary); background:var(--subtle-bg, rgba(148,163,184,.07)); }
 .pickup-detail-table td { font-weight:700; }
+.pickup-detail-pane { overflow-x:hidden; }
+.pickup-installment-table { display:block; width:100%; margin-top:.7rem; }
+.pickup-installment-table thead { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0, 0, 0, 0); white-space:nowrap; border:0; }
+.pickup-installment-table tbody { display:grid; gap:10px; }
+.pickup-installment-table tbody tr { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); border:1px solid var(--border-color); border-radius:10px; overflow:hidden; }
+.pickup-installment-table tbody td { display:block; min-width:0; padding:.65rem .75rem; border:0; overflow-wrap:normal; word-break:normal; }
+.pickup-installment-table tbody td::before { display:block; margin-bottom:4px; color:var(--text-secondary); font-size:.68rem; font-weight:600; text-transform:uppercase; }
+.pickup-installment-table tbody td:nth-child(1)::before { content:'No.'; }
+.pickup-installment-table tbody td:nth-child(2)::before { content:'Due'; }
+.pickup-installment-table tbody td:nth-child(3)::before { content:'Frequency'; }
+.pickup-installment-table tbody td:nth-child(4)::before { content:'Amount'; }
+.pickup-installment-table tbody td:nth-child(5)::before { content:'Status'; }
+.pickup-installment-table tbody td:nth-child(6) { grid-column:1 / -1; }
+.pickup-installment-table tbody td:nth-child(6)::before { content:'Action'; }
+.pickup-installment-table tbody td:nth-child(6) button { max-width:100%; white-space:normal; }
 .pickup-payment-table { min-width:650px; }
 .pickup-payment-table th { color:var(--text-secondary); background:#f3f4f6; font-size:.7rem; }
 .pickup-payment-status { display:inline-flex; padding:.18rem .4rem; border-radius:999px; color:#047857; background:rgba(16,185,129,.13); font-size:.68rem; font-weight:800; text-transform:capitalize; }

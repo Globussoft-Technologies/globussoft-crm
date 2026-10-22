@@ -347,6 +347,14 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Tickets')).toBeTruthy();
     });
 
+    it('keeps the Dashboard date filter when its active sidebar link is selected again', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', path: '/dashboard?from=2026-10-16&to=2026-10-22' });
+      const dashboardLink = screen.getByText('Dashboard').closest('a');
+      expect(dashboardLink).toHaveAttribute('href', '/dashboard?from=2026-10-16&to=2026-10-22');
+      fireEvent.click(dashboardLink);
+      expect(dashboardLink).toHaveAttribute('href', '/dashboard?from=2026-10-16&to=2026-10-22');
+    });
+
     it('renders the Web Forms nav entry with href /forms for ADMIN', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       const link = screen.getByText('Web Forms').closest('a');

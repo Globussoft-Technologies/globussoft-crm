@@ -149,30 +149,25 @@ describe('Layout', () => {
         await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'false'));
         expect(matchMedia).toHaveBeenCalledWith('(max-width: 899px)');
         const shell = document.querySelector('.app-shell');
-        if (vertical === 'generic') {
-          expect(shell).not.toHaveClass('app-shell--scaled');
-          expect(shell).toHaveStyle({ inset: '0' });
-          expect(document.querySelector('main.page-fade-in')).toHaveClass('generic-page-content');
-        } else {
-          expect(shell).toHaveClass('app-shell--scaled');
-          expect(shell).toHaveStyle({ width: '1440px', height: '1265.625px', transform: `scale(${1024 / 1440})` });
-        }
+        expect(shell).not.toHaveClass('app-shell--scaled');
+        expect(shell).toHaveStyle({ inset: '0' });
+        if (vertical === 'generic') expect(document.querySelector('main.page-fade-in')).toHaveClass('generic-page-content');
       } finally {
         matchMedia.mockRestore();
       }
     },
   );
 
-  it('updates desktop scale when a laptop window is resized', () => {
+  it('keeps the travel shell at viewport size when a laptop window is resized', () => {
     window.innerWidth = 1024;
     renderTravelLayout();
     const shell = document.querySelector('.app-shell');
     window.innerWidth = 1280;
     fireEvent.resize(window);
-    expect(shell).toHaveStyle({ transform: `scale(${1280 / 1440})`, width: '1440px' });
+    expect(shell).not.toHaveClass('app-shell--scaled');
+    expect(shell).toHaveStyle({ inset: '0' });
     window.innerWidth = 1440;
     fireEvent.resize(window);
-    expect(shell).not.toHaveClass('app-shell--scaled');
     expect(shell).toHaveStyle({ inset: '0' });
   });
 

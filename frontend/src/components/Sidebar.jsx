@@ -758,7 +758,10 @@ const Sidebar = ({
                         : to;
     const activeTarget = to;
     const sharedDatePages = ["/dashboard", "/pipeline", "/reports"];
-    const datedTo = sharedDatePages.includes(to) && sharedDatePages.includes(location.pathname)
+    // Re-selecting Dashboard must keep its current range. Other pages do not
+    // replace Dashboard's saved range when navigating back to it.
+    const keepDashboardRange = to === "/dashboard" && location.pathname === "/dashboard";
+    const datedTo = (keepDashboardRange || (to !== "/dashboard" && sharedDatePages.includes(to) && sharedDatePages.includes(location.pathname)))
       ? pathWithDateRange(resolvedTo, readDateRange(new URLSearchParams(location.search)))
       : resolvedTo;
     const isTravelDirectLink = isTravel && (activeTarget === "/travel" || activeTarget === "/settings");
@@ -1540,16 +1543,16 @@ function WellnessNavGroup({
     });
   }, [isMobileViewport]);
 
+  const deactivatePanel = useCallback(() => {
+    onActivate((current) => (current === label ? null : current));
+  }, [label, onActivate]);
+
   const clearCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
   }, []);
-
-  const deactivatePanel = useCallback(() => {
-    onActivate((current) => (current === label ? null : current));
-  }, [label, onActivate]);
 
   const openPanel = useCallback(() => {
     clearCloseTimer();
@@ -1730,6 +1733,42 @@ function WellnessNavGroup({
       {trigger}
       {typeof document !== "undefined" ? createPortal(panel, document.body) : null}
     </>
+  );
+}
+
+function GenericNavGroup({ label, dataTour, paths = [], children }) {
+  const location = useLocation();
+  const isActive = paths.some((path) =>
+    location.pathname === path || location.pathname.startsWith(`${path}/`),
+  );
+  const [isOpen, setIsOpen] = useState(isActive);
+  const Icon = WELLNESS_CATEGORY_ICON[label] || LayoutDashboard;
+  const sectionId = `generic-nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+
+  useEffect(() => {
+    if (isActive) setIsOpen(true);
+  }, [isActive, location.pathname]);
+
+  return (
+    <div className="generic-nav-section">
+      <button
+        type="button"
+        className={`generic-nav-section-trigger${isOpen ? " is-open" : ""}${isActive ? " is-active" : ""}`}
+        aria-expanded={isOpen}
+        aria-controls={sectionId}
+        data-tour={dataTour}
+        onClick={() => setIsOpen((open) => !open)}
+      >
+        <span className="generic-nav-section-icon"><Icon size={20} aria-hidden="true" /></span>
+        <span className="generic-nav-section-label">{label}</span>
+        <ChevronDown size={14} aria-hidden="true" className={isOpen ? "" : "is-collapsed"} />
+      </button>
+      {isOpen && (
+        <div id={sectionId} className="generic-nav-section-items" data-search-highlight-scope="global-search">
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2682,18 +2721,21 @@ function renderGenericNav({
       if (child.props?.to) paths.push(child.props.to);
       return false;
     });
-    return (
-      <WellnessNavGroup
-        label={label}
-        dataTour={dataTour}
-        paths={paths}
-        isMobileViewport={isMobileViewport}
-        activeGroup={openGenericGroup}
-        onActivate={onOpenGenericGroup}
-      >
-        {children}
-      </WellnessNavGroup>
-    );
+    if (isMobileViewport) {
+      return (
+        <WellnessNavGroup
+          label={label}
+          dataTour={dataTour}
+          paths={paths}
+          isMobileViewport
+          activeGroup={openGenericGroup}
+          onActivate={onOpenGenericGroup}
+        >
+          {children}
+        </WellnessNavGroup>
+      );
+    }
+    return <GenericNavGroup label={label} dataTour={dataTour} paths={paths}>{children}</GenericNavGroup>;
   };
 
   return (

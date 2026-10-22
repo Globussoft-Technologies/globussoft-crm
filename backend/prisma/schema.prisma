@@ -1952,6 +1952,7 @@ model Sequence {
 }
 
 model SequenceEnrollment {
+  automationEventKey String? @unique @db.VarChar(191)
   id          Int       @id @default(autoincrement())
   sequenceId  Int
   sequence    Sequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)

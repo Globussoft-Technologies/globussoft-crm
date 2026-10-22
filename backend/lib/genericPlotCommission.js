@@ -2,10 +2,24 @@
 function roundMoney(value) { return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100; }
 function parseMetadata(value) { try { return typeof value === "string" ? JSON.parse(value) : (value || {}); } catch (_error) { return {}; } }
 async function syncPlotCommission(db, payment, booking) {
-  if (!db?.plotCommission || String(payment?.status || "").toUpperCase() !== "SUCCESS") return null;
+  if (!db?.plotCommission) return null;
   const metadata = parseMetadata(payment.metadata); const plotBookingId = Number(booking?.id || metadata.plotBookingId); const tenantId = Number(payment.tenantId || booking?.tenantId);
   if (!Number.isInteger(plotBookingId) || plotBookingId <= 0 || !Number.isInteger(tenantId) || tenantId <= 0) return null;
-  const existing = await db.plotCommission.findFirst({ where: { tenantId, plotBookingId } }); if (existing) return existing;
+  const existing = await db.plotCommission.findFirst({ where: { tenantId, plotBookingId } }); if (existing) {
+    const rows = await db.$queryRaw`SELECT COALESCE(SUM(amount), 0) AS amountPaid FROM Payment
+      WHERE tenantId = ${tenantId} AND status = 'SUCCESS'
+      AND JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(metadata), metadata, '{}'), '$.kind')) = 'plot-booking-payment'
+      AND JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(metadata), metadata, '{}'), '$.plotBookingId')) = ${String(plotBookingId)}`;
+    const funded = roundMoney(rows[0]?.amountPaid);
+    if ((funded < Number(existing.commissionAmount) && ['APPROVED', 'PAID'].includes(existing.status)) || (funded <= 0 && existing.status !== 'REVERSED')) {
+      return db.plotCommission.update({ where: { id: existing.id }, data: { status: 'REVERSED', reversedAt: new Date(), approvedAt: null, approvedByUserId: null, paidAt: null, paidByUserId: null } });
+    }
+    if (funded > 0 && existing.status === 'REVERSED') {
+      return db.plotCommission.update({ where: { id: existing.id }, data: { status: 'EARNED', reversedAt: null } });
+    }
+    return existing;
+  }
+  if (String(payment?.status || '').toUpperCase() !== 'SUCCESS') return null;
   const plotBrokerId = Number(booking?.plotBrokerId); if (!Number.isInteger(plotBrokerId) || plotBrokerId <= 0) return null;
   const broker = await db.plotBroker.findFirst({ where: { id: plotBrokerId, tenantId, isActive: true }, select: { id: true, commissionPercent: true } });
   const commissionPercent = Number(broker?.commissionPercent || 0); const eligibleAmount = roundMoney(booking?.totalAmount);

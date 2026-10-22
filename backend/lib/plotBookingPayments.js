@@ -35,11 +35,11 @@ async function reconcilePlotBookingPayment(payment) {
       where: { id: booking.id },
       data: { amountPaid, balance, paymentStatus: balance === 0 ? 'PAID' : 'PARTIAL' },
     });
-    await syncPlotCommission(tx, payment, updated);
+    await syncPlotCommission(tx, payment, { ...booking, ...updated });
     const installmentId = Number(metadata.installmentId);
     if (Number.isInteger(installmentId) && installmentId > 0) {
       await tx.plotInstallment.updateMany({
-        where: { id: installmentId, tenantId: payment.tenantId, plotBookingId: booking.id },
+        where: { id: installmentId, tenantId: payment.tenantId, plotBookingId: booking.id, ...(String(payment.status || '').toUpperCase() === 'SUCCESS' ? {} : { paymentId: payment.id }) },
         data: {
           status: String(payment.status || '').toUpperCase() === 'SUCCESS' ? 'PAID' : 'PLANNED',
           paymentId: String(payment.status || '').toUpperCase() === 'SUCCESS' ? payment.id : null,

@@ -228,6 +228,16 @@ async function processContactCreated(contactId, tenantId) {
 // Generic Email/SMS trigger mappings are persisted as ordinary Campaign +
 // Sequence rows, so deliveries use the existing sequence engine (including
 // its provider, retries, and message logging) instead of bypassing it.
+async function createEventEnrollment(data) {
+  try {
+    await prisma.sequenceEnrollment.create({ data: { ...data, automationEventKey: `${data.tenantId}:${data.currentNode}` } });
+    return true;
+  } catch (error) {
+    if (error.code === 'P2002' && String(error.meta?.target || '').includes('automationEventKey')) return false;
+    throw error;
+  }
+}
+
 async function processGenericChannelCampaignEvent(eventName, payload = {}, tenantId) {
   if (![
     'contact.created',
@@ -288,10 +298,7 @@ async function processGenericChannelCampaignEvent(eventName, payload = {}, tenan
       select: { id: true },
     });
     if (existing) continue;
-    await prisma.sequenceEnrollment.create({
-      data: { tenantId, sequenceId: sequence.id, contactId: contact.id, currentNode: eventKey, currentStep: 0, status: 'Active', nextRun: new Date() },
-    });
-    enrolled++;
+    if (await createEventEnrollment({ tenantId, sequenceId: sequence.id, contactId: contact.id, currentNode: eventKey, currentStep: 0, status: 'Active', nextRun: new Date() })) enrolled++;
   }
   return { enrolled };
 }
@@ -648,18 +655,7 @@ async function processWhatsAppCampaignEvent(eventName, payload = {}, tenantId) {
         select: { id: true },
       });
       if (existing) continue;
-      await prisma.sequenceEnrollment.create({
-        data: {
-          tenantId,
-          sequenceId: campaign.sequenceId,
-          contactId: contact.id,
-          currentNode: eventKey,
-          currentStep: 0,
-          status: "Active",
-          nextRun: new Date(),
-        },
-      });
-      queued++;
+      if (await createEventEnrollment({ tenantId, sequenceId: campaign.sequenceId, contactId: contact.id, currentNode: eventKey, currentStep: 0, status: "Active", nextRun: new Date() })) queued++;
       break;
     }
 

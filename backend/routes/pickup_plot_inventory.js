@@ -3433,6 +3433,14 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         error.code = "PAYMENT_EXCEEDS_BALANCE";
         throw error;
       }
+      if (installment) {
+        const payable = await tx.plotInstallment.findFirst({ where: { id: installment.id, tenantId, plotBookingId: booking.id, status: { in: ["PLANNED", "LINK_CREATED"] } } });
+        if (!payable) {
+          const error = new Error("This installment has already been paid.");
+          error.code = "INSTALLMENT_NOT_PAYABLE";
+          throw error;
+        }
+      }
       nextAmountPaid = accountedPaid + amount;
       nextBalance = Math.max(0, Number(current.totalAmount || 0) - nextAmountPaid);
       payment = await tx.payment.create({
@@ -3502,6 +3510,7 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       booking: { id: booking.id, amountPaid: nextAmountPaid, balance: nextBalance },
     });
   } catch (error) {
+    if (error.code === "INSTALLMENT_NOT_PAYABLE") return res.status(409).json({ error: error.message, code: error.code });
     if (error.code === "PAYMENT_EXCEEDS_BALANCE") {
       return res.status(400).json({ error: error.message, code: error.code });
     }
@@ -3628,42 +3637,53 @@ router.patch("/commissions/:id/status", adminOnly, async (req, res) => {
     if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
       return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
     }
-    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
-    if (!commission) {
-      return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
-    }
-    const currentStatus = String(commission.status || "EARNED").toUpperCase();
-    const validTransition = (currentStatus === "EARNED" && requestedStatus === "APPROVED")
-      || (currentStatus === "APPROVED" && requestedStatus === "PAID")
-      || currentStatus === requestedStatus;
-    if (!validTransition) {
-      return res.status(409).json({
-        error: `Commission cannot move from ${currentStatus} to ${requestedStatus}.`,
-        code: "INVALID_COMMISSION_TRANSITION",
-      });
-    }
-    const now = new Date();
-    const updated = currentStatus === requestedStatus
-      ? commission
-      : await prisma.plotCommission.update({
-        where: { id: commission.id },
-        data: requestedStatus === "APPROVED"
-          ? { status: "APPROVED", approvedAt: now, approvedByUserId: req.user.userId }
-          : { status: "PAID", paidAt: now, paidByUserId: req.user.userId },
-      });
-    if (currentStatus !== requestedStatus) {
-      await appendWorkflowEvent(prisma, req, {
-        bookingId: commission.plotBookingId,
-        contactId: commission.contactId,
-        stage: "COMMISSION",
-        eventType: `COMMISSION_${requestedStatus}`,
-        label: requestedStatus === "APPROVED" ? "Commission approved" : "Commission marked paid",
-        fromStatus: currentStatus,
-        toStatus: requestedStatus,
-        occurredAt: now.toISOString(),
-        metadata: { commissionId: commission.id, paymentId: commission.paymentId, amount: Number(commission.commissionAmount || 0) },
-      });
-    }
+    let updated;
+    await prisma.$transaction(async (tx) => {
+      const initial = await tx.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+      if (!initial) { const error = new Error("Commission entry not found."); error.code = "COMMISSION_NOT_FOUND"; throw error; }
+      await require("../lib/plotBookingPayments").lockBooking(tx, tenantId, initial.plotBookingId);
+      const commission = await tx.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+      if (!commission) {
+        const error = new Error("Commission entry not found."); error.code = "COMMISSION_NOT_FOUND"; throw error;
+      }
+      const currentStatus = String(commission.status || "EARNED").toUpperCase();
+      const validTransition = (currentStatus === "EARNED" && requestedStatus === "APPROVED")
+        || (currentStatus === "APPROVED" && requestedStatus === "PAID")
+        || currentStatus === requestedStatus;
+      if (!validTransition) {
+        const error = new Error(`Commission cannot move from ${currentStatus} to ${requestedStatus}.`);
+        error.code = "INVALID_COMMISSION_TRANSITION";
+        throw error;
+      }
+      const funded = await require("../lib/plotBookingPayments").successfulPaymentTotal(tx, tenantId, commission.plotBookingId);
+      if (funded + 0.001 < Number(commission.commissionAmount)) {
+        const error = new Error("Commission must be fully deducted from successful payments before approval or payout.");
+        error.code = "COMMISSION_NOT_FUNDED";
+        throw error;
+      }
+      const now = new Date();
+      updated = currentStatus === requestedStatus
+        ? commission
+        : await tx.plotCommission.update({
+          where: { id: commission.id },
+          data: requestedStatus === "APPROVED"
+            ? { status: "APPROVED", approvedAt: now, approvedByUserId: req.user.userId }
+            : { status: "PAID", paidAt: now, paidByUserId: req.user.userId },
+        });
+      if (currentStatus !== requestedStatus) {
+        await appendWorkflowEvent(tx, req, {
+          bookingId: commission.plotBookingId,
+          contactId: commission.contactId,
+          stage: "COMMISSION",
+          eventType: `COMMISSION_${requestedStatus}`,
+          label: requestedStatus === "APPROVED" ? "Commission approved" : "Commission marked paid",
+          fromStatus: currentStatus,
+          toStatus: requestedStatus,
+          occurredAt: now.toISOString(),
+          metadata: { commissionId: commission.id, paymentId: commission.paymentId, amount: Number(commission.commissionAmount || 0) },
+        });
+      }
+    });
     return res.json({
       ...updated,
       commissionPercent: Number(updated.commissionPercent || 0),
@@ -3671,6 +3691,7 @@ router.patch("/commissions/:id/status", adminOnly, async (req, res) => {
       commissionAmount: Number(updated.commissionAmount || 0),
     });
   } catch (error) {
+    if (["COMMISSION_NOT_FUNDED", "INVALID_COMMISSION_TRANSITION", "COMMISSION_NOT_FOUND"].includes(error.code)) return res.status(error.code === "COMMISSION_NOT_FOUND" ? 404 : 409).json({ error: error.message, code: error.code });
     console.error("pickup-plot-inventory PATCH /commissions/:id/status error:", error);
     return res.status(500).json({ error: "Failed to update commission status", code: "COMMISSION_STATUS_UPDATE_FAILED" });
   }

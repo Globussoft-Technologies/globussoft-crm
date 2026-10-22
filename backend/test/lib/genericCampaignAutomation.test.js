@@ -18,6 +18,19 @@ beforeEach(() => {
 });
 
 describe('Generic Email/SMS trigger sequences', () => {
+  test('handles concurrent duplicate events through the unique database key', async () => {
+    prisma.campaign.findMany.mockResolvedValue([{ id: 22, channel: 'EMAIL', sequence: { id: 90, isActive: true, steps: [{ kind: 'email' }] }, scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', channel: 'EMAIL', triggerEvent: 'contact.created' }) }]);
+    const keys = new Set();
+    prisma.sequenceEnrollment.create.mockImplementation(async ({ data }) => {
+      if (keys.has(data.automationEventKey)) throw Object.assign(new Error('duplicate'), { code: 'P2002', meta: { target: 'SequenceEnrollment_automationEventKey_key' } });
+      keys.add(data.automationEventKey);
+      return { id: 42 };
+    });
+    const results = await Promise.all([1, 2].map(() => processGenericChannelCampaignEvent('contact.created', { contactId: 7 }, 1)));
+    expect(results.reduce((sum, result) => sum + result.enrolled, 0)).toBe(1);
+    expect([...keys]).toEqual(['1:campaign-event:22:contact.created:7']);
+  });
+
   test('enrolls a matching email template sequence once for a new lead', async () => {
     const campaign = {
       id: 22,

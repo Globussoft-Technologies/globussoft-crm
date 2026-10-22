@@ -3338,7 +3338,27 @@ describe('customer pickup status', () => {
     });
   });
 
+  test.each(['APPROVED', 'PAID'])('rejects unfunded commission transition to %s', async status => {
+    prisma.plotCommission.findFirst.mockResolvedValue({ id: 801, plotBookingId: 501, status: status === 'PAID' ? 'APPROVED' : 'EARNED', commissionAmount: 450000 });
+    prisma.$queryRaw.mockResolvedValue([{ amountPaid: 20000 }]);
+    const response = await request(makeApp()).patch('/api/pickup-plot-inventory/commissions/801/status').send({ status });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('COMMISSION_NOT_FUNDED');
+    expect(prisma.plotCommission.update).not.toHaveBeenCalled();
+  });
+
+  test('rechecks installment status inside the booking transaction', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, totalAmount: 1000, balance: 1000, amountPaid: 0 });
+    prisma.plotInstallment.findFirst.mockResolvedValueOnce({ id: 901, status: 'PLANNED', amount: 100 }).mockResolvedValueOnce(null);
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment').send({ amount: 100, installmentId: 901, method: 'cash', transactionRef: 'installment-race' });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('INSTALLMENT_NOT_PAYABLE');
+    expect(prisma.plotInstallment.update).not.toHaveBeenCalled();
+  });
+
   test('lets an admin approve an earned commission', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ amountPaid: 20000 }]);
     prisma.plotCommission.findFirst.mockResolvedValue({
       id: 801, tenantId: 7, plotBookingId: 501, paymentId: 701, plotBrokerId: 51,
       contactId: 61, commissionPercent: 10, eligibleAmount: 20000,

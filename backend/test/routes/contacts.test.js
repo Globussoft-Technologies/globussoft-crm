@@ -1504,6 +1504,34 @@ describe('PUT /api/contacts/:id — update', () => {
     const updateData = prisma.contact.update.mock.calls[0][0].data;
     expect(updateData.callifiedCampaignId).toBe(42);
   });
+
+  test('persists a configured Generic CRM lifecycle stage without changing its broad status', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, lifecycleStageKey: 'new' });
+
+    const res = await request(makeApp())
+      .patch('/api/contacts/9001')
+      .send({ status: 'Lead', lifecycleStageKey: 'new' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update.mock.calls[0][0].data).toMatchObject({
+      status: 'Lead',
+      lifecycleStageKey: 'new',
+    });
+  });
+
+  test('does not write Generic CRM lifecycle stages for another vertical', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    prisma.contact.update.mockResolvedValueOnce(SAMPLE_CONTACT);
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'new' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update.mock.calls[0][0].data.lifecycleStageKey).toBeUndefined();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

@@ -504,6 +504,28 @@ router.get("/campaigns", verifyToken, async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.channel) where.channel = req.query.channel;
     if (req.query.status) where.status = req.query.status;
+    // Generic CRM sequence builders use one Campaign per channel + trigger.
+    // Resolve that campaign from the full tenant-scoped set instead of the
+    // currently visible UI page, otherwise an older Email sequence on page 2
+    // can be recreated as a duplicate. Both metadata keys are supported:
+    // Email/SMS use triggerEvent; WhatsApp uses eventTrigger.
+    const sequenceTrigger = typeof req.query.sequenceTrigger === "string"
+      ? req.query.sequenceTrigger.trim()
+      : "";
+    if (sequenceTrigger) {
+      const campaigns = await prisma.campaign.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+      return res.json(campaigns.filter((campaign) => {
+        try {
+          const metadata = JSON.parse(campaign.scheduleFilters || "{}");
+          return (metadata.triggerEvent || metadata.eventTrigger) === sequenceTrigger;
+        } catch {
+          return false;
+        }
+      }));
+    }
     const paginate = req.query.paginate === "1";
     if (paginate && (req.query.createdFrom || req.query.createdTo)) {
       const from = req.query.createdFrom ? new Date(req.query.createdFrom) : null;

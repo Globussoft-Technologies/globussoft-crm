@@ -389,6 +389,7 @@ function defaultSettings() {
   // previously-created forms; email and SMS are opt-in per submitted lead.
   contactNotificationChannels: ["whatsapp"],
   contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
+  contactNotificationTemplates: { emailTemplateId: null, smsTemplateId: null, whatsappTemplateId: null },
   optInEnabled: false,
    optInText: "I agree to receive communication on newsletters, promotional content, offers and events.",
   optInLinkText: "",
@@ -20637,29 +20638,6 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                           <span>Enable WhatsApp number field and same-as-phone checkbox</span>
                         </label>
                         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 6 }}>When enabled, visitors can provide a WhatsApp number or select the phone number for WhatsApp automation.</div>
-                      </div> : null}
-                      {scope === "generic" ? <div className="wf-settings-block">
-                        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
-                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>
-                        {selectedForm.scope === "generic" ? (
-                          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 6 }}>Generic CRM WhatsApp uses the approved template selected on the WhatsApp Templates page for every lead, regardless of lead status.</div>
-                        ) : null}
-                        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-                          {[['email', 'Send email automatically to all leads'], ['sms', 'Send SMS automatically to all leads'], ['whatsapp', 'Send WhatsApp automatically to all leads']].map(([channel, label]) => (
-                            <label key={channel} className="wf-settings-toggle">
-                              <input
-                                type="checkbox"
-                                checked={Array.isArray(selectedForm.settings.contactNotificationChannels) && selectedForm.settings.contactNotificationChannels.includes(channel)}
-                                onChange={(e) => {
-                                  const current = Array.isArray(selectedForm.settings.contactNotificationChannels) ? selectedForm.settings.contactNotificationChannels : [];
-                                  const next = e.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel);
-                                  applyDraft({ settings: { ...selectedForm.settings, contactNotificationChannels: next } });
-                                }}
-                              />
-                              <span>{label}</span>
-                            </label>
-                          ))}
-                        </div>
                       </div> : null}
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">

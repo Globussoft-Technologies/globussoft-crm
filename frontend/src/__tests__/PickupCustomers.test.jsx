@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import PickupCustomers from '../pages/PickupCustomers';
 import { NotifyProvider } from '../utils/notify';
+import { AuthContext } from '../appContexts';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn(), registerGlobalNotify: vi.fn() }));
 import { fetchApi } from '../utils/api';
@@ -71,6 +72,49 @@ beforeEach(() => {
 });
 
 describe('<PickupCustomers />', () => {
+  it('shows the admin commission ledger and approves an earned commission', async () => {
+    const adminPayload = {
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        commissions: [{
+          id: 801, brokerName: 'Sanjeev', eligibleAmount: 4500000,
+          commissionPercent: 10, commissionAmount: 450000, commissionDeducted: 450000,
+          commissionOutstanding: 0, currency: 'INR', status: 'EARNED',
+          allocations: [
+            { paymentId: 701, paidAt: '2026-10-07T10:00:00.000Z', grossAmount: 1000000, commissionDeduction: 450000, netPaymentAmount: 550000 },
+            { paymentId: 702, paidAt: '2026-10-08T10:00:00.000Z', grossAmount: 500000, commissionDeduction: 0, netPaymentAmount: 500000 },
+          ],
+        }],
+      }, payload.customers[1]],
+    };
+    fetchApi.mockResolvedValue(adminPayload);
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' } }}>
+        <NotifyProvider><PickupCustomers /></NotifyProvider>
+      </AuthContext.Provider>,
+    );
+
+    const ledger = await screen.findByRole('table', { name: 'Plot commission ledger' });
+    expect(ledger).toHaveTextContent('Sanjeev');
+    const rateInput = within(ledger).getByRole('spinbutton', { name: 'Commission percentage for Sanjeev' });
+    expect(rateInput).toHaveValue(10);
+    fireEvent.change(rateInput, { target: { value: '5' } });
+    expect(ledger).toHaveTextContent('₹2,25,000.00');
+    expect(ledger).toHaveTextContent('₹45,00,000.00 × 5%');
+    fireEvent.click(within(ledger).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/commissions/801/rate',
+      { method: 'PATCH', body: JSON.stringify({ commissionPercent: 5 }) },
+    ));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/commissions/801/status',
+      { method: 'PATCH', body: JSON.stringify({ status: 'APPROVED' }) },
+    ));
+  });
+
   it('shows a customer table on the left and the selected customer details on the right', async () => {
     render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
     expect(await screen.findByRole('button', { name: 'Priya Shah' })).toHaveAttribute('aria-pressed', 'true');
@@ -219,14 +263,33 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByText('Customer can pay using UPI, card, or net banking.')).toBeInTheDocument();
   });
 
-  it('adds an installment by month and year before initiating its payment', async () => {
-    fetchApi.mockResolvedValue({
+  it('persists a monthly installment sequence before initiating its payment', async () => {
+    const unscheduledPayload = {
       ...payload,
       customers: [{
         ...payload.customers[0],
         booking: { ...payload.customers[0].booking, amountPaid: 0, balance: 4500000 },
         payments: [{ ...payload.customers[0].payments[0], amount: 1 }],
+        installments: [],
       }, payload.customers[1]],
+    };
+    const scheduledPayload = {
+      ...unscheduledPayload,
+      customers: [{
+        ...unscheduledPayload.customers[0],
+        installments: [
+          { id: 901, plotBookingId: 501, sequenceNumber: 1, frequency: 'MONTHLY', dueDate: '2027-12-01T12:00:00.000Z', amount: 150000, status: 'PLANNED' },
+          { id: 902, plotBookingId: 501, sequenceNumber: 2, frequency: 'MONTHLY', dueDate: '2028-01-01T12:00:00.000Z', amount: 150000, status: 'PLANNED' },
+        ],
+      }, payload.customers[1]],
+    };
+    let scheduleCreated = false;
+    fetchApi.mockImplementation(async (url, options = {}) => {
+      if (url.endsWith('/installments') && options.method === 'POST') {
+        scheduleCreated = true;
+        return { installments: scheduledPayload.customers[0].installments };
+      }
+      return scheduleCreated ? scheduledPayload : unscheduledPayload;
     });
     render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
     await screen.findByRole('button', { name: 'Priya Shah' });
@@ -238,17 +301,28 @@ describe('<PickupCustomers />', () => {
     expect(installments).toHaveTextContent('remains on this booking.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add installment' }));
-    const addDialog = screen.getByRole('dialog', { name: 'Add installment' });
+    const addDialog = screen.getByRole('dialog', { name: 'Create installment schedule' });
+    fireEvent.change(within(addDialog).getByLabelText('Installment frequency'), { target: { value: 'MONTHLY' } });
+    fireEvent.change(within(addDialog).getByLabelText('Number of installment payments'), { target: { value: '2' } });
     fireEvent.change(within(addDialog).getByLabelText('Installment month'), { target: { value: '12' } });
     fireEvent.change(within(addDialog).getByLabelText('Installment year'), { target: { value: '2027' } });
     fireEvent.change(within(addDialog).getByLabelText('New installment amount'), { target: { value: '150000' } });
-    fireEvent.click(within(addDialog).getByRole('button', { name: 'Add installment' }));
+    fireEvent.click(within(addDialog).getByRole('button', { name: 'Create schedule' }));
 
-    const planned = screen.getByRole('table', { name: 'Planned installments' });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/61/installments',
+      {
+        method: 'POST',
+        body: JSON.stringify({ plotBookingId: 501, frequency: 'MONTHLY', paymentCount: 2, firstMonth: 12, firstYear: 2027, amount: 150000 }),
+      },
+    ));
+
+    const planned = await screen.findByRole('table', { name: 'Planned installments' });
     expect(planned).toHaveTextContent('December');
-    expect(planned).toHaveTextContent('2027');
+    expect(planned).toHaveTextContent('January');
+    expect(planned).toHaveTextContent('2028');
     expect(planned).toHaveTextContent('1,50,000');
-    fireEvent.click(within(planned).getByRole('button', { name: 'Initiate payment' }));
+    fireEvent.click(within(planned).getAllByRole('button', { name: 'Initiate payment' })[0]);
     expect(screen.getByRole('heading', { name: 'Generate installment payment' })).toBeInTheDocument();
     expect(screen.getByLabelText('Installment payment amount')).toHaveValue(150000);
     expect(screen.getByLabelText('Installment payment amount')).toHaveAttribute('readonly');

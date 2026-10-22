@@ -20,6 +20,9 @@ const { normalizeGenericCrmPhone, normalizeGenericCrmPhone: normalizeGenericPhon
 const axios = require("axios");
 const { DEFAULT_PERSONAL_DOMAINS, cleanDomains, validateEmail } = require("../lib/webFormEmailValidation");
 const { sanitizeCustomCss } = require("../lib/webFormCustomCss");
+const { createSelectionToken, selectionUrl } = require("../lib/genericPickupPlotSelection");
+const { genericLeadNotificationCategory, ensureGenericLeadNotificationTemplates } = require("../lib/genericLeadEmailTemplates");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 
 const router = express.Router();
 
@@ -254,15 +257,39 @@ function renderContactNotification(template, contact, form) {
     .replace(/\{\{\s*(name|email|phone|company|form)\s*\}\}/g, (_, key) => values[key]);
 }
 
-async function sendContactNotifications({ form, settings, contact, submissionId, isNewContact }) {
+function renderWebFormTemplate(template, contact, form, selectionLink, html = false) {
+  const values = {
+    name: contact?.name || "",
+    email: contact?.email || "",
+    phone: contact?.phone || "",
+    company: contact?.company || "",
+    form: form?.name || "",
+    selectionlink: selectionLink || "",
+  };
+  const escapeHtml = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  return String(template || "").replace(/\{\{\s*(name|email|phone|company|form|selectionLink)\s*\}\}/gi, (_, key) => {
+    const value = values[key.toLowerCase()] || "";
+    return html ? escapeHtml(value) : value;
+  });
+}
+
+async function sendContactNotifications({ form, settings, contact, submissionId, isNewContact, request }) {
   // Contact acknowledgement controls belong to Generic CRM. Travel forms have
   // their own submission workflows and provider configuration, so never let a
   // shared settings payload trigger Generic notifications for that scope.
   if (form.scope !== "generic") return {};
+  // Create editable Email/SMS defaults on first Generic form notification even
+  // if an operator has not yet opened Marketing > Templates.
+  await ensureGenericLeadNotificationTemplates(prisma, form.tenantId);
   const channels = Array.isArray(settings.contactNotificationChannels)
     ? settings.contactNotificationChannels
     : ["whatsapp"];
   const body = renderContactNotification(settings.contactNotificationMessage, contact, form);
+  const selectionLink = selectionUrl({
+    baseUrl: getFrontendUrlFromRequest(request),
+    token: createSelectionToken({ tenantId: form.tenantId, contactId: contact.id, submissionId }),
+  });
+  const selectionMessage = `${body}\n\nChoose your pickup location and interested plot here:\n${selectionLink}`;
   const result = {};
 
   if (channels.includes("email")) {
@@ -270,11 +297,27 @@ async function sendContactNotifications({ form, settings, contact, submissionId,
       result.email = { sent: false, code: "LEAD_EMAIL_MISSING" };
     } else {
       try {
+        const emailTemplateId = Number(settings.contactNotificationTemplates?.emailTemplateId);
+        const emailTemplate = emailTemplateId > 0
+          ? await prisma.emailTemplate.findFirst({ where: { id: emailTemplateId, tenantId: form.tenantId, channel: "EMAIL" }, select: { subject: true, body: true } })
+          : await prisma.emailTemplate.findFirst({ where: { tenantId: form.tenantId, channel: "EMAIL", category: genericLeadNotificationCategory(isNewContact) }, select: { subject: true, body: true } });
+        let emailBody = selectionMessage;
+        let emailHtml = null;
+        if (emailTemplate?.body) {
+          emailBody = renderWebFormTemplate(emailTemplate.body, contact, form, selectionLink);
+          emailHtml = renderWebFormTemplate(emailTemplate.body, contact, form, selectionLink, true);
+          if (!/\{\{\s*selectionLink\s*\}\}/i.test(emailTemplate.body)) {
+            emailHtml += `<p>Choose your pickup location and interested plot here:<br><a href="${selectionLink.replace(/"/g, "&quot;")}">Choose pickup location and plot</a></p>`;
+          }
+          emailBody = emailBody.replace(/<\/?[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
+          if (!emailBody.includes(selectionLink)) emailBody += `\n\nChoose your pickup location and interested plot here: ${selectionLink}`;
+        }
         const sent = await sendEmail({
           tenantId: form.tenantId,
           to: contact.email,
-          subject: `Thanks for contacting ${form.name}`,
-          text: body,
+          subject: emailTemplate?.subject ? renderContactNotification(emailTemplate.subject, contact, form) : `Thanks for contacting ${form.name}`,
+          text: emailBody,
+          ...(emailHtml ? { html: emailHtml } : {}),
         });
         result.email = sent?.sent
           ? { sent: true }
@@ -299,7 +342,21 @@ async function sendContactNotifications({ form, settings, contact, submissionId,
         if (!config) {
           result.sms = { sent: false, code: "SMS_NOT_CONFIGURED" };
         } else {
-          const sent = await sendSms({ ...config, to: contact.phone, body });
+          const smsTemplateId = Number(settings.contactNotificationTemplates?.smsTemplateId);
+          const smsTemplate = smsTemplateId > 0
+            ? await prisma.smsTemplate.findFirst({ where: { id: smsTemplateId, tenantId: form.tenantId }, select: { body: true, dltTemplateId: true } })
+            : null;
+          const genericSmsTemplate = !smsTemplate?.body
+            ? await prisma.emailTemplate.findFirst({ where: { tenantId: form.tenantId, channel: "SMS", category: genericLeadNotificationCategory(isNewContact) }, select: { body: true } })
+            : null;
+          const activeSmsTemplate = smsTemplate?.body ? smsTemplate : genericSmsTemplate;
+          let smsBody = activeSmsTemplate?.body
+            ? renderWebFormTemplate(activeSmsTemplate.body, contact, form, selectionLink).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+            : body;
+          if (activeSmsTemplate?.body && !smsBody.includes(selectionLink)) {
+            smsBody += ` Choose your pickup location and interested plot: ${selectionLink}`;
+          }
+          const sent = await sendSms({ ...config, ...(smsTemplate?.dltTemplateId ? { dltTemplateId: smsTemplate.dltTemplateId } : {}), to: contact.phone, body: smsBody });
           result.sms = sent?.success === false
             ? { sent: false, code: "SMS_SEND_FAILED", error: sent.error }
             : { sent: true, providerMsgId: sent?.providerMsgId };
@@ -318,6 +375,8 @@ async function sendContactNotifications({ form, settings, contact, submissionId,
         contact,
         submissionId,
         isNewContact,
+        selectionLink,
+        bulkTemplateId: Number(settings.contactNotificationTemplates?.whatsappTemplateId) || null,
       });
     } catch (error) {
       console.error("[web_forms] generic WhatsApp automation failed:", error.message);
@@ -633,6 +692,7 @@ function defaultSettings() {
     notificationEmail: "",
     contactNotificationChannels: ["whatsapp"],
     contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
+    contactNotificationTemplates: { emailTemplateId: null, smsTemplateId: null, whatsappTemplateId: null },
     whatsappEnabled: false,
     phoneAllowAllCountries: true,
     phoneAllowedCountries: [],
@@ -970,6 +1030,11 @@ function normalizeSettings(raw) {
       settings.contactNotificationMessage,
       defaultSettings().contactNotificationMessage,
     ),
+    contactNotificationTemplates: {
+      emailTemplateId: Number(settings.contactNotificationTemplates?.emailTemplateId) || null,
+      smsTemplateId: Number(settings.contactNotificationTemplates?.smsTemplateId) || null,
+      whatsappTemplateId: Number(settings.contactNotificationTemplates?.whatsappTemplateId) || null,
+    },
 
     whatsappEnabled: settings.whatsappEnabled === true || settings.showWhatsappSameAsPhone === true,
 
@@ -2103,6 +2168,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     contact,
     submissionId: submission.id,
     isNewContact: createdNewContact,
+    request: req,
     });
     if (response.contactNotifications.whatsapp) {
       response.whatsapp = response.contactNotifications.whatsapp;

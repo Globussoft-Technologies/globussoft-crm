@@ -1,5 +1,6 @@
 const prisma = require('./prisma');
 const { syncPlotBookingInvoice } = require('./plotBookingInvoice');
+const { syncPlotCommission } = require('./genericPlotCommission');
 
 // Payment.metadata is a TEXT column. Extract exact JSON values in MySQL,
 // rather than matching an ID prefix (12 must never match 123).
@@ -34,6 +35,17 @@ async function reconcilePlotBookingPayment(payment) {
       where: { id: booking.id },
       data: { amountPaid, balance, paymentStatus: balance === 0 ? 'PAID' : 'PARTIAL' },
     });
+    await syncPlotCommission(tx, payment, { ...booking, ...updated });
+    const installmentId = Number(metadata.installmentId);
+    if (Number.isInteger(installmentId) && installmentId > 0) {
+      await tx.plotInstallment.updateMany({
+        where: { id: installmentId, tenantId: payment.tenantId, plotBookingId: booking.id, ...(String(payment.status || '').toUpperCase() === 'SUCCESS' ? {} : { paymentId: payment.id }) },
+        data: {
+          status: String(payment.status || '').toUpperCase() === 'SUCCESS' ? 'PAID' : 'PLANNED',
+          paymentId: String(payment.status || '').toUpperCase() === 'SUCCESS' ? payment.id : null,
+        },
+      });
+    }
     const reconciled = {
       ...booking,
       ...updated,

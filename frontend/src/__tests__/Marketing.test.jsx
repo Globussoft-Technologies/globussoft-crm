@@ -52,7 +52,7 @@ const notifyObj = {
   error: vi.fn(),
   info: vi.fn(),
   success: vi.fn(),
-  confirm: () => Promise.resolve(true),
+  confirm: vi.fn(() => Promise.resolve(true)),
   prompt: () => Promise.resolve(''),
 };
 vi.mock('../utils/notify', () => ({
@@ -103,7 +103,7 @@ const SAMPLE_CAMPAIGNS = [
   },
 ];
 
-function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], forms = [], sequences = [] } = {}) {
+function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], whatsapp = [], forms = [], sequences = [] } = {}) {
   fetchApiMock.mockImplementation((url, options = {}) => {
     if (typeof url !== 'string') return Promise.resolve(null);
     if (url === '/api/marketing/campaigns' && options.method === 'POST') {
@@ -122,6 +122,9 @@ function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], forms = [], sequenc
     }
     if (url.startsWith('/api/marketing/campaigns?channel=SMS')) {
       return Promise.resolve(sms);
+    }
+    if (url.startsWith('/api/marketing/campaigns?channel=WHATSAPP')) {
+      return Promise.resolve(whatsapp);
     }
     if (url.startsWith('/api/marketing/campaigns?channel=FORM')) {
       return Promise.resolve(forms);
@@ -152,6 +155,7 @@ beforeEach(() => {
   notifyObj.error.mockReset();
   notifyObj.info.mockReset();
   notifyObj.success.mockReset();
+  notifyObj.confirm.mockReset().mockResolvedValue(true);
 });
 
 describe('<Marketing /> — Generic campaign workflow', () => {
@@ -201,7 +205,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     }));
   });
 
-  it('keeps the date filter available after empty results and reloads when cleared', async () => {
+  it('hides the created-date filter on the Generic email sequence page', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (String(url).includes('paginate=1')) {
         return Promise.resolve({
@@ -213,13 +217,8 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     });
     renderMarketing(GENERIC_USER);
     expect(await screen.findByText(SAMPLE_CAMPAIGNS[0].name)).toBeInTheDocument();
-    const filter = screen.getByDisplayValue('All time');
-    fireEvent.change(filter, { target: { value: 'today' } });
-    expect(await screen.findByText('No sequences found')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Today')).toBeInTheDocument();
-    fireEvent.change(screen.getByDisplayValue('Today'), { target: { value: 'all' } });
-    expect(await screen.findByText(SAMPLE_CAMPAIGNS[0].name)).toBeInTheDocument();
-    expect(screen.getByDisplayValue('All time')).toBeInTheDocument();
+    expect(screen.queryByText('Filter by created date')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('All time')).not.toBeInTheDocument();
     const requests = fetchApiMock.mock.calls.filter(([url]) => String(url).includes('paginate=1'));
     expect(requests.at(-1)[0]).not.toContain('createdFrom=');
     expect(requests.at(-1)[0]).not.toContain('createdTo=');
@@ -262,6 +261,25 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     expect(screen.queryByRole('button', { name: 'Push Campaigns' })).not.toBeInTheDocument();
   });
 
+  it('highlights only the selected Generic marketing tab', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates');
+    wireFetch();
+    renderMarketing(GENERIC_USER);
+
+    const templatesTab = await screen.findByRole('button', { name: 'Templates' });
+    const emailTab = screen.getByRole('button', { name: 'Email Sequences' });
+    expect(templatesTab.style.background).toBe('var(--primary-color, var(--accent-color))');
+    expect(emailTab.style.background).toBe('transparent');
+
+    fireEvent.click(emailTab);
+
+    expect(templatesTab.style.background).toBe('transparent');
+    expect(templatesTab.style.color).toBe('var(--text-secondary)');
+    expect(emailTab.style.background).toBe('var(--primary-color)');
+    expect(emailTab.style.color).toBe('rgb(255, 255, 255)');
+    window.history.pushState({}, '', '/marketing');
+  });
+
   it('renders percentage-based engagement and running status in Generic cards', async () => {
     wireFetch({ campaigns: [{ ...workflow, status: 'Active' }] });
     renderMarketing(GENERIC_USER);
@@ -272,39 +290,160 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     expect(screen.getByRole('button', { name: /Delete sequence Q4 Holiday Promo/ })).toBeInTheDocument();
   });
 
-  it('opens the Generic wizard and rejects advancing or saving an unnamed campaign', async () => {
-    wireFetch({ campaigns: [] });
+  it.each([
+    ['Email', 'EMAIL', 'campaigns'],
+    ['SMS', 'SMS', 'sms'],
+    ['WhatsApp', 'WHATSAPP', 'whatsapp'],
+  ])('starts a Generic %s sequence in place without reloading and moving its card', async (label, channel, source) => {
+    const sequence = {
+      ...workflow,
+      id: 700 + ['EMAIL', 'SMS', 'WHATSAPP'].indexOf(channel),
+      name: `${label} in-place sequence`,
+      status: 'Draft',
+      channel,
+    };
+    wireFetch({
+      campaigns: source === 'whatsapp' ? [] : [sequence],
+      sms: source === 'sms' ? [sequence] : [],
+      whatsapp: source === 'whatsapp' ? [sequence] : [],
+    });
     renderMarketing(GENERIC_USER);
-    fireEvent.click(await screen.findByRole('button', { name: 'Create Sequence' }));
-    const wizard = await screen.findByRole('main', { name: 'Create campaign' });
-    expect(screen.queryByRole('dialog', { name: 'Create campaign' })).not.toBeInTheDocument();
-    fireEvent.click(within(wizard).getByRole('button', { name: /^Next/ }));
-    expect(notifyObj.error).toHaveBeenCalledWith('Campaign name is required');
-    fireEvent.click(within(wizard).getByRole('button', { name: 'Save Draft' }));
-    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
-    fireEvent.click(within(wizard).getByRole('button', { name: 'Close' }));
-    expect(await screen.findByRole('heading', { name: 'Marketing Sequences' })).toBeInTheDocument();
+    if (source !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
+    const listUrl = source === 'whatsapp'
+      ? `/api/marketing/campaigns?channel=${channel}`
+      : '/api/marketing/campaigns?paginate=1';
+    await screen.findByText(sequence.name);
+    const listCallsBeforePlay = fetchApiMock.mock.calls.filter(([url]) => String(url).startsWith(listUrl)).length;
+
+    fireEvent.click(screen.getByRole('button', { name: `Play sequence ${sequence.name}` }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: `Pause sequence ${sequence.name}` })).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.filter(([url]) => String(url).startsWith(listUrl))).toHaveLength(listCallsBeforePlay);
+    expect(notifyObj.success).toHaveBeenCalledWith('Campaign activated');
+
+    fireEvent.click(screen.getByRole('button', { name: `Pause sequence ${sequence.name}` }));
+    await waitFor(() => expect(screen.getByRole('button', { name: `Play sequence ${sequence.name}` })).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.filter(([url]) => String(url).startsWith(listUrl))).toHaveLength(listCallsBeforePlay);
+    expect(notifyObj.success).toHaveBeenCalledWith('Campaign paused');
   });
 
-  it.each([false, true])('persists Generic steps, delay and send window (activate=%s)', async activate => {
-    wireFetch({ campaigns: [workflow] });
+  it('hides the redundant create-sequence and date-filter controls for Generic Email and SMS', async () => {
+    wireFetch({ campaigns: [], sms: [] });
     renderMarketing(GENERIC_USER);
+    expect(screen.queryByRole('heading', { name: 'Build a Email sequence' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a condition' }));
+    expect(await screen.findByRole('heading', { name: 'Build a Email sequence' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Filter by created date')).not.toBeInTheDocument();
+    expect(screen.queryByText('No sequences found')).not.toBeInTheDocument();
+    expect(screen.getByText('Create an email template before adding an automation action.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
+    expect(screen.queryByRole('heading', { name: 'Build a SMS sequence' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a condition' }));
+    expect(await screen.findByRole('heading', { name: 'Build a SMS sequence' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Filter by created date')).not.toBeInTheDocument();
+    expect(screen.queryByText('No sequences found')).not.toBeInTheDocument();
+    expect(screen.getByText('Create an SMS template before adding an automation action.')).toBeInTheDocument();
+  });
+
+  it('hides saved WhatsApp sequences while building and restores them from the top action', async () => {
+    const whatsapp = [{
+      id: 202,
+      name: 'Request pickup location & interested plot for new lead WhatsApp',
+      status: 'Active',
+      channel: 'WHATSAPP',
+      sent: 3,
+      scheduleFilters: JSON.stringify({
+        automationType: 'whatsapp_event',
+        eventTrigger: 'pickup_plot.selection_requested',
+        whatsappTemplateId: 9,
+        sequenceName: 'pickup_plot_request',
+      }),
+    }];
+    wireFetch({ whatsapp });
+    renderMarketing(GENERIC_USER);
+
+    fireEvent.click(screen.getByRole('button', { name: 'WhatsApp Sequences' }));
+
+    expect(screen.queryByRole('heading', { name: 'Build a WhatsApp sequence' })).not.toBeInTheDocument();
+    expect(await screen.findByText(whatsapp[0].name)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pause sequence Request pickup location/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a condition' }));
+    expect(await screen.findByRole('heading', { name: 'Build a WhatsApp sequence' })).toBeInTheDocument();
+    expect(screen.queryByText(whatsapp[0].name)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View sequences' }));
+
+    expect(await screen.findByText(whatsapp[0].name)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Build a WhatsApp sequence' })).not.toBeInTheDocument();
+  });
+
+  it('keeps an edited Generic sequence open until unsaved changes are explicitly discarded', async () => {
+    wireFetch({ campaigns: [], sms: [] });
+    renderMarketing(GENERIC_USER);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a condition' }));
+    const nextStep = await screen.findByRole('combobox', { name: 'Next step type after step 1' });
+    fireEvent.change(nextStep, { target: { value: 'wait' } });
+
+    notifyObj.confirm.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      confirmText: 'Continue editing',
+      cancelText: 'Discard changes',
+    })));
+    expect(screen.getByRole('heading', { name: 'Build a Email sequence' })).toBeInTheDocument();
+
+    notifyObj.confirm.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
+
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Build a Email sequence' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Add a condition' })).toBeInTheDocument();
+  });
+
+  it('registers the browser leave warning only after a Generic sequence is changed', async () => {
+    wireFetch({ campaigns: [] });
+    renderMarketing(GENERIC_USER);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a condition' }));
+
+    const cleanEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(cleanEvent);
+    expect(cleanEvent.defaultPrevented).toBe(false);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Next step type after step 1' }), { target: { value: 'wait' } });
+    const dirtyEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirtyEvent);
+    expect(dirtyEvent.defaultPrevented).toBe(true);
+  });
+
+  it.each([
+    ['Email', 'EMAIL', 'campaigns', 'generic-email-sequence-builder'],
+    ['SMS', 'SMS', 'sms', 'generic-sms-sequence-builder'],
+    ['WhatsApp', 'WHATSAPP', 'whatsapp', 'generic-whatsapp-sequence-builder'],
+  ])('Edit Sequence opens the same %s builder used to create sequences', async (_label, channel, tab, builderId) => {
+    const campaign = {
+      ...workflow,
+      channel,
+      scheduleFilters: JSON.stringify(channel === 'WHATSAPP'
+        ? { eventTrigger: 'contact.created', whatsappTemplateId: 9, sequenceName: 'Welcome sequence' }
+        : { automationType: 'generic_channel_event', channel, triggerEvent: 'contact.created', templateId: 4, sequenceName: 'Welcome sequence' }),
+    };
+    wireFetch({ campaigns: [campaign], whatsapp: channel === 'WHATSAPP' ? [campaign] : [] });
+    renderMarketing(GENERIC_USER);
+    if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${tab === 'sms' ? 'SMS' : 'WhatsApp'} Sequences` }));
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Sequence' }));
-    const wizard = await screen.findByRole('main', { name: 'Edit campaign' });
-    expect(screen.queryByText(/Sub-brand audience/i)).not.toBeInTheDocument();
-    if (activate) {
-      for (let index = 0; index < 4; index++) fireEvent.click(within(wizard).getByRole('button', { name: /^Next/ }));
-      expect(within(wizard).getByText(/After 2 hours/)).toBeInTheDocument();
-    }
-    fireEvent.click(within(wizard).getByRole('button', { name: activate ? 'Activate Campaign' : 'Save Draft' }));
-    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith(activate ? 'Campaign activated' : 'Campaign draft saved'));
-    const stepCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/sequences/steps/20' && options?.method === 'PUT');
-    expect(JSON.parse(stepCall[1].body)).toMatchObject({ kind: 'email', name: 'Welcome email', delayMinutes: 120, emailTemplateId: 4 });
-    const scheduleCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/marketing/campaigns/100/schedule' && options?.method === 'POST');
-    expect(JSON.parse(scheduleCall[1].body).filters).toMatchObject({ timezone: 'UTC', startHour: 9, endHour: 17, businessDaysOnly: true });
-    const activation = fetchApiMock.mock.calls.find(([url]) => url === '/api/sequences/12/toggle');
-    if (activate) expect(JSON.parse(activation[1].body)).toEqual({ isActive: true });
-    else expect(activation).toBeUndefined();
+
+    const builder = await screen.findByRole('heading', { name: `Build a ${channel === 'EMAIL' ? 'Email' : channel === 'SMS' ? 'SMS' : 'WhatsApp'} sequence` });
+    expect(builder.closest(`#${builderId}`)).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    expect(screen.queryByRole('main', { name: 'Edit campaign' })).not.toBeInTheDocument();
+    Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 });
 

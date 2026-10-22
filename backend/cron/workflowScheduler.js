@@ -393,6 +393,67 @@ async function processOverdueInvoices(now, io) {
   return { checked: overdue.length, emitted };
 }
 
+/**
+ * Emit Generic CRM payment-due events at the operator-selected time before
+ * an unpaid invoice becomes due. Distinct offsets are read from active
+ * Email/SMS/WhatsApp campaign metadata, so the scan only covers configured
+ * reminder windows.
+ */
+async function processUpcomingPaymentDueReminders(now, io) {
+  const { emitEvent } = require("../lib/eventBus");
+  const campaigns = await prisma.campaign.findMany({
+    where: { status: "Active", channel: { in: ["EMAIL", "SMS", "WHATSAPP"] } },
+    select: { scheduleFilters: true },
+  });
+  const offsets = new Set();
+  for (const campaign of campaigns) {
+    const filters = parseJson(campaign.scheduleFilters, null);
+    if (!filters || (filters.eventTrigger || filters.triggerEvent) !== "payment.due") continue;
+    if (!["generic_channel_event", "whatsapp_event"].includes(filters.automationType)) continue;
+    const amount = Number(filters.dueBefore?.amount);
+    const multiplier = { minutes: 1, hours: 60, days: 1440 }[filters.dueBefore?.unit];
+    if (Number.isFinite(amount) && amount > 0 && multiplier) offsets.add(Math.round(amount * multiplier));
+  }
+
+  let checked = 0;
+  let emitted = 0;
+  for (const offsetMinutes of offsets) {
+    const target = now.getTime() + offsetMinutes * 60_000;
+    const invoices = await prisma.invoice.findMany({
+      where: {
+        status: "UNPAID",
+        dueDate: { gt: new Date(target - 15 * 60_000), lte: new Date(target) },
+      },
+      select: {
+        id: true, invoiceNum: true, amount: true, dueDate: true,
+        contactId: true, dealId: true, tenantId: true,
+      },
+      take: 1000,
+      orderBy: { dueDate: "asc" },
+    });
+    checked += invoices.length;
+    for (const invoice of invoices) {
+      try {
+        await emitEvent("invoice.payment_due", {
+          eventId: `${invoice.id}:${new Date(invoice.dueDate).toISOString()}:${offsetMinutes}`,
+          invoiceId: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          dueDate: invoice.dueDate,
+          dueBeforeMinutes: offsetMinutes,
+          contactId: invoice.contactId,
+          dealId: invoice.dealId,
+          status: invoice.status || "UNPAID",
+        }, invoice.tenantId, io);
+        emitted += 1;
+      } catch (error) {
+        console.error(`[WorkflowScheduler] invoice ${invoice.id} pre-due emit failed:`, error.message);
+      }
+    }
+  }
+  return { checked, emitted, offsets: offsets.size };
+}
+
 // ── Tick ──────────────────────────────────────────────────────────────
 
 async function tickWorkflowScheduler() {
@@ -403,6 +464,7 @@ async function tickWorkflowScheduler() {
   let scheduled = { rules: 0, fired: 0, skipped: 0, truncated: 0 };
   let deferred = { resumed: 0, failed: 0, due: 0 };
   let invoices = { checked: 0, emitted: 0 };
+  let paymentDue = { checked: 0, emitted: 0, offsets: 0 };
 
   // Each stage is independently guarded: a failure in one must not stop the
   // other two from running this tick.
@@ -417,6 +479,11 @@ async function tickWorkflowScheduler() {
     console.error("[WorkflowScheduler] deferred action stage failed:", error.message);
   }
   try {
+    paymentDue = await processUpcomingPaymentDueReminders(now, io);
+  } catch (error) {
+    console.error("[WorkflowScheduler] payment-due reminder stage failed:", error.message);
+  }
+  try {
     invoices = await processOverdueInvoices(now, io);
   } catch (error) {
     console.error("[WorkflowScheduler] overdue invoice stage failed:", error.message);
@@ -426,10 +493,11 @@ async function tickWorkflowScheduler() {
   console.log(
     `[WorkflowScheduler] rules=${scheduled.rules} fired=${scheduled.fired} skipped=${scheduled.skipped}`
     + ` truncated=${scheduled.truncated} deferred=${deferred.resumed}/${deferred.due}`
+    + ` paymentDue=${paymentDue.emitted}/${paymentDue.checked}`
     + ` overdue=${invoices.emitted}/${invoices.checked} (${ms}ms)`,
   );
 
-  return { scheduled, deferred, invoices, ms };
+  return { scheduled, deferred, paymentDue, invoices, ms };
 }
 
 function initWorkflowScheduler() {
@@ -467,6 +535,7 @@ module.exports = {
   processScheduledRules,
   processDeferredActions,
   processOverdueInvoices,
+  processUpcomingPaymentDueReminders,
   runScheduledRule,
   runForTenant,
   candidateWhere,

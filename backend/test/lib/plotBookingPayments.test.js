@@ -5,15 +5,23 @@ import prisma from '../../lib/prisma.js';
 prisma.$queryRaw = vi.fn();
 prisma.$transaction = vi.fn();
 prisma.plotBooking = { findFirst: vi.fn(), update: vi.fn() };
+prisma.invoice = { findFirst: vi.fn(), update: vi.fn() };
+prisma.payment = { update: vi.fn() };
+prisma.plotInstallment = { updateMany: vi.fn() };
 const { reconcilePlotBookingPayment, successfulPaymentTotal } = createRequire(import.meta.url)('../../lib/plotBookingPayments');
 
 beforeEach(() => {
   prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.$transaction.mockReset().mockImplementation(callback => callback(prisma));
-  prisma.plotBooking.findFirst.mockReset().mockResolvedValue({ id: 12, tenantId: 7, totalAmount: 1000 });
+  prisma.plotBooking.findFirst.mockReset().mockResolvedValue({ id: 12, tenantId: 7, invoiceId: 99, totalAmount: 1000 });
   prisma.plotBooking.update.mockReset().mockImplementation(async ({ data }) => ({ id: 12, ...data }));
+  prisma.plotCommission = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.contact = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.plotSite = { findFirst: vi.fn().mockResolvedValue(null) };
+  prisma.invoice.findFirst.mockReset().mockResolvedValue({ id: 99, status: 'UNPAID' });
+  prisma.invoice.update.mockReset().mockImplementation(async ({ data }) => ({ id: 99, ...data }));
+  prisma.payment.update.mockReset().mockResolvedValue({ id: 501 });
+  prisma.plotInstallment.updateMany.mockReset().mockResolvedValue({ count: 1 });
 });
 
 describe('plot booking payment reconciliation', () => {
@@ -73,4 +81,9 @@ describe('plot booking payment reconciliation', () => {
     expect(await reconcilePlotBookingPayment({ tenantId: 7, metadata: '{"kind":"plot-booking-payment","plotBookingId":12}' })).toBeNull();
     expect(prisma.plotBooking.update).not.toHaveBeenCalled();
   });
+});
+
+test('a failed older payment cannot reopen an installment paid by another attempt', async () => {
+  await reconcilePlotBookingPayment({ id: 501, status: 'FAILED', tenantId: 7, metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 12, installmentId: 10 }) });
+  expect(prisma.plotInstallment.updateMany).toHaveBeenCalledWith({ where: { id: 10, tenantId: 7, plotBookingId: 12, paymentId: 501 }, data: { status: 'PLANNED', paymentId: null } });
 });

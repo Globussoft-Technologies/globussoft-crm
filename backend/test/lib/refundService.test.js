@@ -269,3 +269,12 @@ describe('notifyRefundInitiated', () => {
     });
   });
 });
+
+test('reconciles plot balances and commissions after a gateway refund', async () => {
+  const payments = requireCJS('../../lib/plotBookingPayments');
+  const reconcile = vi.spyOn(payments, 'reconcilePlotBookingPayment').mockResolvedValue(null);
+  try {
+    await svc.finalizeRefund(pay({ metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 12 }) }), { refundId: 'rfnd_plot', amount: 499 });
+    expect(reconcile).toHaveBeenCalledWith(expect.objectContaining({ id: 5, tenantId: 1, status: 'REFUNDED' }));
+  } finally { reconcile.mockRestore(); }
+});

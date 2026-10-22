@@ -821,6 +821,9 @@ model Contact {
   company               String?
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
+  // Generic CRM-only stable key for the tenant-configured lifecycle stage.
+  // The broad `status` above remains the automation/reporting value.
+  lifecycleStageKey     String?
   source                String?   @default("Organic")
   // Web-form Medium (e.g. Google, Facebook Ads) — free-text channel detail
   // kept SEPARATE from `source` (e.g. Website). Nullable so all pre-existing
@@ -1949,6 +1952,7 @@ model Sequence {
 }
 
 model SequenceEnrollment {
+  automationEventKey String? @unique @db.VarChar(191)
   id          Int       @id @default(autoincrement())
   sequenceId  Int
   sequence    Sequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
@@ -2746,6 +2750,7 @@ model WhatsAppTemplate {
   headerType     String? // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
   headerContent  String?
   body           String    @db.Text
+  variableMapping String?   @db.Text // JSON mapping Meta {{n}} parameters to Generic CRM personalization field keys
   footer         String?
   buttons        String?   @db.Text // JSON
   status         String    @default("PENDING") // PENDING, APPROVED, REJECTED
@@ -3659,6 +3664,54 @@ model PlotBooking {
   @@index([tenantId, plotSiteId, status])
   @@index([tenantId, billingPersonId, status])
   @@index([tenantId, invoiceId])
+}
+
+// Generic CRM plot-sale commission ledger. One row records the admin-managed
+// percentage of the full booking total; successful payments absorb that
+// amount in chronological order until the commission has been collected.
+model PlotCommission {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  plotBookingId       Int
+  paymentId           Int
+  plotBrokerId        Int
+  contactId           Int
+  currency            String   @default("INR")
+  commissionPercent   Decimal  @db.Decimal(5, 2)
+  eligibleAmount      Decimal  @db.Decimal(15, 2)
+  commissionAmount    Decimal  @db.Decimal(15, 2)
+  status              String   @default("EARNED")
+  approvedByUserId    Int?
+  approvedAt          DateTime?
+  paidByUserId        Int?
+  paidAt              DateTime?
+  reversedAt          DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([tenantId, plotBookingId])
+  @@index([tenantId, plotBookingId, createdAt])
+  @@index([tenantId, plotBrokerId, status])
+  @@index([tenantId, status, createdAt])
+}
+
+model PlotInstallment {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int
+  plotBookingId   Int
+  contactId       Int
+  sequenceNumber  Int
+  frequency       String
+  dueDate         DateTime
+  amount          Decimal  @db.Decimal(15, 2)
+  status          String   @default("PLANNED")
+  paymentId       Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, plotBookingId, sequenceNumber])
+  @@index([tenantId, contactId, status])
+  @@index([tenantId, dueDate, status])
 }
 
 model PlotInvoiceItem {

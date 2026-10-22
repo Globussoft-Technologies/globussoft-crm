@@ -245,6 +245,30 @@ describe('Omnibar (inline top-bar)', () => {
     expect(navigateMock).toHaveBeenCalledWith('/forms');
   });
 
+  it('does not search a generic page hidden from the shared sidebar catalog', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) {
+        return Promise.resolve({
+          pages: [{ path: '/clients', label: 'Clients', description: 'Company directory' }],
+        });
+      }
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'clients' } });
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me?q=clients', { silent: true }));
+    expect(screen.queryByRole('option', { name: /Clients/i })).not.toBeInTheDocument();
+  });
+
   it('launches searchable external integrations through their canonical sidebar action', async () => {
     fetchApi.mockImplementation((url) => {
       if (url === '/api/pages/me') return Promise.resolve({ pages: [] });

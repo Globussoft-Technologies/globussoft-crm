@@ -119,6 +119,10 @@
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+const enqueueWhatsAppSend = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/whatsappQueue.js', () => ({
+  getQueue: () => ({ enqueueSend: enqueueWhatsAppSend }),
+}));
 const travelProviderMocks = vi.hoisted(() => {
   const Module = require('node:module');
   const fromBackend = Module.createRequire(process.cwd() + '/');
@@ -145,11 +149,14 @@ import {
   receiverConditionMatches,
   classifyGenericEmailOpen,
   isLikelyHumanGenericEmailOpen,
+  genericSequenceOptOutReason,
 } from '../../cron/sequenceEngine.js';
 
 beforeAll(() => {
   prisma.activity = { create: vi.fn() };
   prisma.payment = { findFirst: vi.fn().mockResolvedValue(null) };
+  prisma.plotBooking = { findFirst: vi.fn().mockResolvedValue(null) };
+  prisma.plotSite = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.emailMessage = {
     create: vi.fn(),
     findMany: vi.fn(),
@@ -162,10 +169,21 @@ beforeAll(() => {
   };
   prisma.smsMessage = {
     create: vi.fn(),
+    findFirst: vi.fn(),
+    update: vi.fn(),
+  };
+  prisma.emailTemplate = {
+    findFirst: vi.fn(),
   };
   prisma.whatsAppMessage = {
     create: vi.fn(),
+    findFirst: vi.fn(),
   };
+  prisma.whatsAppConfig = { findFirst: vi.fn() };
+  prisma.whatsAppOptOut = { findUnique: vi.fn() };
+  prisma.whatsAppTemplate = { findFirst: vi.fn() };
+  prisma.whatsAppThread = { upsert: vi.fn(), findMany: vi.fn() };
+  prisma.campaign = { updateMany: vi.fn() };
   prisma.sequenceEnrollment = {
     findMany: vi.fn(),
     findUnique: vi.fn(),
@@ -198,6 +216,8 @@ beforeAll(() => {
 
 let originalSendgridKey;
 beforeEach(() => {
+  prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotSite.findFirst.mockReset().mockResolvedValue(null);
   prisma.activity.create.mockReset().mockResolvedValue({});
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
@@ -205,7 +225,18 @@ beforeEach(() => {
   prisma.emailMessage.update.mockReset();
   prisma.emailTracking.findMany.mockReset();
   prisma.smsMessage.create.mockReset();
+  prisma.smsMessage.findFirst.mockReset();
+  prisma.smsMessage.update.mockReset().mockResolvedValue({});
+  prisma.emailTemplate.findFirst.mockReset();
   prisma.whatsAppMessage.create.mockReset();
+  prisma.whatsAppMessage.findFirst.mockReset().mockResolvedValue(null);
+  prisma.whatsAppConfig.findFirst.mockReset().mockResolvedValue({ phoneNumberId: 'meta-phone-id' });
+  prisma.whatsAppOptOut.findUnique.mockReset().mockResolvedValue(null);
+  prisma.whatsAppTemplate.findFirst.mockReset().mockResolvedValue({ id: 9, name: 'follow_up', body: 'Hi {{1}}', variableMapping: '{"1":"contact.first_name"}' });
+  prisma.whatsAppThread.upsert.mockReset().mockResolvedValue({ id: 44, contactPhone: '+14155550000' });
+  prisma.whatsAppThread.findMany.mockReset().mockResolvedValue([]);
+  prisma.campaign.updateMany.mockReset().mockResolvedValue({ count: 1 });
+  enqueueWhatsAppSend.mockReset().mockResolvedValue({});
   prisma.sequenceEnrollment.findMany.mockReset();
   prisma.sequenceEnrollment.findUnique.mockReset();
   prisma.sequenceEnrollment.update.mockReset();
@@ -218,6 +249,8 @@ beforeEach(() => {
   prisma.emailMessage.update.mockResolvedValue({});
   prisma.emailTracking.findMany.mockResolvedValue([]);
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-1' });
+  prisma.smsMessage.findFirst.mockResolvedValue(null);
+  prisma.emailTemplate.findFirst.mockResolvedValue(null);
   prisma.whatsAppMessage.create.mockResolvedValue({ id: 'wa-1' });
   prisma.sequenceEnrollment.findMany.mockResolvedValue([]);
   prisma.sequenceEnrollment.findUnique.mockResolvedValue(null);
@@ -268,7 +301,9 @@ function enrollmentWith(overrides = {}) {
       phone: '+1-415-5550000',
       company: 'Acme',
       status: 'Lead',
+      first_name: 'Jane',
     },
+    sequence: { tenant: { vertical: 'generic', name: 'Acme CRM' }, campaigns: [] },
     ...overrides,
   };
 }
@@ -308,6 +343,41 @@ describe('cron/sequenceEngine — Generic CRM open classification', () => {
     expect(isLikelyHumanGenericEmailOpen({ userAgent: 'EmailSecurityGateway/1.0' })).toBe(false);
   });
 
+});
+
+describe('cron/sequenceEngine — Generic CRM DND and opt-out gate', () => {
+  test.each(['DND', 'Do Not Contact', 'Opted_Out', 'Unsubscribed'])('blocks status %s before any channel send', async status => {
+    const enrollment = enrollmentWith({ contact: { ...enrollmentWith().contact, status } });
+    await expect(genericSequenceOptOutReason(enrollment, 'email')).resolves.toBe('contact_status');
+  });
+
+  test('blocks SMS when the contact previously sent a STOP keyword', async () => {
+    prisma.smsMessage.findFirst.mockResolvedValueOnce({ id: 91 });
+    const enrollment = enrollmentWith({ contactId: 7 });
+
+    await expect(genericSequenceOptOutReason(enrollment, 'sms')).resolves.toBe('sms_stop_keyword');
+    expect(prisma.smsMessage.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 'tenant-A', contactId: 7, direction: 'INBOUND' }),
+    }));
+  });
+
+  test('does not apply the gate to wellness or travel sequences', async () => {
+    const enrollment = enrollmentWith({
+      contact: { ...enrollmentWith().contact, status: 'DND' },
+      sequence: { tenant: { vertical: 'wellness' } },
+    });
+    await expect(genericSequenceOptOutReason(enrollment, 'email')).resolves.toBeNull();
+  });
+
+  test('completes a generic enrollment without sending when the contact opted out', async () => {
+    const result = await processStep(
+      stepWith({ kind: 'email', emailTemplate: { subject: 'Follow-up', body: 'Hello' } }),
+      enrollmentWith({ contact: { ...enrollmentWith().contact, status: 'Unsubscribed' } }),
+    );
+
+    expect(result).toEqual({ complete: true });
+    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('cron/sequenceEngine — Generic pickup and site-visit receiver conditions', () => {
@@ -415,6 +485,22 @@ describe('cron/sequenceEngine — processStep email', () => {
     expect(arg.data.read).toBe(true);
   });
 
+  test('adds a secure pickup/plot form link to the Generic CRM email default', async () => {
+    await processStep(stepWith({
+      emailTemplate: {
+        subject: 'Choose your pickup and plot',
+        body: '<a href="{{system.pickupPlotLink}}">Submit selection</a>',
+      },
+    }), enrollmentWith({
+      tenantId: 12,
+      contactId: 7,
+      sequence: { tenant: { vertical: 'generic', name: 'Generic CRM' } },
+    }));
+
+    const body = prisma.emailMessage.create.mock.calls[0][0].data.body;
+    expect(body).toMatch(/^<a href="http:\/\/localhost:5173\/pickup-plot-selection\/.+">Submit selection<\/a>$/);
+  });
+
   test('fallback subject "Sequence: step N" when no emailTemplate linked', async () => {
     const enrollment = enrollmentWith();
     const step = stepWith({ kind: 'email', position: 4, emailTemplate: null });
@@ -462,6 +548,20 @@ describe('cron/sequenceEngine — processStep sms', () => {
     expect(arg.data.tenantId).toBe('tenant-A');
   });
 
+  test('adds a secure pickup/plot form link to the Generic CRM SMS default', async () => {
+    await processStep(stepWith({
+      kind: 'sms',
+      smsBody: 'Submit pickup and plot: {{system.pickupPlotLink}}',
+    }), enrollmentWith({
+      tenantId: 12,
+      contactId: 7,
+      sequence: { tenant: { vertical: 'generic', name: 'Generic CRM' } },
+    }));
+
+    expect(prisma.smsMessage.create.mock.calls[0][0].data.body)
+      .toMatch(/^Submit pickup and plot: http:\/\/localhost:5173\/pickup-plot-selection\/.+/);
+  });
+
   test('contact has no phone → no write, still advances', async () => {
     const enrollment = enrollmentWith({
       contact: { id: 7, name: 'X', email: 'x@y.com', phone: null },
@@ -472,6 +572,60 @@ describe('cron/sequenceEngine — processStep sms', () => {
 
     expect(result).toEqual({ advance: true });
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('cron/sequenceEngine — Generic Email/SMS branch steps', () => {
+  test('SMS reply condition matches an inbound SMS after the latest sequence SMS', async () => {
+    const sentAt = new Date('2026-10-21T10:00:00Z');
+    prisma.smsMessage.findFirst
+      .mockResolvedValueOnce({ id: 20, createdAt: sentAt })
+      .mockResolvedValueOnce({ id: 21 });
+    const enrollment = enrollmentWith({ createdAt: new Date('2026-10-21T09:00:00Z') });
+
+    await expect(receiverConditionMatches({ type: 'sms_activity', event: 'replied' }, enrollment)).resolves.toBe(true);
+    expect(prisma.smsMessage.findFirst.mock.calls[1][0].where).toMatchObject({
+      tenantId: 'tenant-A', contactId: 7, direction: 'INBOUND', createdAt: { gt: sentAt },
+    });
+  });
+
+  test('SMS condition action renders the selected template and records provider failure cleanly', async () => {
+    prisma.emailTemplate.findFirst.mockResolvedValue({ id: 8, channel: 'SMS', body: 'Hi {{contact.name}}, follow up.' });
+    const conditionJson = JSON.stringify({
+      version: 2,
+      logic: 'ALL',
+      conditions: [{ type: 'crm_field', field: 'contact.status', op: 'eq', value: 'Lead' }],
+      yesAction: { type: 'send_sms', smsTemplateId: 8, branch: 'matched' },
+      noAction: { type: 'stop_sequence' },
+    });
+
+    const result = await processStep(stepWith({ kind: 'condition', position: 1, conditionJson }), enrollmentWith());
+
+    expect(result).toEqual({ advance: false, jumpTo: 2, nextRun: null });
+    expect(prisma.emailTemplate.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 8, tenantId: 'tenant-A', channel: 'SMS' },
+    }));
+    expect(prisma.smsMessage.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ body: 'Hi Jane Doe, follow up.', contactId: 7, status: 'QUEUED' }),
+    }));
+    expect(prisma.smsMessage.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' }),
+    }));
+  });
+
+  test('Email condition action continues to the explicitly authored next step', async () => {
+    prisma.emailTemplate.findFirst.mockResolvedValue({ id: 9, channel: 'EMAIL', subject: 'Thanks', body: 'Hi {{contact.name}}' });
+    const conditionJson = JSON.stringify({
+      version: 2,
+      logic: 'ALL',
+      conditions: [{ type: 'crm_field', field: 'contact.status', op: 'eq', value: 'Lead' }],
+      yesAction: { type: 'send_email', emailTemplateId: 9, branch: 'matched' },
+      noAction: { type: 'stop_sequence' },
+    });
+
+    await expect(processStep(stepWith({ kind: 'condition', position: 2, conditionJson }), enrollmentWith()))
+      .resolves.toEqual({ advance: false, jumpTo: 3, nextRun: null });
+    expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
   });
 });
 

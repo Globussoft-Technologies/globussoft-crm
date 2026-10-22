@@ -5,6 +5,7 @@ const prisma = require("../lib/prisma");
 const { renderGenericTemplate } = require("../lib/genericEmailTemplateRenderer");
 const { normalizeGenericTemplatePlaceholders } = require("../lib/genericCampaignAutomation");
 const { routeRequest } = require("../lib/llmRouter");
+const { ensureGenericLeadNotificationTemplates, SYSTEM_CATEGORY_PREFIX } = require("../lib/genericLeadEmailTemplates");
 
 async function requireGenericTenant(req, res) {
   const tenant = await prisma.tenant.findUnique({
@@ -76,6 +77,7 @@ router.get("/personalization-fields", async (req, res) => {
       { key: "sender.company", label: "Sender Company", group: "Sender Details" },
       { key: "enrollmentId", label: "Enrollment ID", group: "Campaign" },
       { key: "sequenceId", label: "Sequence ID", group: "Campaign" },
+      { key: "system.pickupPlotLink", label: "Pickup / Plot Selection Link", group: "System" },
       ...relatedFields,
       ...customDefinitions.map(field => ({ key: `contact.custom.${field.fieldKey}`, label: field.label, group: "Custom Contact Fields" })),
     ];
@@ -245,10 +247,6 @@ router.post("/ai-draft", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const paginate = req.query.paginate === "1";
-    if (paginate) {
-      const tenant = await requireGenericTenant(req, res);
-      if (!tenant) return;
-    }
     // #920 slice 9: ?fields=summary slim-shape opt-in. Mirrors slice 1
     // (contacts f7790241), slice 2 (deals 6786c2da), slice 3 (tickets
     // badc9cca), slice 4 (tasks), slice 5 (projects), slice 6 (expenses),
@@ -261,9 +259,10 @@ router.get("/", async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const requestedChannel = String(req.query.channel || "").trim().toUpperCase();
     const channel = ["EMAIL", "SMS", "WHATSAPP"].includes(requestedChannel) ? requestedChannel : null;
-    if (channel) {
+    if (paginate || channel) {
       const tenant = await requireGenericTenant(req, res);
       if (!tenant) return;
+      await ensureGenericLeadNotificationTemplates(prisma, req.user.tenantId);
     }
     const findManyArgs = {
       where: { tenantId: req.user.tenantId, ...(channel ? { channel } : {}) },
@@ -299,7 +298,7 @@ router.get("/", async (req, res) => {
     });
   } catch (err) {
     console.error("[EmailTemplates] List error:", err);
-    res.status(500).json({ error: "Failed to fetch email templates" });
+    res.status(500).json({ error: "Failed to fetch email templates", code: "EMAIL_TEMPLATES_LIST_FAILED" });
   }
 });
 
@@ -321,7 +320,8 @@ router.get("/:id", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { name, subject, body, category, channel } = req.body;
-    if (!name || !subject || !body) {
+    const trimmedName = String(name || "").trim();
+    if (!trimmedName || !subject || !body) {
       return res.status(400).json({ error: "name, subject, and body are required" });
     }
     if (channel !== undefined) {
@@ -330,13 +330,25 @@ router.post("/", async (req, res) => {
     }
     const normalizedChannel = String(channel || "EMAIL").trim().toUpperCase();
     if (!["EMAIL", "SMS", "WHATSAPP"].includes(normalizedChannel)) return res.status(400).json({ error: "channel must be EMAIL, SMS, or WHATSAPP" });
+    if (channel !== undefined) {
+      const duplicate = await prisma.emailTemplate.findFirst({
+        where: { tenantId: req.user.tenantId, channel: normalizedChannel, name: trimmedName },
+        select: { id: true },
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          error: `This name is already used by another ${normalizedChannel} template`,
+          code: "TEMPLATE_NAME_EXISTS",
+        });
+      }
+    }
     const template = await prisma.emailTemplate.create({
-      data: { name, subject, body, channel: normalizedChannel, category: category || "General", tenantId: req.user.tenantId },
+      data: { name: trimmedName, subject, body, channel: normalizedChannel, category: category || "General", tenantId: req.user.tenantId },
     });
     res.status(201).json(template);
   } catch (err) {
     console.error("[EmailTemplates] Create error:", err);
-    res.status(500).json({ error: "Failed to create email template" });
+    res.status(500).json({ error: "Failed to create email template", code: "EMAIL_TEMPLATE_CREATE_FAILED" });
   }
 });
 
@@ -352,20 +364,38 @@ router.put("/:id", async (req, res) => {
     }
     const normalizedChannel = channel === undefined ? undefined : String(channel || "").trim().toUpperCase();
     if (normalizedChannel !== undefined && !["EMAIL", "SMS", "WHATSAPP"].includes(normalizedChannel)) return res.status(400).json({ error: "channel must be EMAIL, SMS, or WHATSAPP" });
+    const trimmedName = name === undefined ? existing.name : String(name || "").trim();
+    if (channel !== undefined) {
+      const duplicate = await prisma.emailTemplate.findFirst({
+        where: {
+          tenantId: req.user.tenantId,
+          channel: normalizedChannel,
+          name: trimmedName,
+          id: { not: existing.id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          error: `This name is already used by another ${normalizedChannel} template`,
+          code: "TEMPLATE_NAME_EXISTS",
+        });
+      }
+    }
     const template = await prisma.emailTemplate.update({
       where: { id: existing.id },
       data: {
-        ...(name !== undefined && { name }),
+        ...(name !== undefined && { name: trimmedName }),
         ...(subject !== undefined && { subject }),
         ...(body !== undefined && { body }),
-        ...(category !== undefined && { category }),
+        ...(category !== undefined && !String(existing.category || "").startsWith(SYSTEM_CATEGORY_PREFIX) && { category }),
         ...(normalizedChannel !== undefined && { channel: normalizedChannel }),
       },
     });
     res.json(template);
   } catch (err) {
     console.error("[EmailTemplates] Update error:", err);
-    res.status(500).json({ error: "Failed to update email template" });
+    res.status(500).json({ error: "Failed to update email template", code: "EMAIL_TEMPLATE_UPDATE_FAILED" });
   }
 });
 

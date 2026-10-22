@@ -1069,6 +1069,7 @@ app.use("/api", (req, res, next) => {
     "/terms-and-conditions",
     "/legal",
     "/landing-pages/public",
+    "/pickup-plot-inventory/public",
     // Explore public API intentionally disabled.
     // "/explore",
     "/landing-sites/public",

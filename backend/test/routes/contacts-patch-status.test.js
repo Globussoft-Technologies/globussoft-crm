@@ -123,6 +123,10 @@ prisma.activity = prisma.activity || {};
 prisma.activity.create = vi.fn();
 prisma.activity.findMany = vi.fn();
 prisma.activity.count = vi.fn();
+prisma.activity.findFirst = vi.fn();
+prisma.activity.update = vi.fn();
+prisma.auditLog = prisma.auditLog || {};
+prisma.auditLog.findMany = vi.fn();
 prisma.callLog = prisma.callLog || {};
 prisma.callLog.findMany = vi.fn();
 prisma.callLog.count = vi.fn();
@@ -179,6 +183,9 @@ beforeEach(() => {
   prisma.activity.create.mockReset().mockResolvedValue({});
   prisma.activity.findMany.mockReset().mockResolvedValue([]);
   prisma.activity.count.mockReset().mockResolvedValue(0);
+  prisma.activity.findFirst.mockReset().mockResolvedValue(null);
+  prisma.activity.update.mockReset();
+  prisma.auditLog.findMany.mockReset().mockResolvedValue([]);
   prisma.callLog.findMany.mockReset().mockResolvedValue([]);
   prisma.callLog.count.mockReset().mockResolvedValue(0);
   prisma.$transaction.mockReset().mockImplementation(async (callback) => callback(prisma));
@@ -397,5 +404,103 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 30,
     });
+  });
+});
+
+describe('GET /api/contacts/:id/lifecycle-history', () => {
+  test('returns tenant-scoped lifecycle changes with actor and from/to details', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.auditLog.findMany.mockResolvedValueOnce([
+      {
+        id: 88,
+        createdAt: new Date('2026-10-22T07:30:00.000Z'),
+        userId: USER_ID,
+        user: { id: USER_ID, name: 'Rajesh Sharma', email: 'rajesh@example.com' },
+        details: JSON.stringify({
+          changedFields: {
+            status: { from: 'Lead', to: 'Prospect' },
+            lifecycleStageKey: { from: 'new', to: 'contacted' },
+          },
+          lifecycleTransition: {
+            fromStage: 'New',
+            toStage: 'Contacted',
+            fromStatus: 'Lead',
+            toStatus: 'Prospect',
+          },
+        }),
+      },
+    ]);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/lifecycle-history`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0]).toMatchObject({
+      changedBy: { id: USER_ID, name: 'Rajesh Sharma', email: 'rajesh@example.com' },
+      from: { stageKey: 'new', stage: 'New', status: 'Lead' },
+      to: { stageKey: 'contacted', stage: 'Contacted', status: 'Prospect' },
+    });
+    expect(prisma.auditLog.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: TENANT_ID,
+      entity: 'Contact',
+      entityId: CONTACT_ID,
+      action: 'UPDATE',
+    });
+  });
+});
+
+describe('PATCH /api/contacts/:id/activities/:activityId — edit note', () => {
+  test('updates only the tenant-scoped Note description', async () => {
+    const note = {
+      id: 91,
+      type: 'Note',
+      description: 'Original note',
+      contactId: CONTACT_ID,
+      tenantId: TENANT_ID,
+    };
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findFirst.mockResolvedValueOnce(note);
+    prisma.activity.update.mockResolvedValueOnce({ ...note, description: 'Updated note' });
+
+    const res = await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}/activities/${note.id}`)
+      .send({ description: '  Updated note  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.description).toBe('Updated note');
+    expect(prisma.activity.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: note.id,
+        contactId: CONTACT_ID,
+        tenantId: TENANT_ID,
+        type: 'Note',
+      },
+    });
+    expect(prisma.activity.update).toHaveBeenCalledWith({
+      where: { id: note.id },
+      data: { description: 'Updated note' },
+    });
+  });
+
+  test('rejects an empty note without writing', async () => {
+    const res = await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}/activities/91`)
+      .send({ description: '   ' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('DESCRIPTION_REQUIRED');
+    expect(prisma.activity.update).not.toHaveBeenCalled();
+  });
+
+  test('does not update a note outside the contact and tenant scope', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+
+    const res = await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}/activities/999`)
+      .send({ description: 'Updated note' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOTE_NOT_FOUND');
+    expect(prisma.activity.update).not.toHaveBeenCalled();
   });
 });

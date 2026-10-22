@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -96,12 +97,15 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state, vertical, user } = {}) {
+function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts' } = {}) {
+  const detailPath = `/${listType}/${contactId}`;
   const page = (
-    <MemoryRouter initialEntries={[state ? { pathname: `/contacts/${contactId}`, state } : `/contacts/${contactId}`]}>
+    <MemoryRouter initialEntries={[state ? { pathname: detailPath, state } : detailPath]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
+        <Route path="/leads/:id" element={<ContactDetail />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
+        <Route path="/leads" element={<div data-testid="leads-list-stub">Leads list stub</div>} />
         <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
       </Routes>
     </MemoryRouter>
@@ -164,6 +168,18 @@ describe('ContactDetail — current profile contract', () => {
     expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
     expect(await screen.findByTestId('contacts-list-stub')).toBeInTheDocument();
+  });
+
+  it('keeps the Generic Leads page behind a profile opened from /leads', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ listType: 'leads', vertical: 'generic' });
+
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Leads' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
   });
 
   it('shows the current lifecycle stage and score for the contact', async () => {
@@ -300,6 +316,58 @@ describe('ContactDetail — current profile contract', () => {
     const profile = await getProfile();
     fireEvent.click(profile.getByRole('button', { name: 'Activities' }));
     expect(await profile.findByText('No activities recorded yet.')).toBeInTheDocument();
+  });
+
+  it('opens the note editor from the pencil and persists the updated note', async () => {
+    const note = {
+      id: 81,
+      type: 'Note',
+      description: 'Original note',
+      createdAt: '2026-10-21T06:00:00.000Z',
+      contactId: 42,
+      userId: 7,
+    };
+    const baseFetch = makeFetchImpl({
+      activities: { kind: 'ok', data: { data: [note], total: 1, page: 1, limit: 5, totalPages: 1 } },
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42/activities/81' && opts?.method === 'PATCH') {
+        return Promise.resolve({ ...note, description: 'Updated note' });
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage();
+    const profile = await getProfile();
+
+    fireEvent.click(await profile.findByRole('button', { name: 'Edit note Original note' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit note' });
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    await waitFor(() => expect(editor).toHaveTextContent('Original note'));
+    editor.textContent = 'Updated note';
+    fireEvent.input(editor);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/42/activities/81',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ description: 'Updated note' }) }),
+    ));
+    expect(await profile.findByText('Updated note')).toBeInTheDocument();
+    expect(notifyObj.success).toHaveBeenCalledWith('Note updated.');
+  });
+
+  it('keeps immediately typed text in the generic note composer', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+    const user = userEvent.setup();
+
+    await user.click(profile.getByRole('button', { name: /^Note$/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add note' });
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    await user.type(editor, 'Follow up tomorrow');
+
+    expect(editor).toHaveTextContent('Follow up tomorrow');
+    expect(editor).toHaveFocus();
   });
 });
 

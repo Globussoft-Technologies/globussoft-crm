@@ -42,9 +42,13 @@ const {
   sendTemplate,
   sendText,
   submitTemplateToMeta,
+  deleteTemplateFromMeta,
 } = require("../services/whatsappProvider");
 const { toE164 } = require("../utils/deduplication");
+const { sanitizeJson } = require("../lib/sanitizeJson");
 const { writeAudit } = require("../lib/audit");
+const { resolveValue, fallbackFor } = require("../lib/genericEmailTemplateRenderer");
+const { createSelectionLink } = require("../lib/genericPickupPlotSelection");
 const {
   encryptCredential,
   decryptCredential,
@@ -80,6 +84,56 @@ const {
 // #651 — third-party credentials on WhatsAppConfig. GET masks; PUT requires
 // full fresh value; rotation stamps lastRotatedAt + emits audit row.
 const WA_SECRET_FIELDS = ["accessToken", "webhookVerifyToken"];
+
+const GENERIC_TEMPLATE_FALLBACK_MAPPING = Object.freeze({
+  1: "contact.first_name",
+  2: "contact.company",
+  3: "contact.email",
+  4: "contact.phone",
+  5: "organization.name",
+  6: "form.name",
+  7: "system.pickupPlotLink",
+});
+
+function parseVariableMapping(value) {
+  if (value && typeof value === "object") return value;
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function genericTemplateParameters(template, context) {
+  const mapping = parseVariableMapping(template.variableMapping);
+  const indexes = [...new Set(
+    [...String(template.body || "").matchAll(/\{\{(\d+)\}\}/g)].map((match) => Number(match[1])),
+  )].sort((left, right) => left - right);
+  return indexes.map((index) => {
+    const path = mapping[index] || GENERIC_TEMPLATE_FALLBACK_MAPPING[index] || "";
+    return String(resolveValue(path, context) ?? fallbackFor(path));
+  });
+}
+
+function genericContactContext(contact) {
+  const names = String(contact?.name || "").trim().split(/\s+/).filter(Boolean);
+  let tags = [];
+  try { tags = contact?.tagsJson ? JSON.parse(contact.tagsJson) : []; } catch (_error) { tags = []; }
+  const customFields = (contact?.leadCustomFieldValues || []).map((value) => ({
+    key: value.field?.fieldKey,
+    label: value.field?.label,
+    value: value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool ?? "",
+  })).filter((value) => value.key);
+  return {
+    ...contact,
+    first_name: names[0] || "there",
+    last_name: names.slice(1).join(" "),
+    tags,
+    custom: Object.fromEntries(customFields.map((value) => [value.key, value.value])),
+    customFields,
+  };
+}
 
 // ─── Phone helpers (Wave 2 Agent KK) ───────────────────────────────────────
 // Inbound webhook messages from Meta arrive as digits-only ("919876543210"),
@@ -163,8 +217,81 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
     // to Generic CRM and only runs after the existing configuration gate.
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
-      select: { vertical: true },
+      select: { id: true, name: true, vertical: true },
     });
+
+    let resolvedParameters = Array.isArray(parameters) ? parameters : [];
+    let resolvedContactId = Number(contactId) || null;
+    let genericTemplate = null;
+    if (tenant?.vertical === "generic" && templateName) {
+      genericTemplate = await prisma.whatsAppTemplate.findFirst({
+        where: { tenantId: req.user.tenantId, name: templateName, status: "APPROVED" },
+        select: { id: true, name: true, body: true, variableMapping: true },
+      });
+      if (!genericTemplate) {
+        return res.status(404).json({ error: "Approved WhatsApp template not found", code: "TEMPLATE_NOT_FOUND" });
+      }
+
+      const hasVariables = /\{\{\d+\}\}/.test(genericTemplate.body || "");
+      if (hasVariables) {
+        const digits = String(normalizedTo || "").replace(/\D/g, "");
+        const phoneCandidates = [...new Set([String(to || "").trim(), normalizedTo, digits].filter(Boolean))];
+        const contact = await prisma.contact.findFirst({
+          where: resolvedContactId
+            ? { id: resolvedContactId, tenantId: req.user.tenantId, deletedAt: null }
+            : {
+                tenantId: req.user.tenantId,
+                deletedAt: null,
+                OR: phoneCandidates.flatMap((phone) => [{ phone }, { whatsappPhone: phone }]),
+              },
+          select: {
+            id: true, name: true, email: true, phone: true, whatsappPhone: true,
+            company: true, title: true, status: true, source: true, medium: true,
+            tagsJson: true, industry: true, companySize: true, linkedin: true,
+            website: true, facebookUrl: true, githubUrl: true, twitterUrl: true,
+            firstTouchSource: true, lastTouchSource: true, birthDate: true,
+            anniversary: true, gst: true, stateCode: true, billingStateCode: true,
+            externalId: true, aiScore: true,
+            leadCustomFieldValues: {
+              select: {
+                valueText: true, valueNumber: true, valueDate: true, valueBool: true,
+                field: { select: { fieldKey: true, label: true } },
+              },
+            },
+          },
+        });
+        if (!contact) {
+          return res.status(422).json({
+            error: "Pick a Generic CRM contact so the template details can be filled automatically.",
+            code: "GENERIC_TEMPLATE_CONTACT_REQUIRED",
+          });
+        }
+        resolvedContactId = contact.id;
+        const sender = await prisma.user.findFirst({
+          where: { id: req.user.userId, tenantId: req.user.tenantId },
+          select: { name: true, email: true },
+        });
+        const mapping = parseVariableMapping(genericTemplate.variableMapping);
+        const needsSelectionLink = Object.values(mapping).includes("system.pickupPlotLink")
+          || /\{\{7\}\}/.test(genericTemplate.body || "");
+        const pickupPlotLink = needsSelectionLink
+          ? createSelectionLink({ tenantId: req.user.tenantId, contactId: contact.id })
+          : null;
+        const contactContext = genericContactContext(contact);
+        const context = {
+          contact: contactContext,
+          customFields: contactContext.customFields,
+          organization: tenant,
+          tenant,
+          sender: { name: sender?.name || "our team", email: sender?.email || "", company: tenant.name || "" },
+          form: { name: "Generic CRM" },
+          ...(pickupPlotLink ? { system: { pickupPlotLink }, selectionLink: pickupPlotLink } : {}),
+        };
+        resolvedParameters = genericTemplateParameters(genericTemplate, context);
+      } else {
+        resolvedParameters = [];
+      }
+    }
 
     // Wave 2 Agent KK: upsert thread for the recipient phone so outbound
     // messages slot into the same conversation as inbound. lastMessageAt
@@ -175,7 +302,7 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
         ? await upsertGenericWhatsAppThread({
             tenantId: req.user.tenantId,
             phone: normalizedTo,
-            data: { contactId: contactId || undefined },
+            data: { contactId: resolvedContactId || undefined },
           })
         : await prisma.whatsAppThread.upsert({
             where: {
@@ -188,7 +315,7 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
               tenantId: req.user.tenantId,
               contactPhone: normalizedTo,
               status: "OPEN",
-              contactId: contactId || null,
+              contactId: resolvedContactId || null,
               lastMessageAt: new Date(),
             },
             update: { lastMessageAt: new Date() },
@@ -218,17 +345,18 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
     // substituted so the chat shows what was actually sent to the customer.
     let storedBody = body || null;
     if (!storedBody && templateName) {
-      const tpl = await prisma.whatsAppTemplate
+      const tpl = genericTemplate || await prisma.whatsAppTemplate
         .findFirst({
           where: { tenantId: req.user.tenantId, name: templateName },
           select: { body: true },
         })
         .catch(() => null);
-      const params = Array.isArray(parameters) ? parameters : [];
+      const params = resolvedParameters;
       if (tpl?.body) {
         storedBody = tpl.body.replace(/\{\{(\d+)\}\}/g, (match, n) => {
           const val = params[parseInt(n, 10) - 1];
-          return val != null && val !== "" ? String(val) : match;
+          const text = val && typeof val === "object" ? val.text : val;
+          return text != null && text !== "" ? String(text) : match;
         });
       } else {
         // Template text not found locally — at least label the bubble with
@@ -249,10 +377,10 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
         // Meta. Without this it sent parameters:[] → Meta #132000 "Number of
         // parameters does not match" for templates with {{n}} placeholders.
         interactiveJson:
-          templateName && Array.isArray(parameters) && parameters.length
-            ? JSON.stringify({ parameters })
+          templateName && resolvedParameters.length
+            ? JSON.stringify({ parameters: resolvedParameters })
             : null,
-        contactId: contactId || null,
+        contactId: resolvedContactId || null,
         userId: req.user.userId,
         tenantId: req.user.tenantId,
         threadId: thread?.id || null,
@@ -1894,9 +2022,12 @@ router.post("/templates/generic-web-form-status", verifyToken, verifyRole(["ADMI
     } else {
       const template = await prisma.whatsAppTemplate.findFirst({
         where: { id: templateId, tenantId: req.user.tenantId, status: "APPROVED" },
-        select: { id: true, name: true },
+        select: { id: true, name: true, body: true },
       });
       if (!template) return res.status(404).json({ error: "An approved WhatsApp template is required" });
+      if (!/\{\{7\}\}/.test(template.body || "")) {
+        return res.status(400).json({ error: "Template must include {{7}} for the system-generated pickup/plot link", code: "PICKUP_PLOT_LINK_VARIABLE_REQUIRED" });
+      }
       statusTemplates[status] = template.id;
     }
 
@@ -2013,9 +2144,12 @@ router.post("/templates/:id/use-for-generic-web-forms", verifyToken, verifyRole(
     }
     const template = await prisma.whatsAppTemplate.findFirst({
       where: { id: Number(req.params.id), tenantId: req.user.tenantId, status: "APPROVED" },
-      select: { id: true, name: true },
+      select: { id: true, name: true, body: true },
     });
     if (!template) return res.status(404).json({ error: "An approved WhatsApp template is required" });
+    if (!/\{\{7\}\}/.test(template.body || "")) {
+      return res.status(400).json({ error: "Add {{7}} as the pickup/plot selection-link variable, then get the template approved by Meta", code: "PICKUP_PLOT_LINK_VARIABLE_REQUIRED" });
+    }
 
     await prisma.tenantSetting.upsert({
       where: { tenantId_key: { tenantId: req.user.tenantId, key: "generic.webForm.whatsappTemplate" } },
@@ -2040,6 +2174,7 @@ router.post("/templates", verifyToken, async (req, res) => {
       headerType,
       headerContent,
       footer,
+      variableMapping,
       buttons,
     } = req.body;
 
@@ -2054,6 +2189,17 @@ router.post("/templates", verifyToken, async (req, res) => {
         error:
           "Template name must contain only lowercase letters, digits, and underscores (no spaces).",
         code: "INVALID_NAME",
+      });
+    }
+
+    const duplicate = await prisma.whatsAppTemplate.findFirst({
+      where: { tenantId: req.user.tenantId, name },
+      select: { id: true },
+    });
+    if (duplicate) {
+      return res.status(409).json({
+        error: "A WhatsApp template with this name already exists",
+        code: "TEMPLATE_NAME_EXISTS",
       });
     }
 
@@ -2097,9 +2243,11 @@ router.post("/templates", verifyToken, async (req, res) => {
       const friendly = metaResp.userTitle
         ? `${metaResp.userTitle}: ${metaResp.error}`
         : metaResp.error;
+      const duplicateTemplate = Number(metaResp.subcode) === 2388024
+        || /content in this language already exists/i.test(friendly || "");
       return res.status(422).json({
         error: friendly || "Meta rejected the template submission.",
-        code: "META_REJECTED",
+        code: duplicateTemplate ? "META_TEMPLATE_ALREADY_EXISTS" : "META_REJECTED",
         metaCode: metaResp.code || null,
         metaSubcode: metaResp.subcode || null,
         details: metaResp.details || null,
@@ -2115,6 +2263,7 @@ router.post("/templates", verifyToken, async (req, res) => {
         language: language || "en_US",
         category: category || "MARKETING",
         body,
+        variableMapping: variableMapping ? JSON.stringify(sanitizeJson(variableMapping)) : null,
         headerType: headerType || null,
         headerContent: headerContent || null,
         footer: footer || null,
@@ -2131,7 +2280,7 @@ router.post("/templates", verifyToken, async (req, res) => {
     if (err.code === "P2002")
       return res
         .status(409)
-        .json({ error: "Template name already exists for this tenant" });
+        .json({ error: "A WhatsApp template with this name already exists", code: "TEMPLATE_NAME_EXISTS" });
     res
       .status(500)
       .json({ error: "Failed to create template", detail: err.message });
@@ -2150,6 +2299,7 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
       headerType,
       headerContent,
       footer,
+      variableMapping,
       buttons,
     } = req.body;
 
@@ -2158,6 +2308,19 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Template not found" });
 
+    if (name !== undefined) {
+      const duplicate = await prisma.whatsAppTemplate.findFirst({
+        where: { tenantId: req.user.tenantId, name, id: { not: existing.id } },
+        select: { id: true },
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          error: "A WhatsApp template with this name already exists",
+          code: "TEMPLATE_NAME_EXISTS",
+        });
+      }
+    }
+
     const template = await prisma.whatsAppTemplate.update({
       where: { id: existing.id },
       data: {
@@ -2165,6 +2328,7 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
         ...(language !== undefined && { language }),
         ...(category !== undefined && { category }),
         ...(body !== undefined && { body }),
+        ...(variableMapping !== undefined && { variableMapping: variableMapping ? JSON.stringify(sanitizeJson(variableMapping)) : null }),
         ...(headerType !== undefined && { headerType }),
         ...(headerContent !== undefined && { headerContent }),
         ...(footer !== undefined && { footer }),
@@ -2180,7 +2344,7 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
     if (err.code === "P2025")
       return res.status(404).json({ error: "Template not found" });
     if (err.code === "P2002")
-      return res.status(409).json({ error: "Template name already exists" });
+      return res.status(409).json({ error: "A WhatsApp template with this name already exists", code: "TEMPLATE_NAME_EXISTS" });
     res.status(500).json({ error: "Failed to update template" });
   }
 });
@@ -2193,8 +2357,32 @@ router.delete("/templates/:id", verifyToken, async (req, res) => {
       where: { id: parseInt(id), tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Template not found" });
+
+    if (existing.metaTemplateId) {
+      const config = await prisma.whatsAppConfig.findFirst({
+        where: { tenantId: req.user.tenantId, provider: "meta_cloud", isActive: true, disconnectedAt: null },
+      });
+      if (!config?.businessAccountId || !config?.accessToken) {
+        return res.status(409).json({
+          error: "Reconnect WhatsApp before deleting this Meta template",
+          code: "WHATSAPP_NOT_CONNECTED",
+        });
+      }
+      const metaResult = await deleteTemplateFromMeta({
+        wabaId: config.businessAccountId,
+        accessToken: decryptCredential(config.accessToken),
+        name: existing.name,
+      });
+      if (!metaResult.ok) {
+        return res.status(502).json({
+          error: metaResult.error || "Meta could not delete this WhatsApp template",
+          code: "META_TEMPLATE_DELETE_FAILED",
+        });
+      }
+    }
+
     await prisma.whatsAppTemplate.delete({ where: { id: existing.id } });
-    res.json({ success: true, message: "Template deleted" });
+    res.json({ success: true, message: existing.metaTemplateId ? "Template deleted from Meta and CRM" : "Template deleted" });
   } catch (err) {
     console.error("WhatsApp template delete error:", err);
     if (err.code === "P2025")
@@ -2706,7 +2894,7 @@ async function _legacyPostWebhookDeadCode(req, res) {
             });
           }
 
-          await prisma.whatsAppMessage.create({
+          const inboundMessage = await prisma.whatsAppMessage.create({
             data: {
               to:
                 metadata.display_phone_number || metadata.phone_number_id || "",
@@ -2722,6 +2910,15 @@ async function _legacyPostWebhookDeadCode(req, res) {
               threadId: thread?.id || null,
             },
           });
+
+          if (contact?.id) {
+            require("../lib/eventBus").emitEvent(
+              "whatsapp.customer_replied",
+              { contactId: contact.id, threadId: thread?.id || null, messageId: inboundMessage.id },
+              tenantId,
+              req.io,
+            ).catch((error) => console.error("[GenericCampaign] WhatsApp reply event failed:", error.message));
+          }
 
           // Wave 2 Agent KK: STOP-keyword opt-out detection. Auto-record
           // opt-out + best-effort confirmation reply. We don't fail the

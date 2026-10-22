@@ -584,6 +584,21 @@ function listTemplates({ wabaId, accessToken, limit }) {
 }
 
 /**
+ * Delete a template from Meta before removing the corresponding CRM row.
+ * Deleting only the local row is not durable because the next Meta sync will
+ * import the still-existing remote template again.
+ * @param {{ wabaId: string, accessToken: string, name: string }} opts
+ */
+function deleteTemplateFromMeta({ wabaId, accessToken, name }) {
+  return graphRequest({
+    method: "DELETE",
+    path: `/${wabaId}/message_templates`,
+    accessToken,
+    query: { name },
+  });
+}
+
+/**
  * Send a WhatsApp interactive message (buttons or list).
  * @param {{ to, type: 'button'|'list', body, header?, footer?, action, phoneNumberId, accessToken }} opts
  */
@@ -620,6 +635,7 @@ module.exports = {
   registerPhone,
   listPhoneNumbers,
   listTemplates,
+  deleteTemplateFromMeta,
   graphRequest,
   GRAPH_API_VERSION,
 };

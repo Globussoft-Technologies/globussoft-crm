@@ -65,6 +65,12 @@ const BUILTIN_COLUMNS = {
     { key: "aiScore", label: "Lead Score" },
     { key: "source", label: "Source" },
     { key: "webForm", label: "Web Form" },
+    {
+      key: "lifecycleStage",
+      label: "Lifecycle Stage",
+      filterField: "lifecycleStageKey",
+      filterKind: "enum",
+    },
     { key: "medium", label: "Medium" }, // Contact.medium — web-form Medium, kept separate from Source
     { key: "location", label: "Location" },
     { key: "pickupLocation", label: "Pickup Location" },
@@ -180,7 +186,7 @@ function getDefaultVisibleColumns(tableKey, vertical) {
   // should not suddenly receive every optional column after this change.
   if (vertical === "generic" && tableKey === "leads") {
     return [
-      "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm",
+      "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm", "lifecycleStage",
       "medium", "location", "pickupLocation", "plotAssign", "overallPickupStatus", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
       "callStatus", "callifiedAi", "callifiedScore",
     ];

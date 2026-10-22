@@ -299,6 +299,9 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
 
     // No error toast on the happy path
     expect(notifyError).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith('Lead created successfully');
+    });
   });
 
   it('blocks a separate Generic lead when the email already belongs to a lead', async () => {
@@ -1585,6 +1588,9 @@ describe('Leads  vertical-aware form schema (#600)', () => {
     const phone = screen.getByPlaceholderText(/Phone \(10-digit/i);
     expect(phone).toBeInTheDocument();
     expect(phone).toHaveAttribute('required');
+    expect(document.querySelector('label[for="create-lead-name"] .required-mark')).toBeInTheDocument();
+    expect(document.querySelector('label[for="create-lead-phone"] .required-mark')).toBeInTheDocument();
+    expect(document.querySelector('label[for="create-lead-email"] .required-mark')).toBeNull();
 
     // WhatsApp option present in the Source dropdown.
     const sourceSelect = screen.getByDisplayValue('Walk-in');
@@ -1685,6 +1691,8 @@ describe('Leads  vertical-aware form schema (#600)', () => {
     openDrawer();
 
     expect(screen.queryByPlaceholderText(/Phone \(10-digit/i)).toBeNull();
+    expect(document.querySelector('label[for="create-lead-name"] .required-mark')).toBeInTheDocument();
+    expect(document.querySelector('label[for="create-lead-email"] .required-mark')).toBeInTheDocument();
 
     const sourceSelect = screen.getByDisplayValue('Organic');
     expect(sourceSelect).toBeInTheDocument();
@@ -1698,6 +1706,28 @@ describe('Leads  vertical-aware form schema (#600)', () => {
       o => o.value === 'LinkedIn',
     );
     expect(linkedinOpt).toBeDefined();
+
+    const countryCode = screen.getByRole('combobox', { name: 'Country code' });
+    fireEvent.mouseDown(countryCode);
+    const countryOptions = within(await screen.findByRole('listbox', { name: 'Country code' })).getAllByRole('option');
+    expect(countryOptions).toHaveLength(15);
+    fireEvent.click(screen.getByRole('option', { name: '+91' }));
+    expect(countryCode).toHaveValue('+91');
+
+    fireEvent.mouseDown(countryCode);
+    const countryList = await screen.findByRole('listbox', { name: 'Country code' });
+    expect(within(countryList).getAllByRole('option')).toHaveLength(15);
+    fireEvent.change(countryCode, { target: { value: '+9abc' } });
+    expect(countryCode).toHaveValue('+9');
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91', '+971']);
+    fireEvent.change(countryCode, { target: { value: '91' } });
+    expect(countryCode).toHaveValue('91');
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91']);
+    fireEvent.change(countryCode, { target: { value: '+91' } });
+    expect(countryCode).toHaveValue('+91');
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91']);
+    fireEvent.change(countryCode, { target: { value: '+6' } });
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+61', '+65', '+60']);
   });
 });
 
@@ -4128,11 +4158,12 @@ describe('Leads extended Freshsales-parity columns', () => {
     company: 'Acme',
     phone: '+91 98000 12345',
     status: 'Lead',
+    lifecycleStageKey: 'interested',
     title: 'Chief Executive',
     website: 'acme.test',
     linkedin: 'linkedin.com/in/aarav',
     industry: 'Logistics',
-    companySize: '51-200',
+    companySize: '-688',
     description: 'Met at expo',
     stateCode: 'IN-KA',
     firstTouchSource: 'Web',
@@ -4146,7 +4177,7 @@ describe('Leads extended Freshsales-parity columns', () => {
   };
 
   const EXTENDED_KEYS = [
-    'name', 'email', 'status', 'title', 'firstName', 'lastName', 'website',
+    'name', 'email', 'lifecycleStage', 'status', 'title', 'firstName', 'lastName', 'website',
     'linkedin', 'industry', 'companySize', 'description', 'stateCode',
     'firstTouchSource', 'lastTouchSource',
   ];
@@ -4162,6 +4193,7 @@ describe('Leads extended Freshsales-parity columns', () => {
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'email', label: 'Email' },
+            { key: 'lifecycleStage', label: 'Lifecycle Stage', filterField: 'lifecycleStageKey', filterKind: 'enum' },
             { key: 'status', label: 'Status' },
             { key: 'title', label: 'Job Title' },
             { key: 'firstName', label: 'First Name' },
@@ -4177,6 +4209,14 @@ describe('Leads extended Freshsales-parity columns', () => {
           ],
         });
       }
+      if (url === '/api/tenant-settings/generic.contactLifecycleStages' && opts?.silent === true) {
+        return Promise.resolve({
+          value: JSON.stringify([
+            { id: 'new', title: 'New', options: [{ id: 'new', label: 'New', status: 'Lead' }] },
+            { id: 'interest', title: 'Interest', options: [{ id: 'interested', label: 'Interested', status: 'Lead' }] },
+          ]),
+        });
+      }
       return leadsFetchMock(url, opts);
     });
 
@@ -4184,7 +4224,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     await screen.findByText('Aarav Sharma');
 
     // Headers for every extended column.
-    for (const h of ['Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
+    for (const h of ['Lifecycle Stage', 'Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
       expect(screen.getByText(h)).toBeInTheDocument();
     }
 
@@ -4192,12 +4232,24 @@ describe('Leads extended Freshsales-parity columns', () => {
     expect(screen.getByText('Aarav')).toBeInTheDocument();
     expect(screen.getByText('Sharma')).toBeInTheDocument();
     expect(screen.getByText('Chief Executive')).toBeInTheDocument();
+    expect(await screen.findByText('Interested')).toBeInTheDocument();
     expect(screen.getByText('Logistics')).toBeInTheDocument();
-    expect(screen.getByText('51-200')).toBeInTheDocument();
+    expect(screen.getByText('Invalid employee count', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Met at expo')).toBeInTheDocument();
     expect(screen.getByText('IN-KA')).toBeInTheDocument();
     const websiteLink = screen.getByRole('link', { name: 'acme.test' });
     expect(websiteLink.getAttribute('href')).toBe('https://acme.test');
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit No Of Employee for Aarav Sharma' }));
+    const employeeInput = screen.getByRole('textbox', { name: 'Edit No Of Employee for Aarav Sharma' });
+    fireEvent.change(employeeInput, { target: { value: '-89' } });
+    fireEvent.blur(employeeInput);
+    await waitFor(() => expect(notifyError).toHaveBeenCalledWith('Number of employees cannot be negative'));
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/201',
+      expect.objectContaining({ method: 'PUT' }),
+    );
   });
 });
 

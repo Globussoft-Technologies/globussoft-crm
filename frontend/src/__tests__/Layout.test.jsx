@@ -205,9 +205,9 @@ describe('Layout', () => {
     expect(scrollRegion).toHaveStyle({ minHeight: '0', overflowY: 'auto' });
   });
 
-  it('renders Softphone for generic tenants', async () => {
+  it('hides the phone-call FAB for generic tenants', () => {
     renderLayout({ tenant: { vertical: 'generic' } });
-    expect(await screen.findByTestId('softphone-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
   });
 
   it('hides Softphone for wellness tenants (Callified handles voice)', () => {

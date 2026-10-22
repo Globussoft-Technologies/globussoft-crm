@@ -16,6 +16,12 @@ export const assignOwner = (id, assignedToId) =>
 export const postActivity = (id, { type, description }) =>
   fetchApi(`/api/contacts/${id}/activities`, { method: 'POST', body: JSON.stringify({ type, description }) });
 
+export const patchActivity = (contactId, activityId, { description }) =>
+  fetchApi(`/api/contacts/${contactId}/activities/${activityId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ description }),
+  });
+
 export const createTask = (data) =>
   fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(data) });
 

@@ -424,6 +424,20 @@
         transform: translateY(-1px);
       }
 
+      /* Typed and autofilled values remain high-contrast after focus moves to
+         another field; placeholders retain their configured muted color. */
+      html.generic-scope #gbs-form input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(:placeholder-shown),
+      html.generic-scope #gbs-form textarea:not(:placeholder-shown),
+      html.generic-scope #gbs-form input:-webkit-autofill,
+      html.generic-scope #gbs-form textarea:-webkit-autofill,
+      html.generic-scope #gbs-form input:focus,
+      html.generic-scope #gbs-form select:focus,
+      html.generic-scope #gbs-form textarea:focus {
+        color: #111827 !important;
+        -webkit-text-fill-color: #111827 !important;
+        font-weight: 600 !important;
+      }
+
       .check {
         display: inline-flex;
         align-items: flex-start;
@@ -3606,7 +3620,7 @@
           var trigger = document.createElement("input");
           trigger.type = "text";
           trigger.placeholder = "+91";
-          trigger.inputMode = "numeric";
+          trigger.inputMode = "tel";
           trigger.pattern = "\\+?[0-9]*";
           trigger.setAttribute("aria-label", ariaLabel || "Phone country code");
           var options = document.createElement("div");
@@ -3690,8 +3704,10 @@
           trigger.addEventListener("click", openCountryPicker);
           trigger.addEventListener("keydown", openCountryPicker);
           trigger.addEventListener("input", function () {
+            var hasLeadingPlus = trigger.value.trim().charAt(0) === "+";
             var numericQuery = trigger.value.replace(/\D/g, "");
-            if (trigger.value !== numericQuery) trigger.value = numericQuery;
+            var visibleQuery = (hasLeadingPlus ? "+" : "") + numericQuery;
+            if (trigger.value !== visibleQuery) trigger.value = visibleQuery;
             var query = numericQuery ? "+" + numericQuery : "";
             openCountryPicker();
             options.querySelectorAll("button").forEach(function (node) {
@@ -4528,7 +4544,7 @@
               }
               updatePickerTrigger();
               trigger.placeholder = "+91";
-              trigger.inputMode = "numeric";
+              trigger.inputMode = "tel";
               // The displayed country code includes the international '+'
               // prefix (for example, +91), so the picker must allow it.
               trigger.pattern = "\\+?[0-9]*";
@@ -4599,9 +4615,11 @@
               trigger.addEventListener("click", openCountryPicker);
               trigger.addEventListener("keydown", openCountryPicker);
               trigger.addEventListener("input", function () {
+                var hasLeadingPlus = trigger.value.trim().charAt(0) === "+";
                 var numericQuery = trigger.value.replace(/\D/g, "");
-                if (trigger.value !== numericQuery)
-                  trigger.value = numericQuery;
+                var visibleQuery = (hasLeadingPlus ? "+" : "") + numericQuery;
+                if (trigger.value !== visibleQuery)
+                  trigger.value = visibleQuery;
                 var query = numericQuery ? "+" + numericQuery : "";
                 var normalizedQuery = numericQuery;
                 openCountryPicker();

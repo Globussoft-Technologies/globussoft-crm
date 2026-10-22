@@ -58,6 +58,8 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenantSetting = prisma.tenantSetting || {};
 
 prisma.user = prisma.user || {};
+prisma.emailTemplate = { findFirst: vi.fn() };
+prisma.smsTemplate = { findFirst: vi.fn() };
 
 
 for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'groupBy']) {
@@ -137,6 +139,9 @@ beforeEach(() => {
     }
 
   }
+
+  prisma.emailTemplate.findFirst.mockReset();
+  prisma.smsTemplate.findFirst.mockReset();
 
   prisma.webForm.findMany.mockResolvedValue([]);
 

@@ -32,6 +32,19 @@ describe('filterSidebarPages', () => {
     expect(pages.some((page) => page.path === '/marketing')).toBe(false);
   });
 
+  it('uses the shared sidebar visibility flag for generic navigation and search', () => {
+    const pages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+    });
+
+    expect(getGenericAccessByPath('/clients')).toMatchObject({ sidebarHidden: true });
+    expect(pages.some((page) => page.path === '/clients')).toBe(false);
+    expect(pages.some((page) => page.path === '/contacts')).toBe(true);
+  });
+
   it('uses one access contract for routes, sidebar search, and tours', () => {
     expect(getGenericAccessByPath('/settings')).toMatchObject({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/settings')).toEqual({ requiredPermission: { module: 'settings', action: 'read' } });
@@ -88,10 +101,10 @@ describe('filterSidebarPages', () => {
     expect(manager).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: '/whatsapp' }),
       expect.objectContaining({ path: '/lead-reports' }),
-      expect.objectContaining({ path: '/workflows' }),
       expect.objectContaining({ id: 'adsgpt', actionTarget: '[data-tour-feature="adsgpt"]' }),
       expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
     ]));
+    expect(manager.some((page) => page.path === '/workflows')).toBe(false);
   });
 
   it('keeps only travel sidebar-visible pages and rewrites their labels', () => {

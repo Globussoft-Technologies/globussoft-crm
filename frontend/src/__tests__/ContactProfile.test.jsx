@@ -54,6 +54,8 @@ function renderProfile() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
+  Element.prototype.scrollIntoView = vi.fn();
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
@@ -112,7 +114,7 @@ describe('ContactDetail profile', () => {
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7', expect.objectContaining({ method: 'PATCH' }));
     });
-    expect(JSON.parse(fetchApiMock.mock.calls.find(([_u, o]) => o?.method === 'PATCH')[1].body)).toEqual({ status: 'Prospect' });
+    expect(JSON.parse(fetchApiMock.mock.calls.find(([_u, o]) => o?.method === 'PATCH')[1].body)).toEqual({ status: 'Prospect', lifecycleStageKey: 'interested' });
     await waitFor(() => expect(panel.getByRole('button', { name: 'Interested / Unqualified' }).className).toMatch(/current/));
   });
 
@@ -122,6 +124,120 @@ describe('ContactDetail profile', () => {
     fireEvent.click(panel.getByRole('button', { name: 'Qualified / Lost' }));
     expect(panel.getByRole('button', { name: 'Qualified' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Lost' })).toBeTruthy();
+  });
+
+  it('adds a Generic CRM lifecycle stage at the end and scrolls it into view', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const dialogElement = await screen.findByRole('dialog', { name: 'Manage lifecycle stages' });
+    expect(dialogElement).toHaveAttribute('aria-modal', 'true');
+    const dialog = within(dialogElement);
+    fireEvent.click(dialog.getByRole('button', { name: 'Add stage' }));
+    const newStageInput = dialog.getByRole('textbox', { name: 'Stage 6 name' });
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' }));
+    expect(newStageInput).toHaveFocus();
+    fireEvent.change(newStageInput, { target: { value: 'Renewal' } });
+    expect(dialog.getByRole('button', { name: 'Move Renewal down' })).toBeDisabled();
+    fireEvent.click(dialog.getByRole('button', { name: 'Save stages' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/tenant-settings/generic.contactLifecycleStages',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const putCall = fetchApiMock.mock.calls.find(([url, options]) => url.includes('generic.contactLifecycleStages') && options?.method === 'PUT');
+    const saved = JSON.parse(JSON.parse(putCall[1].body).value);
+    expect(saved[5].title).toBe('Renewal');
+    expect(saved[5].options[0].status).toBe('Lead');
+    expect(localStorage.getItem('crm:generic-lifecycle-draft:v1:generic:current')).toBeNull();
+  });
+
+  it('allows two conditions with separate CRM statuses in one lifecycle stage', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Add stage' }));
+
+    const stageInput = dialog.getByRole('textbox', { name: 'Stage 6 name' });
+    const stageRow = within(stageInput.closest('.cp-stage-manager-row'));
+    fireEvent.click(stageRow.getByRole('button', { name: 'Add condition' }));
+
+    expect(stageRow.queryByRole('textbox', { name: 'Stage 6 name' })).not.toBeInTheDocument();
+    expect(stageRow.getAllByRole('textbox')).toHaveLength(2);
+    expect(stageRow.getByRole('textbox', { name: 'New stage condition 1' })).toHaveValue('New stage');
+    const secondCondition = stageRow.getByRole('textbox', { name: 'New stage condition 2' });
+    fireEvent.change(secondCondition, { target: { value: 'No response' } });
+    fireEvent.change(stageRow.getByRole('combobox', { name: 'No response CRM status' }), { target: { value: 'Churned' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Save stages' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/tenant-settings/generic.contactLifecycleStages',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const putCall = fetchApiMock.mock.calls.find(([url, options]) => url.includes('generic.contactLifecycleStages') && options?.method === 'PUT');
+    const saved = JSON.parse(JSON.parse(putCall[1].body).value);
+    expect(saved[5].options).toHaveLength(2);
+    expect(saved[5].options[1]).toEqual(expect.objectContaining({ label: 'No response', status: 'Churned', negative: true }));
+
+    const groupedStage = panel.getByRole('button', { name: 'New stage / No response' });
+    fireEvent.click(groupedStage);
+    const groupedStageMenu = within(groupedStage.closest('.cp-chev-wrap'));
+    expect(groupedStageMenu.getByRole('button', { name: 'New stage' })).toBeInTheDocument();
+    expect(groupedStageMenu.getByRole('button', { name: 'No response' })).toBeInTheDocument();
+  });
+
+  it('restores an unsaved lifecycle draft after closing and revisiting the page', async () => {
+    const firstRender = renderProfile();
+    const firstPanel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(firstPanel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const firstDialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    fireEvent.click(firstDialog.getByRole('button', { name: 'Add stage' }));
+    fireEvent.change(firstDialog.getByRole('textbox', { name: 'Stage 6 name' }), { target: { value: 'Draft renewal' } });
+    fireEvent.click(firstDialog.getByRole('button', { name: 'Close lifecycle stage editor' }));
+
+    await waitFor(() => expect(localStorage.getItem('crm:generic-lifecycle-draft:v1:generic:current')).toContain('Draft renewal'));
+    firstRender.unmount();
+
+    renderProfile();
+    const nextPanel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(nextPanel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const restoredDialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    expect(restoredDialog.getByRole('textbox', { name: 'Stage 6 name' })).toHaveValue('Draft renewal');
+    expect(restoredDialog.getByRole('combobox', { name: 'Draft renewal CRM status' })).toHaveValue('Lead');
+  });
+
+  it('shows who changed the lifecycle, when, and the complete from/to values', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      if (url === '/api/contacts/7/lifecycle-history') {
+        return Promise.resolve({
+          data: [{
+            id: 88,
+            changedAt: '2026-10-22T07:30:00.000Z',
+            changedBy: { id: 7, name: 'Rajesh Sharma', email: 'rajesh@example.com' },
+            from: { stageKey: 'new', stage: 'New', status: 'Lead' },
+            to: { stageKey: 'contacted', stage: 'Contacted', status: 'Prospect' },
+          }],
+          total: 1,
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'View lifecycle history' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Lifecycle history' }));
+
+    expect(await dialog.findByText('Rajesh Sharma')).toBeInTheDocument();
+    expect(dialog.getByText('rajesh@example.com')).toBeInTheDocument();
+    expect(dialog.getByText('New')).toBeInTheDocument();
+    expect(dialog.getByText('Contacted')).toBeInTheDocument();
+    expect(dialog.getByText('CRM status: Lead')).toBeInTheDocument();
+    expect(dialog.getByText('CRM status: Prospect')).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7/lifecycle-history', { silent: true });
   });
 
   it('adds a note via POST and clears the input', async () => {

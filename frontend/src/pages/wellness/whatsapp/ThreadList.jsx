@@ -90,6 +90,7 @@ export default function ThreadList() {
     // route the templates link to their own surface. Wellness's
     // WhatsAppThreads.jsx doesn't set it → default preserved.
     templatesPath,
+    showTemplatesButton = true,
     // Bulk delete. Optional — a host that doesn't provide it simply gets no
     // Select affordance (travel's Wati chat is on a different backend).
     bulkDeleteThreads,
@@ -156,7 +157,7 @@ export default function ThreadList() {
           </h2>
           {isAdmin && (
             <div style={{ display: 'flex', gap: 6 }}>
-              <Link
+              {showTemplatesButton && <Link
                 to={tplPath}
                 title="Manage WhatsApp Templates"
                 style={{
@@ -170,7 +171,7 @@ export default function ThreadList() {
                 }}
               >
                 Templates
-              </Link>
+              </Link>}
               <button
                 onClick={() => { setShowNewModal(true); setNewError(null); }}
                 title="New conversation"

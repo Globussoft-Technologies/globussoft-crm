@@ -670,6 +670,7 @@ const Sidebar = ({
     const canonicalAccess = !isTravel && !isWellness
       ? getGenericAccessByPath(to)
       : null;
+    if (canonicalAccess?.sidebarHidden) return null;
     const adminOnly = canonicalAccess ? Boolean(canonicalAccess.adminOnly) : requestedAdminOnly;
     const managerOnly = canonicalAccess ? Boolean(canonicalAccess.managerOnly) : requestedManagerOnly;
     const requiredPermission = canonicalAccess?.requiredPermission || requestedPermission;
@@ -2645,6 +2646,7 @@ function renderGenericNav({
   const canRenderLink = (props) => {
     if (isTenantPageHidden(props.to, hiddenPagePaths)) return false;
     const canonical = getGenericAccessByPath(props.to);
+    if (canonical?.sidebarHidden) return false;
     const adminOnly = canonical ? Boolean(canonical.adminOnly) : props.adminOnly;
     const managerOnly = canonical ? Boolean(canonical.managerOnly) : props.managerOnly;
     const requiredPermission = canonical?.requiredPermission || props.requiredPermission;

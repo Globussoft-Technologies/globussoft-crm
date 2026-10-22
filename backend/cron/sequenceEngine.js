@@ -30,11 +30,13 @@ const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
 const { normalizeGenericTemplatePlaceholders } = require('../lib/genericCampaignAutomation');
 const { renderGenericTemplate } = require('../lib/genericEmailTemplateRenderer');
+const { createSelectionLink } = require('../lib/genericPickupPlotSelection');
 const flyerRenderEngine = require('../services/flyerRenderEngine');
 const shortUrlService = require('../services/shortUrl');
 const { sendEmail } = require('../lib/emailSender');
 const { writeAudit } = require('../lib/audit');
 const { resolveSendGridConfig } = require('../services/travelSendGrid');
+const { sendSms, resolveProviderConfig } = require('../services/smsProvider');
 
 // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
 // SequenceStep.attachmentRefsJson entries with kind='flyer'.
@@ -189,6 +191,7 @@ function buildContextForEnrollment(enrollment) {
     billingStateCode: c.billingStateCode,
     externalId: c.externalId,
     aiScore: c.aiScore,
+    interestedPlotArea: c.interestedPlotArea,
     tags,
     custom,
   });
@@ -228,6 +231,21 @@ function buildContextForEnrollment(enrollment) {
         : {},
     });
   }
+  return context;
+}
+
+function addGenericPickupPlotLink(context, enrollment, template) {
+  if (
+    enrollment.sequence?.tenant?.vertical !== 'generic'
+    || !/\{\{\s*(?:system\.pickupPlotLink|selectionLink)\s*\}\}/i.test(String(template || ''))
+  ) return context;
+  const pickupPlotLink = createSelectionLink({
+    tenantId: enrollment.tenantId,
+    contactId: enrollment.contactId || enrollment.contact?.id,
+    submissionId: enrollment.id,
+  });
+  context.system = { ...(context.system || {}), pickupPlotLink };
+  context.selectionLink = pickupPlotLink;
   return context;
 }
 
@@ -491,6 +509,40 @@ function isLikelyHumanGenericEmailOpen(tracking) {
   return classifyGenericEmailOpen(tracking) === 'likely_human';
 }
 
+// Generic CRM compliance gate used immediately before every sequence send.
+// Contact.status is the existing cross-channel operator control; WhatsApp's
+// phone-level opt-out table remains authoritative in queueWhatsAppSequenceTemplate.
+const GENERIC_SEQUENCE_BLOCKED_STATUSES = new Set([
+  'unsubscribed', 'opted out', 'opt out', 'do not contact', 'do not disturb', 'dnc', 'dnd',
+]);
+const SMS_STOP_WORDS = ['STOP', 'UNSUBSCRIBE', 'UNSUB', 'OPT OUT', 'OPT-OUT', 'STOP ALL'];
+
+async function genericSequenceOptOutReason(enrollment, channel) {
+  if (enrollment.sequence?.tenant?.vertical !== 'generic') return null;
+  const status = String(enrollment.contact?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (GENERIC_SEQUENCE_BLOCKED_STATUSES.has(status)) return 'contact_status';
+
+  const contactId = enrollment.contactId || enrollment.contact?.id;
+  if (channel === 'sms' && contactId) {
+    const stopped = await prisma.smsMessage.findFirst({
+      where: {
+        tenantId: enrollment.tenantId,
+        contactId,
+        direction: 'INBOUND',
+        body: { in: SMS_STOP_WORDS },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (stopped) return 'sms_stop_keyword';
+  }
+  return null;
+}
+
 function genericCampaignAllowsDispatch(sequence) {
   const campaign = (sequence.campaigns || []).find(item => item.status === 'Active') || sequence.campaigns?.[0];
   if (!campaign?.scheduleFilters) return true;
@@ -576,6 +628,62 @@ async function addGenericEmailTracking(emailId, body, tenantId) {
 async function receiverConditionMatches(condition, enrollment) {
   const type = condition?.type;
   const event = condition?.event;
+  if (type === 'whatsapp_activity') {
+    const outbound = await prisma.whatsAppMessage.findFirst({
+      where: {
+        tenantId: enrollment.tenantId,
+        contactId: enrollment.contactId,
+        direction: 'OUTBOUND',
+        interactiveJson: { contains: `"sequenceEnrollmentId":${enrollment.id}` },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, threadId: true, createdAt: true },
+    });
+    if (!outbound) return event === 'no_reply';
+    const reply = await prisma.whatsAppMessage.findFirst({
+      where: {
+        tenantId: enrollment.tenantId,
+        contactId: enrollment.contactId,
+        threadId: outbound.threadId,
+        direction: 'INBOUND',
+        createdAt: { gt: outbound.createdAt },
+      },
+      select: { id: true },
+    });
+    return event === 'replied' ? Boolean(reply) : event === 'no_reply' ? !reply : false;
+  }
+  if (type === 'sms_activity') {
+    const contactId = enrollment.contactId || enrollment.contact?.id;
+    const outbound = await prisma.smsMessage.findFirst({
+      where: {
+        tenantId: enrollment.tenantId,
+        contactId,
+        direction: 'OUTBOUND',
+        createdAt: { gte: enrollment.createdAt },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    });
+    if (!outbound) return event === 'no_reply';
+    const reply = await prisma.smsMessage.findFirst({
+      where: {
+        tenantId: enrollment.tenantId,
+        contactId,
+        direction: 'INBOUND',
+        createdAt: { gt: outbound.createdAt },
+      },
+      select: { id: true },
+    });
+    return event === 'replied' ? Boolean(reply) : event === 'no_reply' ? !reply : false;
+  }
+  if (type === 'crm_field') {
+    const contact = { ...(enrollment.contact || {}) };
+    for (const value of contact.leadCustomFieldValues || []) {
+      contact[`custom_${value.fieldId}`] = value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool;
+    }
+    const { matchesEventConditions } = require('../lib/genericCampaignAutomation');
+    return matchesEventConditions({ conditions: [{ field: condition.field, key: condition.key, op: condition.op, value: condition.value }], conditionLogic: 'AND' }, contact, 'contact.updated');
+  }
   if (type === 'email_activity') {
     const email = await latestSequenceEmail(enrollment);
     if (!email) return false;
@@ -657,7 +765,7 @@ async function receiverConditionMatches(condition, enrollment) {
   return false;
 }
 
-async function executeReceiverAction(action, enrollment, ctx) {
+async function executeReceiverAction(action, enrollment, ctx, stepId = null) {
   const type = action?.type || 'send_email';
   if (type === 'stop_sequence') return { stop: true };
   if (type === 'wait') {
@@ -668,6 +776,51 @@ async function executeReceiverAction(action, enrollment, ctx) {
     if (action.value) {
       await prisma.contact.update({ where: { id: enrollment.contactId }, data: { status: String(action.value) } });
     }
+    return {};
+  }
+  const channel = type === 'send_whatsapp' ? 'whatsapp' : type === 'send_sms' ? 'sms' : type === 'send_email' ? 'email' : null;
+  if (channel && await genericSequenceOptOutReason(enrollment, channel)) return { complete: true };
+  if (type === 'send_whatsapp' && action.whatsappTemplateId) {
+    const { queueWhatsAppSequenceTemplate } = require('../lib/genericCampaignAutomation');
+    const queued = await queueWhatsAppSequenceTemplate({
+      templateId: Number(action.whatsappTemplateId),
+      enrollment,
+      context: ctx,
+      stepId: stepId ?? enrollment.currentStep,
+      branch: action.branch || null,
+    });
+    if (queued?.reason === 'contact_opted_out') return { complete: true };
+    return {};
+  }
+  if (type === 'send_sms' && action.smsTemplateId) {
+    const template = await prisma.emailTemplate.findFirst({
+      where: { id: Number(action.smsTemplateId), tenantId: enrollment.tenantId, channel: 'SMS' },
+      select: { id: true, body: true },
+    });
+    if (!template || !enrollment.contact?.phone) return {};
+    const body = renderGenericTemplate(normalizeGenericTemplatePlaceholders(template.body || ''), ctx);
+    const message = await prisma.smsMessage.create({
+      data: {
+        to: enrollment.contact.phone,
+        body: body || 'Automated sequence message',
+        direction: 'OUTBOUND',
+        status: 'QUEUED',
+        contactId: enrollment.contact.id,
+        tenantId: enrollment.tenantId,
+      },
+    });
+    const provider = await resolveProviderConfig(prisma, enrollment.tenantId);
+    if (!provider) {
+      await prisma.smsMessage.update({ where: { id: message.id }, data: { status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' } });
+      return {};
+    }
+    const sent = await sendSms({ ...provider, to: enrollment.contact.phone, body: body || 'Automated sequence message' });
+    await prisma.smsMessage.update({
+      where: { id: message.id },
+      data: sent.success
+        ? { status: 'SENT', provider: provider.provider, providerMsgId: sent.providerMsgId || null }
+        : { status: 'FAILED', provider: provider.provider, errorMessage: sent.error || 'SMS provider rejected the message' },
+    });
     return {};
   }
   if (type !== 'send_email' || !action.emailTemplateId) return {};
@@ -689,12 +842,43 @@ async function executeReceiverAction(action, enrollment, ctx) {
 
 // ── New step-list dispatcher ──────────────────────────────────────────
 async function processStep(step, enrollment) {
+  const genericChannel = enrollment.sequence?.tenant?.vertical === 'generic'
+    ? ({ email: 'email', sms: 'sms', whatsapp: 'whatsapp' }[step.kind] || null)
+    : null;
+  if (genericChannel && await genericSequenceOptOutReason(enrollment, genericChannel)) {
+    return { complete: true };
+  }
   const ctx = buildContextForEnrollment(enrollment);
   if (enrollment.sequence?.tenant?.vertical === 'generic') {
     ctx.payment = await prisma.payment.findFirst({
       where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId },
       orderBy: { createdAt: 'desc' },
     }) || {};
+    if (prisma.plotBooking?.findFirst) {
+      ctx.booking = await prisma.plotBooking.findFirst({
+        where: { tenantId: enrollment.tenantId, contactId: enrollment.contactId },
+        orderBy: { updatedAt: 'desc' },
+      }).catch(() => null) || {};
+      if (ctx.booking.plotSiteId && prisma.plotSite?.findFirst) {
+        ctx.plot = await prisma.plotSite.findFirst({
+          where: { tenantId: enrollment.tenantId, id: ctx.booking.plotSiteId },
+        }).catch(() => null) || {};
+      }
+    }
+  }
+
+  if (step.kind === 'whatsapp' && enrollment.sequence?.tenant?.vertical === 'generic') {
+    let config = {};
+    try { config = JSON.parse(step.conditionJson || '{}'); } catch (_error) {}
+    const { queueWhatsAppSequenceTemplate } = require('../lib/genericCampaignAutomation');
+    const queued = await queueWhatsAppSequenceTemplate({
+      templateId: Number(config.whatsappTemplateId),
+      enrollment,
+      context: ctx,
+      stepId: step.id,
+    });
+    if (queued?.reason === 'contact_opted_out') return { complete: true };
+    return { advance: true };
   }
 
   if (step.kind === 'email') {
@@ -710,6 +894,7 @@ async function processStep(step, enrollment) {
       const templateBody = isGenericSequence
         ? normalizeGenericTemplatePlaceholders(step.emailTemplate.body || '')
         : step.emailTemplate.body || '';
+      if (isGenericSequence) addGenericPickupPlotLink(ctx, enrollment, `${templateSubject}\n${templateBody}`);
       subject = isGenericSequence ? renderGenericTemplate(templateSubject, ctx) : renderTemplate(templateSubject, ctx);
       body = isGenericSequence ? renderGenericTemplate(templateBody, ctx, { html: true }) : renderTemplate(templateBody, ctx);
     }
@@ -806,6 +991,7 @@ async function processStep(step, enrollment) {
 
   if (step.kind === 'sms') {
     if (enrollment.contact?.phone) {
+      addGenericPickupPlotLink(ctx, enrollment, step.smsBody);
       let body = renderTemplate(step.smsBody || '', ctx);
       // S19 — SMS doesn't natively carry binary attachments but flyer links
       // are commonly sent as a separate URL line.
@@ -886,7 +1072,7 @@ async function processStep(step, enrollment) {
           body = `${body.trim()}\n\n${linkLines.join('\n')}`.trim();
         }
       }
-      await prisma.smsMessage.create({
+      const message = await prisma.smsMessage.create({
         data: {
           to: enrollment.contact.phone,
           body: body || `Automated sequence message`,
@@ -896,6 +1082,20 @@ async function processStep(step, enrollment) {
           tenantId: enrollment.tenantId,
         },
       });
+      if (enrollment.sequence?.tenant?.vertical === 'generic') {
+        const provider = await resolveProviderConfig(prisma, enrollment.tenantId);
+        if (!provider) {
+          await prisma.smsMessage.update({ where: { id: message.id }, data: { status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' } });
+        } else {
+          const sent = await sendSms({ ...provider, to: enrollment.contact.phone, body: body || 'Automated sequence message' });
+          await prisma.smsMessage.update({
+            where: { id: message.id },
+            data: sent.success
+              ? { status: 'SENT', provider: provider.provider, providerMsgId: sent.providerMsgId || null }
+              : { status: 'FAILED', provider: provider.provider, errorMessage: sent.error || 'SMS provider rejected the message' },
+          });
+        }
+      }
     }
     return { advance: true };
   }
@@ -925,15 +1125,12 @@ async function processStep(step, enrollment) {
       for (const condition of receiverCondition.conditions) checks.push(await receiverConditionMatches(condition, enrollment));
       const matched = receiverCondition.logic === 'ANY' ? checks.some(Boolean) : checks.every(Boolean);
       const branch = matched ? receiverCondition.yesAction : receiverCondition.noAction;
-      const actionResult = await executeReceiverAction(branch, enrollment, ctx);
+      const actionResult = await executeReceiverAction(branch, enrollment, ctx, step.id);
       if (actionResult.stop) return { stop: true };
+      if (actionResult.complete) return { complete: true };
       const fallback = step.position + 1;
-      // Generic v2 conditions own their YES/NO action. Do not fall through
-      // into a standalone email step or honor stale legacy branch targets,
-      // otherwise the selected branch can send a second message as well.
-      if (branch?.type === 'send_email') {
-        return { complete: true };
-      }
+      // Generic v2 conditions own their YES/NO action, then continue to the
+      // explicitly authored next step in the durable sequence.
       const target = matched
         ? (step.trueNextPosition != null ? step.trueNextPosition : fallback)
         : (step.falseNextPosition != null ? step.falseNextPosition : fallback);
@@ -1415,7 +1612,7 @@ const tickSequenceEngine = async () => {
     const enrollments = await prisma.sequenceEnrollment.findMany({
       where: { id: { in: ids }, lockedBy: claimId },
       include: {
-        sequence: { include: { tenant: { select: { vertical: true, name: true } }, campaigns: { select: { id: true, status: true, scheduleFilters: true, sequenceId: true }, orderBy: { createdAt: 'desc' } }, steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
+        sequence: { include: { tenant: { select: { vertical: true, name: true } }, campaigns: { select: { id: true, status: true, channel: true, scheduleFilters: true, sequenceId: true }, orderBy: { createdAt: 'desc' } }, steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
         contact: { include: {
           leadCustomFieldValues: { include: { field: { select: { fieldKey: true, label: true } } } },
           deals: { orderBy: { createdAt: 'desc' }, take: 1 },
@@ -1502,4 +1699,5 @@ module.exports = {
   shortenUrlSafe, // S87
   classifyGenericEmailOpen,
   isLikelyHumanGenericEmailOpen,
+  genericSequenceOptOutReason,
 };

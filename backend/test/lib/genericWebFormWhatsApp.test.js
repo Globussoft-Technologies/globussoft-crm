@@ -175,6 +175,57 @@ describe('generic web-form WhatsApp acknowledgement', () => {
     });
   });
 
+  test('passes the fixed pickup/plot URL as the seventh approved-template parameter', async () => {
+    const selectionLink = 'https://crm.example/pickup-plot-selection/signed-token';
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify({ templateId: 77 }) });
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({
+      id: 77,
+      name: 'generic_lead_pickup_plot',
+      body: 'Hi {{1}}. Company {{2}}, email {{3}}, phone {{4}}, team {{5}}, form {{6}}. Choose pickup and plot: {{7}}',
+    });
+
+    await sendGenericWebFormWhatsApp({ form, contact, submissionId: 1101, isNewContact: true, selectionLink });
+
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        body: expect.stringContaining(selectionLink),
+        interactiveJson: JSON.stringify({
+          submissionId: 1101,
+          source: 'web_form',
+          parameters: [
+            { type: 'text', text: 'Jane' },
+            { type: 'text', text: '' },
+            { type: 'text', text: 'jane@example.com' },
+            { type: 'text', text: '+919876543210' },
+            { type: 'text', text: 'Acme' },
+            { type: 'text', text: 'Contact us' },
+            { type: 'text', text: selectionLink },
+          ],
+        }),
+      }),
+    });
+  });
+
+  test('does not append the pickup/plot URL to other approved templates', async () => {
+    const selectionLink = 'https://crm.example/pickup-plot-selection/signed-token';
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify({ templateId: 77 }) });
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({
+      id: 77,
+      name: 'generic_lead_details_updated',
+      body: 'Hi {{1}}, your details were updated.',
+    });
+
+    await sendGenericWebFormWhatsApp({ form, contact, submissionId: 1102, selectionLink });
+
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        body: 'Hi Jane, your details were updated.',
+        templateName: 'generic_lead_details_updated',
+      }),
+    });
+    expect(prisma.whatsAppMessage.create.mock.calls[0][0].data.body).not.toContain(selectionLink);
+  });
+
   test('uses the template assigned to the contact status', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({
       value: JSON.stringify({ statusTemplates: { prospect: 88 } }),

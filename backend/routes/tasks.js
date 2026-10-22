@@ -608,7 +608,16 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
       },
       include: { contact: true, user: true },
     });
-    try { require("../lib/eventBus").emitEvent("task.created", { taskId: task.id, title: task.title, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
+    try {
+      require("../lib/eventBus").emitEvent("task.created", {
+        taskId: task.id,
+        title: task.title,
+        type: task.type,
+        dueDate: task.dueDate,
+        contactId: task.contactId,
+        userId: req.user.userId,
+      }, req.user.tenantId, req.io);
+    } catch(_e) {}
     // #179: audit task creation.
     await writeAudit('Task', 'CREATE', task.id, req.user.userId, req.user.tenantId, {
       title: task.title,

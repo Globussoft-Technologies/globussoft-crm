@@ -311,6 +311,42 @@ describe('PUT /api/tenant-settings/:key', () => {
     );
   });
 
+  test('saves validated lifecycle stages for Generic CRM only', async () => {
+    const stages = [{ id: 'new', title: 'New', options: [{ id: 'new', label: 'New', status: 'Lead', negative: false }] }];
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    prisma.tenantSetting.upsert.mockResolvedValue({
+      id: 120,
+      key: KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES,
+      value: JSON.stringify(stages),
+      category: 'lifecycle',
+    });
+
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: JSON.stringify(stages), category: 'lifecycle' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledOnce();
+  });
+
+  test('rejects invalid lifecycle stage mappings and non-Generic tenants', async () => {
+    const invalid = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: JSON.stringify([{ id: 'bad', title: 'Bad', options: [{ id: 'bad', label: 'Bad', status: 'Unknown' }] }]) });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('INVALID_LIFECYCLE_STAGES');
+
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    const nonGeneric = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: DEFAULTS[KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES] });
+    expect(nonGeneric.status).toBe(404);
+    expect(nonGeneric.body.code).toBe('GENERIC_ONLY');
+  });
+
   test('rejects unknown key with 400 INVALID_SETTING_KEY + allowed list', async () => {
     const res = await request(makeApp())
       .put('/api/tenant-settings/not_a_real_key')

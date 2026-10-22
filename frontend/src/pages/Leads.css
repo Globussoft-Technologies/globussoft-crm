@@ -166,6 +166,31 @@
   max-width: 100%;
 }
 
+/* Keep entered values high-contrast after focus moves to another field. */
+.create-lead-modal--generic .create-lead-form--generic input:not([type="checkbox"]):not([type="radio"]):not(:placeholder-shown),
+.create-lead-modal--generic .create-lead-form--generic textarea:not(:placeholder-shown),
+.create-lead-modal--generic .create-lead-form--generic input:-webkit-autofill,
+.create-lead-modal--generic .create-lead-form--generic textarea:-webkit-autofill {
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  font-weight: 600;
+}
+
+/* Keep the active field unmistakable while typing in the Generic CRM lead
+ * dialog. This is intentionally scoped here so other CRM verticals and forms
+ * keep their existing focus presentation. */
+.create-lead-modal--generic .create-lead-form--generic input:focus,
+.create-lead-modal--generic .create-lead-form--generic textarea:focus,
+.create-lead-modal--generic .create-lead-form--generic select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.22);
+  background-color: var(--input-bg-focus);
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  font-weight: 600;
+}
+
 .create-lead-form--generic .create-lead-form__actions {
   grid-column: 1 / -1;
   position: sticky;

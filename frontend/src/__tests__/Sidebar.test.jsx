@@ -935,12 +935,28 @@ describe('Sidebar — load-bearing render surface', () => {
 
     it('shows manager-only items for MANAGER role but still hides admin-only', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      // Manager sees manager items.
-      expect(screen.getByText('Forecasting')).toBeTruthy();
-      expect(screen.getByText('Quotas')).toBeTruthy();
+      // Requested Generic CRM navigation entries stay hidden for all roles.
+      expect(screen.queryByText('Forecasting')).toBeNull();
+      expect(screen.queryByText('Quotas')).toBeNull();
       // Manager does NOT see admin-only.
       expect(screen.queryByText('Audit Log')).toBeNull();
       expect(screen.queryByText('Sandbox')).toBeNull();
+    });
+
+    it('keeps requested product pages out of the Generic CRM sidebar for admins and managers', () => {
+      const hiddenLabels = [
+        'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
+        'Lead Scoring', 'Approvals', 'Workflows', 'Knowledge Base', 'Landing Sites',
+        'Sequences', 'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
+      ];
+
+      for (const role of ['ADMIN', 'MANAGER']) {
+        const { unmount } = renderSidebar({ vertical: 'generic', role });
+        for (const label of hiddenLabels) {
+          expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
+        }
+        unmount();
+      }
     });
 
     it('hides clinical-role-gated wellness items (Patients) for USER w/o wellnessRole', () => {
@@ -1625,16 +1641,14 @@ describe('Sidebar — load-bearing render surface', () => {
   // for cases 4-5 which are the equivalent "automation cluster" navs.
 
   describe('Generic Reports cluster sub-items', () => {
-    it('renders all five Reports cluster items for MANAGER (Reports / Agent Reports / Dashboards / Custom Reports / Funnel)', () => {
-      // The five report-style navs all live under `managerOnly` in
-      // renderGenericNav. MANAGER role should see every one of them.
+    it('renders remaining Reports cluster items for MANAGER while custom shortcuts stay hidden', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       // "Reports" appears twice (the bare label + potential section header
       // duplication via segmentMatches). getAllByText handles both.
       expect(screen.getAllByText('Reports').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Agent Reports')).toBeTruthy();
-      expect(screen.getByText('Dashboards')).toBeTruthy();
-      expect(screen.getByText('Custom Reports')).toBeTruthy();
+      expect(screen.queryByText('Dashboards')).toBeNull();
+      expect(screen.queryByText('Custom Reports')).toBeNull();
       expect(screen.getByText('Funnel')).toBeTruthy();
     });
 
@@ -1645,7 +1659,7 @@ describe('Sidebar — load-bearing render surface', () => {
       // dashboards.read.
       expect(screen.getByText('Agent Reports')).toBeTruthy();
       expect(screen.queryByText('Dashboards')).toBeNull();
-      expect(screen.getByText('Custom Reports')).toBeTruthy();
+      expect(screen.queryByText('Custom Reports')).toBeNull();
       expect(screen.getByText('Funnel')).toBeTruthy();
       expect(screen.getByText('Reports')).toBeTruthy();
     });
@@ -1664,11 +1678,9 @@ describe('Sidebar — load-bearing render surface', () => {
   });
 
   describe('Generic Sequences + Marketing + Lead Routing manager cluster', () => {
-    it('renders Sequences / Marketing / Lead Routing for MANAGER under generic', () => {
-      // These three are the "automation cluster" navs (Sidebar has no
-      // "Workflows" nav; the closest equivalent is Sequences).
+    it('renders Marketing / Lead Routing for MANAGER while Sequences stays hidden under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.getByText('Sequences')).toBeTruthy();
+      expect(screen.queryByText('Sequences')).toBeNull();
       const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
       expect(marketingCampaignLink).toBeTruthy();
       expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');

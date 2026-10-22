@@ -79,6 +79,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.visible).toContain('webForm');
+    expect(res.body.visible).toContain('lifecycleStage');
     expect(res.body.visible).toContain('location');
     expect(res.body.visible).toContain('pickupLocation');
     expect(res.body.visible).toContain('plotAssign');
@@ -94,6 +95,11 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     });
     expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).toMatchObject({
       label: 'Overall Status',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'lifecycleStage')).toMatchObject({
+      label: 'Lifecycle Stage',
+      filterField: 'lifecycleStageKey',
+      filterKind: 'enum',
     });
     expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).not.toHaveProperty('lockedVisible');
     expect(res.body.availableColumns.find((c) => c.key === 'plotAssign')).not.toHaveProperty('lockedVisible');
@@ -121,9 +127,10 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.availableColumns.find((c) => c.key === 'medium')).toMatchObject({
       label: 'Medium',
     });
-    // Medium sits next to the attribution pair without disturbing the
-    // Source → Web Form adjacency pinned above.
-    expect(keys.indexOf('medium')).toBe(keys.indexOf('webForm') + 1);
+    // Lifecycle Stage now sits between Web Form and Medium without
+    // disturbing the Source → Web Form adjacency pinned above.
+    expect(keys.indexOf('lifecycleStage')).toBe(keys.indexOf('webForm') + 1);
+    expect(keys.indexOf('medium')).toBe(keys.indexOf('lifecycleStage') + 1);
     expect(keys.indexOf('medium')).not.toBe(keys.indexOf('source') + 1);
     // First-ever load defaults Medium visible (every builtin is visible).
     expect(res.body.visible).toContain('medium');
@@ -143,6 +150,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.status).toBe(200);
     const byKey = new Map(res.body.availableColumns.map((c) => [c.key, c.label]));
     expect(byKey.get('status')).toBe('Status');
+    expect(byKey.get('lifecycleStage')).toBe('Lifecycle Stage');
     expect(byKey.get('title')).toBe('Job Title');
     expect(byKey.get('firstName')).toBe('First Name');
     expect(byKey.get('lastName')).toBe('Last Name');

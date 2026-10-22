@@ -31,9 +31,6 @@ const {
 } = require("../utils/deduplication");
 const { notify } = require("../lib/notificationService");
 const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
-const {
-  sendGenericWebFormWhatsApp,
-} = require("../lib/genericWebFormWhatsApp");
 const { getSetting, setSetting, KEYS } = require("../lib/tenantSettings");
 const {
   evaluateAutoCampaignRules,
@@ -564,6 +561,12 @@ const FILTERABLE_FIELDS = {
   stateCode: { column: "stateCode", kind: "text", label: "State", verticals: ["generic"] },
   status: { column: "status", kind: "text", label: "Status", required: true },
   source: { column: "source", kind: "text", label: "Source" },
+  lifecycleStageKey: {
+    column: "lifecycleStageKey",
+    kind: "enum",
+    label: "Lifecycle Stage",
+    verticals: ["generic"],
+  },
   medium: { column: "medium", kind: "text", label: "Medium", verticals: ["generic"] },
   firstTouchSource: { column: "firstTouchSource", kind: "text", label: "First Touch Source", verticals: ["generic"] },
   lastTouchSource: { column: "lastTouchSource", kind: "text", label: "Last Touch Source", verticals: ["generic"] },
@@ -833,6 +836,12 @@ function buildFilterClause(fieldDef, operator, values) {
     return operator === "not_contains"
       ? { [column]: { notIn: nums } }
       : { [column]: { in: nums } };
+  }
+  if (kind === "enum") {
+    const selected = list.map(String);
+    return operator === "not_contains"
+      ? { [column]: { notIn: selected } }
+      : { [column]: { in: selected } };
   }
   if (kind === "range") {
     // Values are bucket keys ("26-50"), resolved back to their {min,max}
@@ -2191,6 +2200,29 @@ router.get("/filter-values/:field", async (req, res) => {
       }
       return res.json({ values });
     }
+    if (req.params.field === "lifecycleStageKey") {
+      let stages = [];
+      try {
+        const raw = await getSetting(
+          tenantId,
+          KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES,
+          { coerce: String },
+        );
+        stages = typeof raw === "string" ? JSON.parse(raw) : raw;
+      } catch (_error) {
+        stages = [];
+      }
+      const normalizedSearch = valueSearch.toLowerCase();
+      const values = (Array.isArray(stages) ? stages : [])
+        .flatMap((stage) => (Array.isArray(stage?.options) ? stage.options : []))
+        .map((option) => ({
+          value: String(option?.id || "").trim(),
+          label: String(option?.label || "").trim(),
+        }))
+        .filter((option) => option.value && option.label)
+        .filter((option) => !normalizedSearch || option.label.toLowerCase().includes(normalizedSearch));
+      return res.json({ values });
+    }
     if (req.params.field === "territoryId") {
       const territories = await prisma.territory.findMany({
         where: { tenantId },
@@ -2424,6 +2456,95 @@ router.patch('/tags/:tagName', async (req, res) => {
     res.json(updated);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to update contact tag' });
+  }
+});
+
+// Generic CRM lifecycle history. AuditLog is the tenant-scoped source of
+// truth for who changed a contact and when; this projection exposes only
+// lifecycle/status transitions for the contact profile timeline.
+router.get('/:id/lifecycle-history', async (req, res) => {
+  try {
+    const contactId = Number(req.params.id);
+    if (!Number.isInteger(contactId) || contactId < 1) {
+      return res.status(400).json({ error: 'Invalid contact ID', code: 'INVALID_ID' });
+    }
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, tenantId: req.user.tenantId },
+      select: { id: true, assignedToId: true },
+    });
+    if (!contact || !canAccessLead(req, contact)) {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+
+    let stageLabels = new Map();
+    try {
+      const raw = await getSetting(req.user.tenantId, KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES, { coerce: String });
+      const stages = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      stageLabels = new Map((Array.isArray(stages) ? stages : [])
+        .flatMap((stage) => Array.isArray(stage?.options) ? stage.options : [])
+        .map((option) => [String(option.id || ''), String(option.label || '')]));
+    } catch (_error) {
+      stageLabels = new Map();
+    }
+
+    const rows = await prisma.auditLog.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        entity: 'Contact',
+        entityId: contactId,
+        action: 'UPDATE',
+      },
+      select: {
+        id: true,
+        details: true,
+        createdAt: true,
+        userId: true,
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200,
+    });
+
+    const history = rows.flatMap((row) => {
+      let details;
+      try {
+        details = JSON.parse(row.details || '{}');
+      } catch (_error) {
+        return [];
+      }
+      const changes = details?.changedFields || {};
+      const statusChange = changes.status;
+      const stageChange = changes.lifecycleStageKey;
+      if (!statusChange && !stageChange) return [];
+      const fromStageKey = stageChange?.from == null ? null : String(stageChange.from);
+      const toStageKey = stageChange?.to == null ? null : String(stageChange.to);
+      return [{
+        id: row.id,
+        changedAt: row.createdAt,
+        changedBy: row.user
+          ? { id: row.user.id, name: row.user.name, email: row.user.email }
+          : { id: row.userId, name: row.userId ? `User #${row.userId}` : 'System', email: null },
+        from: {
+          stageKey: fromStageKey,
+          stage: details?.lifecycleTransition?.fromStage
+            || (fromStageKey ? stageLabels.get(fromStageKey) : null)
+            || statusChange?.from
+            || '(not set)',
+          status: statusChange?.from ?? details?.lifecycleTransition?.fromStatus ?? null,
+        },
+        to: {
+          stageKey: toStageKey,
+          stage: details?.lifecycleTransition?.toStage
+            || (toStageKey ? stageLabels.get(toStageKey) : null)
+            || statusChange?.to
+            || '(not set)',
+          status: statusChange?.to ?? details?.lifecycleTransition?.toStatus ?? null,
+        },
+      }];
+    });
+    return res.json({ data: history, total: history.length });
+  } catch (_error) {
+    return res.status(500).json({ error: 'Failed to fetch lifecycle history' });
   }
 });
 
@@ -2715,30 +2836,6 @@ router.post("/", async (req, res) => {
       req.user.tenantId,
       customFields,
     );
-
-    // Generic CRM: enqueue the Create Lead WhatsApp acknowledgement as soon
-    // as the contact exists. The helper checks the tenant vertical itself, so
-    // Wellness and Travel tenants return NOT_GENERIC without sending anything.
-    // Keep this best-effort so WhatsApp/Meta failures never roll back a lead.
-    try {
-      await sendGenericWebFormWhatsApp({
-        form: {
-          id: 0,
-          tenantId: req.user.tenantId,
-          scope: "generic",
-          name: "Create Lead",
-        },
-        contact,
-        submissionId: `create-lead-${contact.id}-${Date.now()}`,
-        isNewContact: true,
-        source: "create_lead",
-      });
-    } catch (whatsappError) {
-      console.error(
-        "[contacts] Generic Create Lead WhatsApp automation failed:",
-        whatsappError?.message || whatsappError,
-      );
-    }
 
     try {
       const { emitEvent } = require("../lib/eventBus");
@@ -3126,6 +3223,46 @@ router.post("/:id/activities", async (req, res) => {
   }
 });
 
+router.patch("/:id/activities/:activityId", async (req, res) => {
+  try {
+    const contactId = parseInt(req.params.id);
+    const activityId = parseInt(req.params.activityId);
+    if (!Number.isFinite(contactId) || !Number.isFinite(activityId)) {
+      return res.status(400).json({ error: "Invalid contact or activity ID", code: "INVALID_ID" });
+    }
+    const description = typeof req.body.description === "string"
+      ? req.body.description.trim()
+      : "";
+    if (!description) {
+      return res.status(400).json({ error: "Description is required", code: "DESCRIPTION_REQUIRED" });
+    }
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, tenantId: req.user.tenantId },
+    });
+    if (!contact || !canAccessLead(req, contact)) {
+      return res.status(404).json({ error: "Contact not found" });
+    }
+    const activity = await prisma.activity.findFirst({
+      where: {
+        id: activityId,
+        contactId,
+        tenantId: req.user.tenantId,
+        type: "Note",
+      },
+    });
+    if (!activity) {
+      return res.status(404).json({ error: "Note not found", code: "NOTE_NOT_FOUND" });
+    }
+    const updated = await prisma.activity.update({
+      where: { id: activity.id },
+      data: { description },
+    });
+    return res.json(updated);
+  } catch (_err) {
+    return res.status(500).json({ error: "Failed to update note" });
+  }
+});
+
 // "Summarize" (2026-07-07) — on-demand full-history AI narrative. Re-reads
 // EVERY WhatsApp message linked to this contact and REPLACES Contact.description
 // with one flowing narrative + a current lead-stage line. Independent of the
@@ -3269,6 +3406,33 @@ const updateContactById = async (req, res) => {
       where: { id: req.user.tenantId },
       select: { vertical: true },
     });
+    let lifecycleStagesConfig = null;
+    if (Object.prototype.hasOwnProperty.call(updateData, "lifecycleStageKey")) {
+      if (tenant?.vertical !== "generic") {
+        delete updateData.lifecycleStageKey;
+      } else {
+        const lifecycleStageKey = String(updateData.lifecycleStageKey || "").trim();
+        if (!lifecycleStageKey || lifecycleStageKey.length > 80) {
+          return res.status(400).json({ error: "Invalid lifecycle stage", code: "INVALID_LIFECYCLE_STAGE" });
+        }
+        let stages;
+        try {
+          const rawStages = await getSetting(req.user.tenantId, KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES, { coerce: String });
+          stages = typeof rawStages === "string" ? JSON.parse(rawStages) : rawStages;
+          lifecycleStagesConfig = Array.isArray(stages) ? stages : [];
+        } catch {
+          return res.status(400).json({ error: "Lifecycle stage configuration is invalid", code: "INVALID_LIFECYCLE_STAGE_CONFIG" });
+        }
+        const option = (Array.isArray(stages) ? stages : [])
+          .flatMap((stage) => Array.isArray(stage?.options) ? stage.options : [])
+          .find((item) => item?.id === lifecycleStageKey);
+        const effectiveStatus = updateData.status === undefined ? existing.status : updateData.status;
+        if (!option || option.status !== effectiveStatus) {
+          return res.status(400).json({ error: "Lifecycle stage does not match the contact status", code: "INVALID_LIFECYCLE_STAGE" });
+        }
+        updateData.lifecycleStageKey = lifecycleStageKey;
+      }
+    }
     if (
       tenant?.vertical === "generic" &&
       (Object.keys(updateData).length > 0 ||
@@ -3327,13 +3491,25 @@ const updateContactById = async (req, res) => {
     // #179: audit only the keys that actually changed (skip unchanged + DB internals).
     const changes = diffFields(existing, contact, Object.keys(req.body || {}));
     if (Object.keys(changes).length > 0) {
+      let lifecycleTransition;
+      if (changes.status || changes.lifecycleStageKey) {
+        const options = (lifecycleStagesConfig || [])
+          .flatMap((stage) => Array.isArray(stage?.options) ? stage.options : []);
+        const labelFor = (stageKey) => options.find((option) => option?.id === stageKey)?.label || null;
+        lifecycleTransition = {
+          fromStage: labelFor(existing.lifecycleStageKey) || existing.status || '(not set)',
+          toStage: labelFor(contact.lifecycleStageKey) || contact.status || '(not set)',
+          fromStatus: existing.status || null,
+          toStatus: contact.status || null,
+        };
+      }
       await writeAudit(
         "Contact",
         "UPDATE",
         contact.id,
         req.user.userId,
         req.user.tenantId,
-        { changedFields: changes },
+        { changedFields: changes, ...(lifecycleTransition ? { lifecycleTransition } : {}) },
       );
     }
 

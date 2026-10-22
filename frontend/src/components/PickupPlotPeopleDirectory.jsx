@@ -81,7 +81,7 @@ const PEOPLE_TABLE_COLUMNS = {
     { label: 'Actions', width: 120, minWidth: 100 },
   ],
 };
-const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere', background: '#f3f4f6' };
+const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--table-header-bg, var(--surface-color))' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';
@@ -641,7 +641,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
                   </> : <>
                     <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{row.agency || 'Independent'}</td>
                     <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={(row.plots || []).length ? row.plots : row.plotSite ? [row.plotSite] : []} /></td>
-                    <td style={{ padding: '.55rem .65rem' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? 'Not set' : `${Number(row.commissionPercent)}%`}</td>
+                    <td style={{ padding: '.55rem .65rem' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? '10% (default)' : `${Number(row.commissionPercent)}%`}</td>
                   </>}
                   <td style={{ padding: '.55rem .65rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
                   <td style={{ padding: '.55rem .65rem' }}><StatusPill active={row.isActive} /></td>

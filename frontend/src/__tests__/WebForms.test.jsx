@@ -262,7 +262,8 @@ describe('public web form embed footer', () => {
     expect(html).toMatch(/trigger\.addEventListener\(["']pointerdown["']/);
     expect(html).toMatch(/allowedCountries\.length\s*>\s*0/);
     expect(html).toMatch(/pickerAllowedCountries\.length\s*>\s*0/);
-    expect(html).toMatch(/trigger\.inputMode\s*=\s*["']numeric["']/);
+    expect(html).toMatch(/trigger\.inputMode\s*=\s*["']tel["']/);
+    expectSourceContains(html, 'var visibleQuery = (hasLeadingPlus ? "+" : "") + numericQuery');
     expectSourceContains(html, "var numericQuery = trigger.value.replace(/\\D/g, '')");
     expect(html).toMatch(/fd\.set\(["']phone["']\s*,\s*nationalDigits\)/);
     expect(html).toMatch(/if\s*\(\s*advanced\s*&&\s*fd\.get\(["']phone["']\)\s*&&\s*fd\.get\(["']phoneCountry["']\)\s*\)/);

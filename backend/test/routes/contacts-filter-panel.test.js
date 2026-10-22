@@ -51,6 +51,8 @@ prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
 prisma.leadCustomFieldValue.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
 prisma.webFormSubmission = prisma.webFormSubmission || {};
 prisma.webFormSubmission.findMany = vi.fn();
 prisma.$queryRaw = vi.fn();
@@ -105,6 +107,7 @@ beforeEach(() => {
   prisma.tenant.findUnique
     .mockReset()
     .mockResolvedValue({ vertical: "generic" });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
   prisma.webFormSubmission.findMany.mockReset().mockResolvedValue([]);
   callifiedClient.listCampaigns.mockReset().mockResolvedValue([]);
@@ -139,6 +142,7 @@ describe("GET /api/contacts/filter-fields", () => {
       "status",
       "source",
       "webForm",
+      "lifecycleStageKey",
       "medium",
       "firstTouchSource",
       "lastTouchSource",
@@ -187,6 +191,10 @@ describe("GET /api/contacts/filter-fields", () => {
     expect(byKey.whatsappPhone.kind).toBe("text");
     expect(byKey.whatsappPhone.label).toBe("WhatsApp Number");
     expect(byKey.status.kind).toBe("text");
+    expect(byKey.lifecycleStageKey).toMatchObject({
+      kind: "enum",
+      label: "Lifecycle Stage",
+    });
     expect(byKey.callifiedCampaignId.kind).toBe("id");
     expect(byKey.callifiedCampaignId.label).toBe("Callified Campaign");
     expect(byKey.callifiedLeadStatus.kind).toBe("text");
@@ -226,6 +234,7 @@ describe("GET /api/contacts/filter-fields", () => {
       "firstTouchSource",
       "lastTouchSource",
       "status",
+      "lifecycleStageKey",
       "callifiedCampaignId",
       "callifiedLeadStatus",
       "tags",
@@ -549,6 +558,32 @@ describe("GET /api/contacts/filter-values/:field", () => {
       { value: "connected", label: "Connected" },
       { value: "qualified", label: "Qualified" },
     ]);
+  });
+
+  test("Lifecycle Stage values use the Generic CRM tenant configuration", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify([
+        { id: "new", title: "New", options: [{ id: "new", label: "New" }] },
+        {
+          id: "interest",
+          title: "Interest",
+          options: [
+            { id: "interested", label: "Interested" },
+            { id: "unqualified", label: "Unqualified" },
+          ],
+        },
+      ]),
+    });
+
+    const res = await request(makeApp()).get(
+      "/api/contacts/filter-values/lifecycleStageKey?status=Lead&q=interest",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.values).toEqual([
+      { value: "interested", label: "Interested" },
+    ]);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
 
   test("a field not in FILTERABLE_FIELDS → 404 (territoryId is not a table column, so not offered)", async () => {
@@ -931,6 +966,23 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
     expect(res.status).toBe(200);
     const call = prisma.contact.findMany.mock.calls[0][0];
     expect(call.where.AND).toEqual([{ assignedToId: { in: [7, 8] } }]);
+  });
+
+  test("Lifecycle Stage selections filter by exact configured stage keys", async () => {
+    const filters = [{
+      field: "lifecycleStageKey",
+      operator: "contains",
+      values: ["interested", "qualified"],
+    }];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([
+      { lifecycleStageKey: { in: ["interested", "qualified"] } },
+    ]);
   });
 
   test('id-kind field "is_empty" → equality null (no OR[""], integers have no empty string)', async () => {

@@ -65,6 +65,7 @@ prisma.emailTemplate = {
   delete: vi.fn(),
 };
 prisma.tenant = { findUnique: vi.fn() };
+prisma.tenantSetting = { findUnique: vi.fn(), upsert: vi.fn() };
 
 import express from 'express';
 import request from 'supertest';
@@ -91,7 +92,10 @@ beforeEach(() => {
   prisma.emailTemplate.update.mockReset();
   prisma.emailTemplate.delete.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
+  prisma.tenantSetting.upsert.mockReset();
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Generic CRM', vertical: 'generic' });
+  prisma.tenantSetting.findUnique.mockResolvedValue(null);
 });
 
 describe('GET /api/email_templates — list', () => {
@@ -144,7 +148,7 @@ describe('GET /api/email_templates — list', () => {
     const res = await request(app).get('/api/email_templates');
 
     expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: 'Failed to fetch email templates' });
+    expect(res.body).toEqual({ error: 'Failed to fetch email templates', code: 'EMAIL_TEMPLATES_LIST_FAILED' });
     errSpy.mockRestore();
   });
 });
@@ -248,6 +252,43 @@ describe('POST /api/email_templates — create', () => {
     const data = prisma.emailTemplate.create.mock.calls[0][0].data;
     expect(data.category).toBe('Sales');
   });
+
+  test('rejects a duplicate template name within the same channel', async () => {
+    prisma.emailTemplate.findFirst.mockResolvedValueOnce({ id: 44 });
+
+    const res = await request(makeApp())
+      .post('/api/email_templates')
+      .send({ name: 'Welcome', subject: 'Hi', body: 'Hello', channel: 'EMAIL' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: 'This name is already used by another EMAIL template',
+      code: 'TEMPLATE_NAME_EXISTS',
+    });
+    expect(prisma.emailTemplate.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 1, channel: 'EMAIL', name: 'Welcome' },
+      select: { id: true },
+    });
+    expect(prisma.emailTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('allows the same template name in another channel', async () => {
+    prisma.emailTemplate.findFirst.mockImplementation(({ where }) => (
+      where.name === 'Welcome' && where.channel === 'EMAIL' ? Promise.resolve({ id: 44 }) : Promise.resolve(null)
+    ));
+    prisma.emailTemplate.create.mockResolvedValueOnce({ id: 45, name: 'Welcome', channel: 'SMS' });
+
+    const res = await request(makeApp())
+      .post('/api/email_templates')
+      .send({ name: 'Welcome', subject: 'SMS', body: 'Hello', channel: 'SMS' });
+
+    expect(res.status).toBe(201);
+    expect(prisma.emailTemplate.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 1, channel: 'SMS', name: 'Welcome' },
+      select: { id: true },
+    });
+    expect(prisma.emailTemplate.create).toHaveBeenCalledOnce();
+  });
 });
 
 describe('PUT /api/email_templates/:id — update', () => {
@@ -290,6 +331,25 @@ describe('PUT /api/email_templates/:id — update', () => {
 
     // update WHERE clause uses the inner id from the pre-check row, not raw params.
     expect(prisma.emailTemplate.update.mock.calls[0][0].where).toEqual({ id: 11 });
+  });
+
+  test('rejects renaming a template to a name already used in its channel', async () => {
+    const existing = { id: 11, name: 'Old', channel: 'SMS', tenantId: 1 };
+    prisma.emailTemplate.findFirst
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce({ id: 12 });
+
+    const res = await request(makeApp())
+      .put('/api/email_templates/11')
+      .send({ name: 'Reminder', channel: 'SMS' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TEMPLATE_NAME_EXISTS');
+    expect(prisma.emailTemplate.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { tenantId: 1, channel: 'SMS', name: 'Reminder', id: { not: 11 } },
+      select: { id: true },
+    });
+    expect(prisma.emailTemplate.update).not.toHaveBeenCalled();
   });
 });
 
@@ -359,13 +419,16 @@ describe('GET /api/email_templates?fields=summary — #920 slice 9 slim-shape op
   });
 
   test('channel filter scopes summary templates to the requested channel', async () => {
-    prisma.emailTemplate.findMany.mockResolvedValueOnce([]);
+    prisma.emailTemplate.findMany.mockResolvedValue([]);
 
     const app = makeApp();
     const res = await request(app).get('/api/email_templates?fields=summary&channel=whatsapp');
 
     expect(res.status).toBe(200);
-    const args = prisma.emailTemplate.findMany.mock.calls[0][0];
+    const args = prisma.emailTemplate.findMany.mock.calls
+      .map(([options]) => options)
+      .find((options) => options.where?.channel === 'WHATSAPP');
+    expect(args).toBeTruthy();
     expect(args.where).toEqual({ tenantId: 1, channel: 'WHATSAPP' });
     expect(args.select.channel).toBe(true);
   });

@@ -14,16 +14,61 @@ const { sendEmail } = require("./emailSender");
 
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
+let genericCampaignEventSequence = 0;
+
+function shouldDispatchStatusChanged(payload) {
+  return Boolean(payload?.changedFields?.some(field => field === "status" || field === "lifecycleStageKey"));
+}
+
+async function dispatchGenericCampaignEvent(eventName, payload, tenantId) {
+  const automation = require("./genericCampaignAutomation");
+  await Promise.all([
+    automation.processWhatsAppCampaignEvent(eventName, payload, tenantId)
+      .catch((error) => console.error(`[GenericWhatsAppTrigger] ${eventName} failed:`, error.message)),
+    automation.processGenericChannelCampaignEvent(eventName, payload, tenantId)
+      .catch((error) => console.error(`[GenericChannelTrigger] ${eventName} failed:`, error.message)),
+  ]);
+}
 
 // Generic CRM campaign entry trigger. The listener is intentionally fail-soft
 // and the handler checks tenant.vertical before doing any campaign work, so
 // Travel and Wellness events retain their existing behavior.
-bus.on("contact.created", ({ payload, tenantId }) => {
+bus.on("contact.created", async ({ payload, tenantId }) => {
   if (!payload?.contactId) return;
-  require("./genericCampaignAutomation")
-    .processContactCreated(payload.contactId, tenantId)
-    .catch((error) => console.error("[GenericCampaign] contact.created failed:", error.message));
+  const automation = require("./genericCampaignAutomation");
+  await Promise.all([
+    automation.processContactCreated(payload.contactId, tenantId)
+      .catch((error) => console.error("[GenericCampaign] contact.created failed:", error.message)),
+    dispatchGenericCampaignEvent("contact.created", payload, tenantId),
+  ]);
+  await dispatchGenericCampaignEvent("pickup_plot.selection_requested", payload, tenantId);
+  await dispatchGenericCampaignEvent("custom.trigger", payload, tenantId);
 });
+
+bus.on("contact.updated", async ({ payload, tenantId }) => {
+  const eventPayload = { ...payload, eventId: payload?.eventId || `${payload?.contactId}-${Date.now()}-${++genericCampaignEventSequence}` };
+  await dispatchGenericCampaignEvent("contact.updated", eventPayload, tenantId);
+  if (payload?.changedFields?.includes("assignedToId") && payload?.assignedToId) {
+    await dispatchGenericCampaignEvent("contact.assigned", eventPayload, tenantId);
+  }
+  if (shouldDispatchStatusChanged(payload)) {
+    await dispatchGenericCampaignEvent("contact.status_changed", eventPayload, tenantId);
+  }
+  await dispatchGenericCampaignEvent("custom.trigger", eventPayload, tenantId);
+});
+
+bus.on("task.created", ({ payload, tenantId }) => {
+  if (!payload?.contactId || !["Meeting", "Site Visit"].includes(payload?.type)) return;
+  return dispatchGenericCampaignEvent("appointment.scheduled", payload, tenantId);
+});
+bus.on("task.reminder_due", ({ payload, tenantId }) => dispatchGenericCampaignEvent("appointment.reminder_due", payload, tenantId));
+bus.on("invoice.overdue", ({ payload, tenantId }) => dispatchGenericCampaignEvent("payment.due", payload, tenantId));
+bus.on("invoice.payment_due", ({ payload, tenantId }) => dispatchGenericCampaignEvent("payment.due", payload, tenantId));
+bus.on("whatsapp.customer_replied", ({ payload, tenantId }) => dispatchGenericCampaignEvent("whatsapp.customer_replied", payload, tenantId));
+
+for (const eventName of ["pickup_plot.selected", "payment.collected", "plot.confirmed"]) {
+  bus.on(eventName, ({ payload, tenantId }) => dispatchGenericCampaignEvent(eventName, payload, tenantId));
+}
 
 // Generic CRM derives the first successful payment event from the existing
 // payment.collected event. This keeps every payment provider on the existing
@@ -1295,6 +1340,7 @@ module.exports = {
   runsOncePerRecord,
   lookupField,
   ruleExecutionOrder,
+  shouldDispatchStatusChanged,
   testRule,
   setIO,
   getIO,

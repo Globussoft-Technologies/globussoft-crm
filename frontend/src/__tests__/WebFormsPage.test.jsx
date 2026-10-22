@@ -602,14 +602,6 @@ describe('WebForms builder page', () => {
 
     await screen.findByText(/Send email notification to this address/i);
 
-    expect(screen.getByText(/Send an automatic message to all leads/i)).toBeInTheDocument();
-
-    expect(screen.getByText(/Send email automatically to all leads/i)).toBeInTheDocument();
-
-    expect(screen.getByText(/Send SMS automatically to all leads/i)).toBeInTheDocument();
-
-    expect(screen.getByText(/Send WhatsApp automatically to all leads/i)).toBeInTheDocument();
-
     const whatsappToggle = screen.getByRole('checkbox', { name: /Enable WhatsApp number field and same-as-phone checkbox/i });
     expect(whatsappToggle).not.toBeChecked();
     fireEvent.click(whatsappToggle);

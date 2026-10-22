@@ -128,7 +128,7 @@ export function ContactDetailsGroup({ label, open, onToggle, children, showHeade
   );
 }
 
-export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], inline = false, hideSms = false, genericTagsEnabled = false }) {
+export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], inline = false, hideSms = false, genericTagsEnabled = false, lifecycleStageLabel = '' }) {
   const { tenant } = useContext(AuthContext);
   const isWellness = tenant?.vertical === 'wellness';
   const isTravel = tenant?.vertical === 'travel';
@@ -269,6 +269,9 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId, readOnly: true },
     { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus, readOnly: true },
     { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore, readOnly: true },
+    ...(lifecycleStageLabel
+      ? [{ label: 'Lifecycle Stage', key: 'lifecycleStageKey', value: lifecycleStageLabel, readOnly: true }]
+      : []),
     { label: 'Status', key: 'status', value: contact?.status },
     { label: 'Job Title', key: 'title', value: contact?.title },
     { label: 'Website URL', key: 'website', value: contact?.website },

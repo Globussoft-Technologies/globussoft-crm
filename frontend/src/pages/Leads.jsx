@@ -48,6 +48,7 @@ import ColumnPicker from "../components/ColumnPicker";
 import FilterPanel from "../components/FilterPanel";
 import InlineCellEditor from "../components/InlineCellEditor";
 import ScrollableSelect from "../components/ScrollableSelect";
+import SearchableSelect from "../components/ui/SearchableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import {
   SUB_BRAND_IDS,
@@ -86,6 +87,19 @@ const SOURCE_OPTIONS = [
   "Event",
   "Other",
 ];
+
+// Generic CRM stores this field as text because web forms may submit values
+// such as "11-50". A negative plain numeric value is invalid for a headcount;
+// normalize only that display case without changing stored lead data or other
+// verticals.
+function formatGenericEmployeeCount(value) {
+  const displayValue = String(value ?? "").trim();
+  if (!displayValue) return "";
+  const numericValue = Number(displayValue);
+  return Number.isFinite(numericValue) && numericValue < 0
+    ? "Invalid employee count"
+    : displayValue;
+}
 
 // Built-in lead columns available for auto-campaign assignment rules.
 const BUILTIN_RULE_COLUMNS = [
@@ -273,6 +287,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "whatsappPhone",
   "aiScore",
   "source",
+  "lifecycleStage",
   "webForm",
   "medium",
   "location",
@@ -348,6 +363,7 @@ const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set(["referrerUrl"]);
 // destinations. The remaining Customize Table catalog entries are valid CRM
 // field choices for generic lead imports.
 const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
+  "lifecycleStage",
   "pageUrl",
   "pageTitle",
   "pageSource",
@@ -498,6 +514,18 @@ const sourceBadgeStyle = {
   backgroundColor: "var(--source-badge-bg, rgba(139, 92, 246, 0.16))",
   color: "var(--source-badge-text, var(--text-primary))",
   border: "1px solid var(--border-color)",
+};
+
+const createLeadFieldLabelStyle = {
+  display: "block",
+  marginBottom: "0.3rem",
+  color: "var(--text-secondary)",
+  fontSize: "0.78rem",
+};
+const requiredMarkStyle = {
+  color: "var(--danger-color, #ef4444)",
+  marginLeft: "0.2rem",
+  fontWeight: 700,
 };
 
 const compactToolbarButtonStyle = {
@@ -1655,7 +1683,8 @@ function BuiltInInlineCellEditor({
     }
     setSaving(true);
     try {
-      await onSave(lead, field, normalized);
+      const saved = await onSave(lead, field, normalized);
+      if (saved === false) return;
       setEditing(false);
     } finally {
       setSaving(false);
@@ -2209,6 +2238,29 @@ const Leads = () => {
   // expose a button that opens requests a Leads permission cannot authorize.
   const canManageCallSettings = isAdmin;
   const [leads, setLeads] = useState([]);
+  const [genericLifecycleOptions, setGenericLifecycleOptions] = useState([]);
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi('/api/tenant-settings/generic.contactLifecycleStages', { silent: true })
+      .then((setting) => {
+        if (!active) return;
+        try {
+          const stages = JSON.parse(setting?.value || '[]');
+          setGenericLifecycleOptions((Array.isArray(stages) ? stages : []).flatMap((stage) => (
+            Array.isArray(stage?.options) ? stage.options.map((option) => ({
+              id: String(option.id || ''),
+              label: String(option.label || ''),
+              status: option.status,
+            })) : []
+          )).filter((option) => option.id && option.label && option.status));
+        } catch (_error) {
+          setGenericLifecycleOptions([]);
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [isGeneric]);
   const [pickupPlotStatusByContact, setPickupPlotStatusByContact] = useState(
     () => new Map(),
   );
@@ -4499,6 +4551,7 @@ const Leads = () => {
       // #892  close the drawer on successful create; the list refresh
       // below puts the new row at the top so the user sees the result.
       closeCreate();
+      if (isGeneric) notify.success("Lead created successfully");
     } catch (err) {
       if (err?.body?.code === "DUPLICATE_CONTACT") {
         setLeadDuplicate({
@@ -5316,6 +5369,7 @@ const Leads = () => {
         (key === "whatsappPhone" && isGeneric) ||
         key === "aiScore" ||
         key === "source" ||
+        (key === "lifecycleStage" && isGeneric) ||
         key === "medium" ||
         // Web Form is generic-CRM only (wellness/travel never see it).
         (key === "webForm" && isGeneric) ||
@@ -5382,6 +5436,7 @@ const Leads = () => {
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
+      if (key === "lifecycleStage") return { key, label: "Lifecycle Stage" };
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
@@ -5508,6 +5563,12 @@ const Leads = () => {
         };
       case "source":
         return { fieldKey: "source", label: "Source", kind: "text" };
+      case "lifecycleStage":
+        return {
+          fieldKey: "lifecycleStageKey",
+          label: "Lifecycle Stage",
+          kind: "enum",
+        };
       case "medium":
         return { fieldKey: "medium", label: "Medium", kind: "text" };
       case "webForm":
@@ -6144,6 +6205,13 @@ const Leads = () => {
       notify.error("Phone number can contain digits only (7-15 digits)");
       throw new Error("Invalid phone number");
     }
+    if (isGeneric && field === "companySize") {
+      const employeeCount = Number(value);
+      if (String(value).trim() !== "" && Number.isFinite(employeeCount) && employeeCount < 0) {
+        notify.error("Number of employees cannot be negative");
+        return false;
+      }
+    }
     if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
       notify.error(`${field} contains invalid control characters`);
       throw new Error("Invalid control characters");
@@ -6587,8 +6655,10 @@ const Leads = () => {
       const value = values?.[f.fieldKey] ?? "";
       const handle = (v) => onChange(f.fieldKey, v);
       const label = f.label;
-      const placeholder =
-        f.placeholder || (f.isRequired ? label : `${label} (optional)`);
+      const placeholder = f.isRequired
+        ? `${f.placeholder || label} *`
+        : (f.placeholder || `${label} (optional)`);
+      const fieldLabel = <>{label}{f.isRequired && <span aria-hidden="true" className="required-mark" style={{ color: "var(--danger-color, #ef4444)", marginLeft: "0.2rem" }}>*</span>}</>;
       const titleAttr = f.tooltip ? { title: f.tooltip } : {};
 
       if (f.fieldType === "checkbox") {
@@ -6604,7 +6674,7 @@ const Leads = () => {
               required={f.isRequired}
               onChange={(e) => handle(e.target.checked)}
             />
-            {label}
+            {fieldLabel}
           </label>
         );
       }
@@ -6637,7 +6707,7 @@ const Leads = () => {
             style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}
             {...titleAttr}
           >
-            {label}
+            {fieldLabel}
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
               {(f.options || []).map((opt) => (
                 <label
@@ -7153,8 +7223,36 @@ const Leads = () => {
             {formatDate(lead.createdAt)}
           </td>
         );
-      case "status": {
+      case "lifecycleStage": {
+        const configuredStage = isGeneric
+          ? genericLifecycleOptions.find((option) => option.id === lead.lifecycleStageKey && option.status === lead.status)
+          : null;
+        const lifecycleOptions = isGeneric && genericLifecycleOptions.length
+          ? genericLifecycleOptions
+          : ["Lead", "Prospect", "Customer", "Churned", "Junk"].map((status) => ({ id: status, label: status, status }));
         // Lifecycle stage — inline-editable dropdown, pill display.
+        return renderBuiltInLeadCell({
+          lead,
+          field: "status",
+          label: "Lifecycle Stage",
+          value: configuredStage?.label || lead.status || "Lead",
+          type: "select",
+          options: lifecycleOptions.map((option) => option.label),
+          renderValue: (displayValue) => (
+            <span style={sourceBadgeStyle}>{displayValue || ""}</span>
+          ),
+          onSave: async (row, _field, selectedLabel) => {
+            const option = lifecycleOptions.find((item) => item.label === selectedLabel);
+            if (!option) return;
+            const updated = await fetchApi(`/api/contacts/${row.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ status: option.status, ...(isGeneric && genericLifecycleOptions.length ? { lifecycleStageKey: option.id } : {}) }),
+            });
+            setLeads((current) => current.map((item) => item.id === row.id ? { ...item, ...updated } : item));
+          },
+        });
+      }
+      case "status":
         return renderBuiltInLeadCell({
           lead,
           field: "status",
@@ -7166,7 +7264,6 @@ const Leads = () => {
             <span style={sourceBadgeStyle}>{displayValue || ""}</span>
           ),
         });
-      }
       case "title":
         return renderBuiltInLeadCell({
           lead,
@@ -7344,8 +7441,7 @@ const Leads = () => {
             label: "No Of Employee",
             value: lead.companySize,
             extraStyle: { color: "var(--text-secondary)" },
-            renderValue: (displayValue) =>
-              displayValue ? String(displayValue) : "",
+            renderValue: formatGenericEmployeeCount,
           });
         }
         const value =
@@ -12903,7 +12999,9 @@ const Leads = () => {
               }}
             >
               <div>
+                <label htmlFor="create-lead-name" style={createLeadFieldLabelStyle}>Full Name<span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span></label>
                 <input
+                  id="create-lead-name"
                   type="text"
                   placeholder={isTravel ? "Full Name *" : "Full Name"}
                   required
@@ -12932,36 +13030,48 @@ const Leads = () => {
                   </div>
                 )}
               </div>
-              <input
-                type="email"
-                placeholder={isTravel ? "Email Address *" : "Email Address"}
-                required={!isWellness}
-                maxLength={191}
-                className="input-field"
-                value={newLead.email}
-                onChange={(e) => handleChange("email", e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={
-                  isTravel
-                    ? "Category (e.g. School Trip, Umrah, Family Holiday)"
-                    : "Company"
-                }
-                maxLength={191}
-                className="input-field"
-                value={newLead.company}
-                onChange={(e) => handleChange("company", e.target.value)}
-              />
-              {!isTravel && (
+              <div>
+                <label htmlFor="create-lead-email" style={createLeadFieldLabelStyle}>Email Address{!isWellness && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                 <input
-                  type="text"
-                  placeholder="Job Title"
-                  maxLength={200}
+                  id="create-lead-email"
+                  type="email"
+                  placeholder={isWellness ? "Email Address (optional)" : "Email Address"}
+                  required={!isWellness}
+                  maxLength={191}
                   className="input-field"
-                  value={newLead.title}
-                  onChange={(e) => handleChange("title", e.target.value)}
+                  value={newLead.email}
+                  onChange={(e) => handleChange("email", e.target.value)}
                 />
+              </div>
+              <div>
+                <label htmlFor="create-lead-company" style={createLeadFieldLabelStyle}>{isTravel ? "Category" : "Company"}</label>
+                <input
+                  id="create-lead-company"
+                  type="text"
+                  placeholder={
+                    isTravel
+                      ? "Category (e.g. School Trip, Umrah, Family Holiday)"
+                      : "Company"
+                  }
+                  maxLength={191}
+                  className="input-field"
+                  value={newLead.company}
+                  onChange={(e) => handleChange("company", e.target.value)}
+                />
+              </div>
+              {!isTravel && (
+                <div>
+                  <label htmlFor="create-lead-title" style={createLeadFieldLabelStyle}>Job Title</label>
+                  <input
+                    id="create-lead-title"
+                    type="text"
+                    placeholder="Job Title"
+                    maxLength={200}
+                    className="input-field"
+                    value={newLead.title}
+                    onChange={(e) => handleChange("title", e.target.value)}
+                  />
+                </div>
               )}
               {/* Phone field — required for wellness, optional for generic and travel. */}
               <div>
@@ -12993,37 +13103,24 @@ const Leads = () => {
                     />
                   </div>
                 ) : (
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <>
+                    <label htmlFor="create-lead-phone" style={createLeadFieldLabelStyle}>Phone{isWellness && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
                   {isGeneric ? (
-                    <>
-                      <input
-                        type="text"
-                        inputMode="tel"
-                        list="lead-country-code-options"
-                        aria-label="Country code"
-                        className="input-field"
-                        placeholder="+1"
-                        value={newLead.countryCode}
-                        onChange={(e) => {
-                          genericPhoneCountryUserChangedRef.current = true;
-                          const raw = e.target.value.replace(/[^\d+]/g, "");
-                          handleChange(
-                            "countryCode",
-                            raw && !raw.startsWith("+") ? `+${raw}` : raw,
-                          );
-                        }}
-                        style={{ width: "100px" }}
-                      />
-                      <datalist id="lead-country-code-options">
-                        {COUNTRY_CODES.map((cc) => (
-                          <option
-                            key={cc.code}
-                            value={cc.code}
-                            label={`${cc.country} (${cc.code})`}
-                          />
-                        ))}
-                      </datalist>
-                    </>
+                    <SearchableSelect
+                      ariaLabel="Country code"
+                      value={newLead.countryCode}
+                      placeholder="Code"
+                      allowClear={false}
+                      sanitizeInput={(input) => `${String(input).trimStart().startsWith("+") ? "+" : ""}${String(input).replace(/\D/g, "")}`}
+                      options={COUNTRY_CODES.map((cc) => ({ value: cc.code, label: cc.code, keywords: cc.code }))}
+                      onChange={(value) => {
+                        genericPhoneCountryUserChangedRef.current = true;
+                        handleChange("countryCode", value);
+                      }}
+                      style={{ color: "#111827", caretColor: "#111827" }}
+                      wrapperStyle={{ width: "100px", flexShrink: 0 }}
+                    />
                   ) : (
                     <select
                       className="input-field"
@@ -13041,6 +13138,7 @@ const Leads = () => {
                     </select>
                   )}
                   <input
+                    id="create-lead-phone"
                     type="tel"
                     placeholder={
                       isWellness
@@ -13073,7 +13171,8 @@ const Leads = () => {
                     onChange={(e) => handleChange("phone", e.target.value)}
                     style={{ flex: 1 }}
                   />
-                </div>
+                    </div>
+                  </>
                 )}
                 {createFieldErrors.phone && (
                   <div
@@ -13089,30 +13188,34 @@ const Leads = () => {
                   </div>
                 )}
               </div>
-              <select
-                className="input-field"
-                name="source"
-                value={newLead.source}
-                onChange={(e) => handleChange("source", e.target.value)}
-              >
-                {isWellness
-                  ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))
-                  : isTravel
-                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+              <div>
+                <label htmlFor="create-lead-source" style={createLeadFieldLabelStyle}>Lead Source</label>
+                <select
+                  id="create-lead-source"
+                  className="input-field"
+                  name="source"
+                  value={newLead.source}
+                  onChange={(e) => handleChange("source", e.target.value)}
+                >
+                  {isWellness
+                    ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
                       ))
-                    : SOURCE_OPTIONS.map((src) => (
-                        <option key={src} value={src}>
-                          {src}
-                        </option>
-                      ))}
-              </select>
+                    : isTravel
+                      ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))
+                      : SOURCE_OPTIONS.map((src) => (
+                          <option key={src} value={src}>
+                            {src}
+                          </option>
+                        ))}
+                </select>
+              </div>
 
               {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the

@@ -78,6 +78,37 @@ function defaultCategoryFor(key) {
 // { ok: true } or { ok: false, code, error } so callers can return 400
 // with a canonical envelope before touching the DB.
 function validateTenantSettingValue(key, rawValue) {
+  if (key === KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES) {
+    let stages;
+    try {
+      stages = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Lifecycle stages must be valid JSON." };
+    }
+    if (!Array.isArray(stages) || stages.length < 1 || stages.length > 20) {
+      return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Lifecycle stages must contain between 1 and 20 stages." };
+    }
+    const stageIds = new Set();
+    const optionIds = new Set();
+    const allowedStatuses = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
+    for (const stage of stages) {
+      const id = String(stage?.id || "").trim();
+      const title = String(stage?.title || "").trim();
+      const options = Array.isArray(stage?.options) ? stage.options : [];
+      if (!id || id.length > 80 || stageIds.has(id) || !title || title.length > 80 || options.length < 1 || options.length > 5) {
+        return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Each lifecycle stage needs a unique id, a title, and between 1 and 5 outcomes." };
+      }
+      stageIds.add(id);
+      for (const option of options) {
+        const optionId = String(option?.id || "").trim();
+        const label = String(option?.label || "").trim();
+        if (!optionId || optionId.length > 80 || optionIds.has(optionId) || !label || label.length > 80 || !allowedStatuses.has(option?.status)) {
+          return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Each lifecycle outcome needs a unique id, a label, and a valid CRM status." };
+        }
+        optionIds.add(optionId);
+      }
+    }
+  }
   if (key === KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES) {
     const n = Number(rawValue);
     if (!Number.isInteger(n) || n < 1 || n > 10) {
@@ -296,6 +327,19 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
         code: "INVALID_SETTING_KEY",
         allowedKeys: ALLOWED_KEYS,
       });
+    }
+
+    if (key === KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      });
+      if (tenant?.vertical !== "generic") {
+        return res.status(404).json({
+          error: "Lifecycle stage customization is available only for Generic CRM",
+          code: "GENERIC_ONLY",
+        });
+      }
     }
 
     const body = req.body || {};

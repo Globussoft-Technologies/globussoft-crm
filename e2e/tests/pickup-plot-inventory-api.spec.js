@@ -113,6 +113,29 @@ test('only an admin can generate or record a plot initial payment', async ({ req
   expect(response.status()).toBe(403);
 });
 
+test('only an admin can create a plot installment schedule', async ({ request }) => {
+  const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/installments`, {
+    headers: headers(userToken),
+    data: { plotBookingId: 1, frequency: 'MONTHLY', paymentCount: 2, firstMonth: 11, firstYear: 2026, amount: 1000 },
+  });
+  expect(response.status()).toBe(403);
+});
+
+test('only an admin can update a plot commission', async ({ request }) => {
+  const [statusResponse, rateResponse] = await Promise.all([
+    request.patch(`${BASE_URL}/api/pickup-plot-inventory/commissions/1/status`, {
+      headers: headers(userToken),
+      data: { status: 'APPROVED' },
+    }),
+    request.patch(`${BASE_URL}/api/pickup-plot-inventory/commissions/1/rate`, {
+      headers: headers(userToken),
+      data: { commissionPercent: 5 },
+    }),
+  ]);
+  expect(statusResponse.status()).toBe(403);
+  expect(rateResponse.status()).toBe(403);
+});
+
 test('multi-plot customer assignment is admin-only and validates the selection', async ({ request }) => {
   const [userResponse, invalidAdminResponse] = await Promise.all([
     request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots`, {

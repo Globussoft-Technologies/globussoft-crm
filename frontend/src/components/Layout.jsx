@@ -1,4 +1,4 @@
-import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
@@ -18,7 +18,7 @@ import {
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
-const Softphone = lazy(() => import("./Softphone"));
+// import Softphone from "./Softphone";
 import TravelKeyboardShortcuts, {
   TRAVEL_KEYBOARD_SHORTCUTS_EVENT,
 } from "./travel/TravelKeyboardShortcuts";
@@ -181,14 +181,9 @@ const Layout = () => {
   const isTravel = tenant?.vertical === "travel";
   const isGenericLeadsPage =
     !isWellness && !isTravel && location.pathname === "/leads";
-  // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat,
-  // the inbox page, and the Gmail compose page it overlaps the docked composer.
-  // Hide it only on those routes; every other page keeps it unchanged.
-  const isWhatsAppChat =
-    location.pathname === "/whatsapp" ||
-    location.pathname === "/travel/whatsapp" ||
-    location.pathname === "/gmail" ||
-    location.pathname === "/inbox";
+  // The built-in Softphone FAB is intentionally disabled for Generic CRM.
+  // Keep its import and mount code commented so it can be restored later
+  // without affecting the separate GenericLeadsAssistant chat on /leads.
   // Travel navigation also opens shared top-level routes (for example
   // /leads, /invoices, and /tasks). Use the active tenant rather than the
   // URL prefix so travel shortcuts remain available on every travel page.
@@ -710,7 +705,9 @@ const Layout = () => {
           </small>
         </footer>
       </div>
-      {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Suspense fallback={null}><Softphone /></Suspense>}
+      {/* Generic CRM phone-call FAB intentionally disabled.
+          {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
+      */}
       {/* Wellness Admin Support Chatbot — the component itself also guards
           on tenant.vertical === 'wellness' + authenticated user; the layout
           check avoids mounting it at all for other verticals. */}

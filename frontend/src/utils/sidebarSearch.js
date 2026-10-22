@@ -119,8 +119,8 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/contacts', label: 'Contacts', description: 'Contact directory', requiredPermission: { module: 'contacts', action: 'read' } },
   { path: '/pipeline', label: 'Deals and Pipeline', description: 'Deal pipeline by stage', requiredPermission: { module: 'pipeline', action: 'read' } },
   { path: '/leads', label: 'Leads', description: 'Inbound + open leads', requiredPermission: { module: 'leads', action: 'read' } },
-  { path: '/converted-leads', label: 'Converted Leads', description: 'Leads that converted to customers', requiredPermission: { module: 'leads', action: 'read' } },
-  { path: '/clients', label: 'Clients', description: 'Company and organization directory', requiredPermission: { module: 'contacts', action: 'read' } },
+  { path: '/converted-leads', label: 'Converted Leads', description: 'Leads that converted to customers', requiredPermission: { module: 'leads', action: 'read' }, sidebarHidden: true },
+  { path: '/clients', label: 'Clients', description: 'Company and organization directory', requiredPermission: { module: 'contacts', action: 'read' }, sidebarHidden: true },
   { path: '/tasks', label: 'Task Queue', description: 'Task queue', requiredPermission: { module: 'tasks', action: 'read' } },
   { path: '/transport-workspace', label: 'Transport Work', description: 'Assigned customer pickup and drop-off trips', requiredPermission: { module: 'transport_workspace', action: 'read' } },
   { path: '/sales-workspace', label: 'Site Visits', description: 'Assigned customer site visits and plot selection', requiredPermission: { module: 'broker_workspace', action: 'read' } },
@@ -129,9 +129,9 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/live-chat', label: 'Live Chat', description: 'Website visitor chat support', requiredPermission: { module: 'live_chat', action: 'read' } },
   { path: '/deal-insights', label: 'Deal Insights', description: 'AI-powered deal analytics', requiredPermission: { module: 'deal_insights', action: 'read' } },
   { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows', requiredPermission: { module: 'playbooks', action: 'read' } },
-  { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder', requiredPermission: { module: 'booking_pages', action: 'read' } },
+  { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder', requiredPermission: { module: 'booking_pages', action: 'read' }, sidebarHidden: true },
   { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms', requiredPermission: { module: 'web_forms', action: 'read' } },
-  { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' } },
+  { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' }, sidebarHidden: true },
   { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' } },
   { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'document_templates', action: 'read' } },
   { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures', requiredPermission: { module: 'documents', action: 'read' } },
@@ -141,29 +141,29 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/contracts', label: 'Contracts', description: 'Contract lifecycle management', requiredPermission: { module: 'contracts', action: 'read' } },
   { path: '/projects', label: 'Projects', description: 'Project tracking + task boards', requiredPermission: { module: 'projects', action: 'read' } },
   { path: '/pipelines', label: 'Pipelines', description: 'Create and configure sales pipelines', managerOnly: true },
-  { path: '/forecasting', label: 'Forecasting', description: 'Sales forecast modeling', managerOnly: true },
-  { path: '/quotas', label: 'Quotas', description: 'Sales quota management', managerOnly: true },
+  { path: '/forecasting', label: 'Forecasting', description: 'Sales forecast modeling', managerOnly: true, sidebarHidden: true },
+  { path: '/quotas', label: 'Quotas', description: 'Sales quota management', managerOnly: true, sidebarHidden: true },
   { path: '/win-loss', label: 'Win/Loss', description: 'Sales outcome analysis', managerOnly: true },
   { path: '/funnel', label: 'Funnel', description: 'Sales conversion funnel analytics', managerOnly: true },
   { path: '/reports', label: 'Reports', description: 'CRM reports', managerOnly: true },
   { path: '/agent-reports', label: 'Agent Reports', description: 'Staff performance analytics', managerOnly: true },
-  { path: '/dashboards', label: 'Dashboards', description: 'Drag-and-drop dashboard builder', managerOnly: true },
-  { path: '/custom-reports', label: 'Custom Reports', description: 'Build custom data reports', managerOnly: true },
-  { path: '/approvals', label: 'Approvals', description: 'Pending approvals queue', managerOnly: true },
+  { path: '/dashboards', label: 'Dashboards', description: 'Drag-and-drop dashboard builder', managerOnly: true, sidebarHidden: true },
+  { path: '/custom-reports', label: 'Custom Reports', description: 'Build custom data reports', managerOnly: true, sidebarHidden: true },
+  { path: '/approvals', label: 'Approvals', description: 'Pending approvals queue', managerOnly: true, sidebarHidden: true },
   { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
   { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, requiredPermission: { module: 'territories', action: 'read' }, parent: 'Team & Territories' },
   { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing', description: 'One-shot marketing campaigns', managerOnly: true },
-  { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true },
+  { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true, sidebarHidden: true },
   { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },
   { path: '/web-visitors', label: 'Web Visitors', description: 'Website visitor tracking', managerOnly: true },
   { path: '/chatbots', label: 'Chatbots', description: 'Conversational AI builder', managerOnly: true },
   { path: '/social', label: 'Social Media', description: 'Social listening + posting', managerOnly: true },
-  { path: '/knowledge-base', label: 'Knowledge Base', description: 'Internal + customer-facing knowledge articles', managerOnly: true },
-  { path: '/surveys', label: 'Surveys', description: 'Survey campaigns + responses', managerOnly: true },
+  { path: '/knowledge-base', label: 'Knowledge Base', description: 'Internal + customer-facing knowledge articles', managerOnly: true, sidebarHidden: true },
+  { path: '/surveys', label: 'Surveys', description: 'Survey campaigns + responses', managerOnly: true, sidebarHidden: true },
   { path: '/sla', label: 'SLA Policies', description: 'Service level agreement setup', managerOnly: true },
   { path: '/payments', label: 'Payments', description: 'Payment history + gateway transactions', managerOnly: true },
-  { path: '/lead-scoring', label: 'Lead Scoring', description: 'Lead qualification engine', managerOnly: true },
+  { path: '/lead-scoring', label: 'Lead Scoring', description: 'Lead qualification engine', managerOnly: true, sidebarHidden: true },
   { path: '/cpq', label: 'CPQ', description: 'Configure price quote engine', managerOnly: true },
   { path: '/staff', label: 'Staff', description: 'Team management', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' } },
   { path: '/settings/roles', label: 'Roles', description: 'RBAC roles + permissions matrix', requiredPermission: { module: 'roles', action: 'read' } },
@@ -176,7 +176,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/pickup-customers', label: 'Customer Workflows', description: 'Track pickup and plot workflows including converted customers', requiredPermission: { module: 'billing_workspace', action: 'read' } },
   { path: '/pickup-work-assignments', label: 'Assign Staff Work', description: 'Assign Transport, Site Visit, and Billing work to any staff member', adminOnly: true },
   { path: '/privacy', label: 'Privacy', description: 'GDPR / DSAR retention controls', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
-  { path: '/field-permissions', label: 'Field Permissions', description: 'Field-level access control', adminOnly: true, requiredPermission: { module: 'field_permissions', action: 'read' } },
+  { path: '/field-permissions', label: 'Field Permissions', description: 'Field-level access control', adminOnly: true, requiredPermission: { module: 'field_permissions', action: 'read' }, sidebarHidden: true },
   { path: '/admin/csp-violations', label: 'CSP Violations', description: 'Content security policy logs', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
   { path: '/admin/embed-allowlist', label: 'Embed Allowlist', description: 'iframe embed permissions', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
   { path: '/admin/status', label: 'Status', description: 'Platform status admin', adminOnly: true },
@@ -197,7 +197,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { id: 'callified', label: 'Callified', description: 'Open the connected Callified calling workspace', managerOnly: true, actionTarget: '[data-tour-feature="callified"]' },
   { path: '/whatsapp', label: 'WhatsApp', description: 'Manage tenant-scoped WhatsApp conversations', requiredPermission: { module: 'whatsapp', action: 'read' } },
   { path: '/lead-reports', label: 'Lead Reports', description: 'Review lead productivity, quality, sources, and follow-ups', managerOnly: true },
-  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
+  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' }, sidebarHidden: true },
 ];
 
 // Permission mapping for legacy generic search entries that historically only
@@ -328,6 +328,7 @@ export function canUseGenericSidebarPage(page, {
   hasPermission = () => false,
   hiddenPagePaths = [],
 } = {}) {
+  if (page?.sidebarHidden) return false;
   if (isTenantPageHidden(page?.path, hiddenPagePaths)) return false;
   const fallbackPermission = page.path ? GENERIC_PAGE_PERMISSION_FALLBACK[page.path] : null;
   const requiredPermission = page.requiredPermission || (fallbackPermission
@@ -357,6 +358,7 @@ export function getGenericSidebarPages(options = {}) {
       delete searchable.managerOnly;
       delete searchable.hideForAdmin;
       delete searchable.userOnly;
+      delete searchable.sidebarHidden;
       return { ...searchable, category: searchable.category || 'Navigation' };
     });
 }

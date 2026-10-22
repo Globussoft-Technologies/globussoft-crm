@@ -198,6 +198,7 @@ const ItineraryPaymentSuccess = lazy(
 );
 // Public flyer share/embed viewer  /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
+const GenericPickupPlotSelection = lazy(() => import("./pages/public/GenericPickupPlotSelection"));
 // Public marketing landing page entry point  /trips. Resolves the
 // admin-selected featured LandingPage via /api/landing-pages/public/
 // featured-full and renders it in place. When no page is featured yet,
@@ -1601,6 +1602,7 @@ export default function App() {
                     <Route path="/pricing" element={<Pricing />} />
                     {/* Public status page  no auth (PRD_STATUS_PAGE.md). */}
                     <Route path="/status" element={<StatusPage />} />
+                    <Route path="/pickup-plot-selection/:token" element={<GenericPickupPlotSelection />} />
                     <Route
                       path="/payment-success"
                       element={<PaymentSuccess />}
@@ -2263,7 +2265,14 @@ export default function App() {
                         dropped from the shared page in 3f3ff602; wellness has run
                         rail-less since and stays that way, so only this mount opts in. */}
                       <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" showThreadList />} />
-                      <Route path="whatsapp/templates" element={<WellnessWhatsAppTemplates />} />
+                      <Route
+                        path="whatsapp/templates"
+                        element={(
+                          <GenericOnly>
+                            <Navigate to="/marketing?tab=templates&templateChannel=WHATSAPP" replace />
+                          </GenericOnly>
+                        )}
+                      />
                       <Route
                         path="wellness/reports"
                         element={

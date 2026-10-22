@@ -645,7 +645,10 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
       pauseOnReply, position, attachmentRefsJson,
     } = req.body || {};
 
-    if (!ALLOWED_KINDS.includes(kind) && !(kind === "stop" && await isGenericSequence(seq))) {
+    const genericSequence = ["stop", "whatsapp"].includes(kind)
+      ? await isGenericSequence(seq)
+      : false;
+    if (!ALLOWED_KINDS.includes(kind) && !(["stop", "whatsapp"].includes(kind) && genericSequence)) {
       return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
     }
 
@@ -747,8 +750,8 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
       pauseOnReply, attachmentRefsJson,
     } = req.body || {};
 
-    const parentSequence = kind === "stop" ? await prisma.sequence.findUnique({ where: { id: existing.sequenceId }, select: { tenantId: true } }) : null;
-    if (kind != null && !ALLOWED_KINDS.includes(kind) && !(kind === "stop" && parentSequence && await isGenericSequence(parentSequence))) {
+    const parentSequence = ["stop", "whatsapp"].includes(kind) ? await prisma.sequence.findUnique({ where: { id: existing.sequenceId }, select: { tenantId: true } }) : null;
+    if (kind != null && !ALLOWED_KINDS.includes(kind) && !(["stop", "whatsapp"].includes(kind) && parentSequence && await isGenericSequence(parentSequence))) {
       return res.status(400).json({ error: `kind must be one of ${ALLOWED_KINDS.join(", ")}` });
     }
 

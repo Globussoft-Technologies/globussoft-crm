@@ -51,4 +51,9 @@ describe('Pickup & Plot table scroll cards', () => {
     expect(css).toMatch(/table\.pickup-plot-leads-table\s+thead\s+th[^{}]*\{[^}]*font-size:\s*0\.75rem\s*;/s);
     expect(css).not.toMatch(/body\[data-vertical="(?:wellness|travel)"\]\s+table\.pickup-plot-leads-table/);
   });
+
+  it('uses theme tokens for Generic CRM Pickup & Plot table headers', () => {
+    expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+tr,[\s\S]*?background-color:\s*var\(--table-header-bg/);
+    expect(css).toContain('body[data-vertical="generic"] table.pickup-plot-leads-table thead th {\r\n  color: var(--text-primary) !important;');
+  });
 });

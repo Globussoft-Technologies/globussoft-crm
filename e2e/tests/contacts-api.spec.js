@@ -127,6 +127,9 @@ async function post(request, token, path, body) {
 async function put(request, token, path, body) {
   return request.put(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
+async function patch(request, token, path, body) {
+  return request.patch(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT });
+}
 async function del(request, token, path) {
   return request.delete(`${BASE_URL}${path}`, { headers: headers(token), timeout: REQUEST_TIMEOUT });
 }
@@ -1048,6 +1051,29 @@ test.describe('Contacts API — POST /:id/activities', () => {
     const got = await (await get(request, token, `/api/contacts/${c.id}`)).json();
     expect(got.activities.length).toBeGreaterThanOrEqual(1);
     expect(got.activities[0].description).toContain('note-1');
+  });
+});
+
+test.describe('Contacts API — PATCH /:id/activities/:activityId', () => {
+  test('updates a note and returns the persisted description', async ({ request }) => {
+    const c = await createContact(request, { label: 'edit-note' });
+    const { token } = await getAdmin(request);
+    const created = await post(request, token, `/api/contacts/${c.id}/activities`, {
+      type: 'Note',
+      description: `${RUN_TAG} original note`,
+    });
+    expect(created.status()).toBe(201);
+    const note = await created.json();
+
+    const updated = await patch(request, token, `/api/contacts/${c.id}/activities/${note.id}`, {
+      description: `${RUN_TAG} updated note`,
+    });
+    expect(updated.status()).toBe(200);
+    expect((await updated.json()).description).toBe(`${RUN_TAG} updated note`);
+
+    const detail = await (await get(request, token, `/api/contacts/${c.id}`)).json();
+    expect(detail.activities.find((activity) => activity.id === note.id)?.description)
+      .toBe(`${RUN_TAG} updated note`);
   });
 });
 

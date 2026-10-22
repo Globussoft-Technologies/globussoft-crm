@@ -344,6 +344,24 @@ describe('GET /api/marketing/campaigns — list', () => {
     expect(res.body[0].channel).toBe('SMS');
   });
 
+  test('?sequenceTrigger finds the existing Email, SMS, or WhatsApp sequence across the full tenant channel', async () => {
+    fakePrisma.state.campaigns.push(
+      { id: 1, tenantId: 1, channel: 'EMAIL', scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', triggerEvent: 'contact.created' }) },
+      { id: 2, tenantId: 1, channel: 'SMS', scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', triggerEvent: 'contact.created' }) },
+      { id: 3, tenantId: 1, channel: 'WHATSAPP', scheduleFilters: JSON.stringify({ automationType: 'whatsapp_event', eventTrigger: 'contact.created' }) },
+      { id: 4, tenantId: 2, channel: 'EMAIL', scheduleFilters: JSON.stringify({ triggerEvent: 'contact.created' }) },
+      { id: 5, tenantId: 1, channel: 'EMAIL', scheduleFilters: JSON.stringify({ triggerEvent: 'payment.due' }) },
+      { id: 6, tenantId: 1, channel: 'EMAIL', scheduleFilters: 'not-json' },
+    );
+
+    for (const channel of ['EMAIL', 'SMS', 'WHATSAPP']) {
+      const res = await request(makeApp()).get(`/api/marketing/campaigns?paginate=1&page=99&channel=${channel}&sequenceTrigger=contact.created`);
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0]).toMatchObject({ tenantId: 1, channel });
+    }
+  });
+
   test('?status filter narrows the returned rows', async () => {
     fakePrisma.state.campaigns.push(
       { id: 1, name: 'A', tenantId: 1, channel: 'EMAIL', status: 'Draft' },

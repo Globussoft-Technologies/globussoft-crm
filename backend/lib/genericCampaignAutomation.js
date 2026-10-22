@@ -1,4 +1,5 @@
 const prisma = require("./prisma");
+const { createSelectionLink } = require("./genericPickupPlotSelection");
 
 function parseFilters(value) {
   if (!value) return null;
@@ -8,6 +9,18 @@ function parseFilters(value) {
   } catch (_error) {
     return null;
   }
+}
+
+function dueBeforeMinutes(value) {
+  const amount = Number(value?.amount);
+  const multiplier = { minutes: 1, hours: 60, days: 1440 }[value?.unit];
+  return Number.isFinite(amount) && amount > 0 && multiplier ? Math.round(amount * multiplier) : null;
+}
+
+function matchesDueBefore(config, emittedMinutes) {
+  const configured = dueBeforeMinutes(config);
+  if (configured == null) return emittedMinutes == null;
+  return configured === Number(emittedMinutes);
 }
 
 function normalise(value) {
@@ -28,7 +41,7 @@ function resolveRuleValue(rule, contact, isCreated) {
       // Generic CRM stores a newly created lead as status "Lead". Treat the
       // user-facing "New" value as the creation state for compatibility with
       // campaigns already configured in the wizard.
-      if (normalise(rule.value) === "new" && isCreated && contact.status === "Lead") return "new";
+      if ((Array.isArray(normalise(rule.value)) ? normalise(rule.value).includes("new") : normalise(rule.value) === "new") && isCreated && contact.status === "Lead") return "new";
       return contact.status;
     case "contact.stage": return contact.stage;
     case "contact.source": return contact.source;
@@ -52,22 +65,53 @@ function matchesRule(rule, contact, isCreated) {
   const actual = resolveRuleValue(rule, contact, isCreated);
   const expected = rule.value;
   const actualValues = Array.isArray(actual) ? actual.map(normalise) : [normalise(actual)];
-  const expectedValue = normalise(expected);
+  const expectedValues = (Array.isArray(expected) ? expected : [expected]).map(normalise);
   const hasValue = actualValues.some(value => value !== "");
 
   switch (rule.op) {
-    case "eq": return actualValues.some(value => value === expectedValue);
-    case "neq": return actualValues.every(value => value !== expectedValue);
-    case "contains": return actualValues.some(value => value.includes(expectedValue));
-    case "notContains": return actualValues.every(value => !value.includes(expectedValue));
-    case "gt": return actualValues.some(value => Number(value) > Number(expected));
-    case "gte": return actualValues.some(value => Number(value) >= Number(expected));
-    case "lt": return actualValues.some(value => Number(value) < Number(expected));
-    case "lte": return actualValues.some(value => Number(value) <= Number(expected));
+    case "eq": return actualValues.some(value => expectedValues.includes(value));
+    case "neq": return actualValues.every(value => !expectedValues.includes(value));
+    case "contains": return actualValues.some(value => expectedValues.some(expectedValue => value.includes(expectedValue)));
+    case "notContains": return actualValues.every(value => expectedValues.every(expectedValue => !value.includes(expectedValue)));
+    case "gt": return actualValues.some(value => expectedValues.some(expectedValue => Number(value) > Number(expectedValue)));
+    case "gte": return actualValues.some(value => expectedValues.some(expectedValue => Number(value) >= Number(expectedValue)));
+    case "lt": return actualValues.some(value => expectedValues.some(expectedValue => Number(value) < Number(expectedValue)));
+    case "lte": return actualValues.some(value => expectedValues.some(expectedValue => Number(value) <= Number(expectedValue)));
     case "empty": return !hasValue;
     case "notEmpty": return hasValue;
     default: return false;
   }
+}
+
+function matchesEventConditions(filters, contact, eventName) {
+  const conditions = Array.isArray(filters?.conditions) ? filters.conditions.filter(Boolean) : [];
+  if (!conditions.length) return true;
+  const results = conditions.map(rule => matchesRule(rule, contact, eventName === "contact.created"));
+  return filters.conditionLogic === "OR" ? results.some(Boolean) : results.every(Boolean);
+}
+
+function flowPredecessor(campaign, campaigns) {
+  const filters = parseFilters(campaign.scheduleFilters);
+  if (!filters?.flowId || !Number.isFinite(Number(filters.ruleOrder))) return null;
+  const order = Number(filters.ruleOrder);
+  return campaigns
+    .filter(candidate => {
+      if (candidate.id === campaign.id || candidate.channel !== campaign.channel) return false;
+      const candidateFilters = parseFilters(candidate.scheduleFilters);
+      return candidateFilters?.flowId === filters.flowId && Number(candidateFilters.ruleOrder) < order;
+    })
+    .sort((left, right) => Number(parseFilters(right.scheduleFilters)?.ruleOrder || 0) - Number(parseFilters(left.scheduleFilters)?.ruleOrder || 0))[0] || null;
+}
+
+function orderCampaignRules(campaigns) {
+  return [...campaigns].sort((left, right) => {
+    const leftFilters = parseFilters(left.scheduleFilters);
+    const rightFilters = parseFilters(right.scheduleFilters);
+    if (leftFilters?.flowId && leftFilters.flowId === rightFilters?.flowId) {
+      return Number(leftFilters.ruleOrder || 0) - Number(rightFilters.ruleOrder || 0);
+    }
+    return 0;
+  });
 }
 
 function matchesCampaign(campaign, contact) {
@@ -161,7 +205,9 @@ async function processContactCreated(contactId, tenantId) {
     const existing = await prisma.sequenceEnrollment.findFirst({
       where: { sequenceId: sequence.id, contactId, tenantId },
     });
-    if (existing) continue;
+    // Campaigns are ordered newest mapping first. Never fall through to an
+    // older duplicate when the winning mapping already handled this event.
+    if (existing) break;
 
     await prisma.sequenceEnrollment.create({
       data: { sequenceId: sequence.id, contactId, status: "Active", tenantId },
@@ -171,9 +217,81 @@ async function processContactCreated(contactId, tenantId) {
       },
     });
     enrolled++;
+    break;
 
     // Queue only. The next cron tick applies activation/business-hour checks
     // and claims the enrollment lock before ANY delivery, including step 0.
+  }
+  return { enrolled };
+}
+
+// Generic Email/SMS trigger mappings are persisted as ordinary Campaign +
+// Sequence rows, so deliveries use the existing sequence engine (including
+// its provider, retries, and message logging) instead of bypassing it.
+async function processGenericChannelCampaignEvent(eventName, payload = {}, tenantId) {
+  if (![
+    'contact.created',
+    'contact.assigned',
+    'contact.status_changed',
+    'appointment.scheduled',
+    'appointment.reminder_due',
+    'payment.due',
+    'whatsapp.customer_replied',
+    'custom.trigger',
+    'pickup_plot.selection_requested',
+    'contact.updated',
+    'pickup_plot.selected',
+    'payment.collected',
+    'plot.confirmed',
+  ].includes(eventName)) return { enrolled: 0, skipped: 'unsupported_event' };
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  if (tenant?.vertical !== 'generic') return { enrolled: 0, skipped: 'non_generic' };
+
+  const hydrated = await hydrateGenericEventPayload(eventName, payload, tenantId);
+  if (eventName === 'payment.collected' && hydrated.payment?.status !== 'SUCCESS') return { enrolled: 0, skipped: 'payment_not_successful' };
+  const contact = hydrated.contact;
+  if (!contact?.id) return { enrolled: 0, skipped: 'contact_not_found' };
+
+  const campaigns = await prisma.campaign.findMany({
+    where: { tenantId, status: 'Active', channel: { in: ['EMAIL', 'SMS'] }, sequenceId: { not: null } },
+    include: { sequence: { include: { steps: { orderBy: { position: 'asc' } } } } },
+    orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+  });
+  let enrolled = 0;
+  const eventRecordId = genericCampaignEventRecordId(eventName, payload, hydrated, contact);
+  if (!eventRecordId) return { enrolled: 0, skipped: 'invalid_event_id' };
+
+  for (const campaign of orderCampaignRules(campaigns)) {
+    const filters = parseFilters(campaign.scheduleFilters);
+    if (filters?.automationType !== 'generic_channel_event' || filters.triggerEvent !== eventName || filters.channel !== campaign.channel) continue;
+    if (eventName === 'payment.due' && !matchesDueBefore(filters.dueBefore, payload.dueBeforeMinutes)) continue;
+    if (!matchesEventConditions(filters, contact, eventName)) continue;
+    const sequence = campaign.sequence;
+    if (!sequence?.isActive || !sequence.steps?.length) continue;
+    if (campaign.channel === 'EMAIL' && !contact.email) continue;
+    if (campaign.channel === 'SMS' && !contact.phone) continue;
+    const firstStep = sequence.steps[0];
+    if (!['email', 'sms', 'wait', 'condition'].includes(firstStep.kind)) continue;
+
+    const predecessor = flowPredecessor(campaign, campaigns);
+    if (predecessor?.sequenceId) {
+      const previousEnrollment = await prisma.sequenceEnrollment.findFirst({
+        where: { tenantId, contactId: contact.id, sequenceId: predecessor.sequenceId },
+        select: { id: true },
+      });
+      if (!previousEnrollment) continue;
+    }
+
+    const eventKey = `campaign-event:${campaign.id}:${eventName}:${eventRecordId}`;
+    const existing = await prisma.sequenceEnrollment.findFirst({
+      where: { tenantId, sequenceId: sequence.id, contactId: contact.id, currentNode: eventKey },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.sequenceEnrollment.create({
+      data: { tenantId, sequenceId: sequence.id, contactId: contact.id, currentNode: eventKey, currentStep: 0, status: 'Active', nextRun: new Date() },
+    });
+    enrolled++;
   }
   return { enrolled };
 }
@@ -227,6 +345,7 @@ async function loadGenericContact(tenantId, contactId) {
     select: {
       id: true, name: true, email: true, phone: true, whatsappPhone: true,
       company: true, title: true, status: true, source: true, medium: true,
+      interestedPlotArea: true,
       tagsJson: true, industry: true, companySize: true, linkedin: true,
       website: true, facebookUrl: true, githubUrl: true, twitterUrl: true,
       firstTouchSource: true, lastTouchSource: true, birthDate: true,
@@ -234,6 +353,14 @@ async function loadGenericContact(tenantId, contactId) {
       externalId: true, aiScore: true,
     },
   });
+  if (!contact) return null;
+  const customValues = await prisma.leadCustomFieldValue.findMany({
+    where: { contactId: id, tenantId },
+    select: { fieldId: true, valueText: true, valueNumber: true, valueDate: true, valueBool: true },
+  }).catch(() => []);
+  for (const value of customValues) {
+    contact[`custom_${value.fieldId}`] = value.valueText ?? value.valueNumber ?? value.valueDate ?? value.valueBool;
+  }
   return genericContactContext(contact);
 }
 
@@ -273,6 +400,33 @@ async function hydrateGenericEventPayload(eventName, payload = {}, tenantId) {
         next.pickup_point = next.pickup;
         next.pickupPointId = pickup.id;
       }
+    }
+  }
+
+  if (eventName === 'pickup_plot.selected' || eventName === 'plot.confirmed') {
+    const bookingId = Number(payload.bookingId);
+    if (Number.isInteger(bookingId) && bookingId > 0) {
+      const booking = await prisma.plotBooking.findFirst({ where: { id: bookingId, tenantId } });
+      if (booking) {
+        contactId = booking.contactId || contactId;
+        next.booking = booking;
+      }
+    }
+    const pickupId = Number(payload.pickupPointId || next.booking?.customerPickupId);
+    const pickup = Number.isInteger(pickupId) && pickupId > 0
+      ? await prisma.customerPickup.findFirst({ where: { id: pickupId, tenantId } })
+      : (Number.isInteger(contactId) && contactId > 0
+        ? await prisma.customerPickup.findFirst({ where: { contactId, tenantId }, orderBy: { updatedAt: 'desc' } })
+        : null);
+    if (pickup) {
+      contactId = pickup.contactId || contactId;
+      next.pickup = { ...pickup, address: pickup.pickupAddress, location: pickup.pickupAddress };
+      next.pickup_point = next.pickup;
+    }
+    const plotSiteId = Number(payload.plotSiteId || next.booking?.plotSiteId);
+    if (Number.isInteger(plotSiteId) && plotSiteId > 0) {
+      const plot = await prisma.plotSite.findFirst({ where: { id: plotSiteId, tenantId } });
+      if (plot) next.plot = plot;
     }
   }
 
@@ -333,4 +487,266 @@ async function hydrateGenericEventPayload(eventName, payload = {}, tenantId) {
   return next;
 }
 
-module.exports = { processContactCreated, matchesCampaign, hydrateGenericEventPayload, normalizeGenericTemplatePlaceholders };
+function valueAtPath(context, path) {
+  return String(path || "").split(".").reduce((value, key) => value?.[key], context);
+}
+
+function templateParameterValues(template, context) {
+  const mapping = parseFilters(template.variableMapping) || {};
+  const fallback = {
+    1: "contact.first_name",
+    2: "contact.company",
+    3: "contact.email",
+    4: "contact.phone",
+    5: "organization.name",
+  };
+  const indexes = [...new Set([...String(template.body || "").matchAll(/\{\{(\d+)\}\}/g)].map(match => Number(match[1])))]
+    .sort((left, right) => left - right);
+  return indexes.map(index => {
+    const value = valueAtPath(context, mapping[index] || fallback[index]);
+    return { type: "text", text: value == null ? "" : String(value) };
+  });
+}
+
+function renderWhatsAppTemplate(body, parameters) {
+  const values = parameters.map(parameter => parameter.text);
+  return String(body || "").replace(/\{\{(\d+)\}\}/g, (_match, index) => values[Number(index) - 1] ?? "");
+}
+
+async function queueWhatsAppSequenceTemplate({ templateId, enrollment, context = {}, stepId = null, branch = null }) {
+  if (enrollment.sequence?.tenant?.vertical !== "generic") return { queued: false, reason: "non_generic" };
+  const contact = enrollment.contact;
+  const rawPhone = contact?.whatsappPhone || contact?.phone;
+  const { normalizeGenericWhatsAppThreadPhone } = require("./phoneFormatting");
+  const recipientPhone = normalizeGenericWhatsAppThreadPhone(rawPhone);
+  if (!contact?.id || !recipientPhone) return { queued: false, reason: "contact_phone_missing" };
+
+  const [config, optOut, template] = await Promise.all([
+    prisma.whatsAppConfig.findFirst({ where: { tenantId: enrollment.tenantId, isActive: true }, select: { phoneNumberId: true } }),
+    prisma.whatsAppOptOut.findUnique({ where: { tenantId_contactPhone: { tenantId: enrollment.tenantId, contactPhone: recipientPhone } }, select: { id: true } }),
+    prisma.whatsAppTemplate.findFirst({
+      where: { id: Number(templateId), tenantId: enrollment.tenantId, status: "APPROVED" },
+      select: { id: true, name: true, body: true, variableMapping: true },
+    }),
+  ]);
+  if (!config?.phoneNumberId) return { queued: false, reason: "whatsapp_not_configured" };
+  if (optOut) return { queued: false, reason: "contact_opted_out" };
+  if (!template) return { queued: false, reason: "template_unavailable" };
+
+  const duplicateKey = `sequence:${enrollment.id}:step:${stepId ?? enrollment.currentStep}:${branch || "main"}`;
+  const duplicate = await prisma.whatsAppMessage.findFirst({
+    where: { tenantId: enrollment.tenantId, contactId: contact.id, interactiveJson: { contains: `"sequenceKey":"${duplicateKey}"` } },
+    select: { id: true },
+  });
+  if (duplicate) return { queued: false, reason: "duplicate" };
+
+  const tenant = enrollment.sequence.tenant;
+  const templateContext = { ...context, contact, organization: tenant };
+  const templateMapping = parseFilters(template.variableMapping) || {};
+  if (Object.values(templateMapping).includes("system.pickupPlotLink")) {
+    templateContext.system = {
+      ...(templateContext.system || {}),
+      pickupPlotLink: createSelectionLink({ tenantId: enrollment.tenantId, contactId: contact.id, submissionId: enrollment.id }),
+    };
+    templateContext.selectionLink = templateContext.system.pickupPlotLink;
+    templateContext.form = { ...(templateContext.form || {}), name: "Generic CRM" };
+  }
+  const parameters = templateParameterValues(template, templateContext);
+  const { upsertGenericWhatsAppThread } = require("./genericWebFormWhatsApp");
+  const thread = await upsertGenericWhatsAppThread({
+    tenantId: enrollment.tenantId,
+    phone: recipientPhone,
+    data: { contactName: contact.name, contactId: contact.id },
+  });
+  if (!thread) return { queued: false, reason: "thread_unavailable" };
+
+  const message = await prisma.whatsAppMessage.create({
+    data: {
+      to: recipientPhone.replace(/\D/g, ""),
+      from: config.phoneNumberId,
+      body: renderWhatsAppTemplate(template.body, parameters),
+      direction: "OUTBOUND",
+      status: "QUEUED",
+      templateName: template.name,
+      contactId: contact.id,
+      tenantId: enrollment.tenantId,
+      threadId: thread.id,
+      interactiveJson: JSON.stringify({
+        sequenceKey: duplicateKey,
+        sequenceEnrollmentId: enrollment.id,
+        sequenceId: enrollment.sequenceId,
+        sequenceStepId: stepId,
+        branch,
+        parameters,
+      }),
+    },
+  });
+  await require("./whatsappQueue").getQueue().enqueueSend({ messageId: message.id, tenantId: enrollment.tenantId });
+  const campaign = (enrollment.sequence.campaigns || []).find(item => item.status === "Active" && item.channel === "WHATSAPP");
+  if (campaign?.id) {
+    await prisma.campaign.updateMany({
+      where: { id: campaign.id, tenantId: enrollment.tenantId, sequenceId: enrollment.sequenceId, status: "Active" },
+      data: { sent: { increment: 1 } },
+    }).catch(() => {});
+  }
+  return { queued: true, messageId: message.id, threadId: thread.id };
+}
+
+function genericCampaignEventRecordId(eventName, payload, hydrated, contact) {
+  const candidate = eventName === "payment.collected"
+    ? payload.paymentId || hydrated.payment?.id
+    : payload.eventId || payload.messageId || payload.invoiceId || payload.taskId || payload.bookingId || payload.pickupPointId || payload.contactId || contact?.id;
+  const value = String(candidate || "").trim();
+  return value && !value.includes(":") ? value : value.replaceAll(":", "-");
+}
+
+async function processWhatsAppCampaignEvent(eventName, payload = {}, tenantId) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, vertical: true } });
+  if (tenant?.vertical !== "generic") return { queued: 0, skipped: "non_generic" };
+
+  const hydrated = await hydrateGenericEventPayload(eventName, payload, tenantId);
+  if (eventName === "payment.collected" && hydrated.payment?.status !== "SUCCESS") {
+    return { queued: 0, skipped: "payment_not_successful" };
+  }
+  const contact = hydrated.contact;
+  const rawPhone = contact?.whatsappPhone || contact?.phone;
+  const { normalizeGenericWhatsAppThreadPhone } = require("./phoneFormatting");
+  const recipientPhone = normalizeGenericWhatsAppThreadPhone(rawPhone);
+  if (!contact || !recipientPhone) return { queued: 0, skipped: "contact_phone_missing" };
+
+  const [config, optOut, campaigns] = await Promise.all([
+    prisma.whatsAppConfig.findFirst({ where: { tenantId, isActive: true }, select: { phoneNumberId: true } }),
+    prisma.whatsAppOptOut.findUnique({ where: { tenantId_contactPhone: { tenantId, contactPhone: recipientPhone } }, select: { id: true } }),
+    prisma.campaign.findMany({
+      // Older builder saves persisted trigger metadata through /schedule,
+      // which changed otherwise-active event automations to Scheduled. Keep
+      // those existing rows executable; Draft remains the paused state.
+      where: { tenantId, status: { in: ["Active", "Scheduled"] }, channel: "WHATSAPP" },
+      include: { sequence: { include: { steps: { orderBy: { position: "asc" } } } } },
+      // Saving a mapping refreshes scheduledAt. Prefer that over createdAt so
+      // editing an older duplicate still makes the operator's latest choice win.
+      orderBy: [{ scheduledAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    }),
+  ]);
+  if (!config?.phoneNumberId) return { queued: 0, skipped: "whatsapp_not_configured" };
+  if (optOut) return { queued: 0, skipped: "contact_opted_out" };
+
+  let queued = 0;
+  for (const campaign of orderCampaignRules(campaigns)) {
+    const filters = parseFilters(campaign.scheduleFilters);
+    if (filters?.automationType !== "whatsapp_event" || filters.eventTrigger !== eventName) continue;
+    if (eventName === "payment.due" && !matchesDueBefore(filters.dueBefore, payload.dueBeforeMinutes)) continue;
+    if (!matchesEventConditions(filters, contact, eventName)) continue;
+    if (campaign.sequenceId && campaign.sequence?.isActive && campaign.sequence.steps?.length) {
+      const firstStep = campaign.sequence.steps[0];
+      if (!["whatsapp", "wait", "condition"].includes(firstStep.kind)) continue;
+      const eventRecordId = genericCampaignEventRecordId(eventName, payload, hydrated, contact);
+      if (!eventRecordId) continue;
+      const eventKey = `campaign-event:${campaign.id}:${eventName}:${eventRecordId}`;
+      const existing = await prisma.sequenceEnrollment.findFirst({
+        where: { tenantId, sequenceId: campaign.sequenceId, contactId: contact.id, currentNode: eventKey },
+        select: { id: true },
+      });
+      if (existing) continue;
+      await prisma.sequenceEnrollment.create({
+        data: {
+          tenantId,
+          sequenceId: campaign.sequenceId,
+          contactId: contact.id,
+          currentNode: eventKey,
+          currentStep: 0,
+          status: "Active",
+          nextRun: new Date(),
+        },
+      });
+      queued++;
+      break;
+    }
+
+    const templateId = Number(filters.whatsappTemplateId);
+    if (!Number.isInteger(templateId) || templateId <= 0) continue;
+
+    const template = await prisma.whatsAppTemplate.findFirst({
+      where: { id: templateId, tenantId, status: "APPROVED" },
+      select: { id: true, name: true, body: true, variableMapping: true },
+    });
+    if (!template) continue;
+
+    const predecessor = flowPredecessor(campaign, campaigns);
+    if (predecessor) {
+      const previousMessage = await prisma.whatsAppMessage.findFirst({
+        where: { tenantId, contactId: contact.id, interactiveJson: { contains: `"campaignId":${predecessor.id}` } },
+        select: { id: true },
+      });
+      if (!previousMessage) continue;
+    }
+
+    const eventRecordId = genericCampaignEventRecordId(eventName, payload, hydrated, contact);
+    if (!eventRecordId) continue;
+    const automationKey = `${campaign.id}:${eventName}:${eventRecordId}`;
+    const duplicate = await prisma.whatsAppMessage.findFirst({
+      where: { tenantId, contactId: contact.id, interactiveJson: { contains: `"automationKey":"${automationKey}"` } },
+      select: { id: true },
+    });
+    if (duplicate) continue;
+
+    const templateMapping = parseFilters(template.variableMapping) || {};
+    const needsPickupPlotLink = eventName === "pickup_plot.selection_requested"
+      || Object.values(templateMapping).includes("system.pickupPlotLink");
+    const pickupPlotLink = needsPickupPlotLink
+      ? createSelectionLink({ tenantId, contactId: contact.id, submissionId: payload.eventId || null })
+      : null;
+    const context = {
+      ...hydrated,
+      contact,
+      organization: tenant,
+      ...(pickupPlotLink ? {
+        system: { pickupPlotLink },
+        selectionLink: pickupPlotLink,
+        form: { name: "Generic CRM" },
+      } : {}),
+    };
+    const parameters = templateParameterValues(template, context);
+    const { upsertGenericWhatsAppThread } = require("./genericWebFormWhatsApp");
+    const thread = await upsertGenericWhatsAppThread({
+      tenantId,
+      phone: recipientPhone,
+      data: { contactName: contact.name, contactId: contact.id },
+    });
+    if (!thread) continue;
+
+    const message = await prisma.whatsAppMessage.create({
+      data: {
+        to: recipientPhone.replace(/\D/g, ""),
+        from: config.phoneNumberId,
+        body: renderWhatsAppTemplate(template.body, parameters),
+        direction: "OUTBOUND",
+        status: "QUEUED",
+        templateName: template.name,
+        contactId: contact.id,
+        tenantId,
+        threadId: thread.id,
+        interactiveJson: JSON.stringify({ automationKey, campaignId: campaign.id, eventName, eventRecordId, parameters }),
+      },
+    });
+    await require("./whatsappQueue").getQueue().enqueueSend({ messageId: message.id, tenantId });
+    await prisma.campaign.update({ where: { id: campaign.id }, data: { sent: { increment: 1 } } });
+    queued++;
+    // A trigger maps to exactly one template. Older duplicate Campaign rows
+    // can exist from earlier UI saves; the newest active mapping wins.
+    break;
+  }
+  return { queued };
+}
+
+module.exports = {
+  processContactCreated,
+  processGenericChannelCampaignEvent,
+  processWhatsAppCampaignEvent,
+  matchesCampaign,
+  hydrateGenericEventPayload,
+  normalizeGenericTemplatePlaceholders,
+  templateParameterValues,
+  matchesEventConditions,
+  queueWhatsAppSequenceTemplate,
+};

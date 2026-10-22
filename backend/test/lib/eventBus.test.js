@@ -335,6 +335,14 @@ describe('emitEvent — synchronous bus.emit', () => {
 // imported prisma singleton; both the SUT and the test see the same
 // patched object because vitest.config.js inlines backend/lib/ + backend/cron/.
 
+describe('generic lifecycle-stage events', () => {
+  test('recognises lifecycle-stage and legacy status changes', () => {
+    expect(sut.shouldDispatchStatusChanged({ changedFields: ['lifecycleStageKey'] })).toBe(true);
+    expect(sut.shouldDispatchStatusChanged({ changedFields: ['status'] })).toBe(true);
+    expect(sut.shouldDispatchStatusChanged({ changedFields: ['assignedToId'] })).toBe(false);
+  });
+});
+
 beforeAll(() => {
   prisma.automationRule = { findMany: vi.fn() };
   prisma.notification = { create: vi.fn() };

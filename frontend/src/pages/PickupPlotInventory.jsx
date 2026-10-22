@@ -99,8 +99,8 @@ const fieldStyle = { width: '100%', marginTop: 5, boxSizing: 'border-box' };
 const labelStyle = { display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' };
 const plotTableHeaderStyle = {
   padding: '0.55rem 0.75rem', textAlign: 'left', fontSize: '0.78rem',
-  color: 'var(--text-secondary)',
-  background: '#f3f4f6',
+  color: 'var(--text-primary)',
+  background: 'var(--table-header-bg, var(--surface-color))',
   borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'normal', overflowWrap: 'anywhere',
   position: 'sticky', top: 0, zIndex: 1,
 };

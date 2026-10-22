@@ -11,6 +11,8 @@ const { cleanPickupAddress } = require("../lib/callifiedPickup");
 const { safeNotifyCustomerPickupPlotAssignments } = require("../lib/pickupPlotAssignmentWhatsApp");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
+const { allocateCommissionAcrossPayments, syncPlotCommission } = require("../lib/genericPlotCommission");
+const { verifySelectionToken } = require("../lib/genericPickupPlotSelection");
 const {
   normalizeBoundary,
   calculateBoundaryAreaSqFt,
@@ -880,7 +882,7 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
       broker: {
         status: brokerStatus,
         updatedAt: saved?.updatedAt || null,
-        assignee: broker ? { id: broker.id, name: broker.name, phone: broker.phone } : null,
+        assignee: broker ? { id: broker.id, name: broker.name, phone: broker.phone, commissionPercent: broker.commissionPercent == null ? null : Number(broker.commissionPercent) } : null,
       },
       billing: {
         status: billingStatus,
@@ -1054,6 +1056,102 @@ async function requireGenericTenant(req, res, next) {
     return next(error);
   }
 }
+
+// Public, token-scoped customer selection used by Generic web-form leads.
+// This is intentionally defined before the authenticated router middleware.
+const PUBLIC_SELECTION_SOURCE = "Selected by customer from Generic web-form link";
+
+async function hasCompletedPublicSelection(db, tenantId, contactId) {
+  const [pickup, booking] = await Promise.all([
+    db.customerPickup.findFirst({
+      where: { tenantId, contactId, sourceExcerpt: PUBLIC_SELECTION_SOURCE },
+      select: { id: true },
+    }),
+    db.plotBooking.findFirst({
+      where: { tenantId, contactId },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(pickup || booking);
+}
+
+router.get("/public/selection/:token", async (req, res) => {
+  try {
+    const { tenantId, contactId } = verifySelectionToken(req.params.token);
+    const [tenant, contact, pickupLocations, plots, completed] = await Promise.all([
+      prisma.tenant.findFirst({ where: { id: tenantId, vertical: "generic" }, select: { id: true, name: true } }),
+      prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null }, select: { id: true, name: true } }),
+      prisma.pickupLocation.findMany({ where: { tenantId, isActive: true }, orderBy: [{ name: "asc" }, { id: "asc" }], select: { id: true, name: true, address: true } }),
+      prisma.plotSite.findMany({ where: { tenantId, isActive: true, availability: "AVAILABLE", plotNumber: { not: null } }, orderBy: [{ name: "asc" }, { plotNumber: "asc" }], select: { id: true, name: true, plotNumber: true, address: true, area: true, areaUnit: true, price: true } }),
+      hasCompletedPublicSelection(prisma, tenantId, contactId),
+    ]);
+    if (!tenant || !contact) return res.status(404).json({ error: "This selection link is no longer available.", code: "SELECTION_NOT_FOUND" });
+    if (completed) return res.json({ completed: true, contact: { name: contact.name } });
+    return res.json({ contact: { name: contact.name }, pickupLocations, plots: plots.map((plot) => ({ ...plot, price: plot.price == null ? null : Number(plot.price) })) });
+  } catch (_error) {
+    return res.status(400).json({ error: "This selection link is invalid or expired.", code: "SELECTION_TOKEN_INVALID" });
+  }
+});
+
+router.post("/public/selection/:token", async (req, res) => {
+  try {
+    const { tenantId, contactId } = verifySelectionToken(req.params.token);
+    const pickupLocationId = Number(req.body?.pickupLocationId);
+    const plotSiteId = Number(req.body?.plotSiteId);
+    if (!Number.isInteger(pickupLocationId) || pickupLocationId <= 0 || !Number.isInteger(plotSiteId) || plotSiteId <= 0) {
+      return res.status(400).json({ error: "Select a pickup location and an interested plot.", code: "SELECTION_REQUIRED" });
+    }
+    const [tenant, contact, pickupLocation, plot] = await Promise.all([
+      prisma.tenant.findFirst({ where: { id: tenantId, vertical: "generic" }, select: { id: true } }),
+      prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null }, select: { id: true } }),
+      prisma.pickupLocation.findFirst({ where: { id: pickupLocationId, tenantId, isActive: true }, select: { id: true, address: true } }),
+      prisma.plotSite.findFirst({ where: { id: plotSiteId, tenantId, isActive: true }, select: { id: true, name: true, plotNumber: true, price: true, availability: true } }),
+    ]);
+    if (!tenant || !contact) return res.status(404).json({ error: "This selection link is no longer available.", code: "SELECTION_NOT_FOUND" });
+    if (!pickupLocation) return res.status(400).json({ error: "That pickup location is no longer available.", code: "PICKUP_LOCATION_UNAVAILABLE" });
+    if (!plot || String(plot.availability || "").toUpperCase() !== "AVAILABLE") return res.status(409).json({ error: "That plot is no longer available. Please choose another.", code: "PLOT_NOT_AVAILABLE" });
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Serialize submissions for this contact. Without this lock, two quick
+      // clicks could both pass the read check and create different bookings.
+      await tx.$queryRaw`SELECT id FROM Contact WHERE id = ${contactId} AND tenantId = ${tenantId} FOR UPDATE`;
+      if (await hasCompletedPublicSelection(tx, tenantId, contactId)) {
+        const alreadyCompleted = new Error("This selection link has already been used.");
+        alreadyCompleted.code = "SELECTION_ALREADY_COMPLETED";
+        throw alreadyCompleted;
+      }
+      await tx.contact.update({
+        where: { id: contactId },
+        data: { interestedPlotArea: `${plot.name}${plot.plotNumber ? ` - Plot ${plot.plotNumber}` : ""}` },
+      });
+      const pickup = await tx.customerPickup.upsert({
+        where: { tenantId_contactId: { tenantId, contactId } },
+        create: { tenantId, contactId, pickupAddress: pickupLocation.address, sourceExcerpt: PUBLIC_SELECTION_SOURCE },
+        update: { pickupAddress: pickupLocation.address, sourceExcerpt: PUBLIC_SELECTION_SOURCE },
+      });
+      const existing = await tx.plotBooking.findFirst({ where: { tenantId, contactId, plotSiteId, status: { not: "CANCELLED" } }, select: { id: true, bookingNumber: true } });
+      const booking = existing || await tx.plotBooking.create({ data: { bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`, tenantId, contactId, customerPickupId: pickup.id, plotSiteId, status: "PLOT_ASSIGNED", paymentStatus: "UNPAID", totalAmount: Number(plot.price || 0), balance: Number(plot.price || 0) }, select: { id: true, bookingNumber: true } });
+      return { pickup, booking };
+    });
+    require("../lib/eventBus").emitEvent(
+      "pickup_plot.selected",
+      {
+        contactId,
+        pickupPointId: result.pickup.id,
+        pickupLocationId,
+        plotSiteId,
+        bookingId: result.booking.id,
+      },
+      tenantId,
+    ).catch((eventError) => console.error("[GenericCampaign] pickup/plot selection event failed:", eventError.message));
+    return res.status(200).json({ saved: true, pickupAddress: result.pickup.pickupAddress, plot: { id: plot.id, name: plot.name, plotNumber: plot.plotNumber }, bookingId: result.booking.id });
+  } catch (error) {
+    if (error?.code === "SELECTION_ALREADY_COMPLETED") return res.status(409).json({ error: "This selection link has already been used.", code: error.code, completed: true });
+    if (error?.name === "JsonWebTokenError" || error?.name === "TokenExpiredError") return res.status(400).json({ error: "This selection link is invalid or expired.", code: "SELECTION_TOKEN_INVALID" });
+    console.error("pickup-plot-inventory public selection error:", error);
+    return res.status(500).json({ error: "Unable to save your selection. Please try again.", code: "SELECTION_SAVE_FAILED" });
+  }
+});
 
 router.use(verifyToken, requireGenericTenant);
 
@@ -2644,6 +2742,22 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         });
       });
     }
+    if (nextStatus === "PAYMENT_VERIFIED" && payment?.id) {
+      require("../lib/eventBus").emitEvent(
+        "payment.collected",
+        { paymentId: payment.id, invoiceId: invoice?.id || saved.invoiceId, contactId: customerId, bookingId: booking?.id },
+        req.user.tenantId,
+        req.io,
+      ).catch((eventError) => console.error("[GenericCampaign] plot payment event failed:", eventError.message));
+    }
+    if (nextStatus === "BOOKING_CONFIRMED") {
+      require("../lib/eventBus").emitEvent(
+        "plot.confirmed",
+        { contactId: customerId, plotSiteId: plotId, bookingId: booking?.id },
+        req.user.tenantId,
+        req.io,
+      ).catch((eventError) => console.error("[GenericCampaign] plot confirmation event failed:", eventError.message));
+    }
     const responseStatus = payment?.workflowStatus || nextStatus;
     return res.json({
       assignmentKey: req.params.assignmentKey,
@@ -3108,6 +3222,76 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
   }
 });
 
+router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    const plotBookingId = Number(req.body?.plotBookingId);
+    const frequency = String(req.body?.frequency || "").trim().toUpperCase();
+    const paymentCount = Number(req.body?.paymentCount);
+    const amount = Math.round((Number(req.body?.amount) + Number.EPSILON) * 100) / 100;
+    const firstMonth = Number(req.body?.firstMonth);
+    const firstYear = Number(req.body?.firstYear);
+    if (!Number.isInteger(contactId) || contactId <= 0 || !Number.isInteger(plotBookingId) || plotBookingId <= 0) {
+      return res.status(400).json({ error: "Choose a valid customer and plot booking.", code: "INVALID_INSTALLMENT_BOOKING" });
+    }
+    if (!new Set(["MONTHLY", "YEARLY"]).has(frequency)) {
+      return res.status(400).json({ error: "Choose Monthly or Yearly payment frequency.", code: "INVALID_INSTALLMENT_FREQUENCY" });
+    }
+    if (!Number.isInteger(paymentCount) || paymentCount < 1 || paymentCount > 120) {
+      return res.status(400).json({ error: "Number of payments must be between 1 and 120.", code: "INVALID_INSTALLMENT_COUNT" });
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Enter a valid amount for each installment.", code: "INVALID_INSTALLMENT_AMOUNT" });
+    }
+    if (!Number.isInteger(firstMonth) || firstMonth < 1 || firstMonth > 12 || !Number.isInteger(firstYear) || firstYear < new Date().getFullYear()) {
+      return res.status(400).json({ error: "Choose a valid first due month and year.", code: "INVALID_INSTALLMENT_START" });
+    }
+    const booking = await prisma.plotBooking.findFirst({
+      where: { id: plotBookingId, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+    });
+    if (!booking) return res.status(404).json({ error: "Active plot booking not found.", code: "PLOT_BOOKING_NOT_FOUND" });
+    const existing = await prisma.plotInstallment.findMany({
+      where: { tenantId, plotBookingId },
+      orderBy: { sequenceNumber: "asc" },
+    });
+    const reservedAmount = existing
+      .filter((row) => ["PLANNED", "LINK_CREATED"].includes(String(row.status || "").toUpperCase()))
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const requestedTotal = amount * paymentCount;
+    const availableBalance = Math.max(0, Number(booking.balance || 0) - reservedAmount);
+    if (requestedTotal > availableBalance + 0.001) {
+      return res.status(400).json({
+        error: `The schedule total cannot exceed the unplanned balance of ${availableBalance.toFixed(2)}.`,
+        code: "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE",
+      });
+    }
+    const firstDueDate = new Date(Date.UTC(firstYear, firstMonth - 1, 1, 12));
+    const nextSequence = existing.reduce((max, row) => Math.max(max, Number(row.sequenceNumber || 0)), 0) + 1;
+    const installments = await prisma.$transaction(Array.from({ length: paymentCount }, (_, index) => {
+      const dueDate = new Date(firstDueDate);
+      if (frequency === "MONTHLY") dueDate.setUTCMonth(dueDate.getUTCMonth() + index);
+      else dueDate.setUTCFullYear(dueDate.getUTCFullYear() + index);
+      return prisma.plotInstallment.create({
+        data: {
+          tenantId,
+          plotBookingId,
+          contactId,
+          sequenceNumber: nextSequence + index,
+          frequency,
+          dueDate,
+          amount,
+          status: "PLANNED",
+        },
+      });
+    }));
+    return res.status(201).json({ installments: installments.map((row) => ({ ...row, amount: Number(row.amount || 0) })) });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /customer-pickups/:contactId/installments error:", error);
+    return res.status(500).json({ error: "Failed to create installment schedule", code: "INSTALLMENT_SCHEDULE_CREATE_FAILED" });
+  }
+});
+
 router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -3131,6 +3315,13 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       : Number(submittedBookingId);
     if (plotBookingId !== null && (!Number.isInteger(plotBookingId) || plotBookingId <= 0)) {
       return res.status(400).json({ error: "Choose a valid plot booking.", code: "INVALID_PLOT_BOOKING_ID" });
+    }
+    const submittedInstallmentId = req.body?.installmentId;
+    const installmentId = submittedInstallmentId === undefined || submittedInstallmentId === null || submittedInstallmentId === ""
+      ? null
+      : Number(submittedInstallmentId);
+    if (installmentId !== null && (!Number.isInteger(installmentId) || installmentId <= 0)) {
+      return res.status(400).json({ error: "Choose a valid installment.", code: "INVALID_INSTALLMENT_ID" });
     }
 
     const [contact, booking] = await Promise.all([
@@ -3160,6 +3351,15 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         balance,
       });
     }
+    const installment = installmentId === null ? null : await prisma.plotInstallment.findFirst({
+      where: { id: installmentId, tenantId, plotBookingId: booking.id, contactId },
+    });
+    if (installmentId !== null && (!installment || !["PLANNED", "LINK_CREATED"].includes(String(installment.status || "").toUpperCase()))) {
+      return res.status(409).json({ error: "This installment is no longer available for payment.", code: "INSTALLMENT_NOT_PAYABLE" });
+    }
+    if (installment && Math.abs(Number(installment.amount || 0) - amount) > 0.001) {
+      return res.status(400).json({ error: "Payment amount must match the scheduled installment.", code: "INSTALLMENT_AMOUNT_MISMATCH" });
+    }
 
     if (method === "payment_link") {
       const { createInvoicePaymentLink } = require("../lib/paymentLink");
@@ -3173,11 +3373,17 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         gatewayPref: "razorpay",
         tenantName: tenant?.name || undefined,
         baseUrl: getFrontendUrlFromRequest(req),
-        travelContext: { kind: "plot-booking-payment", plotBookingId: booking.id },
+        travelContext: { kind: "plot-booking-payment", plotBookingId: booking.id, ...(installment ? { installmentId: installment.id } : {}) },
         description: `Initial payment for plot booking ${booking.bookingNumber}`,
       });
       if (result.error) {
         return res.status(502).json({ error: result.error, code: result.code || "PAYMENT_LINK_FAILED" });
+      }
+      if (installment) {
+        await prisma.plotInstallment.update({
+          where: { id: installment.id },
+          data: { status: "LINK_CREATED", paymentId: result.paymentId },
+        });
       }
       return res.json({
         mode: "payment_link",
@@ -3241,9 +3447,16 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
           status: "SUCCESS",
           paidAt,
           tenantId,
-          metadata: JSON.stringify({ kind: "plot-booking-payment", plotBookingId: booking.id, mode: "manual" }),
+          metadata: JSON.stringify({ kind: "plot-booking-payment", plotBookingId: booking.id, mode: "manual", ...(installment ? { installmentId: installment.id } : {}) }),
         },
       });
+      if (installment) {
+        await tx.plotInstallment.update({
+          where: { id: installment.id },
+          data: { status: "PAID", paymentId: payment.id },
+        });
+      }
+      await syncPlotCommission(tx, payment, current);
       await tx.plotBooking.update({
         where: { id: booking.id },
         data: {
@@ -3300,6 +3513,169 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
   }
 });
 
+router.patch("/commissions/:id/rate", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const commissionId = Number(req.params.id);
+    const commissionPercent = Math.round((Number(req.body?.commissionPercent) + Number.EPSILON) * 100) / 100;
+    if (!Number.isInteger(commissionId) || commissionId <= 0) {
+      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
+    }
+    if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+      return res.status(400).json({ error: "Commission percentage must be between 0 and 100.", code: "INVALID_COMMISSION_PERCENT" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+    if (!commission) return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
+    if (String(commission.status || "EARNED").toUpperCase() !== "EARNED") {
+      return res.status(409).json({ error: "Only an earned commission can be edited.", code: "COMMISSION_NOT_EDITABLE" });
+    }
+    const commissionAmount = Math.round((Number(commission.eligibleAmount || 0) * commissionPercent / 100 + Number.EPSILON) * 100) / 100;
+    const updated = await prisma.plotCommission.update({
+      where: { id: commission.id },
+      data: { commissionPercent, commissionAmount },
+    });
+    await appendWorkflowEvent(prisma, req, {
+      bookingId: commission.plotBookingId,
+      contactId: commission.contactId,
+      stage: "COMMISSION",
+      fromStatus: commission.status,
+      toStatus: "RATE_UPDATED",
+      metadata: { commissionId: commission.id, previousPercent: Number(commission.commissionPercent || 0), commissionPercent, commissionAmount },
+    });
+    return res.json({
+      ...updated,
+      commissionPercent: Number(updated.commissionPercent || 0),
+      eligibleAmount: Number(updated.eligibleAmount || 0),
+      commissionAmount: Number(updated.commissionAmount || 0),
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory PATCH /commissions/:id/rate error:", error);
+    return res.status(500).json({ error: "Failed to update commission percentage", code: "COMMISSION_RATE_UPDATE_FAILED" });
+  }
+});
+
+router.patch("/commissions/:id/amount", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const commissionId = Number(req.params.id);
+    const commissionAmount = Number(req.body?.commissionAmount);
+    if (!Number.isInteger(commissionId) || commissionId <= 0) {
+      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
+    }
+    if (!Number.isFinite(commissionAmount) || commissionAmount < 0) {
+      return res.status(400).json({ error: "Enter a valid commission amount.", code: "INVALID_COMMISSION_AMOUNT" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+    if (!commission) {
+      return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
+    }
+    if (String(commission.status || "EARNED").toUpperCase() !== "EARNED") {
+      return res.status(409).json({ error: "Only an earned commission can be edited.", code: "COMMISSION_NOT_EDITABLE" });
+    }
+    const eligibleAmount = Number(commission.eligibleAmount || 0);
+    if (commissionAmount > eligibleAmount) {
+      return res.status(400).json({ error: "Commission cannot be greater than the customer payment.", code: "COMMISSION_EXCEEDS_PAYMENT" });
+    }
+    const roundedAmount = Math.round((commissionAmount + Number.EPSILON) * 100) / 100;
+    const commissionPercent = eligibleAmount > 0
+      ? Math.round(((roundedAmount / eligibleAmount) * 100 + Number.EPSILON) * 100) / 100
+      : 0;
+    const updated = await prisma.plotCommission.update({
+      where: { id: commission.id },
+      data: { commissionAmount: roundedAmount, commissionPercent },
+    });
+    await appendWorkflowEvent(prisma, req, {
+      bookingId: commission.plotBookingId,
+      contactId: commission.contactId,
+      stage: "COMMISSION",
+      fromStatus: commission.status,
+      toStatus: "AMOUNT_UPDATED",
+      metadata: { commissionId: commission.id, previousAmount: Number(commission.commissionAmount || 0), commissionAmount: roundedAmount },
+    });
+    return res.json({
+      ...updated,
+      commissionPercent: Number(updated.commissionPercent || 0),
+      eligibleAmount: Number(updated.eligibleAmount || 0),
+      commissionAmount: Number(updated.commissionAmount || 0),
+      netPaymentAmount: Math.max(0, Number(updated.eligibleAmount || 0) - Number(updated.commissionAmount || 0)),
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory PATCH /commissions/:id/amount error:", error);
+    return res.status(500).json({ error: "Failed to update commission amount", code: "COMMISSION_AMOUNT_UPDATE_FAILED" });
+  }
+});
+
+router.patch("/commissions/:id/status", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const commissionId = Number(req.params.id);
+    const requestedStatus = String(req.body?.status || "").trim().toUpperCase();
+    if (!Number.isInteger(commissionId) || commissionId <= 0) {
+      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
+    }
+    if (!new Set(["APPROVED", "PAID"]).has(requestedStatus)) {
+      return res.status(400).json({ error: "Commission status must be Approved or Paid.", code: "INVALID_COMMISSION_STATUS" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+    if (!commission) {
+      return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
+    }
+    const currentStatus = String(commission.status || "EARNED").toUpperCase();
+    const validTransition = (currentStatus === "EARNED" && requestedStatus === "APPROVED")
+      || (currentStatus === "APPROVED" && requestedStatus === "PAID")
+      || currentStatus === requestedStatus;
+    if (!validTransition) {
+      return res.status(409).json({
+        error: `Commission cannot move from ${currentStatus} to ${requestedStatus}.`,
+        code: "INVALID_COMMISSION_TRANSITION",
+      });
+    }
+    const now = new Date();
+    const updated = currentStatus === requestedStatus
+      ? commission
+      : await prisma.plotCommission.update({
+        where: { id: commission.id },
+        data: requestedStatus === "APPROVED"
+          ? { status: "APPROVED", approvedAt: now, approvedByUserId: req.user.userId }
+          : { status: "PAID", paidAt: now, paidByUserId: req.user.userId },
+      });
+    if (currentStatus !== requestedStatus) {
+      await appendWorkflowEvent(prisma, req, {
+        bookingId: commission.plotBookingId,
+        contactId: commission.contactId,
+        stage: "COMMISSION",
+        eventType: `COMMISSION_${requestedStatus}`,
+        label: requestedStatus === "APPROVED" ? "Commission approved" : "Commission marked paid",
+        fromStatus: currentStatus,
+        toStatus: requestedStatus,
+        occurredAt: now.toISOString(),
+        metadata: { commissionId: commission.id, paymentId: commission.paymentId, amount: Number(commission.commissionAmount || 0) },
+      });
+    }
+    return res.json({
+      ...updated,
+      commissionPercent: Number(updated.commissionPercent || 0),
+      eligibleAmount: Number(updated.eligibleAmount || 0),
+      commissionAmount: Number(updated.commissionAmount || 0),
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory PATCH /commissions/:id/status error:", error);
+    return res.status(500).json({ error: "Failed to update commission status", code: "COMMISSION_STATUS_UPDATE_FAILED" });
+  }
+});
+
 router.get("/customer-pickups", requirePermission("billing_workspace", "read"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -3330,7 +3706,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
       }),
       prisma.plotBroker.findMany({
         where: { tenantId, isActive: true },
-        select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
+        select: { id: true, name: true, phone: true, commissionPercent: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
       }),
       prisma.plotWorkflowEvent.findMany({
         where: { tenantId, ...assignmentScope },
@@ -3349,7 +3725,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         orderBy: { updatedAt: "desc" },
         select: {
           id: true, bookingNumber: true, contactId: true, plotSiteId: true,
-          invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
+          plotBrokerId: true, invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
           amountPaid: true, balance: true, reservedAt: true, soldAt: true,
           completedAt: true, createdAt: true, updatedAt: true,
         },
@@ -3365,7 +3741,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         },
         orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
         select: {
-          id: true, invoiceId: true, contactId: true, description: true,
+          id: true, tenantId: true, invoiceId: true, contactId: true, description: true,
           amount: true, currency: true, gateway: true, gatewayId: true,
           status: true, paidAt: true, createdAt: true, metadata: true,
         },
@@ -3389,7 +3765,48 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         }
       }
     }
+    let plotCommissions = [];
+    if (req.user.role === "ADMIN") {
+      const bookingMap = new Map(bookings.map((booking) => [Number(booking.id), booking]));
+      for (const payment of plotPayments) {
+        if (String(payment.status || "").toUpperCase() !== "SUCCESS") continue;
+        let metadata = {};
+        try { metadata = JSON.parse(payment.metadata || "{}"); } catch { continue; }
+        const booking = bookingMap.get(Number(metadata.plotBookingId));
+        if (metadata.kind === "plot-booking-payment" && booking) {
+          await syncPlotCommission(prisma, payment, booking);
+        }
+      }
+      plotCommissions = await prisma.plotCommission.findMany({
+        where: { tenantId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+    }
+    const plotInstallments = await prisma.plotInstallment.findMany({
+      where: { tenantId },
+      orderBy: [{ plotBookingId: "asc" }, { sequenceNumber: "asc" }],
+    });
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
+    const brokerMap = new Map(brokers.map((broker) => [Number(broker.id), broker]));
+    const commissionsByBooking = new Map();
+    for (const commission of plotCommissions) {
+      const rows = commissionsByBooking.get(Number(commission.plotBookingId)) || [];
+      const broker = brokerMap.get(Number(commission.plotBrokerId));
+      rows.push({
+        ...commission,
+        commissionPercent: Number(commission.commissionPercent || 0),
+        eligibleAmount: Number(commission.eligibleAmount || 0),
+        commissionAmount: Number(commission.commissionAmount || 0),
+        brokerName: broker?.name || "Sales Executive",
+      });
+      commissionsByBooking.set(Number(commission.plotBookingId), rows);
+    }
+    const installmentsByBooking = new Map();
+    for (const installment of plotInstallments) {
+      const rows = installmentsByBooking.get(Number(installment.plotBookingId)) || [];
+      rows.push({ ...installment, amount: Number(installment.amount || 0) });
+      installmentsByBooking.set(Number(installment.plotBookingId), rows);
+    }
     const historyByCustomer = new Map();
     for (const event of workflowEvents) {
       const history = historyByCustomer.get(event.contactId) || [];
@@ -3446,6 +3863,13 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         const matchesInvoice = booking?.invoiceId && Number(payment.invoiceId) === Number(booking.invoiceId);
         return Number(payment.contactId) === Number(pickup.contactId) && (matchesBooking || matchesInvoice);
       }).map(({ metadata: _metadata, ...payment }) => payment);
+      const commissions = booking ? commissionsByBooking.get(Number(booking.id)) || [] : [];
+      const commissionRows = commissions.map((commission) => {
+        return {
+          ...commission,
+          ...allocateCommissionAcrossPayments(payments, commission.commissionAmount),
+        };
+      });
       return {
         ...pickup,
         pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
@@ -3456,6 +3880,8 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         customerAssignedPlotIds: customerBookings.map((row) => Number(row.plotSiteId)).filter((id) => Number.isInteger(id) && id > 0),
         booking,
         payments,
+        commissions: commissionRows,
+        installments: booking ? installmentsByBooking.get(Number(booking.id)) || [] : [],
         workflowHistory: historyByCustomer.get(pickup.contactId) || [],
       };
     });

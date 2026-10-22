@@ -62,6 +62,7 @@ export default function SearchableSelect({
   ariaLabel,
   id,
   className = "input-field",
+  sanitizeInput = (input) => input,
   style,
   wrapperStyle,
   boundarySelector,
@@ -236,7 +237,7 @@ export default function SearchableSelect({
         value={displayValue}
         placeholder={displayPlaceholder}
         onChange={(e) => {
-          setQuery(e.target.value);
+          setQuery(sanitizeInput(e.target.value));
           setActiveIndex(0);
           if (!open) setOpen(true);
         }}

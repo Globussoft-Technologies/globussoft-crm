@@ -310,7 +310,8 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
     },
     {
       file: ["pages", "Tickets.jsx"],
-      pattern: /<table\s+className="stable-table"/,
+      // Tickets keeps its page-specific class alongside the shared utility.
+      pattern: /<table\s+className="[^\"]*\bstable-table\b[^\"]*"/s,
     },
     {
       file: ["pages", "Invoices.jsx"],

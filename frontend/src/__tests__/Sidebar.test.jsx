@@ -226,6 +226,7 @@ function renderSidebar({
   userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
   hiddenPagePaths = [],
   expandTravelGroups = true, // legacy fixture convenience; production defaults collapsed
+  expandGenericGroups = true,
 } = {}) {
   // Capture the catalog into a closure variable read by the default
   // mock impl set in beforeEach. This lets per-test overrides (e.g.
@@ -279,6 +280,11 @@ function renderSidebar({
   );
   if (vertical === 'travel' && expandTravelGroups) {
     rendered.container.querySelectorAll('.travel-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
+      fireEvent.click(button);
+    });
+  }
+  if (vertical === 'generic' && expandGenericGroups) {
+    rendered.container.querySelectorAll('.generic-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
       fireEvent.click(button);
     });
   }
@@ -374,7 +380,7 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows Pickup & Plot as its own module only to generic CRM admins', () => {
-      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN', expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       const link = screen.getByText('Plot Inventory').closest('a');
       expect(link).toBeTruthy();
@@ -397,7 +403,7 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows transport work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['RENAMED_FIELD_TEAM'], permissions: ['transport_workspace.read'] });
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['RENAMED_FIELD_TEAM'], permissions: ['transport_workspace.read'], expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       expect(screen.getByText('Transport Work').closest('a')).toHaveAttribute('href', '/transport-workspace');
       expect(screen.queryByText('Site Visits')).toBeNull();
@@ -405,7 +411,7 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows site-visit work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['broker_workspace.read'] });
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['broker_workspace.read'], expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
       expect(screen.queryByText('Transport Work')).toBeNull();
@@ -437,7 +443,7 @@ describe('Sidebar — load-bearing render surface', () => {
       const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       const nav = container.querySelector('#app-sidebar nav');
       const groups = Array.from(
-        nav.querySelectorAll('button[aria-controls^="wellness-nav-"]'),
+        nav.querySelectorAll('button[aria-controls^="generic-nav-"]'),
         (button) => button.textContent.trim(),
       );
       expect(groups).toEqual([
@@ -457,8 +463,8 @@ describe('Sidebar — load-bearing render surface', () => {
       ]);
     });
 
-    it('keeps only one generic submenu open at a time', () => {
-      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+    it('allows generic submenus to be opened independently', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', expandGenericGroups: false });
       const sales = screen.getByRole('button', { name: 'Sales' });
       const communication = screen.getByRole('button', { name: 'Communication' });
 
@@ -467,7 +473,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(communication).toHaveAttribute('aria-expanded', 'false');
 
       fireEvent.click(communication);
-      expect(sales).toHaveAttribute('aria-expanded', 'false');
+      expect(sales).toHaveAttribute('aria-expanded', 'true');
       expect(communication).toHaveAttribute('aria-expanded', 'true');
     });
 

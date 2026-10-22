@@ -622,7 +622,7 @@ const ConvertedLeads = () => {
         </div>
 
         {/* overflow-x wrapper the dynamic Lead-custom-field columns can push this table wider than the viewport. */}
-        <TopScrollSync scrollWidth={`${tableMinWidth}px`} hideTopBar>
+        <TopScrollSync scrollWidth={`${tableMinWidth}px`}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: `${tableMinWidth}px`, tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: `${TABLE_WIDTHS.checkbox}px` }} />

@@ -185,6 +185,7 @@ function makeApp({
 }
 
 beforeEach(() => {
+  prisma.plotCommission = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.invoice.findMany.mockReset();
   prisma.invoice.findFirst.mockReset();

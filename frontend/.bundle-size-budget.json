@@ -67,7 +67,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9700,
+    "all-js-maxKB": 9800,
+    "//pr1590-total-js": "9700 → 9800 KB: PR #1590 adds Generic CRM channel sequence builders, WhatsApp templates, public pickup/plot selection and installment/commission views without adding runtime dependencies. Deploy run 39776541606 measured 9744.1 KB total JS; all individual chunk caps passed and remain unchanged. Retain 55.9 KB headroom.",
     "//pr1588-phone-input-js": "9300 → 9700 KB: PR #1588 deliberately adds @intl-tel-input/react and its lazy-loaded libphonenumber utilities for international travel lead validation. Deploy run 39616931869 measured 9634.0 KB total JS (including a 257.9 KB utils chunk). Retain 66 KB headroom; entry and existing vendor chunk caps remain unchanged.",
     "//pr1580-workspace-budget": "9250 → 9300 KB: PR #1580 adds dedicated Transport, Site Visit, Billing and staff-assignment surfaces. Its original e660252a build already measured 9270.0 KB JS; the four missing tour profiles bring this to 9270.7 KB. No new runtime dependency is added and per-chunk caps remain unchanged.",
     "//pr1569-total-bump": "9200 → 9250 KB: PR #1569 adds the lazy-loaded Super Admin page-visibility screen and tenant-aware access/sidebar controls without new runtime dependencies. Deploy run 38687218544 compiled successfully at 9210.0 KB total JS; every individual chunk and CSS budget passed. Retain 40 KB total headroom; entry, vendor, page and CSS caps remain unchanged.",
@@ -91,7 +92,8 @@
     "//previous-total-bump-3": "7950→8150 on 2026-09-15: PR #1441 adds lazy-loaded contact/deal profile workflows and the standalone email composer, bringing total JS to 8027.5 KB. No new runtime dependency was added; this preserves 122.5 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-2": "7850→7950 on 2026-09-10: PR #1432 added the lazy-loaded TMC teacher and parent portal screens, bringing total JS to 7885.4 KB. The feature adds no new dependency; this restores 64.6 KB of total-budget headroom while retaining the existing per-chunk limits.",
     "//previous-total-bump": "7800→7850 on 2026-09-04: PR #1404 added the wellness patient-signature workflow and pushed total JS to 7803.4 KB. This small increase restored 46.6 KB headroom; no new dependency was introduced.",
-    "all-css-maxKB": 410,
+    "all-css-maxKB": 420,
+    "//pr1590-total-css": "410 → 420 KB: PR #1590 adds contact-profile, lead-table and public selection styles. Deploy run 39776541606 measured 414.0 KB total CSS; retain 6 KB headroom.",
     "//pr1588-phone-input-css": "380 → 410 KB: PR #1588 adds intl-tel-input styles plus country-picker and responsive CRM layouts. Deploy run 39616931869 measured 400.8 KB CSS. Retain 9.2 KB headroom for these intentional additions; individual JS caps remain unchanged.",
     "//pr1580-workspace-css": "370 → 380 KB: the original PR #1580 build measures 376.1 KB CSS after its pickup/customer and workspace UI changes; the review fixes add no CSS. Retain 3.9 KB of headroom, without relaxing any JavaScript chunk cap.",
     "//pr1572-css-budget": "365 → 370 KB: PR #1572 adds responsive Generic Leads toolbars, contact email previews and teacher-portal layouts. A fresh production build measured 366.9 KB CSS (previous main: 363.9 KB). Retain 3.1 KB headroom for these intentional styles; JavaScript and individual chunk caps remain unchanged.",

@@ -195,6 +195,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', userType = 'STAFF' 
 }
 
 beforeEach(() => {
+  prisma.plotCommission = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.payment.findMany.mockReset();
   prisma.payment.findFirst.mockReset();
   prisma.payment.create.mockReset();

@@ -11,6 +11,7 @@ import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const { parseXlsxBuffer } = requireCJS('../../lib/csvIO');
 
 const authMw = requireCJS('../../middleware/auth');
 authMw.verifyToken = (_req, _res, next) => next();
@@ -40,6 +41,30 @@ beforeEach(() => {
   prisma.travelSchoolTerm.findFirst.mockReset().mockResolvedValue(null);
   prisma.travelSchoolTerm.create.mockReset().mockImplementation(({ data }) => Promise.resolve({ id: 1, ...data }));
   prisma.travelSchoolTerm.update.mockReset().mockImplementation(({ data }) => Promise.resolve({ id: 1, ...data }));
+});
+
+describe('GET /api/travel-school-terms/template', () => {
+  test('CSV template is a blank header row with only term details', async () => {
+    const res = await request(makeApp()).get('/api/travel-school-terms/template?format=csv');
+    expect(res.status).toBe(200);
+    expect(res.text).toBe('\uFEFFschoolName,board,type,label,startDate,endDate\r\n');
+  });
+
+  test('XLSX template has the same blank, focused schema', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel-school-terms/template?format=xlsx')
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+        response.on('error', callback);
+      });
+    expect(res.status).toBe(200);
+    const parsed = parseXlsxBuffer(res.body);
+    expect(parsed.headers).toEqual(['schoolName', 'board', 'type', 'label', 'startDate', 'endDate']);
+    expect(parsed.rows).toEqual([]);
+  });
 });
 
 describe('GET /api/travel-school-terms', () => {

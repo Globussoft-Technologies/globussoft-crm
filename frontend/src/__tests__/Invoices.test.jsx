@@ -316,13 +316,13 @@ describe('<Invoices /> — page surface', () => {
     });
   });
 
-  it('keeps the Generic CRM page chrome fixed and makes only the table viewport scrollable', async () => {
+  it('keeps the Generic CRM invoice ledger in normal page flow without an inner vertical scrollbar', async () => {
     renderInvoices();
 
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
     expect(document.querySelector('.invoices-generic-page > .invoice-ledger-card')).toBeInTheDocument();
     expect(document.querySelector('.invoice-table-scroll .top-scroll-sync__bottom')).toHaveStyle({
-      overflowY: 'auto',
+      overflowY: 'visible',
     });
     const firstInvoiceRow = screen.getByText('INV-001').closest('tr');
     fireEvent.mouseOver(firstInvoiceRow);

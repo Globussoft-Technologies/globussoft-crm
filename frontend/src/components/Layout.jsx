@@ -149,15 +149,6 @@ function TenantChip({ tenant }) {
 // Keep this aligned with the drawer media queries in responsive.css. JS uses
 // it for the sidebar dialog semantics and keyboard focus trap.
 const DRAWER_BREAKPOINT_PX = 900;
-const DESKTOP_DESIGN_WIDTH = 1440;
-
-function getDesktopFrame() {
-  if (typeof window === "undefined") return null;
-  const { innerWidth: width, innerHeight: height } = window;
-  if (width < DRAWER_BREAKPOINT_PX || width >= DESKTOP_DESIGN_WIDTH) return null;
-  const scale = width / DESKTOP_DESIGN_WIDTH;
-  return { scale, height: height / scale };
-}
 
 const Layout = () => {
   const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
@@ -196,22 +187,10 @@ const Layout = () => {
   // sidebar is actually rendering as a drawer. SSR-safe initial value: assume
   // desktop, then sync on mount via the resize listener below.
   const [isMobileViewport, setIsMobileViewport] = useState(false);
-  // Preserve the legacy design frame for verticalized modules. Generic CRM
-  // uses the available viewport width directly so laptop zoom stays natural.
-  const [desktopFrame, setDesktopFrame] = useState(() =>
-    isWellness || isTravel ? getDesktopFrame() : null,
-  );
   // Keep a ref to the hamburger so we can return focus to it when the drawer
   // closes — required for keyboard / screen-reader users (WAI-ARIA APG dialog
   // pattern: focus must return to the trigger).
   const toggleRef = useRef(null);
-
-  useEffect(() => {
-    if (!isWellness && !isTravel) return undefined;
-    const updateFrame = () => setDesktopFrame(getDesktopFrame());
-    window.addEventListener("resize", updateFrame);
-    return () => window.removeEventListener("resize", updateFrame);
-  }, [isWellness, isTravel]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -377,18 +356,14 @@ const Layout = () => {
 
   return (
     <div
-      className={`app-shell${desktopFrame ? " app-shell--scaled" : ""}`}
+      className="app-shell"
       style={{
         // Anchor the application to all four viewport edges instead of
         // relying on viewport units. Some desktop Chrome/display-scaling
         // combinations can report a reduced vh while still painting a taller
         // document, which leaves body background visible below the footer.
         position: "fixed",
-        inset: desktopFrame ? "0 auto auto 0" : 0,
-        width: desktopFrame ? DESKTOP_DESIGN_WIDTH : undefined,
-        height: desktopFrame ? desktopFrame.height : undefined,
-        transform: desktopFrame ? `scale(${desktopFrame.scale})` : undefined,
-        transformOrigin: desktopFrame ? "top left" : undefined,
+        inset: 0,
         display: "flex",
         overflow: "hidden",
         background: "var(--bg-color)",

@@ -1,0 +1,76 @@
+/* Laptop density for the Generic Leads and Contacts lists only. The sidebar
+   becomes a drawer below 900px, where the existing tablet rules take over. */
+@media (min-width: 900px) and (max-width: 1919px) {
+  body[data-vertical="generic"] :is(.leads-page-root--generic, .contacts-page) {
+    --list-title-size: clamp(1.25rem, calc(0.95rem + 0.44vw), 1.75rem);
+    --list-text-size: clamp(0.75rem, calc(0.5rem + 0.4vw), 0.875rem);
+    --list-gap: clamp(0.5rem, 0.75vw, 0.75rem);
+    --list-control-padding-x: clamp(0.5rem, 0.7vw, 0.8rem);
+  }
+
+  body[data-vertical="generic"] :is(.leads-page-root--generic, .contacts-page) h1 {
+    font-size: var(--list-title-size) !important;
+    line-height: 1.18;
+  }
+
+  body[data-vertical="generic"] .contacts-page__header h2 {
+    font-size: clamp(1.05rem, calc(0.85rem + 0.25vw), 1.375rem) !important;
+    line-height: 1.22;
+  }
+
+  body[data-vertical="generic"] :is(.leads-page-root--generic, .contacts-page)
+    :is(.leads-actions-toolbar, .leads-toolbar-shell, .contacts-page__header-actions, .contacts-filters-bar) {
+    gap: var(--list-gap) !important;
+  }
+
+  body[data-vertical="generic"] :is(.leads-page-root--generic, .contacts-page)
+    :is(.leads-actions-toolbar, .leads-toolbar-shell, .contacts-page__header-actions, .contacts-filters-bar)
+    :is(button, input, select, .btn-primary, .btn-secondary) {
+    font-size: var(--list-text-size) !important;
+    line-height: 1.2;
+  }
+
+  body[data-vertical="generic"] :is(.leads-page-root--generic, .contacts-page)
+    :is(.leads-actions-toolbar, .leads-toolbar-shell, .contacts-page__header-actions, .contacts-filters-bar)
+    :is(button, .btn-primary, .btn-secondary) {
+    padding-inline: var(--list-control-padding-x) !important;
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] :is(.leads-page-root--generic, .contacts-page)
+    :is(.leads-actions-toolbar, .leads-toolbar-shell, .contacts-page__header-actions, .contacts-filters-bar)
+    :is(button, .btn-primary, .btn-secondary) > svg {
+    width: clamp(14px, 1vw, 18px);
+    height: clamp(14px, 1vw, 18px);
+    flex-shrink: 0;
+  }
+
+  body[data-vertical="generic"] :is(.leads-page-root--generic table.leads-table, .contacts-page table.stable-table)
+    :is(th, td) {
+    font-size: var(--list-text-size) !important;
+    line-height: 1.25;
+  }
+
+  body[data-vertical="generic"] .leads-page-root--generic
+    .leads-split-table:not(.leads-split-table--density-comfortable):not(.leads-split-table--density-compact)
+    table.leads-table :is(thead, tbody) tr {
+    height: clamp(36px, 2.5vw, 40px);
+  }
+
+  body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table thead tr {
+    height: clamp(40px, 3vw, 50px);
+  }
+
+  body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table tbody tr {
+    height: clamp(42px, 3.1vw, 52px);
+  }
+
+  body[data-vertical="generic"] .contacts-page .contacts-filters-bar {
+    padding: clamp(0.625rem, 0.85vw, 1rem) !important;
+  }
+
+  body[data-vertical="generic"] .contacts-page .contacts-pagination-footer {
+    padding: clamp(0.5rem, 0.65vw, 0.75rem) clamp(0.625rem, 0.85vw, 1rem);
+    font-size: clamp(0.75rem, calc(0.5rem + 0.3vw), 0.8125rem);
+  }
+}

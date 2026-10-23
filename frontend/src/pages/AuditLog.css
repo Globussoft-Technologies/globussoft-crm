@@ -1,0 +1,55 @@
+.travel-audit-page {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: auto !important;
+  box-sizing: border-box;
+  overflow: visible !important;
+}
+
+.audit-log-table-card,
+.audit-log-table-card .top-scroll-sync,
+.audit-log-table-card .top-scroll-sync__bottom {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.audit-log-table {
+  table-layout: fixed;
+}
+
+.audit-log-expand-column { width: 4%; }
+.audit-log-timestamp-column { width: 25%; }
+.audit-log-user-column { width: 29%; }
+.audit-log-action-column { width: 19%; }
+.audit-log-entity-column { width: 14%; }
+.audit-log-id-column { width: 9%; }
+
+.audit-log-table :is(th, td) {
+  min-width: 0;
+  padding: 0.55rem 0.65rem !important;
+  overflow-wrap: anywhere;
+}
+
+.audit-log-table .audit-log-timestamp {
+  white-space: normal !important;
+}
+
+.audit-log-table td > :is(div, span) {
+  max-width: 100%;
+}
+
+@media (max-width: 700px) {
+  .audit-log-table :is(th, td) {
+    padding: 0.45rem 0.3rem !important;
+    font-size: 0.68rem !important;
+  }
+
+  .audit-log-expand-column { width: 5%; }
+  .audit-log-timestamp-column { width: 24%; }
+  .audit-log-user-column { width: 27%; }
+  .audit-log-action-column { width: 20%; }
+  .audit-log-entity-column { width: 14%; }
+  .audit-log-id-column { width: 10%; }
+}

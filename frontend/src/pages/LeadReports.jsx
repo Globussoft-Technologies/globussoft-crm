@@ -775,12 +775,11 @@ function FollowUpsTab({ d }) {
 
 function SourcesTab({ d }) {
   const t = d.totals || {};
-  const pie = (d.sources || []).slice(0, 8).map((s) => ({ name: s.source, value: s.leads }));
+  const pie = (d.sources || []).slice(0, 8).map((s) => ({
+    name: String(s.source || '').trim() || 'Unknown',
+    value: Math.max(0, Number(s.leads) || 0),
+  }));
   const pieTotal = pie.reduce((sum, slice) => sum + Number(slice?.value || 0), 0);
-  const pieLabel = ({ name, percent = 0 }) => {
-    if (percent < 0.06) return '';
-    return `${truncateSourceLabel(name)} ${Math.round(percent * 100)}%`;
-  };
   return (
     <div className="lead-reports-page__sections">
       <StatRow>
@@ -809,7 +808,10 @@ function SourcesTab({ d }) {
                   cy="50%"
                   paddingAngle={3}
                   stroke="none"
-                  label={pieLabel}
+                  // Keep source labels in the legend, where they can wrap
+                  // safely. Outside slice labels collide and get clipped in
+                  // this responsive panel.
+                  label={false}
                   labelLine={false}
                 >
                   {pie.map((entry, i) => <Cell key={entry.name} fill={COLORS[i % COLORS.length]} />)}
@@ -819,12 +821,12 @@ function SourcesTab({ d }) {
                   layout="vertical"
                   align="right"
                   verticalAlign="middle"
-                  wrapperStyle={{ fontSize: '0.75rem', paddingLeft: 12 }}
-                  formatter={(value, _entry, index) => {
-                    const slice = pie[index] || null;
+                  wrapperStyle={{ fontSize: '0.75rem', paddingLeft: 12, maxWidth: '42%', overflow: 'hidden' }}
+                  formatter={(value) => {
+                    const slice = pie.find((item) => item.name === String(value)) || null;
                     const count = Number(slice?.value || 0);
                     const percent = pieTotal > 0 ? Math.round((count / pieTotal) * 100) : 0;
-                    return `${truncateSourceLabel(value, 22)}${pieTotal > 0 ? ` (${percent}%)` : ''}`;
+                    return `${truncateSourceLabel(value, 18)}${pieTotal > 0 ? ` (${percent}%)` : ''}`;
                   }}
                 />
               </PieChart>

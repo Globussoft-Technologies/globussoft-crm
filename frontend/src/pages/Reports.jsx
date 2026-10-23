@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
-import { formatMoney, currencySymbol } from '../utils/money';
+import { formatMoney, formatMoneyCompact, currencySymbol } from '../utils/money';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
 import { Link, useSearchParams } from "react-router-dom";
@@ -26,6 +26,24 @@ function normalizeReportStage(name) {
   return name;
 }
 const REPORT_STAGE_ORDER = ['NEW-LEAD', 'LEAD', 'CONTACTED', 'NEGOTIATION', 'PROPOSAL-SENT', 'WON', 'LOST'];
+
+function openDatePicker(event) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // Unsupported browsers still retain the native calendar button.
+  }
+}
+
+function preventManualDateEntry(event) {
+  if (event.key === 'Tab' || event.key === 'Escape') return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openDatePicker(event);
+    return;
+  }
+  event.preventDefault();
+}
 
 // #127 followup: respect tenant currency rather than hard-coding "$".
 const METRIC_OPTIONS = [
@@ -286,10 +304,10 @@ export default function Reports() {
         <div className="reports-page__header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div className="reports-page__date-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
             <div className="reports-page__date-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Calendar size={16} color="var(--text-secondary)" />
-              <input type="date" className="input-field" value={startDate} onChange={e => updateDate('from', e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+              <Calendar size={16} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+              <input type="date" className="input-field" aria-label="Start date" aria-invalid={rangeInverted} value={startDate} onChange={e => updateDate('from', e.target.value)} onClick={openDatePicker} onKeyDown={preventManualDateEntry} onPaste={e => e.preventDefault()} onDrop={e => e.preventDefault()} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
               <span style={{ color: 'var(--text-secondary)' }}>to</span>
-              <input type="date" className="input-field" value={endDate} onChange={e => updateDate('to', e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+              <input type="date" className="input-field" aria-label="End date" aria-invalid={rangeInverted} value={endDate} onChange={e => updateDate('to', e.target.value)} onClick={openDatePicker} onKeyDown={preventManualDateEntry} onPaste={e => e.preventDefault()} onDrop={e => e.preventDefault()} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
             </div>
             {rangeInverted && (
               <span className="report-error-text" style={{ fontSize: '0.7rem', alignSelf: 'flex-start' }}>
@@ -395,7 +413,7 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={92} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
@@ -405,11 +423,29 @@ export default function Reports() {
                     </BarChart>
                   ) : chartType === 'pie' ? (
                     <PieChart>
-                      <Pie data={data} innerRadius={80} outerRadius={140} paddingAngle={5} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                      <Pie data={data} cx="38%" cy="50%" innerRadius={80} outerRadius={110} paddingAngle={5} dataKey="value" nameKey="name" label={false}>
                         {data.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
                         ))}
                       </Pie>
+                      <Legend
+                        layout="vertical"
+                        align="right"
+                        verticalAlign="middle"
+                        wrapperStyle={{ fontSize: '0.8rem', maxWidth: '42%', overflow: 'hidden' }}
+                        formatter={(name) => {
+                          const row = data.find((entry) => String(entry.name) === String(name));
+                          const value = Math.max(0, Number(row?.value) || 0);
+                          const total = data.reduce((sum, entry) => sum + Math.max(0, Number(entry.value) || 0), 0);
+                          const percent = total > 0 ? Math.round((value / total) * 100) : 0;
+                          const groupLabel = GROUPBY_OPTIONS.find((option) => option.value === groupBy)?.label || 'Category';
+                          const label = groupBy === 'probability'
+                            ? `${groupLabel}: ${String(name)}%`
+                            : `${groupLabel}: ${String(name || 'Unknown')}`;
+                          const shortLabel = label.length > 30 ? `${label.slice(0, 29)}…` : label;
+                          return `${shortLabel}${total > 0 ? ` (${percent}%)` : ''}`;
+                        }}
+                      />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                     </PieChart>
                   ) : (
@@ -426,7 +462,7 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={92} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                       <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
                     </AreaChart>

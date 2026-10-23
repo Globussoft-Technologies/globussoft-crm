@@ -45,6 +45,7 @@ import ThreadDetail from './whatsapp/ThreadDetail';
 import MessageContextMenu from './whatsapp/MessageContextMenu';
 import UnblockModal from './whatsapp/UnblockModal';
 import NewMessageModal from './whatsapp/NewMessageModal';
+import './whatsapp/threads.css';
 
 function explainWhatsAppSendError(error, isMeta) {
   const message = String(error?.message || '');
@@ -296,13 +297,13 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   // Open the first available conversation on load so the chat pane is never an
   // empty shell on arrival. LOAD-BEARING wherever showThreadList is false
   // (wellness): with no rail there is nothing else to select a thread with.
-  // Where the rail IS shown (generic) it is just a convenience. Either way it
-  // only fires while nothing is selected, so it never fights a user's click.
+  // When the rail is shown, leave the list visible until an agent selects a
+  // conversation. This also lets the mobile Back button return to the list.
   useEffect(() => {
-    if (loadingList || selectedId) return;
+    if (showThreadList || loadingList || selectedId) return;
     const firstThread = threads.find((t) => !t._blocked);
     if (firstThread) setSelectedId(firstThread.id);
-  }, [threads, loadingList, selectedId]);
+  }, [threads, loadingList, selectedId, showThreadList]);
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
@@ -1340,7 +1341,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
 
   return (
     <WhatsAppThreadsContext.Provider value={contextValue}>
-      <div style={{
+      <div className="whatsapp-threads-page" style={{
         display: 'flex', flexDirection: 'column',
         height: '100%', minHeight: 0,
         animation: 'fadeIn 0.4s ease-out',
@@ -1361,7 +1362,10 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
           />
         )}
 
-        <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
+        <div
+          className={`whatsapp-inbox${showThreadList ? ' whatsapp-inbox--with-list' : ''}${selectedId ? ' whatsapp-inbox--selected' : ''}`}
+          style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}
+        >
           {showThreadList && <ThreadList />}
           <ThreadDetail />
         </div>

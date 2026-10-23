@@ -81,15 +81,51 @@ function renderPipeline(initialEntry = '/pipeline') {
   );
 }
 
+function expectedRange(days) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1);
+  const asDate = (date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+  return { from: asDate(start), to: asDate(today) };
+}
+
+function hasRange(url, range) {
+  const params = new URL(url, 'http://localhost').searchParams;
+  return params.get('from') === range.from && params.get('to') === `${range.to}T23:59:59.999Z`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   notifyObj.confirm.mockResolvedValue(true);
   mockApi();
 });
 
 describe('Deals and Pipelines page', () => {
-  it('loads deals and totals for the dashboard date range, then clears it', async () => {
+  it('defaults directly to Last 7 days for deals and totals', async () => {
+    renderPipeline();
+    const range = expectedRange(7);
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
+    });
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last7');
+  });
+
+  it('changes the date range preset for deals and totals', async () => {
+    renderPipeline();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Date range' }), { target: { value: 'last30' } });
+    const range = expectedRange(30);
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
+    });
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last30');
+  });
+
+  it('loads deals and totals for the dashboard date range, then changes to Last 7 days', async () => {
     renderPipeline('/pipeline?from=2026-10-15&to=2026-10-20');
     await waitFor(() => {
       const urls = fetchApi.mock.calls.map(([url]) => url);
@@ -102,8 +138,9 @@ describe('Deals and Pipelines page', () => {
       }
     });
     expect(screen.getByText(/Created 2026-10-15 to 2026-10-20/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear date filter' }));
-    await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/deals?') && !new URL(url, 'http://localhost').searchParams.has('from'))).toBe(true));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Date range' }), { target: { value: 'last7' } });
+    await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/deals?') && hasRange(url, expectedRange(7)))).toBe(true));
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last7');
   });
 
   it('renders the current page heading and primary actions', async () => {

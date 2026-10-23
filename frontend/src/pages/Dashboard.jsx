@@ -22,7 +22,7 @@
  * so swapping tile labels + adding a `/api/tasks?mine=true` widget is enough
  * to produce a coherent personal dashboard without any backend change.
  */
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { Users, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
@@ -31,7 +31,8 @@ import { formatPercent } from '../utils/percent';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import CalendarRangePicker from '../components/CalendarRangePicker';
-import { readDateRange, setDateRangeParams, pathWithDateRange } from '../utils/dateRangeNavigation';
+import { readDateRange, setDateRangeParams, pathWithDateRange, readSavedDashboardDateRange, saveDashboardDateRange } from '../utils/dateRangeNavigation';
+import './Dashboard.css';
 
 const DEFAULT_STATS = {
   totalDeals: 0,
@@ -44,6 +45,46 @@ const DEFAULT_STATS = {
   winRate: 0,
   byStage: [],
 };
+
+const DASHBOARD_DATE_PRESETS = [
+  ['last7', 'Last 7 days'],
+  ['last30', 'Last 30 days'],
+  ['thisQuarter', 'This quarter'],
+  ['lastQuarter', 'Last quarter'],
+  ['q1', 'Q1 (this year)'],
+  ['q2', 'Q2 (this year)'],
+  ['q3', 'Q3 (this year)'],
+  ['q4', 'Q4 (this year)'],
+];
+
+function dateValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function dashboardPresetRange(preset, now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const quarterStart = Math.floor(today.getMonth() / 3) * 3;
+  const quarter = /^q([1-4])$/.exec(preset);
+  if (quarter) {
+    const startMonth = (Number(quarter[1]) - 1) * 3;
+    return { from: dateValue(new Date(today.getFullYear(), startMonth, 1)), to: dateValue(new Date(today.getFullYear(), startMonth + 3, 0)) };
+  }
+  if (preset === 'thisQuarter') return { from: dateValue(new Date(today.getFullYear(), quarterStart, 1)), to: dateValue(today) };
+  if (preset === 'lastQuarter') return { from: dateValue(new Date(today.getFullYear(), quarterStart - 3, 1)), to: dateValue(new Date(today.getFullYear(), quarterStart, 0)) };
+  const days = preset === 'last30' ? 29 : 6;
+  return { from: dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() - days)), to: dateValue(today) };
+}
+
+function dashboardPresetForRange(range) {
+  if (!range.from && !range.to) return 'last7';
+  return DASHBOARD_DATE_PRESETS.find(([preset]) => {
+    const dates = dashboardPresetRange(preset);
+    return dates.from === range.from && dates.to === range.to;
+  })?.[0] || 'custom';
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -67,10 +108,38 @@ export default function Dashboard() {
   const [contactCount, setContactCount] = useState(0);
   const [myPendingTasks, setMyPendingTasks] = useState([]);
   const dateRange = readDateRange(dateSearchParams);
-  const updateDateRange = (range) => setDateSearchParams(setDateRangeParams(dateSearchParams, range), { replace: true });
-  const filteredPath = (path) => pathWithDateRange(path, dateRange);
+  const dateRangeScope = { tenantId: tenant?.id ?? user?.tenantId, userId: user?.id ?? user?.userId };
+  const initialDateRangeRef = useRef(null);
+  const defaultDateAppliedRef = useRef(false);
+  if (!initialDateRangeRef.current) initialDateRangeRef.current = readSavedDashboardDateRange(dateRangeScope) || dashboardPresetRange('last7');
+  const [datePreset, setDatePreset] = useState(() => dashboardPresetForRange(dateRange.from || dateRange.to ? dateRange : initialDateRangeRef.current));
+  const [calendarOpenRequest, setCalendarOpenRequest] = useState(0);
+  const applyingDefaultRange = !defaultDateAppliedRef.current && !dateRange.from && !dateRange.to;
+  const displayedDateRange = applyingDefaultRange ? initialDateRangeRef.current : dateRange;
+  const updateDateRange = (range) => {
+    setDatePreset('custom');
+    setDateSearchParams(setDateRangeParams(dateSearchParams, range), { replace: true });
+  };
+  const filteredPath = (path) => pathWithDateRange(path, displayedDateRange);
 
   useEffect(() => {
+    if (defaultDateAppliedRef.current) return;
+    defaultDateAppliedRef.current = true;
+    if (!dateRange.from && !dateRange.to) {
+      setDateSearchParams(setDateRangeParams(dateSearchParams, initialDateRangeRef.current), { replace: true });
+    }
+  }, [dateRange.from, dateRange.to, dateSearchParams, setDateSearchParams]);
+
+  useEffect(() => {
+    if (!applyingDefaultRange) saveDashboardDateRange(dateRangeScope, dateRange);
+  }, [applyingDefaultRange, dateRange.from, dateRange.to, dateRangeScope.tenantId, dateRangeScope.userId]);
+
+  useEffect(() => {
+    if (!applyingDefaultRange) setDatePreset(dateRange.from || dateRange.to ? dashboardPresetForRange(dateRange) : 'custom');
+  }, [applyingDefaultRange, dateRange.from, dateRange.to]);
+
+  useEffect(() => {
+    if (applyingDefaultRange) return undefined;
     let active = true;
     // KPI numbers — full-population aggregates from the server.
     // For role=USER the backend auto-scopes to ownerId=userId, so the same
@@ -85,10 +154,10 @@ export default function Dashboard() {
     fetchApi(`/api/deals?limit=10&orderBy=createdAt:desc${dateQuery}`)
       .then((d) => { if (active) setRecentDeals(Array.isArray(d) ? d : []); })
       .catch(() => { if (active) setRecentDeals([]); });
-    // Count all visible contacts, not the API's default first page of 100.
-    // USER's tile set replaces this tile with My Tasks.
+    // Count contacts created in the selected period, not just the API's
+    // default first page of 100. USER's tile set replaces this with My Tasks.
     if (!isUser) {
-      fetchApi('/api/contacts?count=1')
+      fetchApi(`/api/contacts?count=1${dateQuery}`)
         .then((d) => setContactCount(Number.isFinite(d?.total) ? d.total : 0))
         .catch(() => setContactCount(0));
     }
@@ -101,7 +170,7 @@ export default function Dashboard() {
         .catch(() => setMyPendingTasks([]));
     }
     return () => { active = false; };
-  }, [isUser, currency, dateRange.from, dateRange.to]);
+  }, [isUser, currency, dateRange.from, dateRange.to, applyingDefaultRange]);
 
   // KPIs derived purely from `stats` (server aggregates), not from any list.
   const totalRevenue = stats.wonValue;
@@ -197,7 +266,7 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-page" style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
-      <header data-tour="dashboard-header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      <header data-tour="dashboard-header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, var(--text-primary), var(--text-secondary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
             {pageTitle}
@@ -207,8 +276,17 @@ export default function Dashboard() {
           </p>
         </div>
         {/* #128: this button only navigates — rename so the label matches the action */}
-        <div className="dashboard-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <CalendarRangePicker value={dateRange} onChange={updateDateRange} label="Dashboard date range" align="right" compact width={190} height={38} />
+        <div className="dashboard-header-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.75rem', marginLeft: 'auto', maxWidth: '100%' }}>
+          <select aria-label="Dashboard date preset" value={datePreset} onChange={(event) => {
+            const preset = event.target.value;
+            setDatePreset(preset);
+            if (preset === 'custom') setCalendarOpenRequest((request) => request + 1);
+            else setDateSearchParams(setDateRangeParams(dateSearchParams, dashboardPresetRange(preset)), { replace: true });
+          }} className="input-field dashboard-date-preset" style={{ width: 150, height: 38, minWidth: 0, maxWidth: '100%', flex: '0 0 150px', boxSizing: 'border-box', padding: '0 12px', lineHeight: 'normal', cursor: 'pointer', fontSize: 13 }}>
+            {DASHBOARD_DATE_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            <option value="custom">Custom range</option>
+          </select>
+          <CalendarRangePicker value={displayedDateRange} onChange={updateDateRange} label="Dashboard date range" align="right" compact width={190} height={38} openRequest={calendarOpenRequest} />
           <button className="btn-primary" onClick={() => navigate(filteredPath(ctaPath))}>{ctaLabel}</button>
         </div>
       </header>
@@ -233,8 +311,8 @@ export default function Dashboard() {
                 {stat.icon}
               </div>
               <div className="dashboard-kpi-copy" style={{ minWidth: 0, flex: 1 }}>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
-                <h2 title={stat.label.includes('Revenue') && stat.value !== 'Unavailable' ? formatMoney(stat.label.includes('Expected') ? expectedRevenue : totalRevenue, moneyOptions) : undefined} style={{ fontSize: 'clamp(1.15rem, 1.5vw, 1.5rem)', fontWeight: 'bold', lineHeight: 1.2, overflowWrap: 'anywhere' }}>{stat.value}</h2>
+                <p title={stat.label} style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
+                <h2 title={stat.label.includes('Revenue') && stat.value !== 'Unavailable' ? formatMoney(stat.label.includes('Expected') ? expectedRevenue : totalRevenue, moneyOptions) : stat.value} style={{ fontSize: 'clamp(1.15rem, 1.5vw, 1.5rem)', fontWeight: 'bold', lineHeight: 1.2, overflowWrap: 'anywhere' }}>{stat.value}</h2>
               </div>
             </div>
           </Link>
@@ -256,7 +334,11 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis width={56} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
+                {/* INR crore labels can be much wider than the default axis,
+                    especially for large pipelines (for example ₹3,800.00Cr).
+                    Reserve enough room so Recharts does not clip the leading
+                    digits and currency symbol. */}
+                <YAxis width={88} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickMargin={8} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
                 <Tooltip
                   contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}

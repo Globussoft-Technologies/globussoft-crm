@@ -87,7 +87,7 @@ const Clients = () => {
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input
               type="text"
-              className="input-field"
+              className="input-field generic-clients-search-input"
               placeholder="Search clients..."
               value={searchTerm}
               onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}

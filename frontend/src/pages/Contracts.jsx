@@ -4,7 +4,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
-import TopScrollSync from '../components/TopScrollSync';
+import './Contracts.css';
 
 const STATUS_STYLES = {
   Draft:      { bg: 'rgba(100,116,139,0.12)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
@@ -181,7 +181,7 @@ export default function Contracts() {
   }, [currentPage, totalPages]);
 
   return (
-    <div className="contracts-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="contracts-page" style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2.5rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <FileText size={26} color="var(--accent-color)" /> Contracts
@@ -217,11 +217,11 @@ export default function Contracts() {
       <div className="contracts-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
 
         {/* Create Form */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
+        <div className="card contracts-form-card" style={{ padding: '2rem', height: 'fit-content' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={20} color="var(--accent-color)" /> Create Contract
           </h3>
-          <form onSubmit={createContract} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <form className="contracts-form" onSubmit={createContract} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Contract Title</label>
               <input
@@ -270,7 +270,7 @@ export default function Contracts() {
               />
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem' }}>
+            <div className="contracts-date-fields" style={{ display: 'flex', gap: '1rem' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Start Date</label>
                 <input
@@ -305,7 +305,7 @@ export default function Contracts() {
         </div>
 
         {/* Contracts Table */}
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card contracts-table-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileText size={20} color="var(--success-color)" /> All Contracts
           </h3>
@@ -316,8 +316,11 @@ export default function Contracts() {
               <p style={{ color: 'var(--text-secondary)' }}>No contracts yet. Create your first contract to get started.</p>
             </div>
           ) : (
-            <TopScrollSync>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <div className="contracts-table-scroll">
+              <table className="contracts-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <colgroup>
+                  {Array.from({ length: 8 }, (_, index) => <col key={index} />)}
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Title</th>
@@ -343,9 +346,10 @@ export default function Contracts() {
                       <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {c.deal?.title || '—'}
                       </td>
-                      <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
-                        <IndianRupee size={14} color="var(--success-color)" />
-                        {formatMoney(c.value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600' }}>
+                        <span className="contracts-value">
+                          {formatMoney(c.value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>
                         <StatusBadge status={c.status} />
@@ -357,24 +361,28 @@ export default function Contracts() {
                         {c.endDate ? formatDate(c.endDate) : '—'}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>
-                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <div className="contracts-row-actions" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                           {c.status !== 'Active' && c.status !== 'Terminated' && (
                             <button
                               onClick={() => activateContract(c.id)}
                               className="btn-secondary"
+                              aria-label="Activate contract"
+                              title="Activate contract"
                               style={{
                                 padding: '0.35rem 0.65rem', fontSize: '0.75rem',
                                 background: 'var(--success-color)', color: '#fff', border: 'none',
                                 display: 'flex', alignItems: 'center', gap: '0.25rem',
                               }}
                             >
-                              <CheckCircle2 size={12} /> Activate
+                              <CheckCircle2 size={12} /> <span className="contracts-action-label">Activate</span>
                             </button>
                           )}
                           {c.status !== 'Terminated' && (
                             <button
                               onClick={() => terminateContract(c.id)}
                               className="btn-secondary"
+                              aria-label="Terminate contract"
+                              title="Terminate contract"
                               style={{
                                 padding: '0.35rem 0.65rem', fontSize: '0.75rem',
                                 background: 'transparent', color: '#f59e0b',
@@ -382,11 +390,13 @@ export default function Contracts() {
                                 display: 'flex', alignItems: 'center', gap: '0.25rem',
                               }}
                             >
-                              <XCircle size={12} /> Terminate
+                              <XCircle size={12} /> <span className="contracts-action-label">Terminate</span>
                             </button>
                           )}
                           <button
                             onClick={() => deleteContract(c.id)}
+                            aria-label="Delete contract"
+                            title="Delete contract"
                             style={{
                               background: 'transparent', border: '1px solid rgba(239,68,68,0.3)',
                               color: 'var(--text-secondary)', cursor: 'pointer',
@@ -396,7 +406,7 @@ export default function Contracts() {
                             onMouseOver={e => e.currentTarget.style.color = '#ef4444'}
                             onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
                           >
-                            <Trash2 size={12} /> Delete
+                            <Trash2 size={12} /> <span className="contracts-action-label">Delete</span>
                           </button>
                         </div>
                       </td>
@@ -404,7 +414,7 @@ export default function Contracts() {
                   ))}
                 </tbody>
               </table>
-            </TopScrollSync>
+            </div>
           )}
           {total > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>

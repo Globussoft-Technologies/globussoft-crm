@@ -103,7 +103,7 @@ export default function PickupPlotWorkAssignments() {
   const assignedCount = staff.filter((person) => (person.workTypes || []).length > 0).length;
   const headerCellStyle = {
     position: 'sticky', top: 0, zIndex: 2, padding: '13px 14px',
-    borderBottom: '1px solid var(--border-color)', background: 'var(--card-bg, #fff)',
+    borderBottom: '1px solid var(--border-color)', background: 'var(--popover-bg)',
     color: 'var(--text-secondary)', fontSize: '.76rem', textAlign: 'left',
     textTransform: 'uppercase', letterSpacing: '.04em',
   };
@@ -121,7 +121,7 @@ export default function PickupPlotWorkAssignments() {
         </div>
         <div
           data-testid="staff-work-assignment-header-actions"
-          style={{ display: 'flex', flex: '1 1 520px', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 12 }}
+          style={{ display: 'flex', flex: '1 1 100%', alignItems: 'center', justifyContent: 'flex-start', flexWrap: 'wrap', gap: 12 }}
         >
           <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 420, minWidth: 220 }}>
             <Search
@@ -130,7 +130,7 @@ export default function PickupPlotWorkAssignments() {
               style={{ position: 'absolute', zIndex: 1, left: 13, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }}
             />
             <input
-              className="input-field"
+              className="input-field pickup-plot-work-search"
               type="search"
               aria-label="Search staff"
               placeholder="Search by name, email, or phone…"

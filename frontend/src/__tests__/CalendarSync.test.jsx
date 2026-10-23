@@ -747,14 +747,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     fireEvent.click(screen.getByTitle(/Create new calendar event/i));
     await screen.findByRole('heading', { name: /Create Event in Google/i });
 
-    // Dropdown option for a fetched contact is present.
-    expect(
-      await screen.findByRole('option', { name: /Anita Sharma \(anita@example.com\)/i }),
-    ).toBeInTheDocument();
-
-    // Selecting it appends the email to the attendees text input.
     const dropdown = screen.getByRole('combobox', { name: /Add attendee from contacts/i });
-    fireEvent.change(dropdown, { target: { value: 'anita@example.com' } });
+    fireEvent.focus(dropdown);
+    // The bounded picker keeps the contact list inside the event modal.
+    expect(screen.getByRole('listbox')).toHaveStyle({ maxHeight: '220px', overflowY: 'auto' });
+    fireEvent.click(await screen.findByRole('option', { name: /Anita Sharma \(anita@example.com\)/i }));
     const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
     expect(attendeesInput.value).toContain('anita@example.com');
   });

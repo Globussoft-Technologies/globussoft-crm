@@ -338,6 +338,28 @@ describe('<WhatsAppThreads /> — current Meta inbox contract', () => {
     expect(screen.getByPlaceholderText(/Just checking in/i).closest('label')).toHaveTextContent('Message *');
   });
 
+  it('returns to the conversation list after opening a thread', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'USER' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    const inbox = await screen.findByText('WhatsApp Threads');
+    expect(inbox.closest('.whatsapp-inbox')).not.toHaveClass('whatsapp-inbox--selected');
+
+    await user.click(await screen.findByText('Rishu Goyal'));
+    expect(await screen.findByRole('button', { name: 'Back to conversations' })).toBeInTheDocument();
+    expect(inbox.closest('.whatsapp-inbox')).toHaveClass('whatsapp-inbox--selected');
+
+    await user.click(screen.getByRole('button', { name: 'Back to conversations' }));
+    expect(inbox.closest('.whatsapp-inbox')).not.toHaveClass('whatsapp-inbox--selected');
+    expect(screen.getByText('Rishu Goyal')).toBeInTheDocument();
+  });
+
   it('selects and sends to multiple Generic CRM leads', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/contacts?limit=200') {

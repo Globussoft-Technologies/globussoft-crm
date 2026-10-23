@@ -8,6 +8,7 @@ import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
+import './WinLoss.css';
 import {
   BadgePercent, Trophy, X, IndianRupee, Plus, Trash2,
 } from 'lucide-react';
@@ -109,7 +110,7 @@ export default function WinLoss() {
   const lossReasons = byReason.filter(r => r.type === 'lost').slice(0, 8);
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="win-loss-analysis-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>

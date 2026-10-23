@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import PickupCustomers from '../pages/PickupCustomers';
@@ -6,6 +8,8 @@ import { AuthContext } from '../appContexts';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn(), registerGlobalNotify: vi.fn() }));
 import { fetchApi } from '../utils/api';
+
+const responsiveCss = readFileSync(resolve(process.cwd(), 'src/pages/PickupCustomers.css'), 'utf8');
 
 const payload = {
   plots: [
@@ -530,5 +534,26 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByRole('button', { name: 'Priya Shah' })).toBeInTheDocument();
     expect(screen.getAllByText('Invoice sent')).not.toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'Amit Rao' })).not.toBeInTheDocument();
+  });
+
+  it('compacts the customer workspace fluidly before using the narrow-screen layout', () => {
+    expect(responsiveCss).toMatch(/\.pickup-customers-page\s*\{[^}]*padding:clamp\(/s);
+    expect(responsiveCss).toMatch(/\.pickup-directory-toolbar \.input-field\s*\{[^}]*min-height:clamp\([^}]*font-size:clamp\(/s);
+    expect(responsiveCss).toMatch(/\.pickup-page-header h1 svg\s*\{[^}]*width:clamp\([^}]*height:clamp\(/s);
+    expect(responsiveCss).toMatch(/\.pickup-detail-actions button\s*\{[^}]*padding:clamp\([^}]*font-size:clamp\(/s);
+    expect(responsiveCss).toMatch(/\.pickup-customer-table td\s*\{[^}]*padding:clamp\([^}]*font-size:clamp\(/s);
+    expect(responsiveCss).toMatch(/\.pickup-master-detail\s*\{[^}]*grid-template-columns:minmax\(300px, 37%\) minmax\(0, 1fr\)/s);
+    expect(responsiveCss).toContain('@media (max-width:760px)');
+    expect(responsiveCss).not.toContain('@media (max-width:1000px)');
+  });
+
+  it('prevents avoidable search overlap and customer-name wrapping', () => {
+    expect(responsiveCss).toMatch(/\.pickup-directory-toolbar input\.input-field\s*\{[^}]*padding-left:clamp\([^}]*!important/s);
+    expect(responsiveCss).toMatch(/\.pickup-customer-title h2\s*\{[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap/s);
+    expect(responsiveCss).toMatch(/\.pickup-customer-table td button\s*\{[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap/s);
+    expect(responsiveCss).toMatch(/\.pickup-detail-actions\s*\{[^}]*flex-wrap:nowrap/s);
+    expect(responsiveCss).toMatch(/\.pickup-customer-table td span,[^{}]*\{[^}]*white-space:nowrap/s);
+    expect(responsiveCss).toContain('@container (max-width:520px)');
+    expect(responsiveCss).toMatch(/\.pickup-action-label\s*\{\s*display:none;/s);
   });
 });

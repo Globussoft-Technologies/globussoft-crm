@@ -1388,8 +1388,9 @@ export default function Staff() {
       style={{
         padding: "2rem",
         height: "100%",
+        boxSizing: "border-box",
         minWidth: isTravel ? 0 : undefined,
-        overflowY: "auto",
+        overflowY: isTravel || isWellness ? "auto" : "visible",
         overflowX: isTravel ? "hidden" : undefined,
         animation: "fadeIn 0.5s ease-out",
       }}
@@ -2133,9 +2134,9 @@ export default function Staff() {
             } : {
               width: "100%",
               minWidth: 0,
-              maxHeight: "min(60dvh, 560px)",
+              maxHeight: filteredStaff.length > STAFF_PAGE_SIZE ? "min(60dvh, 560px)" : "none",
               overflowX: "auto",
-              overflowY: "auto",
+              overflowY: filteredStaff.length > STAFF_PAGE_SIZE ? "auto" : "clip",
               overscrollBehavior: "contain",
             }}
           >
@@ -2492,7 +2493,7 @@ export default function Staff() {
           same overlay/card chrome. On success the new user can log in with
           the chosen email + password; their role decides the dashboard
           variant rendered on first nav to /dashboard. */}
-      {creating && (
+      {creating && typeof document !== "undefined" && createPortal(
         <div
           data-testid="staff-create-modal"
           onClick={(e) => {
@@ -2768,7 +2769,8 @@ export default function Staff() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Reset-password modal. Keeps the existing email reset-link flow and

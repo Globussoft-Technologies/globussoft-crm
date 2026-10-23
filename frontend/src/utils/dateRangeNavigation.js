@@ -1,3 +1,5 @@
+import { scopedStorageKey } from './scopedStorage';
+
 const validDate = (value) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return '';
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -26,4 +28,27 @@ export function pathWithDateRange(path, range) {
   const params = setDateRangeParams(new URLSearchParams(query), range);
   const search = params.toString();
   return search ? `${pathname}?${search}` : pathname;
+}
+
+const dashboardRangeKey = (scope) => scopedStorageKey('dashboard-date-range', scope);
+
+export function readSavedDashboardDateRange(scope) {
+  try {
+    const stored = sessionStorage.getItem(dashboardRangeKey(scope));
+    if (!stored) return null;
+    const range = readDateRange(new URLSearchParams(stored));
+    return range.from || range.to ? range : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveDashboardDateRange(scope, range) {
+  try {
+    const key = dashboardRangeKey(scope);
+    if (range.from || range.to) sessionStorage.setItem(key, setDateRangeParams(new URLSearchParams(), range).toString());
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Storage may be unavailable; URL-based navigation still carries the range.
+  }
 }

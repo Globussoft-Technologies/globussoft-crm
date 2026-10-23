@@ -1,0 +1,105 @@
+.whatsapp-threads-page,
+.whatsapp-inbox {
+  width: 100%;
+  min-width: 0;
+}
+
+.whatsapp-thread-list {
+  flex: 0 0 360px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.whatsapp-thread-search-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--input-bg);
+}
+
+.whatsapp-thread-search-wrap:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+  background: var(--input-bg-focus);
+}
+
+.whatsapp-thread-search-wrap > svg {
+  flex: 0 0 14px;
+  color: var(--text-secondary);
+}
+
+.app-main > main .whatsapp-thread-search-wrap > input.whatsapp-thread-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: auto;
+  padding: 0 !important;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  box-shadow: none;
+}
+
+.whatsapp-thread-detail {
+  overflow: hidden;
+}
+
+.whatsapp-thread-back {
+  display: none;
+}
+
+@media (max-width: 800px) {
+  .whatsapp-inbox--with-list .whatsapp-thread-list,
+  .whatsapp-inbox--with-list .whatsapp-thread-detail {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .whatsapp-inbox--with-list:not(.whatsapp-inbox--selected) .whatsapp-thread-detail,
+  .whatsapp-inbox--with-list.whatsapp-inbox--selected .whatsapp-thread-list {
+    display: none !important;
+  }
+
+  .whatsapp-thread-list {
+    border-right: 0 !important;
+  }
+
+  .whatsapp-thread-list > header > div:first-child {
+    flex-wrap: wrap;
+  }
+
+  .whatsapp-thread-list > header > div:first-child > div {
+    margin-left: auto;
+  }
+
+  .whatsapp-thread-list form > div,
+  .whatsapp-thread-list select {
+    min-width: 0;
+  }
+
+  .whatsapp-inbox--with-list .whatsapp-thread-back {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 0.4rem;
+    min-height: 36px;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.83rem;
+  }
+
+  .whatsapp-thread-detail-header,
+  .whatsapp-thread-detail > footer {
+    padding: 0.75rem !important;
+  }
+}

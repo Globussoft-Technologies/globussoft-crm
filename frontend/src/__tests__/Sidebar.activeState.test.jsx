@@ -46,6 +46,9 @@ function renderSidebarAt(path, role = 'MANAGER', vertical = 'generic') {
       </AuthContext.Provider>
     </MemoryRouter>,
   );
+  document.querySelectorAll('.generic-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
+    button.click();
+  });
 }
 
 async function findLinkByLabel(label) {

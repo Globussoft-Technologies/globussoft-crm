@@ -139,8 +139,8 @@ export default function ThreadList() {
   };
 
   return (
-    <aside style={{
-      width: 360, borderRight: '1px solid var(--border-color)',
+    <aside className="whatsapp-thread-list" style={{
+      borderRight: '1px solid var(--border-color)',
       display: 'flex', flexDirection: 'column', minWidth: 0,
     }}>
       <header style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
@@ -205,17 +205,14 @@ export default function ThreadList() {
           )}
         </div>
         <form onSubmit={handleSearch} style={{ display: 'flex', gap: 6, marginBottom: '0.5rem' }}>
-          <div style={{ flex: 1, position: 'relative' }}>
-            <Search size={14} style={{
-              position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)',
-              color: 'var(--text-secondary)',
-            }} />
+          <div className="whatsapp-thread-search-wrap">
+            <Search size={14} aria-hidden="true" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Phone or contact name"
-              className="input-field"
-              style={{ paddingLeft: 26, fontSize: '0.85rem' }}
+              aria-label="Search WhatsApp threads"
+              className="whatsapp-thread-search"
             />
           </div>
           <button type="submit" className="btn-secondary" style={{ padding: '0.4rem 0.75rem' }}>Go</button>

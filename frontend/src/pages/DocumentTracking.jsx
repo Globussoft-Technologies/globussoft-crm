@@ -175,27 +175,27 @@ export default function DocumentTracking() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+    <div style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+      <header style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Eye size={26} color="var(--accent-color)" /> Document Tracking
+          <h1 style={{ fontSize: '1.6rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <Eye size={22} color="var(--accent-color)" /> Document Tracking
           </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem', fontSize: '0.8rem' }}>
             Get notified when proposals, quotes, estimates, and contracts are opened by recipients.
           </p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
           className="btn-primary"
-          style={{ padding: '0.7rem 1.2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          style={{ padding: '0.55rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem' }}
         >
-          <Plus size={16} /> Track New Document
+          <Plus size={14} /> Track New Document
         </button>
       </header>
 
       {/* Stats Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
         <StatCard
           icon={<FileText size={18} />}
           label="Tracked Documents"
@@ -223,24 +223,24 @@ export default function DocumentTracking() {
       </div>
 
       {/* Tracked Documents Table */}
-      <div className="card" style={{ padding: '2rem' }}>
-        <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Eye size={20} color="var(--accent-color)" /> Tracked Documents
+      <div className="card" style={{ padding: '1.25rem' }}>
+        <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Eye size={18} color="var(--accent-color)" /> Tracked Documents
         </h3>
 
         {loading ? (
           <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p>
         ) : grouped.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
-            <Eye size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>No tracked documents yet.</p>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+          <div style={{ textAlign: 'center', padding: '1.75rem 1rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <Eye size={36} style={{ opacity: 0.2, margin: '0 auto 0.5rem', color: 'var(--accent-color)' }} />
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontSize: '0.8rem' }}>No tracked documents yet.</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
               Click "Track New Document" to generate a unique URL you can paste into proposal emails.
             </p>
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                   <Th>Document</Th>
@@ -258,13 +258,13 @@ export default function DocumentTracking() {
                     onMouseOver={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                     onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                   >
-                    <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600' }}>
+                    <td style={{ padding: '0.6rem 0.4rem', fontWeight: '600' }}>
                       {row.documentType} #{row.documentId}
                     </td>
-                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>
+                    <td style={{ padding: '0.6rem 0.4rem', color: 'var(--text-secondary)' }}>
                       {row.viewerEmail || <span style={{ opacity: 0.5 }}>—</span>}
                     </td>
-                    <td style={{ padding: '0.85rem 0.5rem' }}>
+                    <td style={{ padding: '0.6rem 0.4rem' }}>
                       <span style={{ fontWeight: 600, color: row.viewCount ? '#10b981' : 'var(--text-secondary)' }}>
                         {row.viewCount}
                       </span>
@@ -272,16 +272,16 @@ export default function DocumentTracking() {
                         {' '}/ {row.recipients}
                       </span>
                     </td>
-                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                    <td style={{ padding: '0.6rem 0.4rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
                       {row.firstViewed ? new Date(row.firstViewed).toLocaleString() : '—'}
                     </td>
-                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                    <td style={{ padding: '0.6rem 0.4rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
                       {row.lastViewed ? new Date(row.lastViewed).toLocaleString() : '—'}
                     </td>
-                    <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>
+                    <td style={{ padding: '0.6rem 0.4rem', color: 'var(--text-secondary)' }}>
                       {formatDuration(row.totalDuration)}
                     </td>
-                    <td style={{ padding: '0.85rem 0.5rem' }}>
+                    <td style={{ padding: '0.6rem 0.4rem' }}>
                       <StatusPill viewed={row.viewCount > 0} />
                     </td>
                   </tr>
@@ -413,19 +413,19 @@ export default function DocumentTracking() {
 
 function StatCard({ icon, label, value, color }) {
   return (
-    <div className="card" style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+    <div className="card" style={{ padding: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.65rem', minWidth: 0 }}>
       <div style={{
-        width: 40, height: 40, borderRadius: '10px',
+        width: 34, height: 34, minWidth: 34, borderRadius: '8px',
         background: `${color}1f`, color, display: 'flex',
         alignItems: 'center', justifyContent: 'center',
       }}>
         {icon}
       </div>
-      <div>
-        <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.1px', lineHeight: 1.25 }}>
           {label}
         </div>
-        <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{value}</div>
+        <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{value}</div>
       </div>
     </div>
   );
@@ -433,7 +433,7 @@ function StatCard({ icon, label, value, color }) {
 
 function Th({ children }) {
   return (
-    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
+    <th style={{ padding: '0.6rem 0.4rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
       {children}
     </th>
   );

@@ -1,0 +1,10 @@
+/* Keep the page viewport from acquiring a second horizontal scrollbar.
+   Wide deal data remains scrollable inside its TopScrollSync table wrapper. */
+@media (min-width: 900px) {
+  .win-loss-analysis-page {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+}

@@ -67,7 +67,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9800,
+    "all-js-maxKB": 9850,
+    "//pr1595-integrations-js": "9800 → 9850 KB: PR #1595 adds Maps/Twilio settings, inventory import and workspace calling UI. The Node 24 production build after merging main measured 9801.9 KB JS; retain 48.1 KB headroom. Individual chunk caps remain unchanged.",
     "//pr1590-total-js": "9700 → 9800 KB: PR #1590 adds Generic CRM channel sequence builders, WhatsApp templates, public pickup/plot selection and installment/commission views without adding runtime dependencies. Deploy run 39776541606 measured 9744.1 KB total JS; all individual chunk caps passed and remain unchanged. Retain 55.9 KB headroom.",
     "//pr1588-phone-input-js": "9300 → 9700 KB: PR #1588 deliberately adds @intl-tel-input/react and its lazy-loaded libphonenumber utilities for international travel lead validation. Deploy run 39616931869 measured 9634.0 KB total JS (including a 257.9 KB utils chunk). Retain 66 KB headroom; entry and existing vendor chunk caps remain unchanged.",
     "//pr1580-workspace-budget": "9250 → 9300 KB: PR #1580 adds dedicated Transport, Site Visit, Billing and staff-assignment surfaces. Its original e660252a build already measured 9270.0 KB JS; the four missing tour profiles bring this to 9270.7 KB. No new runtime dependency is added and per-chunk caps remain unchanged.",
@@ -92,7 +93,8 @@
     "//previous-total-bump-3": "7950→8150 on 2026-09-15: PR #1441 adds lazy-loaded contact/deal profile workflows and the standalone email composer, bringing total JS to 8027.5 KB. No new runtime dependency was added; this preserves 122.5 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-2": "7850→7950 on 2026-09-10: PR #1432 added the lazy-loaded TMC teacher and parent portal screens, bringing total JS to 7885.4 KB. The feature adds no new dependency; this restores 64.6 KB of total-budget headroom while retaining the existing per-chunk limits.",
     "//previous-total-bump": "7800→7850 on 2026-09-04: PR #1404 added the wellness patient-signature workflow and pushed total JS to 7803.4 KB. This small increase restored 46.6 KB headroom; no new dependency was introduced.",
-    "all-css-maxKB": 510,
+    "all-css-maxKB": 520,
+    "//pr1595-table-css": "510 → 520 KB: PR #1595 adds internal table scrolling, sticky headers and shared call dialog styles on top of the responsive layouts from main. The combined Node 24 production build measured 513.4 KB CSS; retain 6.6 KB headroom.",
     "//pr1594-responsive-css": "475 → 510 KB: PR #1594 adds viewport density rules and responsive contract, ticket, project, finance and WhatsApp layouts. A Node 24 production build of 989018c9 measured 499.9 KB CSS; retain 10.1 KB headroom. JavaScript and individual chunk limits remain unchanged.",
     "//pr1592-laptop-css": "420 → 475 KB: PR #1592 adds shared laptop typography, Generic/Travel/Wellness density rules and responsive layouts for dashboards, contracts, projects, tickets and WhatsApp. A Node 24 production build of 82aad1f7 measured 465.3 KB CSS; retain 9.7 KB headroom. JavaScript totals and individual chunk caps remain unchanged.",
     "//pr1590-total-css": "410 → 420 KB: PR #1590 adds contact-profile, lead-table and public selection styles. Deploy run 39776541606 measured 414.0 KB total CSS; retain 6 KB headroom.",

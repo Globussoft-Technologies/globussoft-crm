@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import GenericWhatsAppTriggerMappings from '../components/GenericWhatsAppTriggerMappings';
 
 const fetchApiMock = vi.fn();
-const notify = { success: vi.fn(), error: vi.fn(), confirm: vi.fn() };
+const notify = { success: vi.fn(), error: vi.fn(), info: vi.fn(), confirm: vi.fn() };
 const scrollIntoViewMock = vi.fn();
 const scrollToMock = vi.fn();
 
@@ -30,6 +30,7 @@ beforeEach(() => {
   });
   notify.success.mockReset();
   notify.error.mockReset();
+  notify.info.mockReset();
   notify.confirm.mockReset().mockResolvedValue('save');
   scrollIntoViewMock.mockReset();
   scrollToMock.mockReset();
@@ -230,6 +231,26 @@ describe('GenericWhatsAppTriggerMappings', () => {
     expect(screen.getByRole('combobox', { name: 'WhatsApp template for step 3' })).toBeInTheDocument();
     expect(screen.queryByText('Wait added')).not.toBeInTheDocument();
     expect(screen.getByText('Last step · the sequence ends here when saved')).toBeInTheDocument();
+    expect(notify.success).toHaveBeenCalledWith(
+      'Next step added: wait 1 day, then send the next WhatsApp message.',
+    );
+  });
+
+  it('reports trigger changes and removed WhatsApp steps', async () => {
+    render(<GenericWhatsAppTriggerMappings campaigns={[]} onSaved={vi.fn()} />);
+
+    const trigger = await screen.findByRole('combobox', { name: 'WhatsApp sequence trigger' });
+    fireEvent.change(trigger, { target: { value: 'payment.due' } });
+    expect(notify.info).toHaveBeenCalledWith(
+      expect.stringMatching(/^Starting event updated: .*The sequence will begin when this happens\.$/),
+    );
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Next step type after step 1' }), { target: { value: 'whatsapp' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add next step' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove step 3' }));
+    expect(notify.info).toHaveBeenCalledWith(
+      'Step removed: WhatsApp message and its wait condition.',
+    );
   });
 
   it('shows the selected WhatsApp immediate-send editor only after selection', async () => {

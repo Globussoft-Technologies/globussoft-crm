@@ -79,6 +79,7 @@ import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const mockSendSms = vi.hoisted(() => vi.fn());
 
 // Auth middleware bypass — pass through verifyToken so we exercise the
 // route + verifyRole flow without minting JWTs. verifyRole stays REAL so
@@ -105,9 +106,15 @@ vi.mock('../../services/smsProvider', () => ({
       .replace(/\{\{email\}\}/g, contact.email || '')
       .replace(/\{\{phone\}\}/g, contact.phone || '');
   },
-  sendSms: vi.fn().mockResolvedValue({ success: true, providerMsgId: 'mock-msg-id' }),
+  sendSms: mockSendSms,
   resolveProviderConfig: vi.fn().mockResolvedValue(null),
 }));
+
+// sms.js is CommonJS and destructures sendSms at module load. Patch the CJS
+// export as well so the route receives the same controllable mock under
+// Vitest's CJS/ESM interoperability layer.
+const smsProviderCJS = requireCJS('../../services/smsProvider');
+smsProviderCJS.sendSms = mockSendSms;
 
 // Mock the audit lib so writeAudit's prisma calls don't hit a real DB.
 vi.mock('../../lib/audit', () => ({
@@ -144,11 +151,12 @@ import request from 'supertest';
 
 const smsRouter = await import('../../routes/sms');
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
     req.user = { userId, tenantId, role };
+    if (vertical) req.user.vertical = vertical;
     next();
   });
   app.use('/api/sms', smsRouter.default);
@@ -156,6 +164,10 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 }
 
 beforeEach(() => {
+  mockSendSms.mockReset().mockResolvedValue({
+    success: true,
+    providerMsgId: 'mock-msg-id',
+  });
   prisma.smsConfig.findFirst.mockReset();
   prisma.smsConfig.findMany.mockReset();
   prisma.smsConfig.upsert.mockReset();
@@ -507,6 +519,55 @@ describe('PUT /config/:provider — #716 MSG91 senderId length', () => {
 });
 
 // ─── POST /webhook/:provider — no auth, status-mapping ──────────────
+
+test('Generic CRM trims Twilio credentials and sender before saving', async () => {
+  prisma.smsConfig.upsert.mockResolvedValue({
+    id: 2,
+    provider: 'twilio',
+    apiKey: 'test-twilio-account-sid',
+    authToken: 'token',
+    senderId: '+14155552671',
+    isActive: true,
+    tenantId: 1,
+  });
+
+  const res = await request(makeApp({ role: 'ADMIN' }))
+    .put('/api/sms/config/twilio')
+    .send({
+      apiKey: ' test-twilio-account-sid ',
+      authToken: ' token ',
+      senderId: ' +14155552671 ',
+      isActive: true,
+    });
+
+  expect(res.status).toBe(200);
+  expect(prisma.smsConfig.upsert.mock.calls[0][0].create).toMatchObject({
+    apiKey: 'test-twilio-account-sid',
+    authToken: 'token',
+    senderId: '+14155552671',
+  });
+});
+
+test('non-Generic CRM preserves existing provider save behavior', async () => {
+  prisma.smsConfig.upsert.mockResolvedValue({
+    id: 3,
+    provider: 'twilio',
+    apiKey: ' sid ',
+    authToken: ' token ',
+    senderId: ' +14155552671 ',
+    isActive: true,
+    tenantId: 2,
+  });
+
+  const res = await request(makeApp({ tenantId: 2, role: 'ADMIN', vertical: 'wellness' }))
+    .put('/api/sms/config/twilio')
+    .send({ apiKey: ' sid ', authToken: ' token ', senderId: ' +14155552671 ', isActive: true });
+
+  expect(res.status).toBe(200);
+  expect(prisma.smsConfig.upsert.mock.calls[0][0].create).toMatchObject({
+    apiKey: ' sid ', authToken: ' token ', senderId: ' +14155552671 ',
+  });
+});
 
 describe('POST /webhook/:provider — public, no auth', () => {
   test('twilio delivery-status payload updates smsMessage by providerMsgId + responds TwiML', async () => {

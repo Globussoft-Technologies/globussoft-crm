@@ -175,8 +175,8 @@ export default function DocumentTracking() {
   };
 
   return (
-    <div style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+    <div className="document-tracking-page" style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="document-tracking-header" style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '1.6rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
             <Eye size={22} color="var(--accent-color)" /> Document Tracking
@@ -195,7 +195,7 @@ export default function DocumentTracking() {
       </header>
 
       {/* Stats Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+      <div className="document-tracking-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
         <StatCard
           icon={<FileText size={18} />}
           label="Tracked Documents"
@@ -223,23 +223,25 @@ export default function DocumentTracking() {
       </div>
 
       {/* Tracked Documents Table */}
-      <div className="card" style={{ padding: '1.25rem' }}>
+      <div className="card document-tracking-table-card" style={{ padding: '1.25rem' }}>
         <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Eye size={18} color="var(--accent-color)" /> Tracked Documents
         </h3>
 
-        {loading ? (
-          <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p>
-        ) : grouped.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '1.75rem 1rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
-            <Eye size={36} style={{ opacity: 0.2, margin: '0 auto 0.5rem', color: 'var(--accent-color)' }} />
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontSize: '0.8rem' }}>No tracked documents yet.</p>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-              Click "Track New Document" to generate a unique URL you can paste into proposal emails.
-            </p>
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
+        <div className="document-tracking-table-scroll">
+          {loading ? (
+            <p className="document-tracking-table-status" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p>
+          ) : grouped.length === 0 ? (
+            <div className="document-tracking-table-empty" style={{ textAlign: 'center', padding: '1.75rem 1rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              <div>
+                <Eye size={36} style={{ opacity: 0.2, margin: '0 auto 0.5rem', color: 'var(--accent-color)' }} />
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontSize: '0.8rem' }}>No tracked documents yet.</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                  Click "Track New Document" to generate a unique URL you can paste into proposal emails.
+                </p>
+              </div>
+            </div>
+          ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
@@ -288,8 +290,8 @@ export default function DocumentTracking() {
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Create Modal */}

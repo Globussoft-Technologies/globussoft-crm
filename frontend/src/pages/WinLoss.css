@@ -8,3 +8,24 @@
     overflow-x: hidden;
   }
 }
+
+/* Generic CRM only: keep the Recent Closed Deals section from growing with
+   its result count. The rows scroll while the section title and header stay. */
+body[data-vertical="generic"] .win-loss-analysis-page .win-loss-closed-deals-card .top-scroll-sync__bottom {
+  height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .win-loss-analysis-page .win-loss-closed-deals-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #17191f;
+  box-shadow: 0 1px 0 var(--border-color);
+}
+
+[data-theme="light"] body[data-vertical="generic"] .win-loss-analysis-page .win-loss-closed-deals-table thead th {
+  background: #f8f9fb;
+}

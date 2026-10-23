@@ -827,11 +827,11 @@ export default function Tasks() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
 
         {/* Active Queue */}
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card tasks-active-queue-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Phone size={20} color="var(--danger-color)" /> Active Priority Queue
           </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div className="tasks-active-queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {activeTasks.length === 0 ? (
               // "Nothing matched" and "nothing to do" are different states —
               // showing "Excellent work" over a filter that hid everything is a

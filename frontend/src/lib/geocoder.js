@@ -226,6 +226,39 @@ export async function geocodeSuggest(query, limit = 6, opts = {}) {
 }
 
 /**
+ * Google-backed address suggestions used only by generic CRM inventory forms.
+ * Unlike the shared Photon contract, a Places prediction is identified by a
+ * place_id and does not need coordinates to retain Google's exact label.
+ */
+export async function googleAddressSuggest(query, limit = 6) {
+  const key = normalizeQuery(query);
+  if (!key) return [];
+
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 6, 1), 10);
+  const cacheKey = `google-address:${safeLimit}:${key}`;
+  const cached = lruGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let results = [];
+  try {
+    const data = await fetchApi(
+      `/api/geocode?q=${encodeURIComponent(String(query).trim())}&limit=${safeLimit}&provider=google`,
+      { silent: true },
+    );
+    if (Array.isArray(data?.results)) {
+      results = data.results.filter((result) => result?.display_name && (
+        result?.place_id || (Number.isFinite(result?.lat) && Number.isFinite(result?.lng))
+      ));
+    }
+  } catch (err) {
+    console.warn('[geocoder] Google address suggestions error:', err?.message || err);
+  }
+
+  lruSet(cacheKey, results);
+  return results;
+}
+
+/**
  * Test-only — empties the LRU cache.
  */
 export function clearCache() {

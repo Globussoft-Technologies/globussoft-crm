@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import {
   geocode,
+  googleAddressSuggest,
   reverseGeocode,
   clearCache,
   __test__,
@@ -202,5 +203,25 @@ describe('reverseGeocode', () => {
     await reverseGeocode(12.34567899, 98.76543211);
 
     expect(fetchApiMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('googleAddressSuggest', () => {
+  it('requests the generic-only Google provider and retains place-id results', async () => {
+    fetchApiMock.mockResolvedValueOnce({ results: [{
+      place_id: 'ChIJ-exact-place',
+      display_name: '6PV8+HVJ, Devanahalli, Karnataka 562110, India',
+      provider: 'google',
+    }] });
+
+    await expect(googleAddressSuggest(' 6PV8+HVJ Devanahalli ', 6)).resolves.toEqual([{
+      place_id: 'ChIJ-exact-place',
+      display_name: '6PV8+HVJ, Devanahalli, Karnataka 562110, India',
+      provider: 'google',
+    }]);
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/geocode?q=6PV8%2BHVJ%20Devanahalli&limit=6&provider=google',
+      { silent: true },
+    );
   });
 });

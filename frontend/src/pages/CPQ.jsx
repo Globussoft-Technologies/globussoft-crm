@@ -24,8 +24,8 @@ export default function CPQ() {
   }, []);
 
   return (
-    <div style={{ padding: '2rem' }}>
-      <header style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '2rem' }}>
+    <div className="cpq-page" style={{ padding: '2rem' }}>
+      <header className="cpq-page-header" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Briefcase size={28} color="#8b5cf6" />
           <div>
@@ -35,9 +35,9 @@ export default function CPQ() {
         </div>
       </header>
 
-      <div style={{ display: 'grid', gap: '1.5rem', gridTemplateColumns: 'minmax(300px, 380px) minmax(0, 1fr)' }}>
-        <div className="card" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+      <div className="cpq-workspace" style={{ display: 'grid', gap: '1.5rem', gridTemplateColumns: 'minmax(300px, 380px) minmax(0, 1fr)' }}>
+        <div className="card cpq-deal-panel" style={{ padding: '1.5rem' }}>
+          <div className="cpq-deal-panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h2 style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--text-primary)' }}>Deal Selection</h2>
             <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{deals.length} deals</span>
           </div>
@@ -48,7 +48,7 @@ export default function CPQ() {
           ) : deals.length === 0 ? (
             <div style={{ color: 'var(--text-secondary)', padding: '1rem' }}>No deals available. Create a deal in the pipeline first.</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div className="cpq-deal-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {deals.map((deal) => (
                 <button
                   key={deal.id}
@@ -78,7 +78,7 @@ export default function CPQ() {
           )}
         </div>
 
-        <div className="card" style={{ padding: '1.5rem' }}>
+        <div className="card cpq-builder-panel" style={{ padding: '1.5rem' }}>
           {selectedDeal ? (
             <CPQBuilder dealId={selectedDeal.id} />
           ) : (

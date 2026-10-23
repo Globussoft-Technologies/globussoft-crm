@@ -134,6 +134,32 @@ function addStepButtonLabel(type) {
   return 'Add next step';
 }
 
+function waitSummary(wait) {
+  if (!wait) return '';
+  const amount = Number(wait.amount) || 1;
+  const unit = amount === 1 ? String(wait.unit || 'days').replace(/s$/, '') : (wait.unit || 'days');
+  return `wait ${amount} ${unit}, then `;
+}
+
+function addedStepMessage(type, wait) {
+  const prefix = waitSummary(wait);
+  if (type === 'reply') return `Next step added: ${prefix}check for a WhatsApp reply and send the matching response.`;
+  if (type === 'field') return `Next step added: ${prefix}check a CRM column and send the matching response.`;
+  if (type === 'stop') return 'Next step added: stop the sequence for contacts that reach this point.';
+  return `Next step added: ${prefix}send the next WhatsApp message.`;
+}
+
+function removedStepMessage(type, removedWait) {
+  const label = type === 'reply'
+    ? 'WhatsApp reply condition'
+    : type === 'field'
+      ? 'CRM column condition'
+      : type === 'stop'
+        ? 'stop action'
+        : 'WhatsApp message';
+  return `Step removed: ${label}${removedWait ? ' and its wait condition' : ''}.`;
+}
+
 export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaignId = null, onEditLoaded, onSaved, onDirty, onViewSequences }) {
   const notify = useNotify();
   const [templates, setTemplates] = useState([]);
@@ -260,6 +286,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
       return updated;
     });
     setScrollTargetId(addedStep.id);
+    notify.success(addedStepMessage(type, wait));
   };
   useEffect(() => {
     if (!scrollTargetId) return;
@@ -307,6 +334,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
       notify.error(validationMessages.join(' '));
       return;
     }
+    notify.info(`Saving ${stepsToSave.length} sequence step${stepsToSave.length === 1 ? '' : 's'} and activating the WhatsApp automation…`);
     setSaving(true);
     try {
       const selectedTrigger = TRIGGERS.find(item => item.value === trigger) || TRIGGERS[0];
@@ -382,7 +410,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
         <article style={automationBlockStyle} aria-label="WhatsApp sequence trigger">
           <div style={nodeHeadingStyle}><span style={stepBadgeStyle}><Zap size={13} /></span><span>WHEN · TRIGGER</span></div>
           <label style={fieldLabelStyle} htmlFor="wa-sequence-trigger">Start this sequence when</label>
-          <select id="wa-sequence-trigger" aria-label="WhatsApp sequence trigger" className="input-field" value={trigger} onFocus={() => { if (!editCampaignId && trigger === 'contact.created' && steps.length === 1) { onDirty?.(); setSteps(presetSteps(trigger, steps[0].templateId)); } }} onChange={event => { const value = event.target.value; onDirty?.(); setTrigger(value); setSteps(presetSteps(value)); setAddTypes({}); setOpenAddCards({}); setDraftSteps({}); }} style={selectStyle}>{TRIGGERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          <select id="wa-sequence-trigger" aria-label="WhatsApp sequence trigger" className="input-field" value={trigger} onFocus={() => { if (!editCampaignId && trigger === 'contact.created' && steps.length === 1) { onDirty?.(); setSteps(presetSteps(trigger, steps[0].templateId)); } }} onChange={event => { const value = event.target.value; const selectedTrigger = TRIGGERS.find(item => item.value === value); onDirty?.(); setTrigger(value); setSteps(presetSteps(value)); setAddTypes({}); setOpenAddCards({}); setDraftSteps({}); notify.info(`Starting event updated: ${selectedTrigger?.label || value}. The sequence will begin when this happens.`); }} style={selectStyle}>{TRIGGERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         </article>
         {trigger === 'payment.due' && <>
           <div style={connectorStyle} aria-hidden="true"><ArrowDown size={17} /></div>
@@ -400,7 +428,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
           {index > 0 && step.type === 'whatsapp' && !precedingWait && <ComplianceGate />}
           <div style={connectorStyle} aria-hidden="true"><ArrowDown size={17} /></div>
           <article style={automationBlockStyle} aria-label={`WhatsApp sequence step ${index + 1}`}>
-            {index > 0 && <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { onDirty?.(); setSteps(current => current.filter(item => item.id !== step.id && item.id !== precedingWait?.id)); }} style={removeStyle}><Trash2 size={15} /></button>}
+            {index > 0 && <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { onDirty?.(); setSteps(current => current.filter(item => item.id !== step.id && item.id !== precedingWait?.id)); notify.info(removedStepMessage(step.type, Boolean(precedingWait))); }} style={removeStyle}><Trash2 size={15} /></button>}
             {precedingWait && <div style={combinedWaitStyle}>
               <StepEditor step={precedingWait} index={index - 1} stepNumber={visibleStepNumber(steps, index)} sendNumber={0} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateStep(precedingWait.id, patch)} />
             </div>}

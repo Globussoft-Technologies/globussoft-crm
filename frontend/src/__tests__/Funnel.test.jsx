@@ -340,7 +340,9 @@ describe('<Funnel /> — empty + populated payloads', () => {
     expect(await screen.findByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.getByText('Rahul Mehta')).toBeInTheDocument();
     // The Rep Performance heading exists.
-    expect(screen.getByRole('heading', { name: /Rep Performance/i })).toBeInTheDocument();
+    const repHeading = screen.getByRole('heading', { name: /Rep Performance/i });
+    expect(repHeading).toBeInTheDocument();
+    expect(repHeading.closest('.funnel-table-card')?.querySelector('.funnel-table-scroll')).toBeInTheDocument();
   });
 
   it('renders one row per source in the Conversion by Source table', async () => {
@@ -352,7 +354,9 @@ describe('<Funnel /> — empty + populated payloads', () => {
     expect(screen.getByText('referral')).toBeInTheDocument();
     expect(screen.getByText('cold-email')).toBeInTheDocument();
     // The "Conversion by Source" heading exists.
-    expect(screen.getByRole('heading', { name: /Conversion by Source/i })).toBeInTheDocument();
+    const sourceHeading = screen.getByRole('heading', { name: /Conversion by Source/i });
+    expect(sourceHeading).toBeInTheDocument();
+    expect(sourceHeading.closest('.funnel-table-card')?.querySelector('.funnel-table-scroll')).toBeInTheDocument();
   });
 
   it('populates pipeline filter <select> with options from /api/pipelines', async () => {

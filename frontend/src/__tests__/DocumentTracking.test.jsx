@@ -210,6 +210,9 @@ describe('<DocumentTracking /> — page surface', () => {
     expect(
       screen.getByRole('button', { name: /Track New Document/i }),
     ).toBeInTheDocument();
+    expect(document.querySelector('.document-tracking-page')).toBeTruthy();
+    expect(document.querySelector('.document-tracking-table-card')).toBeTruthy();
+    expect(document.querySelector('.document-tracking-table-scroll')).toBeTruthy();
   });
 
   it('initial mount fetches /api/document-views AND /api/document-views/stats with silent:true', async () => {

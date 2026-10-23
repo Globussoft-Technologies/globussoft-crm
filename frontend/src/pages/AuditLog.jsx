@@ -936,7 +936,7 @@ export default function AuditLog() {
 
       {/* Table */}
       <div className="card audit-log-table-card" style={{ padding: 0, overflow: 'hidden' }}>
-        <TopScrollSync>
+        <TopScrollSync verticalOverflow="auto">
           <table className="audit-log-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <colgroup>
               <col className="audit-log-expand-column" />

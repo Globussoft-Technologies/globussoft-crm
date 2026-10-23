@@ -4894,6 +4894,51 @@ body[data-vertical="generic"] .contacts-page-card > .contacts-split-table--gener
   max-height: none;
 }
 
+/* Generic CRM keeps the page chrome, filters, column headings, and pagination
+   in place. Only the records viewport scrolls when the current page contains
+   more rows than fit in the available app-shell height. */
+body[data-vertical="generic"] .contacts-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .contacts-page > .contacts-page__header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .contacts-page > .contacts-page-card {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+body[data-vertical="generic"]
+  .contacts-page-card
+  > .contacts-split-table {
+  min-height: 0;
+  max-height: none;
+  overscroll-behavior-y: contain;
+}
+
+/* In generic CRM, horizontal movement is applied to the table content rather
+   than by making it a nested scroll container. This lets the column headings
+   stay sticky against the outer records viewport while only the body rows
+   move vertically. The existing top scrollbar remains the horizontal control. */
+body[data-vertical="generic"]
+  .contacts-table-scroll-pane
+  .top-scroll-sync__bottom {
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+}
+
+body[data-vertical="generic"]
+  .contacts-table-scroll-pane
+  .top-scroll-sync__sticky-bottom {
+  display: none;
+}
+
 .contacts-pagination-legacy {
   display: none !important;
 }
@@ -5138,6 +5183,37 @@ table.stable-table {
 
 .contacts-split-table table.stable-table tbody tr:hover td {
   background-color: var(--surface-hover);
+}
+
+/* Generic Contacts rows are intentionally static: pointer movement must not
+   recolor either half of the split table. Other verticals retain the shared
+   hover treatment above. */
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  tr,
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  td {
+  transition: none;
+}
+
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  tr:hover,
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  tr:hover
+  td {
+  background-color: var(--surface-color);
+  box-shadow: none;
 }
 
 table.leads-table--fit {
@@ -7254,6 +7330,137 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   background: var(--subtle-bg);
 }
 
+/* Generic CRM only: keep the Active Priority Queue at a stable height and
+   let its records scroll beneath the stationary section heading. */
+body[data-vertical="generic"] .tasks-active-queue-card {
+  display: flex;
+  flex-direction: column;
+  height: clamp(360px, calc(100dvh - 15rem), 640px);
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .tasks-active-queue-card > h3 {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .tasks-active-queue-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 0.35rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Generic CRM Document Tracking is a viewport-height workspace. Page chrome
+   stays still while only the tracked-document records scroll inside the card. */
+body[data-vertical="generic"] .document-tracking-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"]
+  .document-tracking-page
+  > :is(.document-tracking-header, .document-tracking-stats) {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .document-tracking-table-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .document-tracking-table-card > h3 {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .document-tracking-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .document-tracking-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-color);
+}
+
+body[data-vertical="generic"]
+  :is(.document-tracking-table-empty, .document-tracking-table-status) {
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+body[data-vertical="generic"] .document-tracking-table-empty {
+  display: grid;
+  place-items: center;
+}
+
+/* Generic CRM CPQ is a fixed-height workspace. Keep the page and panel chrome
+   stationary and confine movement to the deal data and builder content. */
+body[data-vertical="generic"] .cpq-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .cpq-page-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .cpq-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"]
+  :is(.cpq-deal-panel, .cpq-builder-panel) {
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .cpq-deal-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"]
+  :is(.cpq-deal-list, .cpq-builder-panel) {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .cpq-deal-list {
+  flex: 1 1 auto;
+  padding-right: 0.25rem;
+}
+
 @media (max-width: 700px) {
   .tasks-filterbar__search {
     max-width: none;
@@ -8503,6 +8710,139 @@ body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-se
 .public-selection-card button { min-height: 2.8rem; border: 0; border-radius: 10px; background: var(--primary-color, var(--accent-color, #4f46e5)); color: var(--button-text, #fff); font-weight: 700; cursor: pointer; }
 .public-selection-card button:disabled { opacity: .65; cursor: wait; }
 .public-selection-error { margin: 0; color: var(--danger-color, #b42318); }
+
+/* Generic CRM funnel tables keep their card and column headers stationary;
+   only the data viewport scrolls when additional rows are present. */
+body[data-vertical="generic"] .funnel-table-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(320px, calc(100dvh - 16rem), 560px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .funnel-table-card > h3 {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .funnel-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .funnel-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--popover-bg, var(--modal-bg, var(--surface-color)));
+}
+
+body[data-vertical="generic"] .funnel-table-empty {
+  display: grid;
+  flex: 1 1 auto;
+  margin: 0;
+  place-items: center;
+}
+
+/* Generic CRM Agent Reports keeps the performance card and headers fixed;
+   the agent rows own both vertical and horizontal overflow. */
+body[data-vertical="generic"] .agent-reports-table-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(320px, calc(100dvh - 21rem), 560px);
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] .agent-reports-table-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .agent-reports-table-viewport,
+body[data-vertical="generic"] .agent-reports-table-viewport > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+body[data-vertical="generic"] .agent-reports-table-viewport .top-scroll-sync__bottom {
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .agent-reports-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--table-header-bg, var(--popover-bg, var(--surface-color)));
+}
+
+/* Generic CRM Developer Ecosystem keeps the live-activity panel and its
+   column headers fixed while new activity rows scroll inside the card. */
+body[data-vertical="generic"] .developer-activity-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(180px, 28dvh, 320px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .developer-activity-card__title {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .developer-activity-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .developer-activity-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--popover-bg, var(--modal-bg, var(--surface-color)));
+}
+
+body[data-vertical="generic"] .developer-activity-card__empty {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+}
+
+body[data-vertical="generic"] .developer-api-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(380px, 48dvh, 520px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .developer-api-card > :not(.developer-api-data-scroll) {
+  flex-shrink: 0;
+}
+
+body[data-vertical="generic"] .developer-api-data-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.25rem;
+  scrollbar-gutter: stable;
+}
 
 /* Keep the deals toolbar controls on one shared height. */
 .generic-deals-toolbar select[aria-label="Date range"] {

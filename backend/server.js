@@ -681,6 +681,7 @@ const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
 const settingsRoutes = require("./routes/settings");
+const googleMapsSettingsRoutes = require("./routes/google_maps_settings");
 // G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) — admin surface for per-channel
 // toggles + cooldowns + Meta form-ID → sub-brand routing mappings. Distinct
 // from the generic settings route above (which owns webhook signing creds).
@@ -1268,6 +1269,7 @@ app.use("/api/developer", developerRoutes);
 // even though settings.js has no catch-all today; defensive against future
 // surface additions on the generic settings router.
 app.use("/api/settings/lead-capture", leadCaptureSettingsRoutes);
+app.use("/api/settings/google-maps", googleMapsSettingsRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
 // PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the

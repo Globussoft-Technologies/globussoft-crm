@@ -208,6 +208,8 @@ describe('<Tasks /> — page surface', () => {
     ).toBeInTheDocument();
     // Stats chip: "4 total pending" (sampleTasks has 4 non-Completed).
     expect(await screen.findByText(/4 total pending/i)).toBeInTheDocument();
+    expect(screen.getByText('Active Priority Queue').closest('.tasks-active-queue-card')).toBeTruthy();
+    expect(document.querySelector('.tasks-active-queue-list')).toBeTruthy();
     // Critical + High + Overdue chips render (one of each in the seed).
     expect(screen.getByText(/1 Critical/i)).toBeInTheDocument();
     expect(screen.getByText(/1 High/i)).toBeInTheDocument();

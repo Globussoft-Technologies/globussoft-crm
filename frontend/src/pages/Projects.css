@@ -189,6 +189,71 @@
   width: 100%;
 }
 
+/* Generic CRM only: Projects is a fixed-height workspace. The page header,
+   summary, board heading, table headings, and pagination stay in place while
+   only the project rows scroll. */
+body[data-vertical="generic"] .projects-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"]
+  .projects-page
+  > :is(.projects-header, .projects-summary) {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .projects-grid {
+  display: flex !important;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .projects-board-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-self: stretch;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .projects-board-card > h3,
+body[data-vertical="generic"] .projects-pagination {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .projects-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .projects-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-color);
+}
+
+body[data-vertical="generic"] .projects-empty-state {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+  box-sizing: border-box;
+}
+
 @container (max-width: 1250px) {
   .projects-header {
     margin-bottom: 1.25rem !important;

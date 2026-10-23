@@ -258,43 +258,45 @@ export default function FunnelPage() {
       </div>
 
       {/* Tables */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '1.5rem' }}>
-        <div style={cardStyle}>
+      <div className="funnel-tables-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '1.5rem' }}>
+        <div className="funnel-table-card" style={cardStyle}>
           <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.05rem' }}>Conversion by Source</h3>
           {bySource.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)' }}>No source data.</p>
+            <p className="funnel-table-empty" style={{ color: 'var(--text-secondary)' }}>No source data.</p>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
-                  <th style={{ padding: '0.5rem 0.6rem' }}>Source</th>
-                  <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Leads</th>
-                  <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Won</th>
-                  <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Conv %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bySource.map((s) => (
-                  <tr key={s.source} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <td style={{ padding: '0.55rem 0.6rem' }}>{s.source}</td>
-                    <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.count}</td>
-                    <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.won}</td>
-                    <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right', fontWeight: 600, color: s.conversionRate >= 20 ? COLORS[2] : 'var(--text-primary)' }}>
-                      {fmtPct(s.conversionRate)}
-                    </td>
+            <div className="funnel-table-scroll" role="region" aria-label="Conversion by source data" tabIndex={0}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Source</th>
+                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Leads</th>
+                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Won</th>
+                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Conv %</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {bySource.map((s) => (
+                    <tr key={s.source} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <td style={{ padding: '0.55rem 0.6rem' }}>{s.source}</td>
+                      <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.count}</td>
+                      <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.won}</td>
+                      <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right', fontWeight: 600, color: s.conversionRate >= 20 ? COLORS[2] : 'var(--text-primary)' }}>
+                        {fmtPct(s.conversionRate)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
-        <div style={cardStyle}>
+        <div className="funnel-table-card" style={cardStyle}>
           <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.05rem' }}>Rep Performance</h3>
           {byRep.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)' }}>No rep data.</p>
+            <p className="funnel-table-empty" style={{ color: 'var(--text-secondary)' }}>No rep data.</p>
           ) : (
-            <div className="funnel-rep-scroll" role="region" aria-label="Rep performance columns" tabIndex={0} style={{ overflowX: 'auto' }}>
+            <div className="funnel-table-scroll funnel-rep-scroll" role="region" aria-label="Rep performance columns" tabIndex={0}>
               <table className="funnel-rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>

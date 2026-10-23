@@ -123,6 +123,8 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
         body: m.body,
         personName: m.contactName || m.contact?.name || m.name || contact.name,
         participant: m.direction === 'INBOUND' ? (m.from || m.sender || m.fromNumber) : (m.to || m.recipient || m.toNumber),
+        status: m.status,
+        errorMessage: m.errorMessage,
         createdAt: m.createdAt || m.sentAt || m.timestamp,
       })),
       ...emailItems,
@@ -193,9 +195,15 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
                     <div className="cp-msg-meta">
                       {m.channel} • {formatDateTime(m.createdAt)}
                       {m.participant ? ` • ${m.direction === 'INBOUND' ? 'From' : 'To'} ${m.participant}` : ''}
+                      {m.channel === 'sms' && m.status ? ` • ${m.status}` : ''}
                     </div>
                     {m.subject && <div className="cp-msg-subject">{m.subject}</div>}
                     <div>{m.body || '—'}</div>
+                    {m.channel === 'sms' && m.status === 'FAILED' && m.errorMessage && (
+                      <div style={{ color: 'var(--danger-color, #dc2626)', fontSize: '0.75rem', marginTop: '0.35rem' }}>
+                        Delivery failed: {m.errorMessage}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

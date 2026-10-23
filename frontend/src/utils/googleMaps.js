@@ -11,6 +11,12 @@ export function googleMapsCoordinateUrl(latitude, longitude) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
 }
 
+export function googleMapsPlaceUrl(placeId, address = '') {
+  const id = String(placeId || '').trim();
+  if (!id) return googleMapsSearchUrl(address);
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(address || '').trim())}&query_place_id=${encodeURIComponent(id)}`;
+}
+
 export async function openPreciseGoogleMap(event, location) {
   if (location?.googleMapsLink) return;
 

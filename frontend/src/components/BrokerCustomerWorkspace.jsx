@@ -17,6 +17,7 @@ import {
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import Inbox from '../pages/Inbox';
+import CallifiedCallDialog from './CallifiedCallDialog';
 import './TransportDriverWorkspace.css';
 
 const BROKER_STEPS = [
@@ -54,6 +55,7 @@ export default function BrokerCustomerWorkspace() {
   const [updating, setUpdating] = useState(null);
   const [assigning, setAssigning] = useState(null);
   const [emailCustomer, setEmailCustomer] = useState(null);
+  const [callCustomer, setCallCustomer] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -189,6 +191,7 @@ export default function BrokerCustomerWorkspace() {
             onAdvance={(status, details) => advanceWorkflow(customer, status, details)}
             onAssign={(targetProfileId) => assignSalesExecutive(customer, targetProfileId)}
             onEmail={() => setEmailCustomer(customer)}
+            onCall={() => setCallCustomer(customer)}
           />
         ))}
       </section>
@@ -205,11 +208,24 @@ export default function BrokerCustomerWorkspace() {
           }}
         />
       )}
+      {callCustomer && (
+        <CallifiedCallDialog
+          customer={{ name: callCustomer.name, phone: callCustomer.phone, subtitle: callCustomer.email || callCustomer.company || null }}
+          endpoints={{
+            context: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/context`,
+            campaigns: '/api/pickup-plot-inventory/calling/campaigns',
+            aiCall: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/ai-call`,
+            manualCall: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/manual-call`,
+          }}
+          historyHref="/callified-data"
+          onClose={() => setCallCustomer(null)}
+        />
+      )}
     </>
   );
 }
 
-function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign, onEmail }) {
+function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign, onEmail, onCall }) {
   const [visitScheduledAt, setVisitScheduledAt] = useState('');
   const [selectedPlotId, setSelectedPlotId] = useState(String(customer.plot?.id || ''));
   const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
@@ -367,13 +383,14 @@ function CustomerCard({ customer, updating, assigning, adminOverview, assignment
           </button>
         )}
         {customer.phone && (
-          <a
+          <button
+            type="button"
             className="transport-primary-button"
-            href={`/leads?callifiedLeadId=${encodeURIComponent(customer.id)}&leadSearch=${encodeURIComponent(customer.email || customer.phone || customer.name || '')}`}
             aria-label={`Call ${customer.name}`}
+            onClick={onCall}
           >
             <Phone size={16} /> Call customer
-          </a>
+          </button>
         )}
       </footer>
     </article>

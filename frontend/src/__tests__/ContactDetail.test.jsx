@@ -280,6 +280,28 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.queryByRole('button', { name: /WhatsApp/i })).toBeNull();
   });
 
+  it('shows the Generic CRM SMS delivery status and provider error', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      sms: { kind: 'ok', data: [{
+        id: 602,
+        contactId: 42,
+        body: 'Queued follow-up',
+        direction: 'OUTBOUND',
+        to: '+919000000001',
+        status: 'FAILED',
+        errorMessage: 'The From phone number is not a valid Twilio sender.',
+        createdAt: '2026-05-23T10:00:00.000Z',
+      }] },
+      emailThreads: { kind: 'ok', data: [] },
+    }));
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Conversation' }));
+
+    expect(await profile.findByText(/sms.*FAILED/i)).toBeInTheDocument();
+    expect(profile.getByText(/Delivery failed: The From phone number is not a valid Twilio sender/i)).toBeInTheDocument();
+  });
+
   it('shows inbox-style email previews and opens the complete message', async () => {
     const body = 'Hello Laura,\n\nThis is a long email that belongs in the reader.\nSecond paragraph.';
     fetchApiMock.mockImplementation(makeFetchImpl({

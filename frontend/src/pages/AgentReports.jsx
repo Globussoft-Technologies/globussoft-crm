@@ -300,14 +300,15 @@ export default function AgentReports() {
 
       <div className="agent-reports-layout" style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '1.5rem', alignItems: 'start' }}>
         {/* Agent Performance Table */}
-        <div className="card" style={{ overflow: 'visible' }}>
-          <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="card agent-reports-table-card" style={{ overflow: 'visible' }}>
+          <div className="agent-reports-table-header" style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Users size={18} color="var(--accent-color)" /> Agent Performance
             </h3>
           </div>
-          <TopScrollSync>
-          <table className="agent-reports-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <div className="agent-reports-table-viewport">
+          <TopScrollSync verticalOverflow="auto">
+            <table className="agent-reports-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                 <th style={thBaseStyle}>#</th>
@@ -358,8 +359,9 @@ export default function AgentReports() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
           </TopScrollSync>
+          </div>
         </div>
 
         {/* Right Panel: Leaderboard Chart */}

@@ -1859,6 +1859,8 @@ const Contacts = () => {
               stickyTop
               stickyTopOffset={0}
               hideBottomScrollbar
+              stickyBottom={isGeneric}
+              verticalOverflow="visible"
             >
               <table
                 className="stable-table"

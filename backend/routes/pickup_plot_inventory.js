@@ -13,6 +13,13 @@ const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
 const { allocateCommissionAcrossPayments, syncPlotCommission } = require("../lib/genericPlotCommission");
 const { verifySelectionToken } = require("../lib/genericPickupPlotSelection");
+const callifiedClient = require("../services/callifiedClient");
+const { startBrowserCall } = require("../lib/callifiedAgentBridge");
+const { sendCallifiedError } = require("../lib/callifiedErrors");
+const { wasRecentlyDialed, redialCooldownError } = require("../lib/callifiedRedialGuard");
+const { clearDnpRetryState } = require("../lib/callifiedDnpRetryEngine");
+const { CALL_STATUS } = require("../lib/callifiedLeadStatus");
+const { writeAudit } = require("../lib/audit");
 const {
   normalizeBoundary,
   calculateBoundaryAreaSqFt,
@@ -35,6 +42,8 @@ const AVAILABILITY = new Set(["AVAILABLE", "HOLD", "BOOKED", "REGISTERED", "RESE
 const PLOT_AREA_UNITS = new Set(["SQ_FT", "KATHA"]);
 const PLOT_FACINGS = new Set(["NORTH", "SOUTH", "EAST", "WEST", "NORTH_EAST", "NORTH_WEST", "SOUTH_EAST", "SOUTH_WEST"]);
 const PLOT_PROPERTY_TYPES = new Set(["RESIDENTIAL", "COMMERCIAL"]);
+const MAX_INVENTORY_IMPORT_ROWS = 200;
+const INVALID_IMPORT_BOOLEAN = Symbol("INVALID_IMPORT_BOOLEAN");
 const TRANSPORT_STATUS_FLOW = [
   "ASSIGNED",
   "ACCEPTED",
@@ -169,6 +178,32 @@ function parseMaxAssignments(value) {
   if (value === "" || value === null || value === undefined) return null;
   const limit = Number(value);
   return Number.isInteger(limit) && limit > 0 && limit <= 100000 ? limit : NaN;
+}
+
+function importBoolean(value, fallback = true) {
+  if (value === "" || value === null || value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "yes", "y", "1", "active"].includes(normalized)) return true;
+  if (["false", "no", "n", "0", "inactive"].includes(normalized)) return false;
+  return INVALID_IMPORT_BOOLEAN;
+}
+
+function importKey(...values) {
+  return values.map((value) => String(value || "").trim().toLowerCase()).join("\u0000");
+}
+
+function importRows(body) {
+  if (!Array.isArray(body?.rows) || body.rows.length === 0) {
+    return { error: "Add at least one spreadsheet row to import." };
+  }
+  if (body.rows.length > MAX_INVENTORY_IMPORT_ROWS) {
+    return { error: `Import up to ${MAX_INVENTORY_IMPORT_ROWS} rows at a time.` };
+  }
+  if (body.rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
+    return { error: "Every imported row must be an object." };
+  }
+  return { rows: body.rows };
 }
 
 function parseStoredArray(value) {
@@ -1154,6 +1189,142 @@ router.post("/public/selection/:token", async (req, res) => {
 });
 
 router.use(verifyToken, requireGenericTenant);
+
+async function workspaceCallingProfiles(req) {
+  const select = { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true };
+  const tenantId = req.user.tenantId;
+  if (isAdminWorkspaceOverview(req)) {
+    const [transportPeople, brokers] = await Promise.all([
+      prisma.transportPerson.findMany({ where: { tenantId, isActive: true }, select }),
+      prisma.plotBroker.findMany({ where: { tenantId, isActive: true }, select }),
+    ]);
+    return [...transportPeople, ...brokers];
+  }
+  const [transportPerson, broker] = await Promise.all([
+    prisma.transportPerson.findFirst({ where: { tenantId, userId: req.user.userId, isActive: true }, select }),
+    prisma.plotBroker.findFirst({ where: { tenantId, userId: req.user.userId, isActive: true }, select }),
+  ]);
+  return [transportPerson, broker].filter(Boolean);
+}
+
+async function findWorkspaceCallCustomer(req) {
+  const contactId = Number(req.params.contactId);
+  if (!Number.isInteger(contactId) || contactId <= 0) return null;
+  const profiles = await workspaceCallingProfiles(req);
+  const assigned = profiles.some((profile) => assignmentPairs(profile)
+    .some((pair) => pair.customerId === contactId));
+  if (!assigned) return null;
+  return prisma.contact.findFirst({
+    where: { id: contactId, tenantId: req.user.tenantId, deletedAt: null },
+    select: { id: true, name: true, phone: true, email: true, company: true },
+  });
+}
+
+router.get("/calling/campaigns", async (req, res) => {
+  try {
+    const profiles = await workspaceCallingProfiles(req);
+    if (!isAdminWorkspaceOverview(req) && profiles.length === 0) {
+      return res.status(403).json({ error: "No active transport or Sales Executive profile is linked to this login", code: "CALLING_PROFILE_NOT_LINKED" });
+    }
+    const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
+    return res.json({ campaigns: Array.isArray(campaigns) ? campaigns : [] });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] calling campaigns", "Failed to fetch Callified campaigns");
+  }
+});
+
+router.get("/calling/customers/:contactId/context", async (req, res) => {
+  try {
+    const customer = await findWorkspaceCallCustomer(req);
+    if (!customer) return res.status(404).json({ error: "Assigned customer not found", code: "CALLING_CUSTOMER_NOT_FOUND" });
+    const normalizedPhone = callifiedClient.normalizeCallifiedPhone(customer.phone || "");
+    const phoneValid = normalizedPhone.replace(/\D/g, "").length >= 10;
+    const recent = await wasRecentlyDialed(req.user.tenantId, customer.id);
+    return res.json({
+      contactId: customer.id,
+      patientName: customer.name,
+      phone: customer.phone || null,
+      normalizedPhone: phoneValid ? normalizedPhone : null,
+      phoneValid,
+      recentCallAt: recent ? recent.toISOString() : null,
+    });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] calling context", "Failed to load call details for this customer");
+  }
+});
+
+router.post("/calling/customers/:contactId/ai-call", async (req, res) => {
+  try {
+    const campaignId = Number(req.body?.campaignId);
+    if (!Number.isInteger(campaignId) || campaignId <= 0) {
+      return res.status(400).json({ error: "campaignId is required", code: "MISSING_CAMPAIGN_ID" });
+    }
+    const customer = await findWorkspaceCallCustomer(req);
+    if (!customer) return res.status(404).json({ error: "Assigned customer not found", code: "CALLING_CUSTOMER_NOT_FOUND" });
+    const recent = await wasRecentlyDialed(req.user.tenantId, customer.id);
+    if (recent) return res.status(429).json(redialCooldownError(recent));
+
+    await clearDnpRetryState(customer.id).catch((error) => {
+      console.error(`[pickup-plot-inventory] failed to clear DNP retry state for contact ${customer.id}:`, error.message);
+    });
+    await prisma.contact.update({
+      where: { id: customer.id, tenantId: req.user.tenantId },
+      data: {
+        callifiedLeadStatus: CALL_STATUS.CONNECTED,
+        callifiedLeadStatusSource: "manual",
+        callifiedLeadStatusReason: "Workspace call in progress.",
+        callifiedLeadStatusUpdatedAt: new Date(),
+      },
+    });
+    const result = await callifiedClient.initiateCallForContact({
+      tenantId: req.user.tenantId,
+      contactId: customer.id,
+      campaignId,
+      userId: req.user.userId,
+      interest: "Generic CRM pickup and plot customer",
+    });
+    await writeAudit("CallifiedCall", "INITIATE", String(result.callifiedLeadId), req.user.userId, req.user.tenantId, {
+      surface: "generic_pickup_plot_workspace",
+      mode: "ai",
+      contactId: customer.id,
+      campaignId,
+    });
+    return res.json({ ...result, mode: "ai", contactId: customer.id });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] customer ai-call", "Failed to start the AI call");
+  }
+});
+
+router.post("/calling/customers/:contactId/manual-call", async (req, res) => {
+  try {
+    const campaignId = Number(req.body?.campaignId);
+    if (!Number.isInteger(campaignId) || campaignId <= 0) {
+      return res.status(400).json({ error: "campaignId is required", code: "MISSING_CAMPAIGN_ID" });
+    }
+    const customer = await findWorkspaceCallCustomer(req);
+    if (!customer) return res.status(404).json({ error: "Assigned customer not found", code: "CALLING_CUSTOMER_NOT_FOUND" });
+    const recent = await wasRecentlyDialed(req.user.tenantId, customer.id);
+    if (recent) return res.status(429).json(redialCooldownError(recent));
+
+    const result = await startBrowserCall({
+      tenantId: req.user.tenantId,
+      contactId: customer.id,
+      campaignId,
+      userId: req.user.userId,
+      interest: "Generic CRM pickup and plot customer",
+    });
+    await writeAudit("CallifiedCall", "BROWSER_CALL", String(result.callifiedLeadId), req.user.userId, req.user.tenantId, {
+      surface: "generic_pickup_plot_workspace",
+      mode: "browser",
+      contactId: customer.id,
+      campaignId,
+      callSid: result.callSid,
+    });
+    return res.json({ ...result, contactId: customer.id });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] customer manual-call", "Failed to start the manual call");
+  }
+});
 
 const WORKSPACE_ASSIGNMENT_TYPES = Object.freeze({
   transport: {
@@ -4132,6 +4303,76 @@ router.get("/", adminOnly, async (req, res) => {
   }
 });
 
+router.post("/locations/import", adminOnly, async (req, res) => {
+  try {
+    const parsed = importRows(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error, code: "INVALID_IMPORT" });
+
+    const prepared = [];
+    const errors = [];
+    const seenNames = new Set();
+    parsed.rows.forEach((row, index) => {
+      const rowNumber = index + 2;
+      const name = text(row.name, 150);
+      const address = text(row.address, 2000);
+      const googleMapsLink = text(row.googleMapsLink, 2000);
+      const maxAssignments = parseMaxAssignments(row.maxAssignments);
+      const isActive = importBoolean(row.isActive);
+      const validationError = firstError(
+        validateName(row.name, "Location name"),
+        validateRequiredText(row.address, "Address", { min: 5, max: 2000 }),
+        validateOptionalText(row.googleMapsLink, "Google Maps link", 2000),
+        validateOptionalText(row.notes, "Notes", 4000),
+        Number.isNaN(maxAssignments) ? "Maximum assignments must be a positive whole number." : null,
+        isActive === INVALID_IMPORT_BOOLEAN ? "Active must be TRUE or FALSE." : null,
+        !isGoogleMapsLink(googleMapsLink) ? "Enter a valid HTTPS Google Maps link." : null,
+      );
+      const key = importKey(name);
+      if (validationError) errors.push({ row: rowNumber, error: validationError });
+      else if (seenNames.has(key)) errors.push({ row: rowNumber, error: "Location name is duplicated in this file." });
+      else {
+        seenNames.add(key);
+        prepared.push({
+          name,
+          address,
+          googleMapsLink,
+          maxAssignments,
+          notes: text(row.notes, 4000),
+          isActive,
+        });
+      }
+    });
+    if (errors.length) {
+      return res.status(400).json({ error: "Fix the invalid spreadsheet rows and import again.", code: "IMPORT_VALIDATION_ERROR", errors });
+    }
+
+    const existingRows = await prisma.pickupLocation.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true },
+    });
+    const existingByName = new Map(existingRows.map((row) => [importKey(row.name), row]));
+    let created = 0;
+    let updated = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const row of prepared) {
+        const existing = existingByName.get(importKey(row.name));
+        if (existing) {
+          await tx.pickupLocation.update({ where: { id: existing.id }, data: row });
+          updated += 1;
+        } else {
+          const added = await tx.pickupLocation.create({ data: { ...row, tenantId: req.user.tenantId } });
+          existingByName.set(importKey(row.name), added);
+          created += 1;
+        }
+      }
+    });
+    return res.json({ total: prepared.length, created, updated });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /locations/import error:", error);
+    return res.status(500).json({ error: "Failed to import pickup locations", code: "LOCATION_IMPORT_FAILED" });
+  }
+});
+
 router.post("/locations", adminOnly, async (req, res) => {
   try {
     const name = text(req.body?.name, 150);
@@ -4233,6 +4474,127 @@ async function validatePickupLocationIds(tenantId, input) {
   const ids = await validateTenantIds(prisma.pickupLocation, tenantId, rawIds, "Pickup locations");
   return Array.isArray(ids) ? ids : false;
 }
+
+router.post("/plots/import", adminOnly, async (req, res) => {
+  try {
+    const parsed = importRows(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error, code: "INVALID_IMPORT" });
+
+    const pickupLocations = await prisma.pickupLocation.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true },
+    });
+    const locationsByName = new Map();
+    for (const location of pickupLocations) {
+      const key = importKey(location.name);
+      locationsByName.set(key, [...(locationsByName.get(key) || []), location]);
+    }
+
+    const prepared = [];
+    const errors = [];
+    const seenPlots = new Set();
+    parsed.rows.forEach((row, index) => {
+      const rowNumber = index + 2;
+      const name = text(row.name, 150);
+      const plotNumber = text(row.plotNumber, 100);
+      const availability = String(row.availability || "AVAILABLE").trim().toUpperCase();
+      const areaUnit = String(row.areaUnit || "").trim().toUpperCase().replace(/[ .-]+/g, "_");
+      const facing = String(row.facing || "").trim().toUpperCase().replace(/[ .-]+/g, "_");
+      const propertyType = String(row.propertyType || "").trim().toUpperCase().replace(/[ .-]+/g, "_");
+      const price = parsePrice(row.price);
+      const isActive = importBoolean(row.isActive);
+      const pickupNames = String(row.pickupLocationNames || "")
+        .split(/[|;]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const pickupLocationIds = [];
+      let locationError = null;
+      for (const pickupName of pickupNames) {
+        const matches = locationsByName.get(importKey(pickupName)) || [];
+        if (matches.length === 0) {
+          locationError = `Pickup location "${pickupName}" was not found.`;
+          break;
+        }
+        if (matches.length > 1) {
+          locationError = `Pickup location name "${pickupName}" is ambiguous.`;
+          break;
+        }
+        pickupLocationIds.push(matches[0].id);
+      }
+      const validationError = firstError(
+        validateName(row.name, "Plot or site name"),
+        validateRequiredText(row.plotNumber, "Plot number", { max: 100 }),
+        validateRequiredText(row.block, "Block", { max: 100 }),
+        validateRequiredText(row.address, "Address", { min: 5, max: 2000 }),
+        validateRequiredText(row.area, "Area or size", { max: 100 }),
+        !PLOT_AREA_UNITS.has(areaUnit) ? "Area unit must be SQ_FT or KATHA." : null,
+        validateRequiredText(row.price, "Price", { max: 30 }),
+        validateMoney(row.price),
+        Number.isNaN(price) ? "Enter a valid price." : null,
+        validateRequiredText(row.roadWidth, "Road width", { max: 100 }),
+        facing && !PLOT_FACINGS.has(facing) ? "Select a valid facing." : null,
+        validateRequiredText(row.propertyType, "Residential / Commercial", { max: 30 }),
+        !PLOT_PROPERTY_TYPES.has(propertyType) ? "Property type must be RESIDENTIAL or COMMERCIAL." : null,
+        !AVAILABILITY.has(availability) ? "Select a valid availability." : null,
+        validateOptionalText(row.notes, "Notes", 4000),
+        isActive === INVALID_IMPORT_BOOLEAN ? "Active must be TRUE or FALSE." : null,
+        locationError,
+      );
+      const key = importKey(name, plotNumber);
+      if (validationError) errors.push({ row: rowNumber, error: validationError });
+      else if (seenPlots.has(key)) errors.push({ row: rowNumber, error: "Plot number is duplicated for this plot or site name in the file." });
+      else {
+        seenPlots.add(key);
+        prepared.push({
+          name,
+          plotNumber,
+          block: text(row.block, 100),
+          address: text(row.address, 2000),
+          area: text(row.area, 100),
+          areaUnit,
+          price,
+          availability,
+          roadWidth: text(row.roadWidth, 100),
+          facing: facing || null,
+          propertyType,
+          notes: text(row.notes, 4000),
+          isActive,
+          pickupLocationIdsJson: pickupLocationIds.length ? sanitizeJsonForStringColumn([...new Set(pickupLocationIds)]) : null,
+          pickupLocationId: pickupLocationIds[0] || null,
+        });
+      }
+    });
+    if (errors.length) {
+      return res.status(400).json({ error: "Fix the invalid spreadsheet rows and import again.", code: "IMPORT_VALIDATION_ERROR", errors });
+    }
+
+    const existingRows = await prisma.plotSite.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true, plotNumber: true },
+    });
+    const existingByKey = new Map(existingRows.map((row) => [importKey(row.name, row.plotNumber), row]));
+    let created = 0;
+    let updated = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const row of prepared) {
+        const key = importKey(row.name, row.plotNumber);
+        const existing = existingByKey.get(key);
+        if (existing) {
+          await tx.plotSite.update({ where: { id: existing.id }, data: row });
+          updated += 1;
+        } else {
+          const added = await tx.plotSite.create({ data: { ...row, tenantId: req.user.tenantId } });
+          existingByKey.set(key, added);
+          created += 1;
+        }
+      }
+    });
+    return res.json({ total: prepared.length, created, updated });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /plots/import error:", error);
+    return res.status(500).json({ error: "Failed to import plots or sites", code: "PLOT_IMPORT_FAILED" });
+  }
+});
 
 router.post("/plots", adminOnly, async (req, res) => {
   try {

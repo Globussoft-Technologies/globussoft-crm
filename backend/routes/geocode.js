@@ -19,6 +19,9 @@
  *       `bbox` is optional and is a HARD filter upstream — a malformed one is
  *       ignored (worldwide search) rather than rejected, since it is only ever
  *       a relevance hint layered on top of the user's actual query.
+ *       Generic CRM address fields may add provider=google. That opt-in path
+ *       returns Google place predictions and falls back to Photon when Google
+ *       is unconfigured or unavailable.
  *   GET /api/geocode?reverse=1&lat=<n>&lng=<n>
  *       → 200 { lat, lng, display_name, results: [...] }
  *
@@ -30,6 +33,8 @@ const router = express.Router();
 
 const { verifyToken } = require("../middleware/auth");
 const { forwardGeocode, reverseGeocode } = require("../lib/geocodeProxy");
+const { requestGoogleSuggestions } = require("../lib/googleAddressAutocomplete");
+const { resolveGoogleMapsApiKey } = require("../lib/googleMapsConfig");
 
 router.get("/", verifyToken, async (req, res) => {
   if (req.query.reverse === "1") {
@@ -56,8 +61,19 @@ router.get("/", verifyToken, async (req, res) => {
   }
 
   try {
+    // The Google-backed path is intentionally opt-in and generic-only. Travel
+    // and wellness callers retain their existing Photon behavior.
+    if (req.query.provider === "google" && req.user.vertical === "generic") {
+      try {
+        const apiKey = await resolveGoogleMapsApiKey(req.user.tenantId);
+        const googleResults = await requestGoogleSuggestions(q, req.query.limit, apiKey);
+        if (googleResults.length > 0) return res.json({ results: googleResults, provider: "google" });
+      } catch (googleError) {
+        console.warn("[geocode] Google address lookup unavailable; using Photon fallback:", googleError.message);
+      }
+    }
     const results = await forwardGeocode(q, req.query.limit, { bbox: req.query.bbox });
-    return res.json({ results });
+    return res.json({ results, provider: "photon" });
   } catch (e) {
     console.error("[geocode] forward error:", e.message);
     return res

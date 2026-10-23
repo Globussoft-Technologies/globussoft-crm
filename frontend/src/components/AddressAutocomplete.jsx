@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Loader2, MapPin } from 'lucide-react';
-import { geocodeSuggest } from '../lib/geocoder';
+import { geocodeSuggest, googleAddressSuggest } from '../lib/geocoder';
 
 const MIN_QUERY_LENGTH = 3;
 const SEARCH_DELAY_MS = 300;
@@ -26,6 +26,7 @@ export default function AddressAutocomplete({
   label = 'Address',
   placeholder = 'Start typing an address...',
   required = false,
+  provider = 'default',
 }) {
   const inputId = useId();
   const listId = `${inputId}-suggestions`;
@@ -65,7 +66,9 @@ export default function AddressAutocomplete({
     let cancelled = false;
     setSearching(true);
     const timer = setTimeout(async () => {
-      const results = await geocodeSuggest(query, 6);
+      const results = provider === 'google'
+        ? await googleAddressSuggest(query, 6)
+        : await geocodeSuggest(query, 6);
       if (cancelled) return;
       setSuggestions(results);
       setActiveIndex(results.length ? 0 : -1);
@@ -77,7 +80,7 @@ export default function AddressAutocomplete({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [value]);
+  }, [provider, value]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -156,7 +159,7 @@ export default function AddressAutocomplete({
             {suggestions.map((suggestion, index) => (
               <li
                 id={`${listId}-${index}`}
-                key={`${suggestion.lat},${suggestion.lng},${suggestion.display_name}`}
+                key={suggestion.place_id || `${suggestion.lat},${suggestion.lng},${suggestion.display_name}`}
                 role="option"
                 aria-selected={index === activeIndex}
                 onMouseEnter={() => setActiveIndex(index)}
@@ -178,6 +181,15 @@ export default function AddressAutocomplete({
                 <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{suggestion.display_name}</span>
               </li>
             ))}
+            {suggestions.some((suggestion) => suggestion.provider === 'google') && (
+              <li
+                role="presentation"
+                translate="no"
+                style={{ padding: '0.4rem 0.75rem', textAlign: 'right', color: '#5e5e5e', fontFamily: 'Roboto, sans-serif', fontSize: 12, fontStyle: 'normal', fontWeight: 400 }}
+              >
+                Google Maps
+              </li>
+            )}
           </ul>
         )}
         {open && !searching && suggestions.length === 0 && String(value || '').trim().length >= MIN_QUERY_LENGTH && (

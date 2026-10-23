@@ -320,6 +320,11 @@ describe('<AgentReports /> — empty + populated states', () => {
     expect(screen.getByText('🥉')).toBeInTheDocument();
     // Deals "12/18" composite cell (line 177: agent.dealsWon/agent.dealsTotal).
     expect(screen.getByText('12/18')).toBeInTheDocument();
+
+    const performanceHeading = screen.getByRole('heading', { name: /Agent Performance/i });
+    const performanceCard = performanceHeading.closest('.agent-reports-table-card');
+    expect(performanceCard).toBeInTheDocument();
+    expect(performanceCard?.querySelector('.agent-reports-table-viewport')).toBeInTheDocument();
   });
 
   it('summary StatCard tiles render labels + aggregated values when agents.length > 0', async () => {

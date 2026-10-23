@@ -45,6 +45,8 @@ import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/
 import { useActiveSubBrand } from "../utils/subBrand";
 import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEffectiveBrand";
 import ProductTourSettings from "../components/ProductTourSettings";
+import GoogleMapsSettingsCard from "../components/GoogleMapsSettingsCard";
+import TwilioSettingsCard from "../components/TwilioSettingsCard";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -1121,6 +1123,7 @@ export default function Settings() {
           Below ~720px the columns collapse to a single column. */}
       <div className="settings-grid">
           {isGenericVertical && <ProductTourSettings />}
+          {isGenericVertical && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && <GoogleMapsSettingsCard />}
           {/* Organization Card */}
           <div
             className="card"
@@ -2641,6 +2644,13 @@ export default function Settings() {
               transports have their own separate surfaces. */}
           {hasPermission("settings", "manage") && isGenericVertical && (
             <WhatsAppMetaConfigCard />
+          )}
+
+          {/* Twilio remains available under Communication Channels; this is
+              the same per-tenant configuration surfaced in Generic CRM
+              Settings for administrators who manage integrations here. */}
+          {hasPermission("settings", "manage") && isGenericVertical && (
+            <TwilioSettingsCard />
           )}
 
           {hasPermission("settings", "manage") && (isGenericVertical || ctxTenant?.vertical === "travel") && (

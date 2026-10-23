@@ -1868,6 +1868,23 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
   });
 
+  it('filters to and highlights only the requested lead Callified AI cell', async () => {
+    const { container } = renderLeads(
+      ADMIN_AUTH,
+      ['/leads?callifiedLeadId=11&leadSearch=alice%40acme.test'],
+    );
+
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) => (
+      typeof url === 'string' && url.includes('/api/contacts?status=Lead') && url.includes('q=alice%40acme.test')
+    ))).toBe(true);
+
+    const highlighted = container.querySelector('[data-callified-ai-highlighted="true"]');
+    expect(highlighted).toHaveAttribute('data-callified-ai-lead-id', '11');
+    expect(highlighted).toHaveAttribute('aria-label', 'Callified AI call for Alice Smith');
+    expect(container.querySelectorAll('[data-callified-ai-highlighted="true"]')).toHaveLength(1);
+  });
+
   it('renders source badges with theme tokens so dark mode stays readable', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());

@@ -19,6 +19,15 @@ const PLOT_FIELDS = [
   ["Address", "address"], ["Price", "price", "money"], ["Availability", "availability"],
 ];
 
+const DEFAULT_INITIAL_PAYMENT_PERCENT = 10;
+
+const paymentAmountFromPercent = (balance, percent) => {
+  const numericBalance = Number(balance);
+  const numericPercent = Number(percent);
+  if (!Number.isFinite(numericBalance) || !Number.isFinite(numericPercent)) return "";
+  return String(Math.round((numericBalance * numericPercent / 100) * 100) / 100);
+};
+
 const formatMoney = (amount, currency = "INR") => {
   if (amount === null || amount === undefined || amount === "") return "Not available";
   const value = Number(amount);
@@ -284,6 +293,8 @@ export default function PickupCustomers() {
   const [generatedPaymentLink, setGeneratedPaymentLink] = useState("");
   const [paymentForm, setPaymentForm] = useState({
     amount: "",
+    amountMode: "minimum",
+    percentage: String(DEFAULT_INITIAL_PAYMENT_PERCENT),
     installmentId: null,
     method: "payment_link",
     paidAt: new Date().toISOString().slice(0, 10),
@@ -409,7 +420,9 @@ export default function PickupCustomers() {
     setPaymentCustomer(row);
     setGeneratedPaymentLink("");
     setPaymentForm({
-      amount: String(installment?.amount ?? remainingBalance),
+      amount: String(installment?.amount ?? paymentAmountFromPercent(remainingBalance, DEFAULT_INITIAL_PAYMENT_PERCENT)),
+      amountMode: installment ? "installment" : "minimum",
+      percentage: String(DEFAULT_INITIAL_PAYMENT_PERCENT),
       installmentId: installment?.id ?? null,
       method: "payment_link",
       paidAt: new Date().toISOString().slice(0, 10),
@@ -520,6 +533,30 @@ export default function PickupCustomers() {
   const paymentBalance = paymentCustomer
     ? remainingBookingBalance(paymentCustomer)
     : 0;
+  const updateInitialPaymentMode = (amountMode) => {
+    setPaymentForm((current) => ({
+      ...current,
+      amountMode,
+      amount: amountMode === "full"
+        ? String(paymentBalance)
+        : paymentAmountFromPercent(paymentBalance, current.percentage),
+    }));
+  };
+  const updateInitialPaymentPercentage = (percentage) => {
+    setPaymentForm((current) => ({
+      ...current,
+      amountMode: "minimum",
+      percentage,
+      amount: percentage === "" ? "" : paymentAmountFromPercent(paymentBalance, percentage),
+    }));
+  };
+  const updateInitialPaymentAmount = (amount) => {
+    const numericAmount = Number(amount);
+    const percentage = amount !== "" && paymentBalance > 0 && Number.isFinite(numericAmount)
+      ? String(Math.round((numericAmount / paymentBalance * 100) * 100) / 100)
+      : "";
+    setPaymentForm((current) => ({ ...current, amountMode: "minimum", amount, percentage }));
+  };
 
   return (
     <main className="pickup-customers-page" data-testid="pickup-customers-page">
@@ -593,7 +630,8 @@ export default function PickupCustomers() {
             ) : (
               <>
                 <div className="pickup-payment-balance"><span>{isInstallmentPayment ? "Remaining installment balance" : "Outstanding balance"}</span><strong>{formatMoney(paymentBalance)}</strong></div>
-                <label className="pickup-edit-label">{isInstallmentPayment ? "Installment amount" : "Payment amount"}<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment amount" : "Initial payment amount"} type="number" min="0.01" step="0.01" max={paymentBalance} required readOnly={Boolean(paymentForm.installmentId)} value={paymentForm.amount} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: event.target.value }))} /></label>
+                {!isInstallmentPayment && <fieldset className="pickup-payment-choice"><legend>Initial payment amount</legend><label><input type="radio" name="initial-payment-mode" value="minimum" checked={paymentForm.amountMode === "minimum"} onChange={() => updateInitialPaymentMode("minimum")} /><span><strong>Minimum payment</strong><small>Choose a percentage or enter the amount directly.</small></span></label><label><input type="radio" name="initial-payment-mode" value="full" checked={paymentForm.amountMode === "full"} onChange={() => updateInitialPaymentMode("full")} /><span><strong>Full payment</strong><small>Pay the complete outstanding balance.</small></span></label></fieldset>}
+                {!isInstallmentPayment && paymentForm.amountMode === "minimum" ? <div className="pickup-initial-payment-fields"><label className="pickup-edit-label">Minimum percentage<div className="pickup-percentage-input"><input className="input-field" aria-label="Initial payment percentage" type="number" min="0.01" max="100" step="0.01" required value={paymentForm.percentage} onChange={(event) => updateInitialPaymentPercentage(event.target.value)} /><span aria-hidden="true">%</span></div></label><label className="pickup-edit-label">Payment amount<input className="input-field" aria-label="Initial payment amount" type="number" min="0.01" step="0.01" max={paymentBalance} required value={paymentForm.amount} onChange={(event) => updateInitialPaymentAmount(event.target.value)} /></label></div> : <label className="pickup-edit-label">{isInstallmentPayment ? "Installment amount" : "Payment amount"}<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment amount" : "Initial payment amount"} type="number" min="0.01" step="0.01" max={paymentBalance} required readOnly={Boolean(paymentForm.installmentId) || (!isInstallmentPayment && paymentForm.amountMode === "full")} value={paymentForm.amount} onChange={(event) => isInstallmentPayment ? setPaymentForm((current) => ({ ...current, amount: event.target.value })) : updateInitialPaymentAmount(event.target.value)} /></label>}
                 <label className="pickup-edit-label">Payment option<select className="input-field" aria-label={isInstallmentPayment ? "Installment payment option" : "Initial payment option"} value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="payment_link">Online payment link (UPI / Card / Net banking)</option><option value="upi">Record UPI payment</option><option value="cash">Record cash payment</option><option value="card">Record card payment</option><option value="bank_transfer">Record bank transfer</option><option value="cheque">Record cheque payment</option></select></label>
                 {paymentForm.method !== "payment_link" && <div className="pickup-payment-manual-fields"><label className="pickup-edit-label">Payment date<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment date" : "Initial payment date"} type="date" required value={paymentForm.paidAt} onChange={(event) => setPaymentForm((current) => ({ ...current, paidAt: event.target.value }))} /></label><label className="pickup-edit-label">Transaction reference<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment reference" : "Initial payment reference"} required placeholder="UTR, receipt, or cheque number" value={paymentForm.transactionRef} onChange={(event) => setPaymentForm((current) => ({ ...current, transactionRef: event.target.value }))} /></label></div>}
                 <div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={() => setPaymentCustomer(null)}>Cancel</button><button type="submit" className="btn-primary" disabled={paymentSaving}>{paymentSaving ? "Generating…" : paymentForm.method === "payment_link" ? "Generate link" : "Record payment"}</button></div>

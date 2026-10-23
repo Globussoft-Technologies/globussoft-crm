@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Check, Clock3, GitBranch, List, MessageSquareText, Save, ShieldCheck, Square, Trash2, Zap } from 'lucide-react';
+import { ArrowDown, Check, Clock3, GitBranch, List, MessageSquareText, Plus, Save, ShieldCheck, Square, Trash2, Zap } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { GENERIC_WHATSAPP_SEQUENCE_TRIGGERS as TRIGGERS } from '../utils/genericSequenceTriggers';
 import { useNotify } from '../utils/notify';
@@ -146,6 +146,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
   const [steps, setSteps] = useState([whatsappStep()]);
   const [dueBefore, setDueBefore] = useState({ amount: 1, unit: 'days' });
   const [addTypes, setAddTypes] = useState({});
+  const [openAddCards, setOpenAddCards] = useState({});
   const [draftSteps, setDraftSteps] = useState({});
   const [scrollTargetId, setScrollTargetId] = useState(null);
   const canvasRef = useRef(null);
@@ -202,6 +203,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
     setSteps(Array.isArray(metadata.steps) && metadata.steps.length ? metadata.steps.map(normaliseStoredStep) : [whatsappStep(metadata.whatsappTemplateId)]);
     setDueBefore(metadata.dueBefore && Number(metadata.dueBefore.amount) > 0 ? metadata.dueBefore : { amount: 1, unit: 'days' });
     setAddTypes({});
+    setOpenAddCards({});
     setDraftSteps({});
     document.getElementById('generic-whatsapp-sequence-builder')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
     onEditLoaded?.();
@@ -213,6 +215,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
   };
   const selectAddType = (stepId, type) => {
     onDirty?.();
+    setOpenAddCards(current => ({ ...current, [stepId]: true }));
     setAddTypes(current => ({ ...current, [stepId]: type }));
     const stepIndex = steps.findIndex(step => step.id === stepId);
     const parentUsesTemplate = ['whatsapp', 'reply', 'field'].includes(steps[stepIndex]?.type);
@@ -250,6 +253,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
       delete updated[parentId];
       return updated;
     });
+    setOpenAddCards(current => ({ ...current, [parentId]: false }));
     setDraftSteps(current => {
       const updated = { ...current };
       delete updated[parentId];
@@ -290,6 +294,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
       }
       setDraftSteps({});
       setAddTypes({});
+      setOpenAddCards({});
     }
 
     const validationMessages = stepsToSave
@@ -377,7 +382,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
         <article style={automationBlockStyle} aria-label="WhatsApp sequence trigger">
           <div style={nodeHeadingStyle}><span style={stepBadgeStyle}><Zap size={13} /></span><span>WHEN · TRIGGER</span></div>
           <label style={fieldLabelStyle} htmlFor="wa-sequence-trigger">Start this sequence when</label>
-          <select id="wa-sequence-trigger" aria-label="WhatsApp sequence trigger" className="input-field" value={trigger} onFocus={() => { if (!editCampaignId && trigger === 'contact.created' && steps.length === 1) { onDirty?.(); setSteps(presetSteps(trigger, steps[0].templateId)); } }} onChange={event => { const value = event.target.value; onDirty?.(); setTrigger(value); setSteps(presetSteps(value)); setAddTypes({}); setDraftSteps({}); }} style={selectStyle}>{TRIGGERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          <select id="wa-sequence-trigger" aria-label="WhatsApp sequence trigger" className="input-field" value={trigger} onFocus={() => { if (!editCampaignId && trigger === 'contact.created' && steps.length === 1) { onDirty?.(); setSteps(presetSteps(trigger, steps[0].templateId)); } }} onChange={event => { const value = event.target.value; onDirty?.(); setTrigger(value); setSteps(presetSteps(value)); setAddTypes({}); setOpenAddCards({}); setDraftSteps({}); }} style={selectStyle}>{TRIGGERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         </article>
         {trigger === 'payment.due' && <>
           <div style={connectorStyle} aria-hidden="true"><ArrowDown size={17} /></div>
@@ -397,23 +402,27 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
           <article style={automationBlockStyle} aria-label={`WhatsApp sequence step ${index + 1}`}>
             {index > 0 && <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { onDirty?.(); setSteps(current => current.filter(item => item.id !== step.id && item.id !== precedingWait?.id)); }} style={removeStyle}><Trash2 size={15} /></button>}
             {precedingWait && <div style={combinedWaitStyle}>
-              <StepEditor step={precedingWait} index={index - 1} sendNumber={0} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateStep(precedingWait.id, patch)} />
+              <StepEditor step={precedingWait} index={index - 1} stepNumber={visibleStepNumber(steps, index)} sendNumber={0} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateStep(precedingWait.id, patch)} />
             </div>}
             {precedingWait && step.type === 'whatsapp' && <ComplianceGate embedded />}
-            <StepEditor step={step} index={index} sendNumber={steps.slice(0, index + 1).filter(item => item.type === 'whatsapp').length} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateStep(step.id, patch)} lockLeadStage={trigger === 'contact.status_changed' && index === 0} />
+            <StepEditor step={step} index={index} stepNumber={precedingWait ? null : visibleStepNumber(steps, index)} sendNumber={steps.slice(0, index + 1).filter(item => item.type === 'whatsapp').length} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateStep(step.id, patch)} lockLeadStage={trigger === 'contact.status_changed' && index === 0} />
           </article>
-          {['whatsapp', 'reply', 'field'].includes(step.type) && <div style={addNextStyle}>
-            <select aria-label={`Next step type after step ${index + 1}`} className="input-field" value={addTypes[step.id] || ''} onChange={event => selectAddType(step.id, event.target.value)} style={{ ...selectStyle, width: 190 }}><option value="" disabled>Choose next step</option><option value="whatsapp">WhatsApp message</option><option value="reply">Reply condition</option><option value="field">CRM column condition</option></select>
-            {addTypes[step.id] && <span aria-live="polite" style={addStepHelpStyle}>{nextStepHelp(addTypes[step.id])}</span>}
-          </div>}
-          {draftSteps[step.id] && <article style={previewBlockStyle} aria-label="WhatsApp selected condition preview">
+          {['whatsapp', 'reply', 'field'].includes(step.type) && <article style={openAddCards[step.id] ? previewBlockStyle : collapsedAddCardStyle} aria-label={openAddCards[step.id] ? 'WhatsApp selected condition preview' : undefined}>
+            {!openAddCards[step.id] && <button type="button" aria-label={`Add step after step ${index + 1}`} title="Add step" onClick={() => selectAddType(step.id, 'whatsapp')} style={addStepButtonStyle}><Plus size={19} aria-hidden="true" /></button>}
+            <div style={openAddCards[step.id] ? choiceHeaderStyle : visuallyHiddenContainerStyle}>
+              <div style={choiceHeadingStyle}>Choose the next step</div>
+              <select tabIndex={openAddCards[step.id] ? 0 : -1} aria-label={`Next step type after step ${index + 1}`} className={openAddCards[step.id] ? 'input-field' : undefined} value={addTypes[step.id] || ''} onChange={event => selectAddType(step.id, event.target.value)} style={openAddCards[step.id] ? choiceSelectStyle : visuallyHiddenSelectStyle}><option value="" disabled>Choose next step</option><option value="whatsapp">WhatsApp message</option><option value="reply">Reply condition</option><option value="field">CRM column condition</option></select>
+            </div>
+          {draftSteps[step.id] && <>
             <button type="button" aria-label={addStepButtonLabel(addTypes[step.id] || 'whatsapp')} title={addStepButtonLabel(addTypes[step.id] || 'whatsapp')} onClick={() => insertAfter(index)} style={confirmButtonStyle}><Check size={18} aria-hidden="true" /></button>
+            <span aria-live="polite" style={addStepHelpStyle}>{nextStepHelp(addTypes[step.id])}</span>
             {draftSteps[step.id].precedingWait && <div style={combinedWaitStyle}>
-              <StepEditor step={{ id: `draft-wait-${step.id}`, type: 'wait', ...draftSteps[step.id].precedingWait }} index={index + 1} sendNumber={0} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateDraftWait(step.id, patch)} />
+              <StepEditor step={{ id: `draft-wait-${step.id}`, type: 'wait', ...draftSteps[step.id].precedingWait }} index={index + 1} stepNumber={visibleStepNumber(steps, index) + 1} sendNumber={0} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateDraftWait(step.id, patch)} />
             </div>}
             <StepEditor step={draftSteps[step.id]} index={index + (draftSteps[step.id].precedingWait ? 2 : 1)} sendNumber={steps.slice(0, index + 1).filter(item => item.type === 'whatsapp').length + 1} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateDraftStep(step.id, patch)} />
+          </>}
           </article>}
-          {index === steps.length - 1 && !draftSteps[step.id] && <div role="status" style={lastStepStyle}>Last step · the sequence ends here when saved</div>}
+          {index === steps.length - 1 && !openAddCards[step.id] && <div role="status" style={lastStepStyle}>Last step · the sequence ends here when saved</div>}
         </div>})}
       </div>
     </div>
@@ -438,11 +447,11 @@ function TemplateSelect({ label, value, onChange, templates, ariaLabel }) {
   return <div><label style={fieldLabelStyle}>{label}<select aria-label={ariaLabel || label} className="input-field" value={value} onChange={event => onChange(event.target.value)} style={{ ...selectStyle, marginTop: 6 }}><option value="">Select an approved template</option>{templates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><GenericSequenceTemplateActions channel="WHATSAPP" templateId={value} templates={templates} /></div>;
 }
 
-function StepEditor({ step, index, sendNumber, templates, fields, loadFieldValues, update, lockLeadStage = false }) {
+function StepEditor({ step, index, stepNumber = null, sendNumber, templates, fields, loadFieldValues, update, lockLeadStage = false }) {
   if (step.type === 'whatsapp') return <><div style={nodeHeadingStyle}><span style={greenBadgeStyle}><MessageSquareText size={13} /></span><span>STEP {sendNumber} · SEND WHATSAPP</span></div><p style={stepHelpStyle}>Choose the approved WhatsApp template to send when a contact reaches this step.</p><TemplateSelect label="Choose an approved template" ariaLabel={`WhatsApp template for step ${index + 1}`} value={step.templateId} onChange={templateId => update({ templateId })} templates={templates} /></>;
-  if (step.type === 'wait') return <><div style={nodeHeadingStyle}><span style={amberBadgeStyle}><Clock3 size={13} /></span><span>CONDITION · WAIT</span></div><p style={stepHelpStyle}>Set how long each contact pauses before the sequence continues.</p><div style={twoColumnStyle}><label style={fieldLabelStyle}>Duration<input aria-label={`Wait duration step ${index + 1}`} className="input-field" type="number" min="1" value={step.amount} onChange={event => update({ amount: event.target.value })} style={{ marginTop: 6 }} /></label><label style={fieldLabelStyle}>Unit<select aria-label={`Wait unit step ${index + 1}`} className="input-field" value={step.unit} onChange={event => update({ unit: event.target.value })} style={{ ...selectStyle, marginTop: 6 }}><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></label></div></>;
-  if (step.type === 'reply') return <><div style={nodeHeadingStyle}><span style={purpleBadgeStyle}><GitBranch size={13} /></span><span>CONDITION · CHECK CUSTOMER REPLY</span></div><p style={stepHelpStyle}>Checks for a WhatsApp reply. Put a Wait condition before this check to define how long the contact has to respond, then choose both outcome templates.</p><div style={branchGridStyle}><TemplateSelect label="If replied — send" value={step.repliedTemplateId} onChange={repliedTemplateId => update({ repliedTemplateId })} templates={templates} /><TemplateSelect label="If no reply — send" value={step.noReplyTemplateId} onChange={noReplyTemplateId => update({ noReplyTemplateId })} templates={templates} /></div></>;
-  if (step.type === 'field') return <><div style={nodeHeadingStyle}><span style={purpleBadgeStyle}><GitBranch size={13} /></span><span>CONDITION · CHECK CRM COLUMN</span></div><p style={stepHelpStyle}>Choose the CRM column, comparison, and value, then choose the approved template for each outcome.</p><CrmFieldControls step={step} index={index} fields={fields} loadFieldValues={loadFieldValues} update={update} lockLeadStage={lockLeadStage} /><div style={branchGridStyle}><TemplateSelect label="If matched — send" value={step.matchedTemplateId} onChange={matchedTemplateId => update({ matchedTemplateId })} templates={templates} /><TemplateSelect label="If not matched — send" value={step.unmatchedTemplateId} onChange={unmatchedTemplateId => update({ unmatchedTemplateId })} templates={templates} /></div></>;
+  if (step.type === 'wait') return <>{stepNumber && <div style={stepNumberStyle}>STEP {stepNumber}</div>}<div style={nodeHeadingStyle}><span style={amberBadgeStyle}><Clock3 size={13} /></span><span>CONDITION · WAIT</span></div><p style={stepHelpStyle}>Set how long each contact pauses before the sequence continues.</p><div style={twoColumnStyle}><label style={fieldLabelStyle}>Duration<input aria-label={`Wait duration step ${index + 1}`} className="input-field" type="number" min="1" value={step.amount} onChange={event => update({ amount: event.target.value })} style={{ marginTop: 6 }} /></label><label style={fieldLabelStyle}>Unit<select aria-label={`Wait unit step ${index + 1}`} className="input-field" value={step.unit} onChange={event => update({ unit: event.target.value })} style={{ ...selectStyle, marginTop: 6 }}><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></label></div></>;
+  if (step.type === 'reply') return <>{stepNumber && <div style={stepNumberStyle}>STEP {stepNumber}</div>}<div style={nodeHeadingStyle}><span style={purpleBadgeStyle}><GitBranch size={13} /></span><span>CONDITION · CHECK CUSTOMER REPLY</span></div><p style={stepHelpStyle}>Checks for a WhatsApp reply. Put a Wait condition before this check to define how long the contact has to respond, then choose both outcome templates.</p><div style={branchGridStyle}><TemplateSelect label="If replied — send" value={step.repliedTemplateId} onChange={repliedTemplateId => update({ repliedTemplateId })} templates={templates} /><TemplateSelect label="If no reply — send" value={step.noReplyTemplateId} onChange={noReplyTemplateId => update({ noReplyTemplateId })} templates={templates} /></div></>;
+  if (step.type === 'field') return <>{stepNumber && <div style={stepNumberStyle}>STEP {stepNumber}</div>}<div style={nodeHeadingStyle}><span style={purpleBadgeStyle}><GitBranch size={13} /></span><span>CONDITION · CHECK CRM COLUMN</span></div><p style={stepHelpStyle}>Choose the CRM column, comparison, and value, then choose the approved template for each outcome.</p><CrmFieldControls step={step} index={index} fields={fields} loadFieldValues={loadFieldValues} update={update} lockLeadStage={lockLeadStage} /><div style={branchGridStyle}><TemplateSelect label="If matched — send" value={step.matchedTemplateId} onChange={matchedTemplateId => update({ matchedTemplateId })} templates={templates} /><TemplateSelect label="If not matched — send" value={step.unmatchedTemplateId} onChange={unmatchedTemplateId => update({ unmatchedTemplateId })} templates={templates} /></div></>;
   return <><div style={nodeHeadingStyle}><span style={redBadgeStyle}><Square size={13} /></span><span>STEP {index + 1} · STOP SEQUENCE</span></div><p style={stepHelpStyle}>Contacts reaching this step exit the automation immediately. No additional configuration is required.</p></>;
 }
 
@@ -471,6 +480,7 @@ const flowListStyle = { display: 'grid', justifyItems: 'center', gap: 0 };
 const stepWrapperStyle = { display: 'grid', justifyItems: 'center', width: '100%' };
 const automationBlockStyle = { position: 'relative', width: 'min(100%, 520px)', padding: '1rem', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--primary-color, var(--accent-color))', borderRadius: 10, background: 'var(--surface-color)', boxShadow: '0 8px 24px rgba(15, 23, 42, 0.08)', boxSizing: 'border-box' };
 const nodeHeadingStyle = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.8rem', color: 'var(--text-primary)', fontSize: '0.67rem', fontWeight: 700, letterSpacing: '0.08em' };
+const stepNumberStyle = { marginBottom: '0.65rem', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.1em' };
 const badgeBase = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 25, height: 25, borderRadius: 7 };
 const stepBadgeStyle = { ...badgeBase, background: 'var(--accent-bg)', color: 'var(--primary-color, var(--accent-color))' };
 const greenBadgeStyle = { ...badgeBase, background: 'rgba(16, 185, 129, 0.13)', color: '#059669' };
@@ -479,14 +489,20 @@ const purpleBadgeStyle = { ...badgeBase, background: 'rgba(124, 58, 237, 0.12)',
 const redBadgeStyle = { ...badgeBase, background: 'rgba(239, 68, 68, 0.12)', color: '#dc2626' };
 const complianceBadgeStyle = { ...badgeBase, background: 'rgba(14, 116, 144, 0.12)', color: '#0e7490' };
 const complianceBlockStyle = { ...automationBlockStyle, borderLeftColor: '#0e7490', background: 'var(--subtle-bg, var(--surface-color))' };
-const previewBlockStyle = { ...automationBlockStyle, paddingRight: '3.5rem', borderStyle: 'dashed', boxShadow: 'none', marginBottom: '0.75rem' };
+const previewBlockStyle = { ...automationBlockStyle, paddingRight: '3.5rem', borderStyle: 'dashed', boxShadow: 'none', marginTop: '1.25rem', marginBottom: '0.75rem' };
 const combinedWaitStyle = { marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border-color)' };
 const embeddedComplianceStyle = { margin: '0 0 1rem', padding: '0.75rem', borderRadius: 8, background: 'rgba(14, 116, 144, 0.06)', border: '1px solid rgba(14, 116, 144, 0.18)' };
 const fieldLabelStyle = { display: 'block', color: 'var(--text-secondary)', fontSize: '0.74rem' };
 const selectStyle = { color: 'var(--text-primary)', background: 'var(--input-bg, var(--surface-color))', borderColor: 'var(--border-color)', minHeight: 42 };
 const connectorStyle = { display: 'grid', placeItems: 'center', width: 30, height: 30, margin: '-1px 0', border: '1px solid var(--border-color)', borderRadius: '50%', background: 'var(--surface-color)', color: 'var(--text-secondary)', zIndex: 1 };
 const removeStyle = { position: 'absolute', top: 10, right: 10, display: 'inline-flex', padding: 6, border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--surface-color)', color: 'var(--danger-color)', cursor: 'pointer' };
-const addNextStyle = { display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, margin: '0.75rem 0', flexWrap: 'wrap' };
+const collapsedAddCardStyle = { position: 'relative', display: 'grid', placeItems: 'center', margin: '0.75rem 0' };
+const addStepButtonStyle = { display: 'inline-grid', placeItems: 'center', width: 36, height: 36, padding: 0, border: '1px solid var(--border-color)', borderRadius: '50%', background: 'var(--surface-color)', color: 'var(--primary-color, var(--accent-color))', cursor: 'pointer' };
+const visuallyHiddenContainerStyle = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' };
+const visuallyHiddenSelectStyle = { position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap', border: 0 };
+const choiceHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, paddingRight: 38, flexWrap: 'wrap' };
+const choiceHeadingStyle = { color: 'var(--text-primary)', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
+const choiceSelectStyle = { ...selectStyle, width: 210, maxWidth: '100%' };
 const addStepHelpStyle = { flexBasis: '100%', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.68rem' };
 const lastStepStyle = { margin: '-0.15rem 0 0.9rem', color: 'var(--text-secondary)', fontSize: '0.7rem', textAlign: 'center' };
 const confirmButtonStyle = { position: 'absolute', top: 12, right: 12, display: 'inline-grid', placeItems: 'center', width: 34, height: 34, padding: 0, border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', color: 'var(--primary-color, var(--accent-color))', cursor: 'pointer' };

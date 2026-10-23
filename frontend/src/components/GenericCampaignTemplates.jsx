@@ -1,5 +1,8 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, Edit, Eye, FileText, Italic, Link, Plus, RefreshCw, Save, Search, Sparkles, Trash2, Underline, X } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, ArrowRight, Bold, ChevronDown, Edit, Eye, FileText, GripVertical, Italic, Link, Plus, RefreshCw, Save, Search, Sparkles, Trash2, Underline, X } from 'lucide-react';
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../appContexts';
@@ -18,6 +21,21 @@ const TEMPLATE_FILTERS = [
 const EMPTY_TEMPLATE = { name: '', subject: '', category: 'General', body: '', channel: 'EMAIL' };
 const TEMPLATE_DRAFT_PREFIX = 'globuscrm:campaign-template-draft:v1';
 const GENERIC_SYSTEM_CATEGORY_PREFIX = 'System: Generic CRM:';
+
+function SortableTemplateCard({ template, index, total, disabled, onMove, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(template.id), disabled });
+  return (
+    <div ref={setNodeRef} className="card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.72 : 1, boxShadow: isDragging ? '0 16px 34px rgba(40, 52, 120, 0.22)' : undefined, position: 'relative', zIndex: isDragging ? 2 : 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', margin: '-0.35rem -0.35rem 0', color: 'var(--text-secondary)' }}>
+        <button type="button" aria-label={`Drag template ${template.name} to reorder`} title="Drag to reorder" disabled={disabled} {...attributes} {...listeners} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, background: 'transparent', color: 'inherit', padding: '0.3rem', cursor: disabled ? 'not-allowed' : 'grab', touchAction: 'none' }}><GripVertical size={17} /></button>
+        <span style={{ fontSize: '0.7rem', marginRight: 'auto' }}>Drag to reorder</span>
+        <button type="button" aria-label={`Move template ${template.name} earlier`} title="Move earlier" disabled={disabled || index === 0} onClick={() => onMove(index, -1)} style={cardOrderButtonStyle}><ArrowLeft size={14} /></button>
+        <button type="button" aria-label={`Move template ${template.name} later`} title="Move later" disabled={disabled || index === total - 1} onClick={() => onMove(index, 1)} style={cardOrderButtonStyle}><ArrowRight size={14} /></button>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 function templateDraftKey(template, tenantId, userId) {
   const owner = `${tenantId || 'tenant'}:${userId || 'user'}`;
@@ -174,6 +192,42 @@ function missingRequiredFieldsMessage(fields) {
   return `${fields.slice(0, -1).join(', ')}, and ${fields.at(-1)} are required`;
 }
 
+function metaTemplateNameSuggestion(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function normalizeWhatsAppAiDraft(value, fields, { includePickupPlotLink = false } = {}) {
+  const supported = new Set(fields.map(field => field.key));
+  const mapping = {};
+  const indexByKey = new Map();
+  let nextIndex = 1;
+  let body = String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p\s*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .trim()
+    .replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, key) => {
+      if (!supported.has(key)) return match;
+      if (!indexByKey.has(key)) {
+        indexByKey.set(key, nextIndex);
+        mapping[nextIndex] = key;
+        nextIndex += 1;
+      }
+      return `{{${indexByKey.get(key)}}}`;
+    });
+  if (includePickupPlotLink && !indexByKey.has('system.pickupPlotLink')) {
+    indexByKey.set('system.pickupPlotLink', nextIndex);
+    mapping[nextIndex] = 'system.pickupPlotLink';
+    body = `${body}\n\nReply to this message to view available plots, or use this link: {{${nextIndex}}}.`;
+  }
+  return { body, variableMapping: mapping };
+}
+
 export default function GenericCampaignTemplates({ embeddedCreateChannel = '', onEmbeddedClose, onEmbeddedCreated } = {}) {
   const notify = useNotify();
   const { tenant, user } = useContext(AuthContext);
@@ -191,6 +245,7 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
   const [editor, setEditor] = useState(null);
   const [whatsAppRefreshKey, setWhatsAppRefreshKey] = useState(0);
   const [syncingWhatsAppTemplates, setSyncingWhatsAppTemplates] = useState(false);
+  const [reorderingTemplates, setReorderingTemplates] = useState(false);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [aiDraftError, setAiDraftError] = useState('');
@@ -209,6 +264,10 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
   const editorIdentityRef = useRef(null);
   const templateRequest = useRef(0);
   const createFromQueryHandledRef = useRef(false);
+  const templateSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   useEffect(() => () => { templateRequest.current += 1; }, []);
 
   const removeTemplateDraft = (template) => {
@@ -282,6 +341,39 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
 
   useEffect(() => { loadTemplates(); }, [templatePage, templateChannel]);
 
+  const persistTemplateOrder = async (nextTemplates) => {
+    if (reorderingTemplates || nextTemplates.length < 2) return;
+    const previous = templates;
+    setTemplates(nextTemplates);
+    setReorderingTemplates(true);
+    try {
+      await fetchApi('/api/email-templates/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ channel: templateChannel, orderedIds: nextTemplates.map(template => template.id) }),
+      });
+      notify.success('Template order saved');
+    } catch (error) {
+      setTemplates(previous);
+      notify.error(error?.message || 'Failed to reorder templates');
+    } finally {
+      setReorderingTemplates(false);
+    }
+  };
+
+  const moveTemplate = (index, direction) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= templates.length || reorderingTemplates) return;
+    persistTemplateOrder(arrayMove(templates, index, nextIndex));
+  };
+
+  const handleTemplateDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id || reorderingTemplates) return;
+    const oldIndex = templates.findIndex(template => String(template.id) === String(active.id));
+    const newIndex = templates.findIndex(template => String(template.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    persistTemplateOrder(arrayMove(templates, oldIndex, newIndex));
+  };
+
 
   useEffect(() => {
     Promise.all([
@@ -315,7 +407,7 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
     }
   }, [editor, fields]);
 
-  const insertVariable = (field) => {
+  const insertVariable = (field, target = personalizationTarget) => {
     let placeholder = `{{${field.key}}}`;
     let variableMapping = null;
     if (editor?.whatsappBusinessTemplate) {
@@ -327,15 +419,51 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
       }
       placeholder = `{{${index}}}`;
     }
-    if (personalizationTarget === 'subject') {
+    if (target === 'subject') {
       setEditor(current => ({ ...current, subject: `${current.subject || ''}${placeholder}` }));
     } else if (editorRef.current) {
       editorRef.current.focus();
       const label = editor?.whatsappBusinessTemplate ? field.label : field.label;
-      document.execCommand('insertHTML', false, `<span data-template-variable="${editor?.whatsappBusinessTemplate ? placeholder.match(/\d+/)?.[0] : field.key}" contenteditable="false">[${label}]</span>&nbsp;`);
+      const tokenHtml = `<span data-template-variable="${editor?.whatsappBusinessTemplate ? placeholder.match(/\d+/)?.[0] : field.key}" contenteditable="false">[${label}]</span>&nbsp;`;
+      if (typeof document.execCommand === 'function') document.execCommand('insertHTML', false, tokenHtml);
+      else editorRef.current.insertAdjacentHTML('beforeend', tokenHtml);
       setEditor(current => ({ ...current, body: fromEditorHtml(editorRef.current), ...(variableMapping ? { whatsappVariableMapping: variableMapping } : {}) }));
     }
     setPersonalizationOpen(false);
+  };
+
+  const addPickupPlotLink = () => {
+    if (!pickupPlotField || !editorRef.current) return;
+    let messageBody = fromEditorText(editorRef.current).trim();
+    const variableMapping = { ...parseWhatsAppVariableMapping(editor?.whatsappVariableMapping) };
+    const currentEntry = Object.entries(variableMapping).find(([, key]) => key === 'system.pickupPlotLink');
+    const currentIndex = currentEntry?.[0] || null;
+    if (currentIndex) {
+      const token = `{{${currentIndex}}}`;
+      const occurrences = messageBody.split(token).length - 1;
+      const endsWithToken = new RegExp(`\\{\\{${currentIndex}\\}\\}[^a-z0-9]*$`, 'i').test(messageBody);
+      if (occurrences > 1 || endsWithToken) {
+        messageBody = messageBody.replace(new RegExp(`\\s*\\{\\{${currentIndex}\\}\\}\\s*$`), '').trimEnd();
+        delete variableMapping[currentIndex];
+      } else {
+        return;
+      }
+    }
+
+    const placeholders = [...new Set([...messageBody.matchAll(/\{\{(\d+)\}\}/g)].map(match => Number(match[1])))]
+      .sort((left, right) => left - right);
+    const unmapped = placeholders.filter(index => !variableMapping[index]);
+    const index = String(unmapped.at(-1) || Array.from(
+      { length: Object.keys(variableMapping).length + 2 },
+      (_, offset) => offset + 1,
+    ).find(candidate => !Object.hasOwn(variableMapping, candidate)) || Object.keys(variableMapping).length + 1);
+    variableMapping[index] = 'system.pickupPlotLink';
+    if (!messageBody.includes(`{{${index}}}`)) {
+      messageBody = `${messageBody}${messageBody ? '\n\n' : ''}Reply to this message to view available plots, or use this link: {{${index}}}. Thank you.`;
+    }
+    editorRef.current.innerHTML = toWhatsAppEditorHtml(messageBody, fields, variableMapping);
+    setEditor(current => ({ ...current, body: messageBody, whatsappVariableMapping: variableMapping }));
+    setPersonalizationTarget('body');
   };
 
   const runCommand = (command, value = null) => {
@@ -374,26 +502,47 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
     : openTemplatePreview(editor);
 
   const writeWithAi = async () => {
-    const subject = editor?.subject?.trim();
-    if (!subject) return notify.error('Add a subject before writing with AI');
+    const isWhatsApp = Boolean(editor?.whatsappBusinessTemplate);
+    const subject = isWhatsApp
+      ? metaTemplateNameSuggestion(editor?.name).replace(/_/g, ' ')
+      : editor?.subject?.trim();
+    if (!subject) return notify.error(isWhatsApp ? 'Add a template name before writing with AI' : 'Add a subject before writing with AI');
+    const currentMapping = parseWhatsAppVariableMapping(editor?.whatsappVariableMapping);
+    const includePickupPlotLink = isWhatsApp && (
+      Object.values(currentMapping).includes('system.pickupPlotLink')
+      || /pickup|plot/i.test(editor?.name || '')
+    );
     setAiDraftError('');
     setGenerating(true);
     try {
       const result = await fetchApi('/api/email-templates/ai-draft', {
         method: 'POST',
-        body: JSON.stringify({ subject }),
+        body: JSON.stringify({
+          subject,
+          channel: isWhatsApp ? 'WHATSAPP' : 'EMAIL',
+          templateName: isWhatsApp ? metaTemplateNameSuggestion(editor?.name) : undefined,
+          category: editor?.category,
+          includePickupPlotLink,
+        }),
         silent: true,
       });
-      const body = result?.body || '';
-      setEditor(current => ({ ...current, body }));
-      if (editorRef.current) editorRef.current.innerHTML = toEditorHtml(body, fields);
-      notify.success('AI draft added to the email body');
+      if (isWhatsApp) {
+        const draft = normalizeWhatsAppAiDraft(result?.body || '', fields, { includePickupPlotLink });
+        setEditor(current => ({ ...current, body: draft.body, whatsappVariableMapping: draft.variableMapping }));
+        if (editorRef.current) editorRef.current.innerHTML = toWhatsAppEditorHtml(draft.body, fields, draft.variableMapping);
+        notify.success('AI draft added to the WhatsApp message');
+      } else {
+        const body = result?.body || '';
+        setEditor(current => ({ ...current, body }));
+        if (editorRef.current) editorRef.current.innerHTML = toEditorHtml(body, fields);
+        notify.success('AI draft added to the email body');
+      }
     } catch (error) {
       if (error?.code === 'AI_NOT_CONFIGURED') {
         setAiDraftError('Your organization has not configured an AI provider yet.');
         notify.error('AI access is not configured yet');
       } else {
-        notify.error(error?.message || 'AI could not write the email template');
+        notify.error(error?.message || `AI could not write the ${isWhatsApp ? 'WhatsApp' : 'email'} template`);
       }
     } finally {
       setGenerating(false);
@@ -521,6 +670,18 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
   const personalizationGroups = [...new Set(editorFields.map(field => field.group || 'CRM'))];
   const activePersonalizationGroup = personalizationGroups.includes(personalizationGroup) ? personalizationGroup : (personalizationGroups[0] || '');
   const activePersonalizationFields = visibleFields.filter(field => (field.group || 'CRM') === activePersonalizationGroup);
+  const metaNameSuggestion = editor?.whatsappBusinessTemplate ? metaTemplateNameSuggestion(editor.name) : '';
+  const metaNameNeedsSuggestion = Boolean(editor?.whatsappBusinessTemplate && editor.name && metaNameSuggestion !== editor.name);
+  const whatsappMapping = parseWhatsAppVariableMapping(editor?.whatsappVariableMapping);
+  const pickupPlotLinkIndex = Object.entries(whatsappMapping).find(([, key]) => key === 'system.pickupPlotLink')?.[0] || null;
+  const pickupPlotField = editorFields.find(field => field.key === 'system.pickupPlotLink')
+    || DEFAULT_PERSONALIZATION_FIELDS.find(field => field.key === 'system.pickupPlotLink');
+  const pickupPlotToken = pickupPlotLinkIndex ? `{{${pickupPlotLinkIndex}}}` : null;
+  const pickupPlotTokenCount = pickupPlotToken ? String(editor?.body || '').split(pickupPlotToken).length - 1 : 0;
+  const pickupPlotLinkNeedsFix = Boolean(pickupPlotLinkIndex && (
+    pickupPlotTokenCount > 1
+    || new RegExp(`\\{\\{${pickupPlotLinkIndex}\\}\\}[^a-z0-9]*$`, 'i').test(String(editor?.body || '').trim())
+  ));
   const previewChannelLabel = preview?.source?.channel === 'SMS' ? 'SMS' : preview?.source?.channel === 'WHATSAPP' ? 'WhatsApp' : 'Email';
   const selectedPreviewContact = contacts.find(contact => String(contact.id) === String(previewContactId));
   const normalizedPreviewContactQuery = previewContactQuery.trim().toLowerCase();
@@ -602,11 +763,13 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
           <p style={{ color: 'var(--text-secondary)' }}>Create a template to use it in your sequence steps.</p>
         </div>
       ) : (
-        <div style={templateChannel === 'ALL'
-          ? { display: 'contents' }
-          : { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
-          {templates.map(template => (
-            <div key={template.id} className="card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        <DndContext sensors={templateSensors} collisionDetection={closestCenter} onDragEnd={handleTemplateDragEnd}>
+          <SortableContext items={templates.map(template => String(template.id))} strategy={rectSortingStrategy}>
+            <div style={templateChannel === 'ALL'
+              ? { display: 'contents' }
+              : { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
+          {templates.map((template, index) => (
+            <SortableTemplateCard key={template.id} template={template} index={index} total={templates.length} disabled={reorderingTemplates} onMove={moveTemplate}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
                 <div style={{ minWidth: 0 }}>
                   <h3 style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{template.name}</h3>
@@ -622,9 +785,11 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
                 <button type="button" className="btn-secondary" onClick={() => setEditor({ id: template.id, name: template.name || '', subject: template.subject || '', category: template.category || 'General', body: template.body || '', channel: template.channel || templateChannel })} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}><Edit size={14} /> Edit</button>
                 {!isGenericSystemTemplate(template) && <button type="button" className="btn-secondary" onClick={() => deleteTemplate(template)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#ef4444' }}><Trash2 size={14} /> Delete</button>}
               </div>
-            </div>
+            </SortableTemplateCard>
           ))}
-        </div>
+            </div>
+          </SortableContext>
+        </DndContext>
       )}
       </div>
 
@@ -646,17 +811,17 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
           <div className="generic-template-modal__layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 220px', gap: '1rem', minHeight: '430px' }}>
             <div className="generic-template-modal__editor" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div className="generic-template-modal__fields" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px', gap: '0.75rem' }}>
-                <label style={fieldLabelStyle}><span>Template Name <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><input aria-label="Template Name" className="input-field" value={editor.name} onChange={e => setEditor({ ...editor, name: e.target.value })} placeholder="Template name" /></label>
+                <label style={fieldLabelStyle}><span>Template Name <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><input aria-label="Template Name" className="input-field" value={editor.name} onChange={e => setEditor({ ...editor, name: e.target.value })} placeholder="Template name" />{editor.whatsappBusinessTemplate && <small role="status" style={{ color: metaNameNeedsSuggestion ? '#d97706' : 'var(--text-secondary)', lineHeight: 1.35 }}>{metaNameNeedsSuggestion ? <>Meta names use lowercase letters, numbers, and underscores. Suggested: <button type="button" onClick={() => setEditor(current => ({ ...current, name: metaNameSuggestion }))} style={inlineSuggestionButtonStyle}>Use {metaNameSuggestion}</button></> : editor.name ? 'Meta-compatible template name.' : 'Use lowercase letters, numbers, and underscores, for example pickup_plot_selection.'}</small>}</label>
                 {editor.whatsappBusinessTemplate ? <label style={fieldLabelStyle}>Category<select className="input-field" value={editor.category || 'UTILITY'} onChange={e => setEditor({ ...editor, category: e.target.value })}><option value="UTILITY">Utility</option><option value="MARKETING">Marketing</option><option value="AUTHENTICATION">Authentication</option></select></label> : <label style={fieldLabelStyle}>Category<input className="input-field" value={editor.category} readOnly={String(editor.category || '').startsWith('System: Generic CRM:')} onChange={e => setEditor({ ...editor, category: e.target.value })} placeholder="Category" />{String(editor.category || '').startsWith('System: Generic CRM:') && <small style={{ color: 'var(--text-secondary)' }}>This category keeps the default message connected to its lead event. You can edit the subject and message text.</small>}</label>}
               </div>
               {editor.whatsappBusinessTemplate && <label style={fieldLabelStyle}><span>Template Type <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><select aria-label="Template Type" className="input-field" value="WHATSAPP" disabled><option value="WHATSAPP">WhatsApp</option></select></label>}
               {!editor.whatsappBusinessTemplate && <label style={fieldLabelStyle}><span>Template Type <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><select aria-label="Template Type" className="input-field" value={editor.channel || 'EMAIL'} onChange={e => { removeTemplateDraft(editor); setEditor({ ...editor, channel: e.target.value }); }}>{TEMPLATE_CHANNELS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>}
               {!editor.whatsappBusinessTemplate && <label style={fieldLabelStyle}><span>Subject <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><input aria-label="Subject" className="input-field" value={editor.subject} onFocus={() => setPersonalizationTarget('subject')} onChange={e => setEditor({ ...editor, subject: e.target.value })} placeholder="Subject" /></label>}
-              {editor.whatsappBusinessTemplate && <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Meta approval is required before sending. Use the personalization fields to insert lead values.{editor.whatsappIncludesSelectionLink && <> The pickup/plot link is included in this default template as <code>{'{{7}}'}</code>.</>}</p>}
+              {editor.whatsappBusinessTemplate && <div style={{ display: 'grid', gap: '0.45rem' }}><p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0 }}>Meta approval is required before sending. Use the personalization fields to insert lead values.{editor.whatsappIncludesSelectionLink && <> The pickup/plot link is included in this default template as <code>{'{{7}}'}</code>.</>}</p><div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.55rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--subtle-bg-2)' }}><span style={{ color: pickupPlotLinkNeedsFix ? '#d97706' : 'var(--text-secondary)', fontSize: '0.78rem' }}>{pickupPlotLinkNeedsFix ? 'The pickup/plot link is duplicated or is the last part of the message.' : pickupPlotLinkIndex ? `Pickup / Plot Selection Link is included as {{${pickupPlotLinkIndex}}}.` : 'Building a plot-selection sequence?'}</span><button type="button" className="btn-secondary" disabled={Boolean(pickupPlotLinkIndex && !pickupPlotLinkNeedsFix)} onClick={addPickupPlotLink} style={{ fontSize: '0.76rem', padding: '0.35rem 0.55rem' }}>{pickupPlotLinkNeedsFix ? 'Fix pickup/plot link' : pickupPlotLinkIndex ? 'Pickup/plot link added' : 'Add Pickup / Plot Selection Link'}</button></div></div>}
               {aiDraftError && <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.7rem', padding: '0.9rem 1rem', border: '1px solid #f2b547', borderRadius: 8, background: 'rgba(251, 191, 36, 0.12)', color: 'var(--text-primary)' }}><span aria-hidden="true" style={{ color: '#d97706', fontSize: '1.2rem', lineHeight: 1 }}>×</span><div><strong style={{ display: 'block', marginBottom: '0.25rem' }}>AI access is not configured yet</strong><span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{aiDraftError}</span></div></div>}
               <div style={{ ...fieldLabelStyle, display: 'block', marginBottom: '-0.4rem' }}>Message <span aria-hidden="true" style={requiredMarkStyle}>*</span></div>
               <div style={toolbarStyle}>
-                {!editor.whatsappBusinessTemplate && <button type="button" className="btn-secondary" onClick={writeWithAi} disabled={generating} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}><Sparkles size={15} /> {generating ? 'Writing...' : 'Write with AI'}</button>}
+                <button type="button" className="btn-secondary" onClick={writeWithAi} disabled={generating} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}><Sparkles size={15} /> {generating ? 'Writing...' : 'Write with AI'}</button>
                 <button type="button" style={toolbarButtonStyle} onClick={() => runCommand('bold')} aria-label="Bold"><Bold size={15} /></button>
                 <button type="button" style={toolbarButtonStyle} onClick={() => runCommand('italic')} aria-label="Italic"><Italic size={15} /></button>
                 <button type="button" style={toolbarButtonStyle} onClick={() => runCommand('underline')} aria-label="Underline"><Underline size={15} /></button>
@@ -722,6 +887,7 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
 const fieldLabelStyle = { color: 'var(--text-secondary)', fontSize: '0.8rem', display: 'grid', gap: '0.35rem' };
 const requiredMarkStyle = { color: 'var(--danger-color, #dc2626)', fontWeight: 700 };
 const iconButtonStyle = { background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' };
+const cardOrderButtonStyle = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0.25rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' };
 const cardPreviewIconStyle = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0, border: 0, background: 'transparent', color: 'var(--accent-color)', cursor: 'pointer' };
 const previewContactPopoverStyle = { position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20, padding: '0.3rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--popover-bg, var(--modal-bg))', boxShadow: '0 10px 28px rgba(0,0,0,0.22)' };
 const previewContactSearchStyle = { display: 'flex', alignItems: 'center', gap: '0.45rem', margin: '0.15rem 0.15rem 0.3rem', padding: '0.5rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg, var(--surface-color))', color: 'var(--text-secondary)' };
@@ -730,6 +896,7 @@ const previewContactListStyle = { maxHeight: '220px', overflowY: 'auto' };
 const previewContactOptionStyle = { display: 'block', width: '100%', padding: '0.5rem 0.65rem', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', textAlign: 'left' };
 const previewContactEmptyStyle = { padding: '0.75rem 0.65rem', color: 'var(--text-secondary)', textAlign: 'center' };
 const variableButtonStyle = { textAlign: 'left', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '0.4rem 0.55rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem' };
+const inlineSuggestionButtonStyle = { padding: 0, border: 0, background: 'transparent', color: 'var(--primary-color, var(--accent-color))', cursor: 'pointer', font: 'inherit', fontWeight: 700, textDecoration: 'underline' };
 const toolbarStyle = { display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--subtle-bg-2)' };
 const toolbarButtonStyle = { ...iconButtonStyle, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0.35rem', borderRadius: '5px' };
 const toolbarSelectStyle = { border: '1px solid var(--border-color)', borderRadius: '5px', padding: '0.25rem', background: 'var(--surface-color)', color: 'var(--text-primary)' };

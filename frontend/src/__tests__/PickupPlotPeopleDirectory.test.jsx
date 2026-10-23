@@ -68,7 +68,7 @@ describe('<TransportPersons />', () => {
     expect(screen.getByTestId('transport-directory-table-scroll')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
       position: 'sticky', top: '0px', color: 'var(--text-primary)',
-      background: 'var(--table-header-bg, var(--surface-color))',
+      background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
     });
   });
 
@@ -520,7 +520,7 @@ describe('<PlotBrokers />', () => {
     expect(screen.getByTestId('broker-directory-table-scroll')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
       position: 'sticky', top: '0px', color: 'var(--text-primary)',
-      background: 'var(--table-header-bg, var(--surface-color))',
+      background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
     });
   });
 

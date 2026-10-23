@@ -18,7 +18,7 @@ export function Modal({ title, onClose, children, wide }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div className="cp-overlay" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="cp-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
       <div className={`cp-modal${wide ? ' cp-modal-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="cp-modal-head">
           <h3>{title}</h3>

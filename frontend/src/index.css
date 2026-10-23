@@ -8497,7 +8497,9 @@ body[data-vertical="generic"] table.pickup-plot-leads-table {
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
-  background-color: var(--table-header-bg) !important;
+  /* Sticky headers overlap scrolling rows, so they need an opaque themed
+     surface rather than the glass/translucent table-header token. */
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {

@@ -2193,6 +2193,13 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  const [drillParams, setDrillParams] = useSearchParams();
+  const focusedCallifiedLeadId = isGeneric
+    ? Number(drillParams.get("callifiedLeadId"))
+    : 0;
+  const focusedLeadSearch = isGeneric
+    ? String(drillParams.get("leadSearch") || "").trim()
+    : "";
   const [leadTableDensity, setLeadTableDensity] = useState(() => {
     if (!isGeneric || typeof window === "undefined") return "comfortable";
     try {
@@ -2322,7 +2329,7 @@ const Leads = () => {
   const [services, setServices] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState(focusedLeadSearch);
   const leadRequestSequenceRef = useRef(0);
   const genericPhoneCountryUserChangedRef = useRef(false);
   const genericPhoneCountryDetectionRunRef = useRef(false);
@@ -2592,7 +2599,6 @@ const Leads = () => {
   // Seeding the existing filter state (rather than adding a parallel filter
   // path) means the dropdowns visibly reflect what's applied and the user can
   // widen or clear it from the normal controls.
-  const [drillParams, setDrillParams] = useSearchParams();
   useEffect(() => {
     const callStatus = drillParams.get("callStatus");
     const source = drillParams.get("source");
@@ -6525,6 +6531,15 @@ const Leads = () => {
         currentLeadsPage * leadsPageSize,
         currentLeadsPage * leadsPageSize + leadsPageSize,
       );
+  useEffect(() => {
+    if (!isGeneric || !Number.isInteger(focusedCallifiedLeadId) || focusedCallifiedLeadId <= 0 || loading) return;
+    const cell = document.querySelector(
+      `[data-callified-ai-lead-id="${focusedCallifiedLeadId}"]`,
+    );
+    if (typeof cell?.scrollIntoView === "function") {
+      cell.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }
+  }, [focusedCallifiedLeadId, isGeneric, loading, paginatedLeads]);
   const visibleSelectedLeadCount = paginatedLeads.reduce(
     (count, lead) => count + (selectedLeads.includes(lead.id) ? 1 : 0),
     0,
@@ -11094,7 +11109,20 @@ const Leads = () => {
                         )}
                         {isLeadFixedColumnVisible("callifiedAi") && (
                           <td
-                            style={getBodyCellStyle("callifiedAi")}
+                            data-callified-ai-lead-id={String(lead.id)}
+                            data-callified-ai-highlighted={
+                              Number(lead.id) === focusedCallifiedLeadId ? "true" : undefined
+                            }
+                            aria-label={`Callified AI call for ${lead.name || "lead"}`}
+                            style={getBodyCellStyle(
+                              "callifiedAi",
+                              Number(lead.id) === focusedCallifiedLeadId
+                                ? {
+                                    background: "color-mix(in srgb, var(--primary-color, var(--accent-color)) 18%, transparent)",
+                                    boxShadow: "inset 0 0 0 2px var(--primary-color, var(--accent-color))",
+                                  }
+                                : {},
+                            )}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <button

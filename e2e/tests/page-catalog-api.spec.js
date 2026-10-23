@@ -136,23 +136,26 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
   }) => {
     const token = await loginAdmin(request);
 
-    // Create a brand-new role with no permissions.
+    // New roles require at least one page grant. Start with tasks.read so
+    // contacts remains inaccessible until the lifecycle step below.
     const create = await post(request, token, '/api/roles', {
       name: `${RUN_TAG} life`,
       key: `${RUN_TAG}_LIFE`,
       userType: 'STAFF',
+      permissions: [{ module: 'tasks', action: 'read' }],
     });
     expect(create.status(), await create.text()).toBe(201);
     const role = await create.json();
     createdRoleIds.add(role.id);
 
-    // 1. accessible-pages should only include /home (no perms granted yet).
+    // 1. accessible-pages includes /home + /tasks, but not /contacts.
     const initial = await get(request, token, `/api/roles/${role.id}/accessible-pages`);
     expect(initial.status()).toBe(200);
     /** @type {{ pages: Array<{ path: string }> }} */
     const initialBody = await initial.json();
     const initialPaths = initialBody.pages.map((p) => p.path);
     expect(initialPaths).toContain('/home');
+    expect(initialPaths).toContain('/tasks');
     expect(initialPaths).not.toContain('/contacts');
 
     // 2. Trying to set landingPath to /contacts NOW should 400
@@ -243,6 +246,7 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
       key: `${RUN_TAG}_HOME`,
       userType: 'STAFF',
       landingPath: '/home',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(create.status()).toBe(201);
     const role = await create.json();

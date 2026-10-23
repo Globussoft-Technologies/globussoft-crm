@@ -181,6 +181,7 @@ test.describe('PUT /api/roles/:id/widgets', () => {
       key: RUN_TAG,
       userType: 'STAFF',
       landingPath: '/home',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(create.status(), await create.text()).toBe(201);
     const created = await create.json();

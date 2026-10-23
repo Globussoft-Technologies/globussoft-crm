@@ -141,6 +141,19 @@ test.afterAll(async ({ request }) => {
 // ── POST /api/roles — create + landingPath ────────────────────────────
 
 test.describe('POST /api/roles — landingPath on create', () => {
+  test('400 rejects a generic CRM role without permissions', async ({ request }) => {
+    const { token } = await getAdmin(request);
+    const res = await post(request, token, '/api/roles', {
+      name: `${RUN_TAG} no-page-permission`,
+      key: `${RUN_TAG}_NO_PAGE_PERMISSION`,
+      userType: 'STAFF',
+      permissions: [],
+    });
+    expect(res.status(), await res.text()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('ROLE_PAGE_PERMISSION_REQUIRED');
+  });
+
   test('201 saves a valid landingPath', async ({ request }) => {
     const { token } = await getAdmin(request);
     const key = `${RUN_TAG}_CREATE_OK`;
@@ -150,6 +163,7 @@ test.describe('POST /api/roles — landingPath on create', () => {
       description: 'landingPath round-trip',
       userType: 'STAFF',
       landingPath: '/home',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(res.status(), await res.text()).toBe(201);
     const body = await res.json();
@@ -165,11 +179,12 @@ test.describe('POST /api/roles — landingPath on create', () => {
       name: `${RUN_TAG} create-qs`,
       key,
       userType: 'STAFF',
-      landingPath: '/wellness/reports?tab=pnl',
+      landingPath: '/custom-reports?tab=pnl',
+      permissions: [{ module: 'reports', action: 'write' }],
     });
     expect(res.status(), await res.text()).toBe(201);
     const body = await res.json();
-    expect(body.landingPath).toBe('/wellness/reports?tab=pnl');
+    expect(body.landingPath).toBe('/custom-reports?tab=pnl');
     createdRoleIds.add(body.id);
   });
 
@@ -180,6 +195,7 @@ test.describe('POST /api/roles — landingPath on create', () => {
       name: `${RUN_TAG} create-null`,
       key,
       userType: 'STAFF',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(res.status(), await res.text()).toBe(201);
     const body = await res.json();
@@ -238,6 +254,7 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
       key,
       userType: 'STAFF',
       landingPath: '/home',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(create.status()).toBe(201);
     const created = await create.json();
@@ -274,6 +291,7 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
       key,
       userType: 'STAFF',
       landingPath: '/home',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     const created = await create.json();
     createdRoleIds.add(created.id);
@@ -293,6 +311,7 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
       name: `${RUN_TAG} put-bad`,
       key,
       userType: 'STAFF',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     const created = await create.json();
     createdRoleIds.add(created.id);
@@ -387,6 +406,7 @@ test.describe('POST /api/roles/:id/assign/:userId — single-role replacement', 
       name: `${RUN_TAG} role A`,
       key: roleAKey,
       userType: 'STAFF',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(roleARes.status(), await roleARes.text()).toBe(201);
     const roleA = await roleARes.json();
@@ -396,6 +416,7 @@ test.describe('POST /api/roles/:id/assign/:userId — single-role replacement', 
       name: `${RUN_TAG} role B`,
       key: roleBKey,
       userType: 'STAFF',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(roleBRes.status()).toBe(201);
     const roleB = await roleBRes.json();
@@ -516,6 +537,7 @@ test.describe('POST /api/staff — rbacRoleId at creation', () => {
       key: roleKey,
       userType: 'STAFF',
       landingPath: '/home',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(roleRes.status()).toBe(201);
     const newRole = await roleRes.json();
@@ -601,6 +623,7 @@ test.describe('POST /api/staff — rbacRoleId at creation', () => {
       name: `${RUN_TAG} put A`,
       key: keyA,
       userType: 'STAFF',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(rA.status()).toBe(201);
     const roleA = await rA.json();
@@ -610,6 +633,7 @@ test.describe('POST /api/staff — rbacRoleId at creation', () => {
       name: `${RUN_TAG} put B`,
       key: keyB,
       userType: 'STAFF',
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(rB.status()).toBe(201);
     const roleB = await rB.json();

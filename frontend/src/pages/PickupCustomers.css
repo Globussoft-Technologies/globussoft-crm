@@ -93,6 +93,17 @@
 .pickup-payment-balance span { color:var(--text-secondary); font-size:.8rem; }
 .pickup-payment-balance strong { font-size:1rem; }
 .pickup-payment-manual-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.pickup-payment-choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:0; padding:0; border:0; }
+.pickup-payment-choice legend { grid-column:1/-1; margin-bottom:2px; font-weight:700; }
+.pickup-payment-choice label { display:flex; align-items:flex-start; gap:9px; padding:.75rem; border:1px solid var(--border-color); border-radius:10px; cursor:pointer; }
+.pickup-payment-choice label:has(input:checked) { border-color:var(--primary-color, var(--accent-color)); background:color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, transparent); }
+.pickup-payment-choice input { margin-top:2px; accent-color:var(--primary-color, var(--accent-color)); }
+.pickup-payment-choice span { display:grid; gap:3px; }
+.pickup-payment-choice small { color:var(--text-secondary); font-weight:400; line-height:1.35; }
+.pickup-initial-payment-fields { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:10px; }
+.pickup-percentage-input { position:relative; width:100%; }
+.pickup-percentage-input input { width:100%; box-sizing:border-box; padding-right:32px; }
+.pickup-percentage-input span { position:absolute; right:12px; top:50%; transform:translateY(-50%); color:var(--text-secondary); font-weight:700; }
 .pickup-generated-link { display:grid; gap:10px; }
 .pickup-generated-link p { margin:0; color:var(--text-secondary); font-size:.82rem; }
 .pickup-plot-dialog { display:grid; gap:12px; }
@@ -116,4 +127,4 @@
   .pickup-action-label { display:none; }
 }
 @media (max-width:760px) { .pickup-master-detail { grid-template-columns:1fr; overflow-y:auto; } .pickup-customer-directory { min-height:280px; max-height:44vh; } .pickup-detail-pane { overflow:visible; } }
-@media (max-width:640px) { .pickup-customers-page { height:auto; min-height:100%; overflow-y:auto; } .pickup-page-header,.pickup-detail-header { align-items:stretch; flex-direction:column; } .pickup-refresh { align-self:flex-start; } .pickup-directory-toolbar { grid-template-columns:1fr; } .pickup-customer-table th:nth-child(2),.pickup-customer-table td:nth-child(2) { display:none; } .pickup-customer-table th:nth-child(1) { width:52%; } .pickup-customer-table th:nth-child(3) { width:48%; } .pickup-detail-actions { justify-content:flex-start; } .pickup-section-heading-with-action { align-items:flex-start; flex-wrap:wrap; } .pickup-generate-payment { margin-left:44px; } .pickup-payment-manual-fields { grid-template-columns:1fr; } }
+@media (max-width:640px) { .pickup-customers-page { height:auto; min-height:100%; overflow-y:auto; } .pickup-page-header,.pickup-detail-header { align-items:stretch; flex-direction:column; } .pickup-refresh { align-self:flex-start; } .pickup-directory-toolbar { grid-template-columns:1fr; } .pickup-customer-table th:nth-child(2),.pickup-customer-table td:nth-child(2) { display:none; } .pickup-customer-table th:nth-child(1) { width:52%; } .pickup-customer-table th:nth-child(3) { width:48%; } .pickup-detail-actions { justify-content:flex-start; } .pickup-section-heading-with-action { align-items:flex-start; flex-wrap:wrap; } .pickup-generate-payment { margin-left:44px; } .pickup-payment-manual-fields,.pickup-payment-choice,.pickup-initial-payment-fields { grid-template-columns:1fr; } }

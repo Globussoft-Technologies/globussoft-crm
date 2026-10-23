@@ -127,7 +127,7 @@ describe('<PickupInventory />', () => {
     expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1265px', minWidth: '100%' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', tableLayout: 'fixed' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Pickup location' })).toHaveStyle({ position: 'sticky', top: '0px', color: 'var(--text-primary)', background: 'var(--table-header-bg, var(--surface-color))' });
+    expect(screen.getByRole('columnheader', { name: 'Pickup location' })).toHaveStyle({ position: 'sticky', top: '0px', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' });
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open North Gate in Google Maps' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open pickup address for North Gate in Google Maps' })).toHaveClass('pickup-inventory-address-link');

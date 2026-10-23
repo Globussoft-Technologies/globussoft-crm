@@ -38,6 +38,34 @@ beforeEach(() => {
 });
 
 describe('Generic CRM template personalization', () => {
+  it('reorders Generic CRM template cards and persists the new position', async () => {
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (String(url).startsWith('/api/email-templates?paginate=1')) {
+        return Promise.resolve({
+          items: [
+            { id: 1, name: 'First template', subject: 'First', body: 'First body', channel: 'EMAIL', category: 'General' },
+            { id: 2, name: 'Second template', subject: 'Second', body: 'Second body', channel: 'EMAIL', category: 'General' },
+          ],
+          pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
+        });
+      }
+      if (url === '/api/email-templates/reorder' && options.method === 'PUT') return Promise.resolve({ success: true });
+      if (url === '/api/email-templates/personalization-fields') return Promise.resolve({ fields: [] });
+      if (String(url).startsWith('/api/contacts')) return Promise.resolve({ data: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Move template First template later' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/email-templates/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ channel: 'EMAIL', orderedIds: [2, 1] }),
+    }));
+    expect(screen.getByRole('button', { name: 'Drag template First template to reorder' })).toBeInTheDocument();
+    expect(notifyObj.success).toHaveBeenCalledWith('Template order saved');
+  });
+
   it.each(['EMAIL', 'SMS'])('opens a rendered %s preview from the document icon', async (channel) => {
     window.history.pushState({}, '', `/marketing?tab=templates&templateChannel=${channel}`);
     fetchApiMock.mockImplementation((url, options = {}) => {
@@ -204,6 +232,111 @@ describe('Generic CRM template personalization', () => {
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/templates', expect.objectContaining({ method: 'POST' })));
     const request = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/whatsapp/templates' && options?.method === 'POST');
     expect(JSON.parse(request[1].body)).toMatchObject({ name: 'generic_custom_notice', body: 'Hello, thanks for getting in touch.', variableMapping: {} });
+    window.history.pushState({}, '', '/marketing');
+  });
+
+  it('suggests a Meta-compatible WhatsApp name while the operator types', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=WHATSAPP');
+    fetchApiMock.mockImplementation((url) => {
+      if (String(url).startsWith('/api/email-templates?paginate=1')) return Promise.resolve({ items: [], pagination: { totalPages: 1 } });
+      if (url === '/api/whatsapp/templates') return Promise.resolve([]);
+      return Promise.resolve({ fields: [] });
+    });
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+
+    fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: 'Pickup Plot-Selection' } });
+    const suggestion = screen.getByRole('button', { name: 'Use pickup_plot_selection' });
+    expect(suggestion).toBeInTheDocument();
+    fireEvent.click(suggestion);
+
+    expect(screen.getByLabelText('Template Name')).toHaveValue('pickup_plot_selection');
+    expect(screen.getByRole('status')).toHaveTextContent('Meta-compatible template name');
+    window.history.pushState({}, '', '/marketing');
+  });
+
+  it('offers a one-click pickup/plot link field in the WhatsApp editor', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=WHATSAPP');
+    fetchApiMock.mockImplementation((url) => {
+      if (String(url).startsWith('/api/email-templates?paginate=1')) return Promise.resolve({ items: [], pagination: { totalPages: 1 } });
+      if (url === '/api/whatsapp/templates') return Promise.resolve([]);
+      return Promise.resolve({ fields: [] });
+    });
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+
+    const addLink = screen.getByRole('button', { name: 'Add Pickup / Plot Selection Link' });
+    fireEvent.click(addLink);
+
+    expect(screen.getByRole('button', { name: 'Pickup/plot link added' })).toBeDisabled();
+    expect(screen.getByText(/Pickup \/ Plot Selection Link is included as/)).toHaveTextContent('{{1}}');
+    expect(screen.getByRole('textbox', { name: 'WhatsApp message' })).toHaveTextContent('Pickup / plot link');
+    window.history.pushState({}, '', '/marketing');
+  });
+
+  it('reuses a manually entered WhatsApp placeholder for the pickup/plot link', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=WHATSAPP');
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (String(url).startsWith('/api/email-templates?paginate=1')) return Promise.resolve({ items: [], pagination: { totalPages: 1 } });
+      if (url === '/api/whatsapp/templates' && !options.method) return Promise.resolve([]);
+      if (url === '/api/whatsapp/templates' && options.method === 'POST') return Promise.resolve({ id: 81 });
+      return Promise.resolve({ fields: [] });
+    });
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+    fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: 'pickup_plot_selection' } });
+
+    const body = screen.getByRole('textbox', { name: 'WhatsApp message' });
+    body.textContent = 'Hi {{1}}, your plot-selection request is ready.\n\nReply to this message to view the available plots, or use this link: {{2}}.\n\nThank you.';
+    fireEvent.input(body);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Pickup / Plot Selection Link' }));
+
+    expect(screen.getByText(/Pickup \/ Plot Selection Link is included as/)).toHaveTextContent('{{2}}');
+    expect(body).toHaveTextContent('Pickup / plot link');
+    expect(body.textContent.match(/Pickup \/ plot link/g)).toHaveLength(1);
+    expect(body).toHaveTextContent('Thank you.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Template' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/templates', expect.objectContaining({ method: 'POST' })));
+    const request = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/whatsapp/templates' && options?.method === 'POST');
+    expect(JSON.parse(request[1].body)).toMatchObject({
+      name: 'pickup_plot_selection',
+      variableMapping: { 1: 'contact.first_name', 2: 'system.pickupPlotLink' },
+    });
+    window.history.pushState({}, '', '/marketing');
+  });
+
+  it('writes a WhatsApp pickup/plot draft with AI and preserves Meta variable mappings', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=WHATSAPP');
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (String(url).startsWith('/api/email-templates?paginate=1')) return Promise.resolve({ items: [], pagination: { totalPages: 1 } });
+      if (url === '/api/whatsapp/templates' && !options.method) return Promise.resolve([]);
+      if (url === '/api/email-templates/ai-draft') return Promise.resolve({
+        body: 'Hi {{contact.first_name}}, reply to choose a plot or use {{system.pickupPlotLink}}. Thank you.',
+      });
+      if (url === '/api/whatsapp/templates' && options.method === 'POST') return Promise.resolve({ id: 80 });
+      return Promise.resolve({ fields: [] });
+    });
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+    fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: 'pickup_plot_selection' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Write with AI' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/email-templates/ai-draft', expect.objectContaining({
+      method: 'POST',
+      body: expect.stringContaining('"channel":"WHATSAPP"'),
+    })));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'WhatsApp message' })).toHaveTextContent('First Name'));
+    expect(screen.getByRole('textbox', { name: 'WhatsApp message' })).toHaveTextContent('Pickup / plot link');
+    expect(notifyObj.success).toHaveBeenCalledWith('AI draft added to the WhatsApp message');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Template' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/templates', expect.objectContaining({ method: 'POST' })));
+    const request = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/whatsapp/templates' && options?.method === 'POST');
+    expect(JSON.parse(request[1].body)).toMatchObject({
+      name: 'pickup_plot_selection',
+      variableMapping: { 1: 'contact.first_name', 2: 'system.pickupPlotLink' },
+    });
     window.history.pushState({}, '', '/marketing');
   });
 

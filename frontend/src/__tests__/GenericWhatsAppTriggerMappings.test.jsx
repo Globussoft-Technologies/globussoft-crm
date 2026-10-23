@@ -67,13 +67,13 @@ describe('GenericWhatsAppTriggerMappings', () => {
     expect(screen.queryByText('Lead field filters')).not.toBeInTheDocument();
   });
 
-  it('offers only the seven supported Generic CRM sequence triggers', async () => {
+  it('offers only the eight supported Generic CRM sequence triggers', async () => {
     render(<GenericWhatsAppTriggerMappings campaigns={[]} onSaved={vi.fn()} />);
     const trigger = await screen.findByRole('combobox', { name: 'WhatsApp sequence trigger' });
     const values = within(trigger).getAllByRole('option').map(option => option.value);
     expect(values).toEqual([
       'contact.created', 'contact.status_changed', 'payment.due', 'pickup_plot.selection_requested',
-      'pickup_plot.selected', 'payment.collected', 'plot.confirmed',
+      'pickup_point.assigned', 'pickup_plot.selected', 'payment.collected', 'plot.confirmed',
     ]);
   });
 
@@ -199,13 +199,20 @@ describe('GenericWhatsAppTriggerMappings', () => {
     ]);
   });
 
-  it('shows a confirmation only after selecting the next WhatsApp step type', async () => {
+  it('opens the next WhatsApp message editor and lets the same card switch step type', async () => {
     render(<GenericWhatsAppTriggerMappings campaigns={[]} onSaved={vi.fn()} />);
     const nextStep = await screen.findByRole('combobox', { name: 'Next step type after step 1' });
     expect(nextStep).toHaveValue('');
-    expect(screen.queryByRole('button', { name: 'Add next step' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add step after step 1' }));
+    expect(nextStep).toHaveValue('whatsapp');
+    expect(nextStep).toHaveStyle({ width: '210px' });
+    expect(screen.getByText('STEP 2')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'WhatsApp template for step 3' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add next step' })).toBeInTheDocument();
 
     fireEvent.change(nextStep, { target: { value: 'reply' } });
+    expect(nextStep).toHaveValue('reply');
+    expect(screen.queryByRole('button', { name: 'Add step after step 1' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add reply condition' })).toBeInTheDocument();
     fireEvent.change(nextStep, { target: { value: 'field' } });
     expect(screen.getByRole('button', { name: 'Add CRM column condition' })).toBeInTheDocument();

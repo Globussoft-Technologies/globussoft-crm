@@ -27,7 +27,7 @@ const BILLING_TABLE_COLUMNS = [
   { label: 'Status', width: 120, minWidth: 90 },
   { label: 'Actions', width: 120, minWidth: 100 },
 ];
-const billingHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--table-header-bg, var(--surface-color))' };
+const billingHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';

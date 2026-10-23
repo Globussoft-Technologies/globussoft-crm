@@ -991,8 +991,29 @@ async function processStep(step, enrollment) {
 
   if (step.kind === 'sms') {
     if (enrollment.contact?.phone) {
-      addGenericPickupPlotLink(ctx, enrollment, step.smsBody);
-      let body = renderTemplate(step.smsBody || '', ctx);
+      const isGenericSequence = enrollment.sequence?.tenant?.vertical === 'generic';
+      let smsTemplateBody = step.smsBody || '';
+      // Generic CRM authoring selects a durable SMS template. Resolve that
+      // tenant-scoped template at send time so a sequence really sends the
+      // selected template (including later approved copy changes). smsBody is
+      // retained as a backwards-compatible snapshot/fallback for old steps or
+      // a template that was subsequently deleted. Other verticals keep their
+      // existing inline-body behavior unchanged.
+      if (isGenericSequence && step.emailTemplateId) {
+        const linkedTemplate = await prisma.emailTemplate.findFirst({
+          where: {
+            id: Number(step.emailTemplateId),
+            tenantId: enrollment.tenantId,
+            channel: 'SMS',
+          },
+          select: { id: true, body: true },
+        });
+        if (linkedTemplate) smsTemplateBody = linkedTemplate.body || '';
+      }
+      addGenericPickupPlotLink(ctx, enrollment, smsTemplateBody);
+      let body = isGenericSequence
+        ? renderGenericTemplate(normalizeGenericTemplatePlaceholders(smsTemplateBody), ctx)
+        : renderTemplate(smsTemplateBody, ctx);
       // S19 — SMS doesn't natively carry binary attachments but flyer links
       // are commonly sent as a separate URL line.
       // S87 — for each resolved flyer attachment, shorten the rendered
@@ -1082,7 +1103,7 @@ async function processStep(step, enrollment) {
           tenantId: enrollment.tenantId,
         },
       });
-      if (enrollment.sequence?.tenant?.vertical === 'generic') {
+      if (isGenericSequence) {
         const provider = await resolveProviderConfig(prisma, enrollment.tenantId);
         if (!provider) {
           await prisma.smsMessage.update({ where: { id: message.id }, data: { status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' } });

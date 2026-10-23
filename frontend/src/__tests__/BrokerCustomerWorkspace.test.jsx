@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import BrokerCustomerWorkspace from '../components/BrokerCustomerWorkspace';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
@@ -118,6 +119,45 @@ describe('<BrokerCustomerWorkspace />', () => {
     fireEvent.change(await screen.findByLabelText('Search assigned customers'), { target: { value: 'Priyanka' } });
     expect(screen.getByText('Priyanka Mehta')).toBeInTheDocument();
     expect(screen.queryByText('Li Wei')).toBeNull();
+  });
+
+  it('opens the full email composer over Sales Workspace and keeps the Callified link', async () => {
+    fetchApi.mockResolvedValueOnce(response);
+    render(<MemoryRouter><BrokerCustomerWorkspace /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Email Li Wei' }));
+    expect(await screen.findByRole('heading', { name: 'New Message' })).toBeInTheDocument();
+    expect(screen.getByLabelText('To:')).toHaveValue('li@example.com');
+    expect(screen.getByTestId('broker-customer-workspace')).toBeInTheDocument();
+
+    const call = screen.getByRole('link', { name: 'Call Li Wei' });
+    expect(call).toHaveAttribute('href', '/leads?callifiedLeadId=61&leadSearch=li%40example.com');
+  });
+
+  it('sends from the embedded composer and then opens Inbox', async () => {
+    fetchApi.mockResolvedValueOnce(response).mockResolvedValue([]);
+    render(<MemoryRouter><BrokerCustomerWorkspace /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Email Li Wei' }));
+    fireEvent.change(await screen.findByLabelText('Subject:'), { target: { value: 'Site visit follow-up' } });
+    fireEvent.change(screen.getByLabelText('Message:'), { target: { value: 'Your selected plot is ready.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Email' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/communications/send-email',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          to: 'li@example.com',
+          cc: '',
+          bcc: '',
+          subject: 'Site visit follow-up',
+          body: 'Your selected plot is ready.',
+        }),
+      },
+    ));
+    expect(window.location.pathname).toBe('/inbox');
+    window.history.replaceState({}, '', '/');
   });
 
   it('schedules a completed customer site visit with its date and time', async () => {

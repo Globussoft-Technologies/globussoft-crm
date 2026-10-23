@@ -2743,7 +2743,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       });
     }
     if (nextStatus === "PAYMENT_VERIFIED" && payment?.id) {
-      require("../lib/eventBus").emitEvent(
+      await require("../lib/eventBus").emitEvent(
         "payment.collected",
         { paymentId: payment.id, invoiceId: invoice?.id || saved.invoiceId, contactId: customerId, bookingId: booking?.id },
         req.user.tenantId,
@@ -4024,7 +4024,12 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
     if (tenant?.vertical === "generic") {
       require("../lib/eventBus").emitEvent(
         existingPickup ? "pickup_point.updated" : "pickup_point.created",
-        { pickupPointId: pickup.id, contactId: pickup.contactId, pickup },
+        {
+          pickupPointId: pickup.id,
+          contactId: pickup.contactId,
+          eventId: `${pickup.id}-${new Date(pickup.updatedAt || Date.now()).getTime()}`,
+          pickup,
+        },
         tenantId,
         req.io,
       ).catch((error) => console.error("[GenericCampaign] pickup point event failed:", error.message));

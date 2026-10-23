@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
-import { hydrateGenericEventPayload, matchesEventConditions, processContactCreated, processGenericChannelCampaignEvent, processWhatsAppCampaignEvent, templateParameterValues } from '../../lib/genericCampaignAutomation.js';
+import { hydrateGenericEventPayload, matchesEventConditions, processContactCreated, processGenericChannelCampaignEvent, processWhatsAppCampaignEvent, queueWhatsAppSequenceTemplate, templateParameterValues } from '../../lib/genericCampaignAutomation.js';
 
 vi.mock('../../lib/whatsappQueue.js', () => ({
   getQueue: () => ({ enqueueSend: vi.fn().mockResolvedValue({}) }),
@@ -18,6 +18,50 @@ beforeEach(() => {
 });
 
 describe('Generic Email/SMS trigger sequences', () => {
+  test('marks only a sequence-sent pickup/plot template for the inbound chat flow', async () => {
+    prisma.whatsAppConfig = { findFirst: vi.fn().mockResolvedValue({ phoneNumberId: 'phone-id' }) };
+    prisma.whatsAppOptOut = { findUnique: vi.fn().mockResolvedValue(null) };
+    prisma.whatsAppTemplate = { findFirst: vi.fn().mockResolvedValue({
+      id: 14,
+      name: 'custom_plot_sequence',
+      body: 'Hi {{1}}, continue here: {{2}}.',
+      variableMapping: JSON.stringify({ 1: 'contact.first_name', 2: 'system.pickupPlotLink' }),
+    }) };
+    prisma.whatsAppMessage = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 50 }),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    };
+    prisma.whatsAppThread = {
+      upsert: vi.fn().mockResolvedValue({ id: 70, contactPhone: '+919876543210', unreadCount: 0 }),
+      findMany: vi.fn().mockResolvedValue([]),
+    };
+    prisma.waOutboundJob = { create: vi.fn().mockResolvedValue({ id: 90, status: 'PENDING' }) };
+    const enrollment = {
+      id: 44,
+      tenantId: 1,
+      sequenceId: 9,
+      currentStep: 0,
+      contact: { id: 7, name: 'Kanchan Gupta', phone: '9876543210' },
+      sequence: { tenant: { name: 'NovaCrest', vertical: 'generic' }, campaigns: [] },
+    };
+
+    await expect(queueWhatsAppSequenceTemplate({
+      templateId: 14,
+      enrollment,
+      stepId: 8,
+    })).resolves.toMatchObject({ queued: true, messageId: 50, threadId: 70 });
+
+    const metadata = JSON.parse(prisma.whatsAppMessage.create.mock.calls[0][0].data.interactiveJson);
+    expect(metadata).toMatchObject({
+      sequenceKey: 'sequence:44:step:8:main',
+      sequenceEnrollmentId: 44,
+      sequenceId: 9,
+      sequenceStepId: 8,
+      pickupPlotFlow: true,
+    });
+  });
+
   test('handles concurrent duplicate events through the unique database key', async () => {
     prisma.campaign.findMany.mockResolvedValue([{ id: 22, channel: 'EMAIL', sequence: { id: 90, isActive: true, steps: [{ kind: 'email' }] }, scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', channel: 'EMAIL', triggerEvent: 'contact.created' }) }]);
     const keys = new Set();
@@ -79,6 +123,27 @@ describe('Generic Email/SMS trigger sequences', () => {
 
     expect(prisma.sequenceEnrollment.create).toHaveBeenNthCalledWith(1, { data: expect.objectContaining({ currentNode: 'campaign-event:24:contact.updated:7-update-1' }) });
     expect(prisma.sequenceEnrollment.create).toHaveBeenNthCalledWith(2, { data: expect.objectContaining({ currentNode: 'campaign-event:24:contact.updated:7-update-2' }) });
+  });
+
+  test('enrolls a sequence when a pickup location is assigned from the Leads table', async () => {
+    prisma.customerPickup = { findFirst: vi.fn().mockResolvedValue({ id: 31, contactId: 7, pickupAddress: 'Kursakanta' }) };
+    prisma.campaign.findMany.mockResolvedValue([{
+      id: 29,
+      channel: 'EMAIL',
+      sequence: { id: 97, isActive: true, steps: [{ kind: 'email', emailTemplateId: 17 }] },
+      scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', channel: 'EMAIL', triggerEvent: 'pickup_point.assigned' }),
+    }]);
+
+    expect(await processGenericChannelCampaignEvent('pickup_point.assigned', {
+      pickupPointId: 31,
+      contactId: 7,
+      eventId: '31-1792750000000',
+    }, 1)).toEqual({ enrolled: 1 });
+    expect(prisma.sequenceEnrollment.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      sequenceId: 97,
+      contactId: 7,
+      currentNode: 'campaign-event:29:pickup_point.assigned:31-1792750000000',
+    }) });
   });
 
   test('enrolls a status-change preset whose first sequence step is a CRM condition', async () => {
@@ -203,6 +268,33 @@ describe('Generic WhatsApp campaign triggers', () => {
     }) });
     expect(prisma.whatsAppTemplate.findFirst).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
+  test('enrolls WhatsApp when the Leads table assigns or changes a pickup location', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ name: 'NovaCrest', vertical: 'generic' });
+    prisma.customerPickup = { findFirst: vi.fn().mockResolvedValue({ id: 31, contactId: 7, pickupAddress: 'Kursakanta' }) };
+    prisma.contact.findFirst.mockResolvedValue({ id: 7, name: 'Kanchan Gupta', phone: '9876543210' });
+    prisma.whatsAppConfig = { findFirst: vi.fn().mockResolvedValue({ phoneNumberId: 'phone-id' }) };
+    prisma.whatsAppOptOut = { findUnique: vi.fn().mockResolvedValue(null) };
+    prisma.campaign.findMany.mockResolvedValue([{
+      id: 79,
+      sequenceId: 99,
+      status: 'Active',
+      channel: 'WHATSAPP',
+      sequence: { id: 99, isActive: true, steps: [{ id: 4, position: 0, kind: 'whatsapp' }] },
+      scheduleFilters: JSON.stringify({ automationType: 'whatsapp_event', eventTrigger: 'pickup_point.assigned' }),
+    }]);
+
+    expect(await processWhatsAppCampaignEvent('pickup_point.assigned', {
+      pickupPointId: 31,
+      contactId: 7,
+      eventId: '31-1792750000000',
+    }, 1)).toEqual({ queued: 1 });
+    expect(prisma.sequenceEnrollment.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      sequenceId: 99,
+      contactId: 7,
+      currentNode: 'campaign-event:79:pickup_point.assigned:31-1792750000000',
+    }) });
   });
 
   test('hydrates selected pickup, plot and booking details for confirmation templates', async () => {

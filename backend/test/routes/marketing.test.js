@@ -213,6 +213,7 @@ function makeFakePrisma() {
     // falls back to FROM_EMAIL / env domain and the dispatch proceeds.
     tenantSetting: {
       findUnique: vi.fn(async () => null),
+      upsert: vi.fn(async ({ create, update }) => ({ ...create, ...update })),
     },
   };
 }
@@ -306,7 +307,7 @@ describe('GET /api/marketing/campaigns — list', () => {
     const res = await request(makeApp()).get('/api/marketing/campaigns?paginate=1&page=2&limit=8&campaignType=EMAIL&createdFrom=2026-01-01&createdTo=2026-02-01');
     expect(res.status).toBe(200);
     const where = { tenantId: 1, channel: 'EMAIL', createdAt: { gte: new Date('2026-01-01'), lte: new Date('2026-02-01') } };
-    expect(fakePrisma.campaign.findMany).toHaveBeenCalledWith({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: 8, take: 8 });
+    expect(fakePrisma.campaign.findMany).toHaveBeenCalledWith({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
     expect(fakePrisma.campaign.count).toHaveBeenCalledWith({ where });
     expect(res.body.pagination).toMatchObject({ page: 2, total: 17, totalPages: 3 });
   });
@@ -371,6 +372,40 @@ describe('GET /api/marketing/campaigns — list', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].status).toBe('Completed');
+  });
+});
+
+describe('PUT /api/marketing/campaigns/reorder', () => {
+  test('persists sequence card order for the Generic CRM tenant and selected channel', async () => {
+    fakePrisma.state.campaigns.push(
+      { id: 1, tenantId: 1, channel: 'EMAIL', name: 'First' },
+      { id: 2, tenantId: 1, channel: 'EMAIL', name: 'Second' },
+      { id: 3, tenantId: 1, channel: 'EMAIL', name: 'Third' },
+    );
+
+    const response = await request(makeApp()).put('/api/marketing/campaigns/reorder').send({
+      channel: 'EMAIL',
+      orderedIds: [2, 1],
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, orderedIds: [2, 1] });
+    expect(fakePrisma.tenantSetting.upsert).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: 1, key: 'generic.marketing.sequenceOrder.EMAIL' } },
+      update: { value: JSON.stringify([2, 1, 3]), category: 'ui' },
+      create: { tenantId: 1, key: 'generic.marketing.sequenceOrder.EMAIL', value: JSON.stringify([2, 1, 3]), category: 'ui' },
+    });
+  });
+
+  test('is unavailable to non-Generic CRM tenants', async () => {
+    fakePrisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    const response = await request(makeApp()).put('/api/marketing/campaigns/reorder').send({
+      channel: 'EMAIL',
+      orderedIds: [2, 1],
+    });
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('GENERIC_ONLY');
+    expect(fakePrisma.campaign.update).not.toHaveBeenCalled();
   });
 });
 
@@ -502,7 +537,7 @@ describe('PUT /api/marketing/campaigns/:id — update', () => {
 // 5 — DELETE /campaigns/:id: 204 No Content + tenant isolation
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('DELETE /api/marketing/campaigns/bulk — Draft email sequences', () => {
+describe('DELETE /api/marketing/campaigns/bulk — Draft sequences by channel', () => {
   const seed = () => fakePrisma.state.campaigns.push(
     { id: 1, tenantId: 1, channel: 'EMAIL', status: 'Draft', createdAt: '2026-01-10' },
     { id: 2, tenantId: 1, channel: 'EMAIL', status: 'Draft', createdAt: '2026-02-10' },
@@ -532,9 +567,22 @@ describe('DELETE /api/marketing/campaigns/bulk — Draft email sequences', () =>
     expect(fakePrisma.state.campaigns.map(c => c.id)).toEqual([2, 3, 4, 5]);
   });
 
+  test.each(['SMS', 'WHATSAPP'])('deletes only selected Draft %s rows', async (channel) => {
+    seed();
+    const id = channel === 'SMS' ? 4 : 6;
+    if (channel === 'WHATSAPP') {
+      fakePrisma.state.campaigns.push({ id, tenantId: 1, channel, status: 'Draft', createdAt: '2026-01-10' });
+    }
+    const response = await request(makeApp()).delete('/api/marketing/campaigns/bulk').send({ ids: [id], channel });
+    expect(response.status).toBe(200);
+    expect(response.body.deleted).toBe(1);
+    expect(fakePrisma.state.campaigns.some(campaign => campaign.id === id)).toBe(false);
+    expect(fakePrisma.state.campaigns.filter(campaign => campaign.status === 'Draft' && campaign.channel !== channel)).not.toHaveLength(0);
+  });
+
   test('rejects invalid input without deleting anything', async () => {
     seed();
-    for (const body of [{ ids: [] }, { ids: [1, 5] }, { allDrafts: true, createdFrom: 'invalid' }]) {
+    for (const body of [{ ids: [] }, { ids: [1, 5] }, { allDrafts: true, createdFrom: 'invalid' }, { ids: [1], channel: 'PUSH' }]) {
       const response = await request(makeApp()).delete('/api/marketing/campaigns/bulk').send(body);
       expect(response.status).toBeGreaterThanOrEqual(400);
     }

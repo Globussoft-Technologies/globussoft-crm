@@ -407,5 +407,5 @@ export default function PickupInventory() {
   );
 }
 
-const headerStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--table-header-bg, var(--surface-color))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', fontSize: '0.78rem' };
+const headerStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', fontSize: '0.78rem' };
 const cellStyle = { padding: '0.85rem', verticalAlign: 'middle', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', overflowWrap: 'anywhere' };

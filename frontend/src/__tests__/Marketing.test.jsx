@@ -241,7 +241,11 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
 
     expect(await screen.findByRole('button', { name: 'Add a condition' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Select drafts' })).not.toBeInTheDocument();
+    if (tab === 'campaigns') {
+      expect(screen.getByRole('button', { name: 'Select drafts' })).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole('button', { name: 'Select drafts' })).not.toBeInTheDocument();
+    }
     expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
   });
 

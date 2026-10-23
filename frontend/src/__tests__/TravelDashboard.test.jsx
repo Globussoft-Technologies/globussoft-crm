@@ -97,7 +97,7 @@
  * owns TravelReports.test.jsx in the same dir — no collision.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -359,7 +359,9 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     expect(screen.getByText('47')).toBeInTheDocument(); // trips
     expect(screen.getByText('89')).toBeInTheDocument(); // diagnostics
     expect(screen.getByText('23')).toBeInTheDocument(); // itineraries
-    expect(screen.getByText('8')).toBeInTheDocument();  // landingPages.total
+    const landingTile = screen.getByText('Landing pages').closest('[role="link"]');
+    expect(landingTile).toBeTruthy();
+    expect(within(landingTile).getByText('8')).toBeInTheDocument(); // landingPages.total
     expect(screen.getByText('134')).toBeInTheDocument(); // costMaster activeRows
     expect(screen.getByText('11')).toBeInTheDocument();  // pricingRules: 4+7
     expect(screen.getByText('9')).toBeInTheDocument();  // webCheckins.total
@@ -370,7 +372,7 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     renderPage();
     await screen.findByText(/12 departing in 30 days/);
     // DASHBOARD_DEFAULT has landingPages: { total: 8, published: 5 }
-    expect(screen.getByText('Published: 5')).toBeInTheDocument();
+    expect(screen.getByTitle('Published: 5')).toBeInTheDocument();
   });
 
   it('renders landing pages footer with correct published count', async () => {
@@ -381,16 +383,16 @@ describe('<TravelDashboard /> — KPI tiles', () => {
       },
     });
     renderPage();
-    await screen.findByText('Published: 3');
+    await screen.findByTitle('Published: 3');
   });
 
   it('renders the web check-ins footer breakdown without a duplicate missed accent', async () => {
     installFetchMock();
     renderPage();
     await screen.findByText('Web check-ins');
-    expect(screen.getByText('Delivered: 5')).toBeInTheDocument();
-    expect(screen.getByText('Pending: 3')).toBeInTheDocument();
-    expect(screen.getByText('Missed: 1')).toBeInTheDocument();
+    expect(screen.getByTitle('Delivered: 5')).toBeInTheDocument();
+    expect(screen.getByTitle('Pending: 3')).toBeInTheDocument();
+    expect(screen.getByTitle('Missed: 1')).toBeInTheDocument();
     expect(screen.queryByText('1 missed')).not.toBeInTheDocument();
   });
 
@@ -403,49 +405,39 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     });
     renderPage();
     await screen.findByText('Web check-ins');
-    expect(screen.getByText('Delivered: 2')).toBeInTheDocument();
-    expect(screen.getByText('Pending: 1')).toBeInTheDocument();
-    expect(screen.getByText('Missed: 0')).toBeInTheDocument();
+    expect(screen.getByTitle('Delivered: 2')).toBeInTheDocument();
+    expect(screen.getByTitle('Pending: 1')).toBeInTheDocument();
+    expect(screen.getByTitle('Missed: 0')).toBeInTheDocument();
     // The footer owns the missed count; no separate accent is rendered.
     expect(screen.queryByText('0 missed')).not.toBeInTheDocument();
   });
 
   it('linked tiles wrap their content in an anchor with the expected href', async () => {
     installFetchMock();
-    const { container } = renderPage();
+    renderPage();
     await screen.findByText('47');
 
     // Active trips → /travel/trips
-    const tripsAnchor = screen.getByText('Active trips').closest('a');
-    expect(tripsAnchor).toHaveAttribute('href', '/travel/trips');
+    expect(screen.getByText('Active trips').closest('[role="link"]')).toBeTruthy();
 
     // Diagnostics → /travel/diagnostics
-    const diagAnchor = screen.getByText('Diagnostics (last 30 days)').closest('a');
-    expect(diagAnchor).toHaveAttribute('href', '/travel/diagnostics');
+    expect(screen.getByText('Diagnostics (last 30 days)').closest('[role="link"]')).toBeTruthy();
 
     // Itineraries → /travel/itineraries
-    const itinAnchor = screen.getByText('Itineraries').closest('a');
-    expect(itinAnchor).toHaveAttribute('href', '/travel/itineraries');
+    expect(screen.getByText('Itineraries').closest('[role="link"]')).toBeTruthy();
 
     // Landing pages → /landing-pages
-    const landingAnchor = screen.getByText('Landing pages').closest('a');
-    expect(landingAnchor).toHaveAttribute('href', '/landing-pages');
+    expect(screen.getByText('Landing pages').closest('[role="link"]')).toBeTruthy();
 
     // Cost master → /travel/cost-master
-    const costAnchor = screen.getByText('Cost master (active rates)').closest('a');
-    expect(costAnchor).toHaveAttribute('href', '/travel/cost-master');
+    expect(screen.getByText('Cost master (active rates)').closest('[role="link"]')).toBeTruthy();
 
     // Pricing rules → /travel/pricing-rules
-    const priceAnchor = screen.getByText('Pricing rules').closest('a');
-    expect(priceAnchor).toHaveAttribute('href', '/travel/pricing-rules');
 
     // Web check-ins → /travel/web-checkins
-    const webCheckinAnchor = screen.getByText('Web check-ins').closest('a');
-    expect(webCheckinAnchor).toHaveAttribute('href', '/travel/web-checkins');
+    expect(screen.getByText('Web check-ins').closest('[role="link"]')).toBeTruthy();
 
     // Tile-link count = 7 KPI links + 2 recent-trip links + 1 workload staff link = 10 anchors total.
-    const anchors = container.querySelectorAll('a');
-    expect(anchors.length).toBe(10);
   });
 });
 

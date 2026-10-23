@@ -9,6 +9,10 @@
   gap: 1rem;
 }
 
+.projects-header h1 {
+  margin: 0;
+}
+
 .projects-create-shortcut {
   display: inline-flex;
   align-items: center;
@@ -420,5 +424,182 @@ body[data-vertical="generic"] .projects-empty-state {
 
   .projects-table {
     min-width: 700px;
+  }
+}
+
+/* Keep the board as one compact surface as its available width changes.
+   Container units make this continuous, so the desktop values remain the
+   ceiling and the controls/table simply become denser on smaller layouts. */
+@container (max-width: 1250px) {
+  .projects-board-card {
+    --projects-width-scale: clamp(0.62, 14.2857cqw, 1);
+  }
+
+  .projects-board-card > h3 {
+    gap: clamp(0.25rem, 0.7cqw, 0.5rem) !important;
+    font-size: clamp(0.72rem, 1.64cqw, 1.15rem) !important;
+    margin-bottom: clamp(0.65rem, 2.14cqw, 1.5rem) !important;
+    white-space: nowrap;
+  }
+
+  .projects-board-card > h3 svg {
+    width: clamp(13px, 2.86cqw, 20px) !important;
+    height: clamp(13px, 2.86cqw, 20px) !important;
+    flex: none;
+  }
+
+  .projects-table-scroll {
+    overflow-x: clip !important;
+  }
+
+  .projects-table {
+    min-width: 0 !important;
+    table-layout: fixed;
+  }
+
+  .projects-table :is(th, td) {
+    padding: clamp(0.22rem, 0.9cqw, 0.75rem) clamp(0.12rem, 0.57cqw, 0.5rem) !important;
+    font-size: clamp(0.48rem, 1.25cqw, 0.875rem) !important;
+    line-height: 1.2;
+  }
+
+  .projects-table th {
+    letter-spacing: 0 !important;
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(3),
+  .projects-table td:nth-child(4),
+  .projects-table td:nth-child(5),
+  .projects-table td:nth-child(6),
+  .projects-table td:nth-child(7),
+  .projects-table td:nth-child(8) {
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(7) {
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: clip;
+  }
+
+  .projects-table td:nth-child(3) span,
+  .projects-table td:nth-child(4) span {
+    padding: clamp(0.08rem, 0.28cqw, 0.2rem) clamp(0.16rem, 0.7cqw, 0.6rem) !important;
+    font-size: clamp(0.44rem, 1.05cqw, 0.75rem) !important;
+  }
+
+  .projects-table td:nth-child(5) svg,
+  .projects-table td:nth-child(6) svg {
+    width: clamp(9px, 2cqw, 14px) !important;
+    height: clamp(9px, 2cqw, 14px) !important;
+  }
+
+  .projects-table td:nth-child(8) > div {
+    gap: clamp(0.1rem, 0.7cqw, 0.5rem) !important;
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) select {
+    width: clamp(42px, 8.2cqw, 90px) !important;
+    height: clamp(18px, 3.15cqw, 32px) !important;
+    min-height: 0 !important;
+    padding: clamp(0.04rem, 0.35cqw, 0.25rem) clamp(0.06rem, 0.45cqw, 0.35rem) !important;
+    font-size: clamp(0.46rem, 1.07cqw, 0.75rem) !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button {
+    width: clamp(16px, 2.6cqw, 32px) !important;
+    height: clamp(16px, 2.6cqw, 32px) !important;
+    min-height: 0 !important;
+    padding: clamp(0.1rem, 0.45cqw, 0.4rem) !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button svg {
+    width: clamp(9px, 1.8cqw, 14px) !important;
+    height: clamp(9px, 1.8cqw, 14px) !important;
+  }
+
+  .projects-pagination {
+    flex-wrap: nowrap !important;
+    gap: clamp(0.35rem, 1.7cqw, 1rem) !important;
+    margin-top: clamp(0.6rem, 1.7cqw, 1rem) !important;
+    padding-top: clamp(0.6rem, 1.7cqw, 1rem) !important;
+    white-space: nowrap;
+  }
+
+  .projects-pagination > p,
+  .projects-pagination label,
+  .projects-pagination > div,
+  .projects-pagination > span {
+    font-size: clamp(0.52rem, 1.25cqw, 0.875rem) !important;
+  }
+
+  .projects-pagination > div {
+    gap: clamp(0.25rem, 1.1cqw, 0.75rem) !important;
+  }
+
+  .projects-pagination label {
+    gap: clamp(0.2rem, 0.7cqw, 0.5rem) !important;
+  }
+
+  .projects-pagination select,
+  .projects-pagination button {
+    min-height: 0 !important;
+    padding: clamp(0.25rem, 0.85cqw, 0.6rem) clamp(0.35rem, 1.4cqw, 1rem) !important;
+    font-size: clamp(0.52rem, 1.25cqw, 0.875rem) !important;
+  }
+}
+
+@container (max-width: 850px) {
+  .projects-header {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: clamp(0.4rem, 1.7cqw, 1rem);
+  }
+
+  .projects-header h1 {
+    font-size: clamp(1rem, 3.1cqw, 1.55rem) !important;
+    white-space: nowrap;
+  }
+
+  .projects-header p {
+    font-size: clamp(0.58rem, 1.5cqw, 0.75rem) !important;
+  }
+}
+
+@container (max-width: 700px) {
+  .projects-table-scroll,
+  .projects-table {
+    min-width: 0 !important;
+  }
+}
+
+@container (max-width: 500px) {
+  /* The action controls otherwise outgrow their percentage column at phone
+     widths and are clipped by the table surface. */
+  .projects-table col:nth-child(1) { width: 20%; }
+  .projects-table col:nth-child(2) { width: 10%; }
+  .projects-table col:nth-child(3) { width: 10%; }
+  .projects-table col:nth-child(4) { width: 9%; }
+  .projects-table col:nth-child(5) { width: 13%; }
+  .projects-table col:nth-child(6) { width: 8%; }
+  .projects-table col:nth-child(7) { width: 12%; }
+  .projects-table col:nth-child(8) { width: 18%; }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) select {
+    width: clamp(30px, 7cqw, 60px) !important;
+    padding-inline: 0.08rem !important;
+    text-overflow: clip;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button {
+    width: clamp(13px, 2.6cqw, 18px) !important;
+    height: clamp(13px, 2.6cqw, 18px) !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button svg {
+    width: clamp(7px, 1.8cqw, 11px) !important;
+    height: clamp(7px, 1.8cqw, 11px) !important;
   }
 }

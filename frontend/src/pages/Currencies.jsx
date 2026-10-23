@@ -308,7 +308,7 @@ export default function Currencies() {
           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading currencies...</div>
         ) : (
           <TopScrollSync>
-          <table className="stable-table" style={{ borderCollapse: 'collapse' }}>
+          <table className="stable-table currencies-table" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'var(--subtle-bg)', textAlign: 'left' }}>
                 <th style={th}>Code</th>

@@ -7,13 +7,52 @@
 .pickup-master-detail { display:grid; grid-template-columns:minmax(300px, 37%) minmax(0, 1fr); gap:clamp(8px, 1.25vw, 16px); flex:1 1 0; min-width:0; min-height:0; }
 .pickup-customer-directory,.pickup-detail-pane { min-width:0; min-height:0; overflow:hidden; padding:0; }
 .pickup-detail-pane { container-type:inline-size; }
-.pickup-customer-directory { display:flex; flex-direction:column; }
+.pickup-customer-directory { display:flex; flex-direction:column; container-type:inline-size; }
 .pickup-directory-toolbar { display:grid; grid-template-columns:minmax(0, 1fr) clamp(112px, 12vw, 150px); gap:clamp(5px, .65vw, 8px); padding:clamp(8px, 1vw, 14px); border-bottom:1px solid var(--border-color); }
 .pickup-directory-toolbar label { position:relative; display:block; min-width:0; }
 .pickup-directory-toolbar label svg { position:absolute; z-index:1; left:clamp(9px, .85vw, 12px); top:50%; width:clamp(13px, 1.2vw, 15px); height:clamp(13px, 1.2vw, 15px); transform:translateY(-50%); color:var(--text-secondary); pointer-events:none; }
 .pickup-directory-toolbar .input-field { min-width:0; min-height:clamp(34px, 3.3vw, 42px); box-sizing:border-box; padding:clamp(.45rem, .7vw, .8rem) clamp(.55rem, .9vw, 1rem); font-size:clamp(.7rem, .62rem + .2vw, .84rem); }
 .pickup-directory-toolbar input.input-field { width:100%; padding-left:clamp(2rem, 2.6vw, 2.5rem) !important; }
+
+.pickup-customers-page .pickup-directory-toolbar > label {
+  display: flex !important;
+  position: static !important;
+  align-items: center !important;
+  gap: 2px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+.pickup-customers-page .pickup-directory-toolbar > label > svg {
+  position: static !important;
+  transform: none !important;
+  left: auto !important;
+  right: auto !important;
+}
+.pickup-customers-page .pickup-directory-toolbar > label > input.input-field {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  padding: 0 !important;
+  text-indent: 0 !important;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
 .pickup-directory-scroll,.pickup-detail-pane { overflow:auto; scrollbar-gutter:stable; }
+
+@media (min-width: 641px) and (max-width: 1199px) {
+  .pickup-directory-toolbar {
+    grid-template-columns: minmax(0, 1fr) clamp(100px, 11vw, 135px);
+  }
+
+  .pickup-directory-toolbar .input-field {
+    font-size: clamp(.68rem, .58rem + .18vw, .8rem);
+  }
+}
+
+@container (max-width:420px) {
+  .pickup-directory-toolbar { grid-template-columns:1fr; }
+}
 .pickup-customer-table,.pickup-detail-table,.pickup-payment-table { width:100%; border-collapse:collapse; }
 .pickup-customer-table { table-layout:fixed; }
 .pickup-customer-table th { position:sticky; top:0; z-index:2; padding:clamp(.5rem, .75vw, .7rem); text-align:left; font-size:clamp(.64rem, .58rem + .15vw, .72rem); color:var(--text-secondary); background:#f3f4f6; border-bottom:1px solid var(--border-color); }

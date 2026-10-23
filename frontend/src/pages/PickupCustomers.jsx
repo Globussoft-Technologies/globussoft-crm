@@ -564,7 +564,10 @@ export default function PickupCustomers() {
       <div className="pickup-master-detail">
         <aside className="card pickup-plot-table-scroll pickup-customer-directory" aria-label="Customer directory">
           <div className="pickup-directory-toolbar">
-            <label><Search size={15} aria-hidden="true" /><input className="input-field" type="search" aria-label="Search customer status" placeholder="Search customers..." value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, padding: '0 12px', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--input-bg)' }}>
+              <Search size={15} aria-hidden="true" style={{ flex: '0 0 15px', color: 'var(--text-secondary)' }} />
+              <input className="input-field" type="text" aria-label="Search customer status" placeholder="Search customers..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ width: '100%', minWidth: 0, flex: '1 1 auto', height: 40, padding: 0, textIndent: 0, border: 0, outline: 0, background: 'transparent', boxShadow: 'none' }} />
+            </label>
             <select className="input-field" aria-label="Filter customer trip status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="waiting">Awaiting assignment</option><option value="active">Active trips</option><option value="completed">Completed</option></select>
           </div>
           <div className="pickup-directory-scroll" data-testid="pickup-customers-table-scroll">

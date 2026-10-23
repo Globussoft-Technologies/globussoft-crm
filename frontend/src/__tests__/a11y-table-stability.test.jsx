@@ -306,7 +306,7 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
   const TABLES = [
     {
       file: ["pages", "Contacts.jsx"],
-      pattern: /<table\s+className="stable-table"/,
+      pattern: /<table\s+className="[^"]*\bstable-table\b[^"]*"/s,
     },
     {
       file: ["pages", "Tickets.jsx"],
@@ -320,7 +320,7 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
     },
     {
       file: ["pages", "Currencies.jsx"],
-      pattern: /<table\s+className="stable-table"/,
+      pattern: /<table\s+className="[^"]*\bstable-table\b[^"]*"/s,
     },
     {
       file: ["pages", "Territories.jsx"],

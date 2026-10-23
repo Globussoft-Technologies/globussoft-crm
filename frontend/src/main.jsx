@@ -7,8 +7,11 @@ import './styles/travel-responsive-pages.css'
 import './styles/crm-responsive-density.css'
 import './styles/generic-laptop-density.css'
 import './styles/wellness-laptop-density.css'
-import './styles/travel-laptop-density.css'
 import './styles/shared-laptop-typography.css'
+// Travel's scoped laptop density rules must be last so shared typography
+// cannot re-expand its dashboard cards or override their compact values.
+import './styles/travel-laptop-density.css'
+import './styles/viewport-density.css'
 import './styles/print.css'
 import App from './App.jsx'
 

@@ -57,7 +57,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 // fetchApi mock — every API call the page makes routes through this.
 const fetchApiMock = vi.fn();
@@ -185,6 +185,11 @@ function renderContracts() {
   return render(<Contracts />);
 }
 
+async function openCreateContractForm() {
+  fireEvent.click(screen.getByRole('button', { name: /^Create Contract$/i }));
+  return screen.findByRole('dialog', { name: /Create Contract/i });
+}
+
 describe('<Contracts /> — page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -208,10 +213,9 @@ describe('<Contracts /> — page surface', () => {
     expect(
       screen.getByText(/Manage client contracts, track statuses/i),
     ).toBeInTheDocument();
-    // "Create Contract" appears as both the form-panel heading AND the
-    // submit button label, so length >= 2.
-    expect(screen.getAllByText(/Create Contract/i).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByRole('button', { name: /Create Contract/i })).toBeInTheDocument();
+    const dialog = await openCreateContractForm();
+    expect(within(dialog).getByRole('heading', { name: /Create Contract/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^Create Contract$/i })).toBeInTheDocument();
     expect(screen.getByText(/All Contracts/i)).toBeInTheDocument();
   });
 
@@ -329,6 +333,7 @@ describe('<Contracts /> — page surface', () => {
   it('contact + deal dropdowns list every loaded record', async () => {
     renderContracts();
     await screen.findByText('Annual SaaS License');
+    await openCreateContractForm();
     // Contact <option> labels — "Name (email)" form.
     expect(screen.getByText(/Acme Inc \(ap@acme\.test\)/i)).toBeInTheDocument();
     expect(
@@ -345,6 +350,7 @@ describe('<Contracts /> — page surface', () => {
   it('submitting the create form POSTs /api/contracts with the form body and clears the form', async () => {
     renderContracts();
     await screen.findByText('Annual SaaS License');
+    const dialog = await openCreateContractForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/contracts' && opts?.method === 'POST') {
@@ -367,7 +373,7 @@ describe('<Contracts /> — page surface', () => {
     fireEvent.change(termsInput, { target: { value: 'Net-30 payment terms' } });
 
     // Submit.
-    fireEvent.click(screen.getByRole('button', { name: /Create Contract/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Create Contract$/i }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -386,15 +392,19 @@ describe('<Contracts /> — page surface', () => {
       expect(body.endDate).toBe('');
     });
 
-    // After successful create, the form resets — title input is empty.
+    // After successful create, the modal closes and the reset form is ready
+    // when opened again.
     await waitFor(() => {
-      expect(titleInput.value).toBe('');
+      expect(screen.queryByRole('dialog', { name: /Create Contract/i })).not.toBeInTheDocument();
     });
+    const resetDialog = await openCreateContractForm();
+    expect(within(resetDialog).getByPlaceholderText(/e\.g\. Annual SaaS License/i)).toHaveValue('');
   });
 
   it('failed create surfaces notify.error("Failed to create contract")', async () => {
     renderContracts();
     await screen.findByText('Annual SaaS License');
+    const dialog = await openCreateContractForm();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/contracts' && opts?.method === 'POST') {
         return Promise.reject(new Error('500 boom'));
@@ -405,7 +415,7 @@ describe('<Contracts /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. Annual SaaS License/i), {
       target: { value: 'Will fail' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Create Contract/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Create Contract$/i }));
 
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Failed to create contract');

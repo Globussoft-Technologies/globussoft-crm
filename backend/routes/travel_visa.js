@@ -86,7 +86,8 @@ const {
 } = require("../lib/visaChecklistSnapshots");
 const { ensureEmail, ensureDateInRange } = require("../lib/validators");
 const multer = require("multer");
-const { parseCsv, parseXlsxBuffer, toCsv, toXlsxBuffer } = require("../lib/csvIO");
+const { parseCsv, parseXlsxBuffer, toCsv, withBom } = require("../lib/csvIO");
+const XLSX = require("xlsx");
 const { normalizePhone } = require("../utils/deduplication");
 // #920 slice S43: opt-in slim shape via `?fields=summary` for GET /applications.
 // SQL-drops PII columns (rejectionHistoryJson, outcomeReason, familySize,
@@ -120,6 +121,65 @@ const CHECKLIST_IMPORT_HEADERS = [
   "sortOrder",
   "notes",
 ];
+
+const CHECKLIST_IMPORT_SAMPLE_ROWS = [
+  {
+    applicationType: "tourist",
+    destinationCountry: "US",
+    docType: "Passport",
+    required: true,
+    sortOrder: 1,
+    notes: "Passport valid for at least 6 months",
+  },
+  {
+    applicationType: "tourist",
+    destinationCountry: "US",
+    docType: "Recent passport photograph",
+    required: true,
+    sortOrder: 2,
+    notes: "Delete or replace sample rows before importing",
+  },
+  {
+    applicationType: "business",
+    destinationCountry: "GB",
+    docType: "Invitation letter",
+    required: true,
+    sortOrder: 1,
+    notes: "Example for a second application type and destination",
+  },
+];
+
+const CHECKLIST_IMPORT_INSTRUCTIONS = [
+  ["Visa Sure checklist bulk import"],
+  ["Keep the header row in the Checklist Import sheet unchanged."],
+  ["Required fields: applicationType, destinationCountry, and docType."],
+  ["applicationType must be one of: tourist, business, student, work, umrah, hajj."],
+  ["required accepts true/false, yes/no, or 1/0. sortOrder is a number; lower values appear first."],
+  ["Rows are upserted by applicationType + destinationCountry + docType."],
+  ["Delete the sample rows before importing, then save as CSV or XLSX."],
+];
+
+function checklistTemplateWorkbook() {
+  const workbook = XLSX.utils.book_new();
+  const templateSheet = XLSX.utils.json_to_sheet(CHECKLIST_IMPORT_SAMPLE_ROWS, {
+    header: CHECKLIST_IMPORT_HEADERS,
+  });
+  templateSheet["!cols"] = [
+    { wch: 18 },
+    { wch: 22 },
+    { wch: 32 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 48 },
+  ];
+  templateSheet["!autofilter"] = { ref: `A1:${String.fromCharCode(64 + CHECKLIST_IMPORT_HEADERS.length)}${CHECKLIST_IMPORT_SAMPLE_ROWS.length + 1}` };
+
+  const instructionsSheet = XLSX.utils.aoa_to_sheet(CHECKLIST_IMPORT_INSTRUCTIONS);
+  instructionsSheet["!cols"] = [{ wch: 110 }];
+  XLSX.utils.book_append_sheet(workbook, templateSheet, "Checklist Import");
+  XLSX.utils.book_append_sheet(workbook, instructionsSheet, "Instructions");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true });
+}
 
 const VALID_STATUSES = [
   "intake",
@@ -3368,25 +3428,19 @@ router.get(
   async (req, res) => {
     try {
       const format = String(req.query.format || "csv").toLowerCase();
-      const exampleRow = {
-        applicationType: "tourist",
-        destinationCountry: "US",
-        docType: "Passport",
-        required: true,
-        sortOrder: 0,
-        notes: "Example row. Delete this row before importing.",
-      };
       if (format === "xlsx") {
-        const xlsx = toXlsxBuffer(
-          CHECKLIST_IMPORT_HEADERS,
-          [exampleRow],
-          "Visa Checklists Template",
-        );
+        const xlsx = checklistTemplateWorkbook();
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         res.setHeader("Content-Disposition", 'attachment; filename="travel-visa-checklists-template.xlsx"');
         return res.send(xlsx);
       }
-      const csv = toCsv(CHECKLIST_IMPORT_HEADERS, [exampleRow]);
+      const instructionRows = CHECKLIST_IMPORT_INSTRUCTIONS.slice(1).map(([instruction]) => ({
+        applicationType: `# ${instruction}`,
+      }));
+      const csv = withBom(toCsv(CHECKLIST_IMPORT_HEADERS, [
+        ...instructionRows,
+        ...CHECKLIST_IMPORT_SAMPLE_ROWS,
+      ]));
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", 'attachment; filename="travel-visa-checklists-template.csv"');
       return res.send(Buffer.from(csv, "utf8"));
@@ -3420,6 +3474,17 @@ router.post(
         parsed = parseCsv(req.file.buffer.toString("utf8"));
       }
 
+      // Only identity columns are mandatory; optional columns retain their
+      // existing defaults for older or minimal CSV/XLSX files.
+      const missingHeaders = ["applicationType", "destinationCountry", "docType"]
+        .filter((header) => !parsed.headers.includes(header));
+      if (missingHeaders.length > 0) {
+        return res.status(400).json({
+          error: `Missing required column(s): ${missingHeaders.join(", ")}`,
+          code: "INVALID_HEADERS",
+        });
+      }
+
       const rows = parsed.rows || [];
       let imported = 0;
       let updated = 0;
@@ -3432,11 +3497,11 @@ router.post(
 
         // Skip blank rows and comment rows (applicationType starts with #).
         // Comment rows are intentionally ignored and NOT counted as skipped.
-        if (!applicationType || !destinationCountry || !docType) {
-          skipped += 1;
+        if (applicationType.startsWith("#")) {
           continue;
         }
-        if (applicationType.startsWith("#")) {
+        if (!applicationType || !destinationCountry || !docType) {
+          skipped += 1;
           continue;
         }
         if (!VALID_APPLICATION_TYPES.includes(applicationType)) {

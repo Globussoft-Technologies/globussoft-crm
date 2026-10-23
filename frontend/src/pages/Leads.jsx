@@ -184,7 +184,7 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const GENERIC_LEADS_PAGE_SIZE = 25;
+const GENERIC_LEADS_PAGE_SIZE = 10;
 const LEAD_CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
   { value: "textarea", label: "Text area" },
@@ -6111,11 +6111,7 @@ const Leads = () => {
       const isCompact = densityTable.classList.contains(
         "leads-split-table--density-compact",
       );
-      const minimumHeight = isCompact
-        ? densityTable.classList.contains("leads-split-table--sparse")
-          ? 48
-          : 40
-        : 52;
+      const minimumHeight = isCompact ? 40 : 52;
       const fallbackMaximumHeight = isCompact ? 48 : 64;
       const naturalHeight = (row) => Math.max(
         row.offsetHeight,
@@ -10193,7 +10189,7 @@ const Leads = () => {
           )}
         </div>
         <div
-          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${filteredLeads.length > 0 && filteredLeads.length <= 10 ? " leads-split-table--sparse" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
           onWheel={isGeneric ? (event) => {
             const grid = event.currentTarget;
             const scrollbar = grid.querySelector(".top-scroll-sync__sticky-bottom");
@@ -10238,7 +10234,7 @@ const Leads = () => {
                   border: "1px solid var(--border-color)",
                   borderRadius: "16px",
                   background: "var(--surface-color)",
-                  flex: "1 1 auto",
+                  flex: "0 0 auto",
                   // Let the complete generic table establish its natural
                   // height so the horizontal scrollbar sits at the table's
                   // actual bottom, not at the bottom of a nested viewport.

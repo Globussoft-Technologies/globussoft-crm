@@ -197,6 +197,32 @@
     margin-left: 0 !important;
   }
 
+  /* Dimension-only density: preserve the toolbar's existing layout while
+     scaling its controls, text, icons, and spacing on smaller viewports. */
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar > :is(button, label, div) {
+    font-size: clamp(0.62rem, 0.72vw, 0.8rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar :is(select, button) {
+    min-height: clamp(30px, 3.2vw, 44px) !important;
+    padding-block: clamp(0.2rem, 0.35vw, 0.5rem) !important;
+    padding-inline: clamp(0.3rem, 0.55vw, 0.7rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar > label > span {
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar > :is(button, label, div) > svg {
+    width: clamp(12px, 0.9vw, 16px) !important;
+    height: clamp(12px, 0.9vw, 16px) !important;
+  }
+
+
   body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-stage-title {
     font-size: clamp(0.875rem, calc(0.72rem + 0.17vw), 1rem) !important;
   }

@@ -89,6 +89,7 @@
 
 .invoices-mobile-page .invoice-summary-controls {
   margin-bottom: 1.75rem;
+  container-type: inline-size;
 }
 
 .invoices-mobile-page .invoice-summary-badges {
@@ -113,7 +114,7 @@
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 1rem;
   flex-wrap: wrap;
 }
@@ -131,7 +132,12 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoi
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
   flex: 0 0 auto;
   flex-wrap: nowrap;
-  margin-left: auto;
+  margin-left: 0 !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
+  .invoice-filters > .invoice-filter-pill {
+  margin-left: 0 !important;
 }
 
 /* Generic CRM invoice content follows normal page flow so the ledger rows and
@@ -146,6 +152,99 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page {
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header,
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-summary-controls {
   flex: initial;
+}
+
+/* Fluid invoice toolbar density for laptop/tablet widths. Keep the KPI chips
+   and filter controls in their existing rows while reducing their chrome
+   continuously instead of making each control wrap internally. */
+@media (min-width: 601px) and (max-width: 1919px) {
+  .invoices-mobile-page .invoice-summary-controls {
+    gap: clamp(0.45rem, 1vw, 1rem);
+  }
+
+  .invoices-mobile-page .invoice-summary-badges {
+    gap: clamp(0.35rem, 0.75vw, 0.75rem);
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span {
+    min-width: 0;
+    flex: 0 1 auto;
+    padding: clamp(0.28rem, 0.4vw, 0.4rem) clamp(0.55rem, 1vw, 1rem) !important;
+    font-size: clamp(0.62rem, 0.75vw, 0.75rem) !important;
+    gap: clamp(0.2rem, 0.4vw, 0.4rem) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span svg,
+  .invoices-mobile-page .invoice-filter-pill > svg {
+    width: clamp(11px, 1vw, 14px) !important;
+    height: clamp(11px, 1vw, 14px) !important;
+    flex-shrink: 0;
+  }
+
+  .invoices-mobile-page .invoice-filters {
+    min-width: 0;
+    gap: clamp(0.3rem, 0.65vw, 0.5rem);
+    flex-wrap: nowrap;
+  }
+
+  .invoices-mobile-page .invoice-filter-pill {
+    min-width: 0;
+    gap: clamp(0.25rem, 0.5vw, 0.5rem) !important;
+    padding: clamp(0.18rem, 0.3vw, 0.25rem) clamp(0.45rem, 0.75vw, 0.75rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-filter-pill :is(label, select, input),
+  .invoices-mobile-page .invoice-filter-pill > span {
+    font-size: clamp(0.62rem, 0.75vw, 0.75rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-create-button {
+    padding: clamp(0.35rem, 0.55vw, 0.55rem) clamp(0.55rem, 0.9vw, 0.9rem) !important;
+    font-size: clamp(0.62rem, 0.75vw, 0.75rem) !important;
+    gap: clamp(0.2rem, 0.4vw, 0.4rem) !important;
+    white-space: nowrap;
+  }
+}
+
+/* Scale from the actual invoice content width (after the sidebar), not only
+   from the browser viewport width. This keeps the toolbar usable on narrow
+   laptop layouts where the main pane is substantially smaller than 100vw. */
+@container (max-width: 700px) {
+  .invoices-mobile-page .invoice-summary-badges > span {
+    padding-inline: clamp(0.35rem, 1.5cqw, 0.65rem) !important;
+    font-size: clamp(0.55rem, 1.5cqw, 0.68rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span svg,
+  .invoices-mobile-page .invoice-filter-pill > svg {
+    width: clamp(10px, 2cqw, 13px) !important;
+    height: clamp(10px, 2cqw, 13px) !important;
+  }
+
+  .invoices-mobile-page .invoice-filters {
+    gap: clamp(0.2rem, 1cqw, 0.4rem);
+  }
+
+  .invoices-mobile-page .invoice-filter-pill {
+    gap: clamp(0.15rem, 1cqw, 0.35rem) !important;
+    padding-inline: clamp(0.3rem, 1.5cqw, 0.6rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-filter-pill :is(label, select, input),
+  .invoices-mobile-page .invoice-filter-pill > span,
+  .invoices-mobile-page .invoice-create-button {
+    font-size: clamp(0.55rem, 1.5cqw, 0.68rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-create-button {
+    padding-inline: clamp(0.35rem, 1.5cqw, 0.65rem) !important;
+  }
 }
 
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {

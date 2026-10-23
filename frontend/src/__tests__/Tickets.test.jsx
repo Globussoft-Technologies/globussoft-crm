@@ -139,6 +139,11 @@ function renderTickets() {
   return render(<Tickets />);
 }
 
+async function openCreateTicketForm() {
+  fireEvent.click(screen.getByRole('button', { name: /^Create Ticket$/i }));
+  expect(await screen.findByRole('dialog', { name: /Create Ticket/i })).toBeInTheDocument();
+}
+
 describe('<Tickets /> — page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -154,9 +159,7 @@ describe('<Tickets /> — page surface', () => {
     expect(
       screen.getByRole('heading', { name: /Support Tickets/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: /Create Ticket/i }),
-    ).toBeInTheDocument();
+    await openCreateTicketForm();
     expect(
       screen.getByRole('heading', { name: /All Tickets/i }),
     ).toBeInTheDocument();
@@ -226,9 +229,9 @@ describe('<Tickets /> — page surface', () => {
     // (Low/Medium/High/Urgent). Assert via getAllByText with length >= 2
     // (badge in cell + at least one option) to pin the cell render without
     // colliding with the dropdown vocab.
-    expect(screen.getAllByText('Urgent').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Medium').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('High').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Urgent')).toBeInTheDocument();
+    expect(screen.getByText('Medium')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
     // Assignee cell: named for assigned rows, "—" for unassigned.
     expect(screen.getByText('Anita Sharma')).toBeInTheDocument();
     expect(screen.getByText('Rohit Verma')).toBeInTheDocument();
@@ -342,8 +345,8 @@ describe('<Tickets /> — page surface', () => {
     expect(pageShell).toBeTruthy();
     expect(pageShell.style.overflowY).toBe('');
     expect(pageShell.style.minHeight).toBe('100%');
-    expect(ticketCards.length).toBeGreaterThanOrEqual(2);
-    expect(ticketCards[1].style.overflow).toBe('hidden');
+    expect(ticketCards).toHaveLength(1);
+    expect(ticketCards[0].style.overflow).toBe('hidden');
   });
 
   it('submitting the Create form POSTs /api/tickets with subject, description, priority, and parsed assigneeId', async () => {
@@ -351,6 +354,7 @@ describe('<Tickets /> — page surface', () => {
     await waitFor(() =>
       expect(screen.getByText('Login page not loading')).toBeInTheDocument(),
     );
+    await openCreateTicketForm();
 
     fireEvent.change(screen.getByPlaceholderText(/Login page not loading/i), {
       target: { value: 'Webhook retries flooding logs' },
@@ -397,6 +401,7 @@ describe('<Tickets /> — page surface', () => {
     await waitFor(() =>
       expect(screen.getByText('Login page not loading')).toBeInTheDocument(),
     );
+    await openCreateTicketForm();
 
     fireEvent.change(screen.getByPlaceholderText(/Login page not loading/i), {
       target: { value: 'Slow query in /api/reports' },
@@ -427,7 +432,6 @@ describe('<Tickets /> — page surface', () => {
     await waitFor(() =>
       expect(screen.getByText('Login page not loading')).toBeInTheDocument(),
     );
-
     // The three row-status selects each have current value matching their
     // ticket — 'Open' / 'Pending' / 'Closed'. Find the 'Open' one.
     const selects = screen.getAllByRole('combobox');
@@ -503,6 +507,7 @@ describe('<Tickets /> — page surface', () => {
     await waitFor(() =>
       expect(screen.getByText('Login page not loading')).toBeInTheDocument(),
     );
+    await openCreateTicketForm();
 
     fireEvent.change(screen.getByPlaceholderText(/Login page not loading/i), {
       target: { value: 'Broken thing' },

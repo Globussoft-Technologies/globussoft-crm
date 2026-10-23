@@ -123,11 +123,11 @@ export default function PickupPlotWorkAssignments() {
           data-testid="staff-work-assignment-header-actions"
           style={{ display: 'flex', flex: '1 1 100%', alignItems: 'center', justifyContent: 'flex-start', flexWrap: 'wrap', gap: 12 }}
         >
-          <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 420, minWidth: 220 }}>
+          <div className="pickup-plot-work-search-wrap" style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 280px', maxWidth: 420, minWidth: 220, padding: '0 10px', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--input-bg)' }}>
             <Search
               size={17}
               aria-hidden="true"
-              style={{ position: 'absolute', zIndex: 1, left: 13, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }}
+              style={{ flex: '0 0 17px', color: 'var(--text-secondary)', pointerEvents: 'none' }}
             />
             <input
               className="input-field pickup-plot-work-search"
@@ -136,7 +136,7 @@ export default function PickupPlotWorkAssignments() {
               placeholder="Search by name, email, or phone…"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 40 }}
+              style={{ width: '100%', height: 42, boxSizing: 'border-box', padding: '0 4px', border: 0, outline: 0, background: 'transparent' }}
             />
           </div>
           <div

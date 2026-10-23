@@ -20,7 +20,7 @@
 // view: open/overdue tasks per staff member with a per-brand split).
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
   ClipboardCheck, Compass, IndianRupee, FileText, Luggage,
@@ -103,7 +103,7 @@ export default function TravelDashboard() {
   }, [data]);
 
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
+    <div className="travel-dashboard-page" style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
@@ -139,7 +139,7 @@ export default function TravelDashboard() {
         </div>
       ) : (
         <>
-          <div style={gridStyle}>
+          <div className="travel-dashboard-kpi-grid" style={gridStyle}>
             <Tile
               icon={Luggage}
               label="Active trips"
@@ -147,6 +147,7 @@ export default function TravelDashboard() {
               footer={byKeyFooter(data.trips.byStatus)}
               accent={`${data.trips.upcoming30d} departing in 30 days`}
               link="/travel/trips"
+              statusLinks={statusLinksFor("/travel/trips", ["confirmed", "in-trip", "completed", "cancelled"])}
             />
             <Tile
               icon={ClipboardCheck}
@@ -154,6 +155,7 @@ export default function TravelDashboard() {
               value={data.diagnostics.totalLast30d}
               footer={byKeyFooter(data.diagnostics.byClassification)}
               link="/travel/diagnostics"
+              statusLinks={statusLinksFor("/travel/diagnostics", ["level_1", "level_2", "level_3"], "classification")}
             />
             <Tile
               icon={MapIcon}
@@ -161,6 +163,7 @@ export default function TravelDashboard() {
               value={data.itineraries.total}
               footer={byKeyFooter(data.itineraries.byStatus)}
               link="/travel/itineraries"
+              statusLinks={statusLinksFor("/travel/itineraries", ["draft", "sent", "revised", "accepted", "advance_paid", "fully_paid", "rejected"])}
             />
             <Tile
               icon={FileText}
@@ -168,6 +171,7 @@ export default function TravelDashboard() {
               value={data.landingPages.total}
               footer={`${data.landingPages.published} published`}
               link="/landing-pages"
+              statusLinks={{ published: "/landing-pages?status=PUBLISHED" }}
             />
             <Tile
               icon={IndianRupee}
@@ -175,6 +179,7 @@ export default function TravelDashboard() {
               value={data.costMaster.activeRows}
               footer={byKeyFooter(data.costMaster.bySubBrand)}
               link="/travel/cost-master"
+              statusLinks={statusLinksFor("/travel/cost-master", ["tmc", "rfu", "travelstall", "visasure"], "subBrand")}
             />
             <Tile
               icon={BadgePercent}
@@ -190,6 +195,11 @@ export default function TravelDashboard() {
                 value={data.webCheckins?.total ?? 0}
                 footer={`${data.webCheckins?.done ?? 0} delivered · ${data.webCheckins?.pending ?? 0} pending · ${data.webCheckins?.missed ?? 0} missed`}
                 link="/travel/web-checkins"
+                statusLinks={{
+                  delivered: "/travel/web-checkins?status=done",
+                  pending: "/travel/web-checkins?status=pending,reminded,in-progress",
+                  missed: "/travel/web-checkins?status=fallback-agent,failed",
+                }}
               />
             )}
             <Tile
@@ -336,22 +346,25 @@ export default function TravelDashboard() {
 
 // ─── Building blocks ────────────────────────────────────────────────
 
-function Tile({ icon: Icon, label, value, footer, accent, link, onClick, style }) {
+function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onClick, style }) {
   const [isHovered, setIsHovered] = useState(false);
+  const navigate = useNavigate();
   const clickable = Boolean(onClick);
+  const hasStatusLinks = Boolean(statusLinks && Object.keys(statusLinks).length);
   const content = (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 13, fontWeight: 600 }}>
+      <div className="travel-dashboard-kpi-label" style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 13, fontWeight: 600 }}>
         <Icon size={16} aria-hidden /> {label}
       </div>
-      <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6, color: "var(--text-primary)" }}>
+      <div className="travel-dashboard-kpi-value" style={{ fontSize: 32, fontWeight: 700, marginTop: 6, color: "var(--text-primary)" }}>
         {value ?? 0}
       </div>
       {accent != null && accent !== "" && (
-        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{accent}</div>
+        <div className="travel-dashboard-kpi-accent" style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{accent}</div>
       )}
     {footer && (
       <div
+        className="travel-dashboard-kpi-footer-shell"
         style={{
           borderTop: "1px solid var(--border-color)",
           marginTop: 8,
@@ -359,11 +372,11 @@ function Tile({ icon: Icon, label, value, footer, accent, link, onClick, style }
         }}
       >
         {typeof footer === "string" ? (
-          <div
+          <div className="travel-dashboard-kpi-footer travel-dashboard-kpi-status-footer"
             style={{
               fontSize: 12,
               color: "var(--text-secondary)",
-              marginTop: 8,
+              marginTop: 0,
               lineHeight: 1.5,
               display: "grid",
               gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
@@ -436,12 +449,13 @@ function Tile({ icon: Icon, label, value, footer, accent, link, onClick, style }
                       .replace(/-/g, " ")
                       .replace(/\b\w/g, (char) => char.toUpperCase());
 
-                return (
+                const statusContent = (
                   <span
                     key={index}
+                    className="travel-dashboard-kpi-status-item"
+                    title={`${displayLabel}: ${value}`}
                     style={{
                       minWidth: 0,
-                      overflowWrap: "anywhere",
                       color: colorMap[rawKey] || "var(--text-secondary)",
                       borderLeft:
                         index % 2 === 1
@@ -450,9 +464,22 @@ function Tile({ icon: Icon, label, value, footer, accent, link, onClick, style }
                       paddingLeft: index % 2 === 1 ? 10 : 0,
                     }}
                   >
-                    {displayLabel}: {value}
+                    <span className="travel-dashboard-kpi-status-label">{displayLabel}:</span>
+                    {value && <span className="travel-dashboard-kpi-status-value">{value}</span>}
                   </span>
                 );
+                const statusLink = statusLinks?.[rawKey];
+                return statusLink ? (
+                  <Link
+                    key={index}
+                    to={statusLink}
+                    onClick={(event) => event.stopPropagation()}
+                    style={{ color: "inherit", textDecoration: "none", borderRadius: 4 }}
+                    aria-label={`Filter ${label} by ${displayLabel}`}
+                  >
+                    {statusContent}
+                  </Link>
+                ) : statusContent;
               })}
           </div>
         ) : (
@@ -462,6 +489,35 @@ function Tile({ icon: Icon, label, value, footer, accent, link, onClick, style }
     )}
     </>
   );
+  if (link && hasStatusLinks) {
+    return (
+      <div
+        role="link"
+        tabIndex={0}
+        onClick={(event) => {
+          if (!event.target.closest("a")) navigate(link);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            navigate(link);
+          }
+        }}
+        style={{
+          ...tileStyle,
+          ...style,
+          ...tileLinkStyle,
+          ...(isHovered ? tileLinkHoverStyle : {}),
+        }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onFocus={() => setIsHovered(true)}
+        onBlur={() => setIsHovered(false)}
+      >
+        {content}
+      </div>
+    );
+  }
   if (link) {
     return (
       <Link
@@ -516,12 +572,20 @@ function byKeyFooter(obj) {
     .join(" · ");
 }
 
+function statusLinksFor(path, statuses, queryKey = "status") {
+  return statuses.reduce((links, status) => {
+    links[status] = `${path}?${queryKey}=${encodeURIComponent(status)}`;
+    return links;
+  }, {});
+}
+
 function ReadinessTileFooter({ checks }) {
   if (!Array.isArray(checks)) {
-    return <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Loading readiness…</div>;
+    return <div className="travel-dashboard-kpi-footer" style={{ fontSize: 12, color: "var(--text-secondary)" }}>Loading readiness…</div>;
   }
   return (
     <div
+      className="travel-dashboard-kpi-footer travel-dashboard-readiness-footer"
       style={{
         display: "grid",
         gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
@@ -552,11 +616,15 @@ function ReadinessTileFooter({ checks }) {
             }}
           />
           <span
+            className="travel-dashboard-readiness-label"
+            title={check.label}
             style={{
+              color: "var(--text-secondary)",
+              minWidth: 0,
+              flex: "1 1 auto",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              color: "var(--text-secondary)",
             }}
           >
             {check.label}

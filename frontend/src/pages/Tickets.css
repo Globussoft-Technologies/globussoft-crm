@@ -6,11 +6,115 @@
 
 .tickets-page {
   container-type: inline-size;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tickets-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.tickets-create-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.tickets-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1rem;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(3px);
+}
+
+.tickets-create-modal {
+  box-sizing: border-box;
+  width: min(100%, 540px);
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: calc(100dvh - 2rem) !important;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 1rem auto;
+  padding: 1.25rem !important;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+}
+
+.tickets-create-modal form {
+  max-height: none;
+  overflow: hidden;
+  padding-right: 0;
+}
+
+.tickets-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.tickets-modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.tickets-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tickets-modal-close:hover {
+  background: var(--subtle-bg-2);
+  color: var(--text-primary);
 }
 
 .tickets-grid {
+  display: block !important;
+  width: 100%;
+  max-width: 100%;
   grid-template-columns: clamp(280px, 32%, 340px) minmax(0, 1fr) !important;
   gap: 1.25rem !important;
+}
+
+.tickets-grid > .card {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+/* The ticket list is the page's primary content surface. Keep both the
+   scroll viewport and the fixed-layout table tied to the card width so the
+   table grows with the available area left beside the sidebar. */
+.tickets-table-scroll,
+.tickets-page .tickets-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+.tickets-page .tickets-table {
+  margin: 0;
 }
 
 .tickets-page .tickets-grid > .card,
@@ -157,13 +261,18 @@ body[data-vertical="generic"] main.generic-page-content .tickets-page .tickets-t
   .tickets-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
-
-  .tickets-grid > .card:first-child {
-    max-width: 340px;
-  }
 }
 
 @media (max-width: 768px) {
+  .tickets-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tickets-create-button {
+    justify-content: center;
+  }
+
   .tickets-page .tickets-table {
     min-width: 640px;
     display: table;

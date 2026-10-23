@@ -69,6 +69,57 @@
     padding: clamp(0.625rem, 0.85vw, 1rem) !important;
   }
 
+  /* Keep the contact search usable instead of allowing it to collapse to a
+     tiny sliver beside the fixed status/assignee/score filters. When space
+     runs out, flex-wrap moves the search to its own row. */
+  body[data-vertical="generic"] .contacts-page .contacts-filters-bar > :first-child {
+    flex: 1 1 clamp(220px, 24vw, 300px) !important;
+    min-width: 180px !important;
+    max-width: 300px !important;
+  }
+
+  body[data-vertical="generic"] .contacts-page .contacts-filters-bar > :first-child .crm-search-input {
+    padding-left: 2.5rem !important;
+  }
+
+  /* Deals / Pipeline toolbar: keep the deal search usable beside the
+     pipeline, date, and filter controls. */
+  body[data-vertical="generic"] .generic-deals-toolbar {
+    flex-wrap: wrap !important;
+    min-width: 0;
+  }
+
+  body[data-vertical="generic"] .generic-deals-toolbar .deals-pipeline-search-wrap {
+    flex: 1 1 clamp(220px, 24vw, 300px) !important;
+    min-width: 180px !important;
+    margin-left: 0 !important;
+  }
+
+  body[data-vertical="generic"] .generic-deals-toolbar .deals-pipeline-search {
+    width: 100% !important;
+    min-width: 0;
+    box-sizing: border-box;
+    padding-left: 2.5rem !important;
+  }
+
+  /* Leads toolbar: prevent the lead search from collapsing beside the
+     advanced filter controls. */
+  body[data-vertical="generic"] .leads-toolbar-shell > div:first-child {
+    min-width: 0;
+  }
+
+  body[data-vertical="generic"] .leads-toolbar-shell > div:first-child > div:first-child {
+    flex: 1 1 clamp(220px, 24vw, 300px) !important;
+    min-width: 180px !important;
+    max-width: 300px !important;
+  }
+
+  body[data-vertical="generic"] .leads-toolbar-shell > div:first-child > div:first-child .crm-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding-left: 2.5rem !important;
+  }
+
   body[data-vertical="generic"] .contacts-page .contacts-pagination-footer {
     padding: clamp(0.5rem, 0.65vw, 0.75rem) clamp(0.625rem, 0.85vw, 1rem);
     font-size: clamp(0.75rem, calc(0.5rem + 0.3vw), 0.8125rem);

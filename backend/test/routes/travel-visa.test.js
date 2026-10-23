@@ -1362,6 +1362,33 @@ describe('checklist import endpoints', () => {
     });
   });
 
+  test.each(['csv', 'xlsx'])('accepts minimal %s checklists without optional columns', async format => {
+    const headers = ['applicationType', 'destinationCountry', 'docType'];
+    const file = format === 'xlsx'
+      ? toXlsxBuffer(headers, [{ applicationType: 'tourist', destinationCountry: 'US', docType: 'Passport' }], 'Checklist Import')
+      : Buffer.from(`${headers.join(',')}\ntourist,US,Passport\n`);
+    prisma.visaChecklistTemplate.findFirst.mockResolvedValueOnce(null);
+    prisma.visaChecklistTemplate.create.mockResolvedValue({ id: 33 });
+    const res = await request(makeApp())
+      .post('/api/travel/visa/checklists/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', file, `minimal.${format}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, skipped: 0 });
+    expect(prisma.visaChecklistTemplate.create).toHaveBeenCalledWith({ data: expect.objectContaining({ required: false, sortOrder: 0, notes: null }) });
+  });
+
+  test.each(['applicationType', 'destinationCountry', 'docType'])('rejects a checklist missing %s', async missing => {
+    const headers = ['applicationType', 'destinationCountry', 'docType'].filter(header => header !== missing);
+    const res = await request(makeApp())
+      .post('/api/travel/visa/checklists/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(`${headers.join(',')}\n`), 'invalid.csv');
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_HEADERS', error: `Missing required column(s): ${missing}` });
+    expect(prisma.visaChecklistTemplate.create).not.toHaveBeenCalled();
+  });
+
   test('POST /checklists/import.csv accepts xlsx uploads', async () => {
     const xlsx = toXlsxBuffer(
       ['applicationType', 'destinationCountry', 'docType', 'required', 'sortOrder', 'notes'],

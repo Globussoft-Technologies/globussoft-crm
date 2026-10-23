@@ -1048,11 +1048,6 @@ ${fields.map(f => {
       {/* ─── Email Campaigns Tab ─── */}
       {(activeTab === 'campaigns' || (isGeneric && (activeTab === 'sms' || activeTab === 'whatsapp'))) && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          {isGeneric && !sequenceBuilderOpen && <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1.25rem' }}>
-            <button type="button" className="btn-primary" onClick={() => { setSequenceBuilderDirty(false); setEditingSequenceId(null); setSequenceBuilderOpen(true); }} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Plus size={16} /> Add a condition
-            </button>
-          </div>}
           {isGeneric && sequenceBuilderOpen && activeTab === 'whatsapp' && <GenericWhatsAppTriggerMappings
             campaigns={campaigns}
             editCampaignId={editingSequenceId}
@@ -1063,6 +1058,16 @@ ${fields.map(f => {
           />}
           {isGeneric && sequenceBuilderOpen && activeTab === 'campaigns' && <GenericChannelTriggerMappings channel="EMAIL" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
           {isGeneric && sequenceBuilderOpen && activeTab === 'sms' && <GenericChannelTriggerMappings channel="SMS" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
+          {isGeneric && !sequenceBuilderOpen && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '1.25rem' }}>
+            {activeTab === 'campaigns' && !selectingDrafts && (
+              <button type="button" className="btn-secondary" onClick={() => setSelectingDrafts(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                <CheckCircle2 size={15} /> Select drafts
+              </button>
+            )}
+            <button type="button" className="btn-primary" onClick={() => { setSequenceBuilderDirty(false); setEditingSequenceId(null); setSequenceBuilderOpen(true); }} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Plus size={16} /> Add a condition
+            </button>
+          </div>}
           {!isGeneric && !sequenceBuilderOpen && <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.5rem' }}>
             {!isGeneric && (campaigns.length > 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>

@@ -851,14 +851,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
     );
   });
 
-  it('keeps a fixed Generic table viewport when only a few leads are shown', async () => {
+  it('lets a short Generic table use its natural content height', async () => {
     const { container } = renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     const tableShell = container.querySelector('.leads-split-table');
-    expect(tableShell).toHaveClass('leads-split-table--sparse');
+    expect(tableShell).not.toHaveClass('leads-split-table--sparse');
     expect(tableShell).not.toHaveClass('leads-split-table--empty');
-    expect(tableShell).toHaveStyle({ flex: '1 1 auto' });
+    expect(tableShell).toHaveStyle({ flex: '0 0 auto' });
   });
 
   it('keeps secondary lead actions available in the mobile disclosure', async () => {
@@ -900,7 +900,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     fireEvent.click(within(densityMenu).getByRole('menuitemradio', { name: 'Compact' }));
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
-    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--sparse');
+    expect(document.querySelector('.leads-split-table')).not.toHaveClass('leads-split-table--sparse');
     expect(window.localStorage.getItem('globuscrm.leads.tableDensity.v1')).toBe('compact');
     await waitFor(() => {
       const bodyRows = Array.from(document.querySelectorAll('.leads-split-table tbody tr'));
@@ -1764,7 +1764,7 @@ function leadsFetchMock(url, opts) {
         .some((value) => String(value || '').toLowerCase().includes(query)))
       : SAMPLE_LEADS;
     const page = Number(params.get('page') || 1);
-    const limit = Number(params.get('limit') || 25);
+    const limit = Number(params.get('limit') || 10);
     return Promise.resolve({
       data: rows.slice((page - 1) * limit, page * limit),
       total: rows.length,
@@ -1845,6 +1845,19 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     notifyError.mockReset();
     notifyInfo.mockReset();
     notifySuccess.mockReset();
+  });
+
+  it('defaults Generic CRM Leads to 10 rows per page', async () => {
+    renderLeads(ADMIN_AUTH);
+
+    await screen.findByText('Alice Smith');
+
+    expect(screen.getByLabelText('Rows per page')).toHaveValue('10');
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+        && url.startsWith('/api/contacts?status=Lead')
+        && url.includes('limit=10'),
+    )).toBe(true);
   });
 
   it('renders seeded leads with name + email + company + lead-score badge', async () => {
@@ -1946,7 +1959,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -2002,7 +2015,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const restoredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -2034,7 +2047,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -2197,7 +2210,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -2518,7 +2531,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         const filters = JSON.parse(params.get('filters') || '[]');
         const missingEmail = filters.some((filter) => filter.field === 'email' && filter.operator === 'is_empty');
         const rows = missingEmail ? assistantRows.filter((lead) => !lead.email) : assistantRows;
-        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 25, totalPages: 1 });
+        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 10, totalPages: 1 });
       }
       return leadsFetchMock(url, opts);
     });
@@ -2532,7 +2545,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     await waitFor(() => {
       const filteredCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead&page=1&limit=25') && !opts && url.includes('filters='),
+        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead&page=1&limit=10') && !opts && url.includes('filters='),
       );
       expect(filteredCall).toBeDefined();
       expect(JSON.parse(new URL(filteredCall[0], 'http://crm.test').searchParams.get('filters'))).toEqual([
@@ -2552,7 +2565,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
         const params = new URL(url, 'http://crm.test').searchParams;
         const rows = params.get('nameStartsWith') === 'D' ? [diana] : [diana, unrelated];
-        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 25, totalPages: 1 });
+        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 10, totalPages: 1 });
       }
       return leadsFetchMock(url, opts);
     });
@@ -2681,7 +2694,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           data: [{ ...SAMPLE_LEADS[0], id: page }],
           total: query ? 1 : 30,
           page,
-          limit: 25,
+          limit: 10,
           totalPages: query ? 1 : 2,
         });
       }
@@ -2911,7 +2924,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           data: [{ ...SAMPLE_LEADS[0], id: page, name: `Lead page ${page}` }],
           total: 30,
           page,
-          limit: 25,
+          limit: 10,
           totalPages: 2,
         });
       }
@@ -4068,7 +4081,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );

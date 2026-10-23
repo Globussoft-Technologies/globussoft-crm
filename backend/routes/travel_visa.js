@@ -3474,7 +3474,10 @@ router.post(
         parsed = parseCsv(req.file.buffer.toString("utf8"));
       }
 
-      const missingHeaders = CHECKLIST_IMPORT_HEADERS.filter((header) => !parsed.headers.includes(header));
+      // Only identity columns are mandatory; optional columns retain their
+      // existing defaults for older or minimal CSV/XLSX files.
+      const missingHeaders = ["applicationType", "destinationCountry", "docType"]
+        .filter((header) => !parsed.headers.includes(header));
       if (missingHeaders.length > 0) {
         return res.status(400).json({
           error: `Missing required column(s): ${missingHeaders.join(", ")}`,

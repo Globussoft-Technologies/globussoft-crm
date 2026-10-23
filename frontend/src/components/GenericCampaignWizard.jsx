@@ -553,7 +553,7 @@ export default function GenericCampaignWizard({ campaign, onClose, onSaved }) {
     <div style={pageShellStyle}>
       <div role="main" aria-label={campaign?.id ? 'Edit campaign' : 'Create campaign'} className="card" style={pageContentStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-          <h3 style={{ margin: 0, flex: 1 }}>{campaign?.id ? 'Edit Campaign' : 'Create Email Campaign'}</h3>
+          <h3 style={{ margin: 0, flex: 1 }}>{campaign?.id ? 'Edit Campaign' : `Create ${campaign?.channel === 'WHATSAPP' ? 'WhatsApp' : campaign?.channel === 'SMS' ? 'SMS' : 'Email'} Campaign`}</h3>
           <span style={{ fontSize: '0.72rem', padding: '0.25rem 0.55rem', borderRadius: 6, background: draft.lifecycleState === 'running' ? 'rgba(16, 185, 129, 0.12)' : 'var(--subtle-bg-3)', color: draft.lifecycleState === 'running' ? '#047857' : 'var(--text-secondary)', border: draft.lifecycleState === 'running' ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid var(--border-color)' }}>
             {draft.lifecycleState === 'running' ? 'Running' : draft.lifecycleState === 'paused' ? 'Paused' : 'Draft'}
           </span>

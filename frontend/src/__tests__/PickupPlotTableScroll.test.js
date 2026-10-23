@@ -53,7 +53,17 @@ describe('Pickup & Plot table scroll cards', () => {
   });
 
   it('uses theme tokens for Generic CRM Pickup & Plot table headers', () => {
-    expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+tr,[\s\S]*?background-color:\s*var\(--table-header-bg/);
+    expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+tr,[\s\S]*?background-color:\s*var\(--popover-bg,\s*var\(--modal-bg,\s*var\(--surface-color\)\)\)/);
+    expect(css).not.toMatch(/table\.pickup-plot-leads-table\s+thead\s+th[^{}]*\{[^}]*background-color:\s*var\(--table-header-bg/s);
     expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+th\s*\{\s*color:\s*var\(--text-primary\)\s*!important\s*;/);
+  });
+
+  it('uses an opaque themed surface for the active customer filter', () => {
+    const workspaceCss = readFileSync(resolve(process.cwd(), 'src/components/TransportDriverWorkspace.css'), 'utf8');
+    const activeTabRule = workspaceCss.match(/\.transport-tabs button\.active\s*\{([^}]*)\}/s);
+
+    expect(activeTabRule).not.toBeNull();
+    expect(activeTabRule[1]).toMatch(/background:\s*var\(--popover-bg,\s*var\(--modal-bg,\s*var\(--surface-color\)\)\)/);
+    expect(activeTabRule[1]).not.toMatch(/background:\s*(?:#fff|rgba?\()/);
   });
 });

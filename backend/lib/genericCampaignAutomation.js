@@ -249,6 +249,7 @@ async function processGenericChannelCampaignEvent(eventName, payload = {}, tenan
     'whatsapp.customer_replied',
     'custom.trigger',
     'pickup_plot.selection_requested',
+    'pickup_point.assigned',
     'contact.updated',
     'pickup_plot.selected',
     'payment.collected',
@@ -391,7 +392,7 @@ async function hydrateGenericEventPayload(eventName, payload = {}, tenantId) {
   let next = { ...payload };
   let contactId = Number(payload.contactId);
 
-  if (eventName === 'pickup_point.created' || eventName === 'pickup_point.updated') {
+  if (eventName === 'pickup_point.created' || eventName === 'pickup_point.updated' || eventName === 'pickup_point.assigned') {
     const pickupId = Number(payload.pickupPointId || payload.pickupId);
     if (Number.isInteger(pickupId) && pickupId > 0) {
       const pickup = await prisma.customerPickup.findFirst({
@@ -550,7 +551,8 @@ async function queueWhatsAppSequenceTemplate({ templateId, enrollment, context =
   const tenant = enrollment.sequence.tenant;
   const templateContext = { ...context, contact, organization: tenant };
   const templateMapping = parseFilters(template.variableMapping) || {};
-  if (Object.values(templateMapping).includes("system.pickupPlotLink")) {
+  const pickupPlotFlow = Object.values(templateMapping).includes("system.pickupPlotLink");
+  if (pickupPlotFlow) {
     templateContext.system = {
       ...(templateContext.system || {}),
       pickupPlotLink: createSelectionLink({ tenantId: enrollment.tenantId, contactId: contact.id, submissionId: enrollment.id }),
@@ -584,6 +586,10 @@ async function queueWhatsAppSequenceTemplate({ templateId, enrollment, context =
         sequenceId: enrollment.sequenceId,
         sequenceStepId: stepId,
         branch,
+        // Activates the inbound native-list flow only when this exact message
+        // came from a sequence step using a pickup/plot template. Manual sends
+        // and unrelated sequence templates never receive this marker.
+        pickupPlotFlow,
         parameters,
       }),
     },

@@ -337,6 +337,21 @@ describe('POST /api/roles custom-role quota', () => {
     userType: 'STAFF',
   };
 
+  test('rejects a generic CRM role created without permissions', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'generic' });
+
+    const res = await request(makeApp({ vertical: 'generic' }))
+      .post('/api/roles')
+      .send({ name: 'Receptionist', key: 'RECEPTIONIST', userType: 'STAFF' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'Please give this role permission to at least one page before creating it.',
+      code: 'ROLE_PAGE_PERMISSION_REQUIRED',
+    });
+    expect(prisma.role.create).not.toHaveBeenCalled();
+  });
+
   test('creates a custom role when the tenant is unlimited and marks it isCustom', async () => {
     prisma.$queryRaw.mockResolvedValue([{ id: 11, maxCustomRoles: null }]);
     prisma.role.count.mockResolvedValue(4);
@@ -373,7 +388,7 @@ describe('POST /api/roles custom-role quota', () => {
 
     const res = await request(makeApp({ vertical: 'generic' }))
       .post('/api/roles')
-      .send(payload);
+      .send({ ...payload, permissions: [{ module: 'contacts', action: 'read' }] });
 
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({

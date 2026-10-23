@@ -267,6 +267,41 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByText('Customer can pay using UPI, card, or net banking.')).toBeInTheDocument();
   });
 
+  it('lets an admin choose a percentage, direct amount, or full initial payment', async () => {
+    const unpaidPayload = {
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        booking: { ...payload.customers[0].booking, amountPaid: 0, balance: 4500000 },
+        payments: [],
+      }, payload.customers[1]],
+    };
+    fetchApi.mockResolvedValue(unpaidPayload);
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate payment' }));
+    const amount = screen.getByLabelText('Initial payment amount');
+    const percentage = screen.getByLabelText('Initial payment percentage');
+    expect(screen.getByRole('radio', { name: /Minimum payment/ })).toBeChecked();
+    expect(percentage).toHaveValue(10);
+    expect(amount).toHaveValue(450000);
+
+    fireEvent.change(percentage, { target: { value: '20' } });
+    expect(amount).toHaveValue(900000);
+
+    fireEvent.change(amount, { target: { value: '675000' } });
+    expect(percentage).toHaveValue(15);
+
+    fireEvent.click(screen.getByRole('radio', { name: /Full payment/ }));
+    expect(screen.getByLabelText('Initial payment amount')).toHaveValue(4500000);
+    expect(screen.getByLabelText('Initial payment amount')).toHaveAttribute('readonly');
+
+    fireEvent.click(screen.getByRole('radio', { name: /Minimum payment/ }));
+    expect(screen.getByLabelText('Initial payment amount')).toHaveValue(675000);
+    expect(screen.getByLabelText('Initial payment amount')).not.toHaveAttribute('readonly');
+  });
+
   it('persists a monthly installment sequence before initiating its payment', async () => {
     const unscheduledPayload = {
       ...payload,

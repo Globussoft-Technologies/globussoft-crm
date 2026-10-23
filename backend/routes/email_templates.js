@@ -7,6 +7,26 @@ const { normalizeGenericTemplatePlaceholders } = require("../lib/genericCampaign
 const { routeRequest } = require("../lib/llmRouter");
 const { ensureGenericLeadNotificationTemplates, SYSTEM_CATEGORY_PREFIX } = require("../lib/genericLeadEmailTemplates");
 
+const TEMPLATE_ORDER_SETTING_PREFIX = "generic.marketing.templateOrder";
+
+function parseSavedOrder(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isSafeInteger) : [];
+  } catch {
+    return [];
+  }
+}
+
+function applySavedOrder(rows, orderedIds) {
+  const rank = new Map(orderedIds.map((id, index) => [Number(id), index]));
+  return [...rows].sort((left, right) => {
+    const leftRank = rank.has(left.id) ? rank.get(left.id) : Number.MAX_SAFE_INTEGER;
+    const rightRank = rank.has(right.id) ? rank.get(right.id) : Number.MAX_SAFE_INTEGER;
+    return leftRank - rightRank;
+  });
+}
+
 async function requireGenericTenant(req, res) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: req.user.tenantId },
@@ -210,9 +230,17 @@ router.post("/ai-draft", async (req, res) => {
   try {
     const tenant = await requireGenericTenant(req, res);
     if (!tenant) return;
-    const subject = String(req.body?.subject || "").trim();
+    const channel = String(req.body?.channel || "EMAIL").trim().toUpperCase();
+    if (!["EMAIL", "WHATSAPP"].includes(channel)) {
+      return res.status(400).json({ error: "AI drafting supports EMAIL or WHATSAPP templates", code: "CHANNEL_INVALID" });
+    }
+    const templateName = String(req.body?.templateName || "").trim();
+    const subject = String(req.body?.subject || (channel === "WHATSAPP" ? templateName.replace(/_/g, " ") : "")).trim();
     if (!subject) {
-      return res.status(400).json({ error: "A subject is required to write a template", code: "SUBJECT_REQUIRED" });
+      return res.status(400).json({
+        error: channel === "WHATSAPP" ? "A template name is required to write a WhatsApp message" : "A subject is required to write a template",
+        code: channel === "WHATSAPP" ? "TEMPLATE_NAME_REQUIRED" : "SUBJECT_REQUIRED",
+      });
     }
     if (subject.length > 300) {
       return res.status(400).json({ error: "Subject must be 300 characters or fewer", code: "SUBJECT_TOO_LONG" });
@@ -222,13 +250,17 @@ router.post("/ai-draft", async (req, res) => {
       task: "email-template-draft",
       payload: {
         subject,
+        channel,
+        templateName: templateName || undefined,
+        category: String(req.body?.category || "").trim() || undefined,
+        includePickupPlotLink: channel === "WHATSAPP" && req.body?.includePickupPlotLink === true,
         __userId: req.user.userId,
-        __surface: "generic-email-template",
+        __surface: channel === "WHATSAPP" ? "generic-whatsapp-template" : "generic-email-template",
       },
       tenantId: req.user.tenantId,
     });
     if (result.stub || !String(result.text || "").trim()) {
-      return res.status(503).json({ error: "AI email drafting is not configured for this tenant", code: "AI_NOT_CONFIGURED" });
+      return res.status(503).json({ error: `AI ${channel === "WHATSAPP" ? "WhatsApp" : "email"} drafting is not configured for this tenant`, code: "AI_NOT_CONFIGURED" });
     }
     return res.json({ body: result.text.trim(), model: result.model });
   } catch (err) {
@@ -288,10 +320,16 @@ router.get("/", async (req, res) => {
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 50) : 10;
-    const [templates, total] = await Promise.all([
-      prisma.emailTemplate.findMany({ ...findManyArgs, skip: (page - 1) * limit, take: limit }),
+    const orderSettingKey = `${TEMPLATE_ORDER_SETTING_PREFIX}.${channel || "ALL"}`;
+    const [allTemplates, total, orderSetting] = await Promise.all([
+      prisma.emailTemplate.findMany(findManyArgs),
       prisma.emailTemplate.count({ where: findManyArgs.where }),
+      prisma.tenantSetting.findUnique({
+        where: { tenantId_key: { tenantId: req.user.tenantId, key: orderSettingKey } },
+        select: { value: true },
+      }),
     ]);
+    const templates = applySavedOrder(allTemplates, parseSavedOrder(orderSetting?.value)).slice((page - 1) * limit, page * limit);
     return res.json({
       items: templates,
       pagination: { page, pageSize: limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
@@ -299,6 +337,54 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("[EmailTemplates] List error:", err);
     res.status(500).json({ error: "Failed to fetch email templates", code: "EMAIL_TEMPLATES_LIST_FAILED" });
+  }
+});
+
+// Generic CRM template-card ordering. Only the rows included in orderedIds
+// move; their existing slots in the full tenant/channel order are reused so
+// dragging on a paginated page cannot pull page-two cards onto page one.
+router.put("/reorder", async (req, res) => {
+  try {
+    const tenant = await requireGenericTenant(req, res);
+    if (!tenant) return;
+    const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
+    if (!["ALL", "EMAIL", "SMS", "WHATSAPP"].includes(requestedChannel)) {
+      return res.status(400).json({ error: "channel must be ALL, EMAIL, SMS, or WHATSAPP", code: "INVALID_CHANNEL" });
+    }
+    const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds.map(Number) : [];
+    if (orderedIds.length < 2 || orderedIds.length > 50 || orderedIds.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(orderedIds).size !== orderedIds.length) {
+      return res.status(400).json({ error: "orderedIds must contain 2 to 50 unique template IDs", code: "INVALID_ORDER" });
+    }
+    const where = {
+      tenantId: req.user.tenantId,
+      ...(requestedChannel === "ALL" ? {} : { channel: requestedChannel }),
+    };
+    const settingKey = `${TEMPLATE_ORDER_SETTING_PREFIX}.${requestedChannel}`;
+    const [rows, currentSetting] = await Promise.all([prisma.emailTemplate.findMany({
+      where,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      select: { id: true },
+    }), prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: settingKey } },
+      select: { value: true },
+    })]);
+    const rowIds = applySavedOrder(rows, parseSavedOrder(currentSetting?.value)).map(row => row.id);
+    if (orderedIds.some(id => !rowIds.includes(id))) {
+      return res.status(409).json({ error: "Template order is out of date. Refresh and try again.", code: "ORDER_STALE" });
+    }
+    const moving = new Set(orderedIds);
+    const slots = rowIds.map((id, index) => moving.has(id) ? index : -1).filter(index => index >= 0);
+    const nextIds = [...rowIds];
+    slots.forEach((slot, index) => { nextIds[slot] = orderedIds[index]; });
+    await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: settingKey } },
+      update: { value: JSON.stringify(nextIds), category: "ui" },
+      create: { tenantId: req.user.tenantId, key: settingKey, value: JSON.stringify(nextIds), category: "ui" },
+    });
+    return res.json({ success: true, orderedIds });
+  } catch (err) {
+    console.error("[EmailTemplates] Reorder error:", err);
+    return res.status(500).json({ error: "Failed to reorder templates", code: "EMAIL_TEMPLATE_REORDER_FAILED" });
   }
 });
 

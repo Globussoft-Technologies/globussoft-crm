@@ -623,7 +623,7 @@ router.post(
   requirePermission("roles", "manage"),
   async (req, res) => {
     try {
-      const { name, description, key, userType, landingPath, dataScope, subBrandScope } = req.body;
+      const { name, description, key, userType, landingPath, dataScope, subBrandScope, permissions } = req.body;
 
       if (!name || typeof name !== "string") {
         return res.status(400).json({ error: "Role name is required" });
@@ -654,6 +654,88 @@ router.post(
       const tenantVertical = await getTenantVertical(req.user.tenantId);
       if (tenantVertical !== "travel" && subBrandScopeResult.value && subBrandScopeResult.value.length > 0) {
         return res.status(400).json({ error: "subBrandScope is only available for travel tenants" });
+      }
+
+      // Generic CRM collects a required initial page grant through its
+      // pre-create permission matrix. Other verticals retain their existing
+      // role-creation behavior and configure permissions after creation.
+      if (tenantVertical === "generic" && permissions !== undefined && !Array.isArray(permissions)) {
+        return res.status(400).json({
+          error: "permissions must be an array",
+          code: "INVALID_PERMISSION",
+        });
+      }
+      const suppliedPermissions = tenantVertical === "generic" ? (permissions || []) : [];
+      if (tenantVertical === "generic" && suppliedPermissions.length === 0) {
+        return res.status(400).json({
+          error: "Please give this role permission to at least one page before creating it.",
+          code: "ROLE_PAGE_PERMISSION_REQUIRED",
+        });
+      }
+      const normalizedPermissions = [];
+      const seenPermissions = new Set();
+      for (const permission of suppliedPermissions) {
+        if (!permission || typeof permission !== "object" || !permission.module || !permission.action) {
+          return res.status(400).json({
+            error: "Each permission requires both module and action",
+            code: "INVALID_PERMISSION",
+          });
+        }
+        const module = String(permission.module).trim();
+        const action = String(permission.action).trim();
+        const verticalCheck = validatePermissionForVertical(module, action, tenantVertical);
+        if (!verticalCheck.ok) {
+          return res.status(400).json({
+            error: verticalCheck.error,
+            code: verticalCheck.code,
+            module,
+            action,
+            vertical: tenantVertical,
+          });
+        }
+        const permissionKey = `${module}.${action}`;
+        if (seenPermissions.has(permissionKey)) continue;
+        seenPermissions.add(permissionKey);
+        normalizedPermissions.push({ module, action });
+      }
+
+      const permissionSet = new Set(
+        normalizedPermissions.map(({ module, action }) => `${module}.${action}`),
+      );
+      let accessiblePages = [];
+      if (tenantVertical === "generic") {
+        const pageVisibility = await getTenantPageVisibility(req.user.tenantId, {
+          vertical: tenantVertical,
+        });
+        accessiblePages = filterPagesByTenantVisibility(
+          getAccessiblePages(permissionSet, { vertical: tenantVertical }),
+          pageVisibility,
+        );
+      }
+      const hasPermissionGatedPage = accessiblePages.some(
+        (page) => Array.isArray(page.requiredPermissions) && page.requiredPermissions.length > 0,
+      );
+      if (tenantVertical === "generic" && !hasPermissionGatedPage) {
+        return res.status(400).json({
+          error: "Please give this role permission to at least one page before creating it.",
+          code: "ROLE_PAGE_PERMISSION_REQUIRED",
+        });
+      }
+
+      const normalizedLandingPath = normalizeLandingPath(landingPath);
+      const landingCatalogPath = normalizedLandingPath
+        ? normalizedLandingPath.split(/[?#]/, 1)[0]
+        : null;
+      if (
+        tenantVertical === "generic" &&
+        normalizedLandingPath &&
+        !accessiblePages.some((page) => page.path === landingCatalogPath)
+      ) {
+        return res.status(400).json({
+          error: "Landing page is not accessible by this role. Choose a page included in its initial permissions.",
+          code: "LANDING_PATH_NOT_ACCESSIBLE",
+          path: normalizedLandingPath,
+        });
       }
 
       // Lock the tenant row before counting custom roles. This makes the
@@ -687,7 +769,10 @@ router.post(
             isActive: true,
             dataScope: dataScope !== undefined ? normalizeDataScope(dataScope) : "ALL",
             subBrandScopeJson: serializeSubBrandScope(subBrandScopeResult.value),
-            landingPath: normalizeLandingPath(landingPath),
+            landingPath: normalizedLandingPath,
+            ...(normalizedPermissions.length > 0
+              ? { permissions: { create: normalizedPermissions } }
+              : {}),
           },
           include: { permissions: true },
         });
@@ -703,6 +788,7 @@ router.post(
           roleId: role.id,
           key: role.key,
           name: role.name,
+          permissionCount: normalizedPermissions.length,
         },
       );
 

@@ -2540,6 +2540,7 @@ router.get('/:id/lifecycle-history', async (req, res) => {
             || '(not set)',
           status: statusChange?.to ?? details?.lifecycleTransition?.toStatus ?? null,
         },
+        reason: details?.lifecycleTransition?.reason || null,
       }];
     });
     return res.json({ data: history, total: history.length });
@@ -2845,8 +2846,12 @@ router.post("/", async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {
-      /* event bus optional */
+    } catch (eventError) {
+      // Contact creation must remain successful when an optional downstream
+      // integration is unavailable, but campaign enrollment failures must not
+      // disappear. Operators need the concrete Prisma/provider error to fix
+      // the trigger path instead of seeing an unexplained missing message.
+      console.error("[contacts] contact.created event failed:", eventError.message);
     }
     // [GP-CRM integration] Fire lead.new to registered webhooks (e.g. GlobusPhone)
     // when a Lead contact is created. Carries the id/name/phone/email shape the
@@ -3366,6 +3371,10 @@ const updateContactById = async (req, res) => {
     // for why this must be stripped before the Prisma spread.
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const lifecycleTransitionReason = typeof req.body.lifecycleTransitionReason === "string"
+      ? req.body.lifecycleTransitionReason.trim().slice(0, 500)
+      : "";
+    delete req.body.lifecycleTransitionReason;
     const hasCustomFieldUpdates =
       customFields &&
       typeof customFields === "object" &&
@@ -3429,6 +3438,9 @@ const updateContactById = async (req, res) => {
         const effectiveStatus = updateData.status === undefined ? existing.status : updateData.status;
         if (!option || option.status !== effectiveStatus) {
           return res.status(400).json({ error: "Lifecycle stage does not match the contact status", code: "INVALID_LIFECYCLE_STAGE" });
+        }
+        if (option.negative === true && !lifecycleTransitionReason) {
+          return res.status(400).json({ error: "A reason is required for a negative lifecycle stage", code: "NEGATIVE_STAGE_REASON_REQUIRED" });
         }
         updateData.lifecycleStageKey = lifecycleStageKey;
       }
@@ -3501,6 +3513,7 @@ const updateContactById = async (req, res) => {
           toStage: labelFor(contact.lifecycleStageKey) || contact.status || '(not set)',
           fromStatus: existing.status || null,
           toStatus: contact.status || null,
+          ...(lifecycleTransitionReason ? { reason: lifecycleTransitionReason } : {}),
         };
       }
       await writeAudit(

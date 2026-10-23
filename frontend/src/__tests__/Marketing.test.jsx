@@ -114,7 +114,9 @@ function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], whatsapp = [], form
       return Promise.resolve(campaigns.find(campaign => campaign.id === Number(url.split('/').at(-1))) || null);
     }
     if (url.startsWith('/api/marketing/campaigns?paginate=1')) {
-      return Promise.resolve({ items: campaigns, pagination: { page: 1, pageSize: 8, total: campaigns.length, totalPages: Math.max(1, Math.ceil(campaigns.length / 8)) } });
+      const channel = new URLSearchParams(url.split('?')[1]).get('channel');
+      const items = channel === 'SMS' ? sms : (channel === 'WHATSAPP' ? whatsapp : campaigns);
+      return Promise.resolve({ items, pagination: { page: 1, pageSize: 8, total: items.length, totalPages: Math.max(1, Math.ceil(items.length / 8)) } });
     }
     if (url === '/api/marketing/campaigns') return Promise.resolve(campaigns);
     if (url.startsWith('/api/marketing/campaigns?channel=EMAIL')) {
@@ -159,50 +161,18 @@ beforeEach(() => {
 });
 
 describe('<Marketing /> — Generic campaign workflow', () => {
-  it('selects Draft email sequences only and bulk deletes selected IDs', async () => {
+  it('reorders Generic CRM sequence cards and persists the new position', async () => {
     wireFetch();
-    fetchApiMock.mockImplementation((url, options = {}) => {
-      if (url === '/api/marketing/campaigns/bulk' && options.method === 'DELETE') return Promise.resolve({ deleted: 1 });
-      if (String(url).includes('paginate=1')) return Promise.resolve({ items: SAMPLE_CAMPAIGNS, pagination: { page: 1, totalPages: 1, total: 2 } });
-      return Promise.resolve([]);
-    });
     renderMarketing(GENERIC_USER);
-    expect(await screen.findByRole('button', { name: 'Select drafts' })).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Select drafts' }));
-    const draft = await screen.findByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' });
-    expect(screen.queryByRole('button', { name: 'Delete sequence Q4 Holiday Promo' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Select Draft sequence Spring Newsletter/ })).not.toBeInTheDocument();
-    fireEvent.click(draft);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/marketing/campaigns/bulk', {
-      method: 'DELETE', body: JSON.stringify({ ids: [100] }),
-    }));
-  });
 
-  it('selects Draft email sequences across all pages', async () => {
-    fetchApiMock.mockImplementation((url, options = {}) => {
-      if (url === '/api/marketing/campaigns/bulk' && options.method === 'DELETE') return Promise.resolve({ deleted: 20 });
-      if (String(url).includes('status=Draft')) return Promise.resolve({ items: [], pagination: { total: 20, totalPages: 3 } });
-      if (String(url).includes('paginate=1')) return Promise.resolve({ items: SAMPLE_CAMPAIGNS, pagination: { page: 1, total: 20, totalPages: 3 } });
-      return Promise.resolve([]);
-    });
-    renderMarketing(GENERIC_USER);
-    await screen.findByText('Q4 Holiday Promo');
-    fireEvent.click(screen.getByRole('button', { name: 'Select drafts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Select all Drafts' }));
-    expect(screen.getByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' })).toBeChecked();
-    expect(screen.getByText('Q4 Holiday Promo').closest('.campaign-card')).toHaveAttribute('data-selected', 'true');
-    expect(screen.getByText('Spring Newsletter').closest('.campaign-card')).not.toHaveAttribute('data-selected');
-    expect(screen.queryByText('Only Draft email sequences can be selected')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all Drafts' }));
-    expect(screen.getByRole('checkbox', { name: 'Select Draft sequence Q4 Holiday Promo' })).not.toBeChecked();
-    expect(screen.getByRole('button', { name: 'Delete selected' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Select all Drafts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/marketing/campaigns/bulk', {
-      method: 'DELETE', body: JSON.stringify({ allDrafts: true }),
+    fireEvent.click(await screen.findByRole('button', { name: 'Move sequence Q4 Holiday Promo later' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/marketing/campaigns/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ channel: 'EMAIL', orderedIds: [101, 100] }),
     }));
+    expect(screen.getByRole('button', { name: 'Drag sequence Q4 Holiday Promo to reorder' })).toBeInTheDocument();
+    expect(notifyObj.success).toHaveBeenCalledWith('Sequence order saved');
   });
 
   it('hides the created-date filter on the Generic email sequence page', async () => {
@@ -259,6 +229,20 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     }
     expect(screen.queryByRole('button', { name: 'Embedded Forms' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Push Campaigns' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['Email', 'campaigns'],
+    ['SMS', 'sms'],
+    ['WhatsApp', 'whatsapp'],
+  ])('shows matching controls without a redundant creator for Generic %s sequences', async (label, tab) => {
+    wireFetch({ campaigns: [], sms: [], whatsapp: [] });
+    renderMarketing(GENERIC_USER);
+    if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
+
+    expect(await screen.findByRole('button', { name: 'Add a condition' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Select drafts' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
   });
 
   it('highlights only the selected Generic marketing tab', async () => {
@@ -430,7 +414,11 @@ describe('<Marketing /> — Generic campaign workflow', () => {
         ? { eventTrigger: 'contact.created', whatsappTemplateId: 9, sequenceName: 'Welcome sequence' }
         : { automationType: 'generic_channel_event', channel, triggerEvent: 'contact.created', templateId: 4, sequenceName: 'Welcome sequence' }),
     };
-    wireFetch({ campaigns: [campaign], whatsapp: channel === 'WHATSAPP' ? [campaign] : [] });
+    wireFetch({
+      campaigns: channel === 'EMAIL' ? [campaign] : [],
+      sms: channel === 'SMS' ? [campaign] : [],
+      whatsapp: channel === 'WHATSAPP' ? [campaign] : [],
+    });
     renderMarketing(GENERIC_USER);
     if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${tab === 'sms' ? 'SMS' : 'WhatsApp'} Sequences` }));
     const scrollIntoView = vi.fn();

@@ -16,6 +16,27 @@ const bus = new EventEmitter();
 bus.setMaxListeners(100);
 let genericCampaignEventSequence = 0;
 
+// Node's EventEmitter does not await promises returned by async listeners.
+// That made contact.created look successful to the route while Generic CRM
+// campaign enrollment was still running in the background (and could be lost
+// on a restart). Invoke the raw listeners synchronously, preserving `once`
+// semantics, then wait for every async tail before emitEvent resolves.
+async function emitBusEventAndWait(eventName, event) {
+  const pending = bus.rawListeners(eventName).map((listener) => {
+    try {
+      return Promise.resolve(listener.call(bus, event));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+  const results = await Promise.allSettled(pending);
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error(`[eventBus] ${eventName} listener failed:`, result.reason?.message || result.reason);
+    }
+  }
+}
+
 function shouldDispatchStatusChanged(payload) {
   return Boolean(payload?.changedFields?.some(field => field === "status" || field === "lifecycleStageKey"));
 }
@@ -68,6 +89,13 @@ bus.on("whatsapp.customer_replied", ({ payload, tenantId }) => dispatchGenericCa
 
 for (const eventName of ["pickup_plot.selected", "payment.collected", "plot.confirmed"]) {
   bus.on(eventName, ({ payload, tenantId }) => dispatchGenericCampaignEvent(eventName, payload, tenantId));
+}
+
+// The Leads table saves the same CustomerPickup row for both the first
+// assignment and later changes. Present those storage-level events to the
+// sequence builder as one stable business trigger.
+for (const eventName of ["pickup_point.created", "pickup_point.updated"]) {
+  bus.on(eventName, ({ payload, tenantId }) => dispatchGenericCampaignEvent("pickup_point.assigned", payload, tenantId));
 }
 
 // Generic CRM derives the first successful payment event from the existing
@@ -796,7 +824,7 @@ async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
       console.error(`[WorkflowEngine] Generic ${eventName} payload hydration failed:`, error.message);
     }
   }
-  bus.emit(eventName, { payload, tenantId, io: ioInstance });
+  await emitBusEventAndWait(eventName, { payload, tenantId, io: ioInstance });
 
   // 1. Find matching automation rules
   const triggerTypes = [eventName];

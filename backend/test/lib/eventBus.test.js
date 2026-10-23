@@ -410,6 +410,19 @@ beforeEach(() => {
 });
 
 describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', () => {
+  test('waits for asynchronous in-process listeners before resolving', async () => {
+    let completed = false;
+    bus.once('test.bus.event.awaited', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completed = true;
+    });
+
+    await emitEvent('test.bus.event.awaited', { x: 1 }, 42);
+
+    expect(completed).toBe(true);
+    expect(bus.listenerCount('test.bus.event.awaited')).toBe(0);
+  });
+
   test('queries automationRule scoped to tenant + eventName + isActive=true', async () => {
     await emitEvent('contact.created', { contactId: 1 }, 42);
     expect(prisma.automationRule.findMany).toHaveBeenCalledWith({

@@ -182,6 +182,14 @@ describe('ContactDetail — current profile contract', () => {
     expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
   });
 
+  it('sends the lead sequence action to Marketing Campaign sequences', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ listType: 'leads', vertical: 'generic' });
+
+    expect(await screen.findByRole('link', { name: 'Add to a sequence' }))
+      .toHaveAttribute('href', '/marketing?tab=campaigns');
+  });
+
   it('shows the current lifecycle stage and score for the contact', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();

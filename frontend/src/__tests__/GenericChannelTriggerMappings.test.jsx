@@ -74,14 +74,14 @@ describe('GenericChannelTriggerMappings', () => {
     expect(screen.getByRole('combobox', { name: `${label} template for step 1` })).toHaveValue('6');
   });
 
-  it.each(['EMAIL', 'SMS'])('offers only the seven supported Generic CRM sequence triggers for %s', async channel => {
+  it.each(['EMAIL', 'SMS'])('offers only the eight supported Generic CRM sequence triggers for %s', async channel => {
     arrange(channel);
     const label = channel === 'SMS' ? 'SMS' : 'Email';
     render(<GenericChannelTriggerMappings channel={channel} campaigns={[]} onSaved={vi.fn()} />);
     const trigger = await screen.findByRole('combobox', { name: `${label} sequence trigger` });
     expect(within(trigger).getAllByRole('option').map(option => option.value)).toEqual([
       'contact.created', 'contact.status_changed', 'payment.due', 'pickup_plot.selection_requested',
-      'pickup_plot.selected', 'payment.collected', 'plot.confirmed',
+      'pickup_point.assigned', 'pickup_plot.selected', 'payment.collected', 'plot.confirmed',
     ]);
   });
 
@@ -226,14 +226,21 @@ describe('GenericChannelTriggerMappings', () => {
     ]);
   });
 
-  it.each(['EMAIL', 'SMS'])('shows a confirmation only after selecting the next %s step type', async channel => {
+  it.each(['EMAIL', 'SMS'])('opens the next %s message editor and lets the same card switch step type', async channel => {
     arrange(channel);
     render(<GenericChannelTriggerMappings channel={channel} campaigns={[]} onSaved={vi.fn()} />);
     const nextStep = await screen.findByRole('combobox', { name: 'Next step type after step 1' });
     expect(nextStep).toHaveValue('');
-    expect(screen.queryByRole('button', { name: 'Add next step' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add step after step 1' }));
+    expect(nextStep).toHaveValue('send');
+    expect(nextStep).toHaveStyle({ width: '210px' });
+    expect(screen.getByText('STEP 2')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: `${channel === 'SMS' ? 'SMS' : 'Email'} template for step 3` })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add next step' })).toBeInTheDocument();
 
     fireEvent.change(nextStep, { target: { value: 'reply' } });
+    expect(nextStep).toHaveValue('reply');
+    expect(screen.queryByRole('button', { name: 'Add step after step 1' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add reply condition' })).toBeInTheDocument();
     fireEvent.change(nextStep, { target: { value: 'field' } });
     expect(screen.getByRole('button', { name: 'Add CRM column condition' })).toBeInTheDocument();
@@ -328,9 +335,9 @@ describe('GenericChannelTriggerMappings', () => {
     await waitFor(() => expect(notify.success).toHaveBeenCalledWith('SMS sequence saved and activated'));
     const stepCalls = fetchApiMock.mock.calls.filter(([url, options]) => url === '/api/sequences/90/steps' && options?.method === 'POST');
     expect(stepCalls.map(([, options]) => JSON.parse(options.body))).toMatchObject([
-      { position: 0, kind: 'sms', smsBody: 'Welcome by SMS' },
+      { position: 0, kind: 'sms', emailTemplateId: 6, smsBody: 'Welcome by SMS' },
       { position: 1, kind: 'wait', delayMinutes: 120 },
-      { position: 2, kind: 'sms', smsBody: 'Follow up by SMS' },
+      { position: 2, kind: 'sms', emailTemplateId: 7, smsBody: 'Follow up by SMS' },
     ]);
     const scheduleCall = fetchApiMock.mock.calls.find(([url]) => url === '/api/marketing/campaigns/77/schedule');
     const savedFilters = JSON.parse(scheduleCall[1].body).filters;

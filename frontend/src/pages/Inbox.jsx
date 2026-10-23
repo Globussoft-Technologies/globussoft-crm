@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Mail,
   Search,
@@ -268,31 +268,32 @@ function formatStaffOptionLabel(staff) {
   return staff?.email ? `${name} — ${staff.email}` : name;
 }
 
-export default function Inbox() {
+export default function Inbox({
+  composeOnly = false,
+  initialComposeTo: embeddedComposeTo = "",
+  initialComposeContactId: embeddedComposeContactId = "",
+  onComposeClose,
+  onComposeSent,
+} = {}) {
   const navigate = useNavigate();
+  const [routeParams] = useSearchParams();
   const notify = useNotify();
   const { user, tenant } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === "travel";
   const isWellness = tenant?.vertical === "wellness";
   const isGeneric = !isTravel && !isWellness;
-  const travelComposeTo = isTravel && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("travelComposeTo")
+  const genericComposeTo = isGeneric
+    ? embeddedComposeTo || routeParams.get("composeTo") || ""
     : "";
-  const wellnessComposeTo = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessComposeTo")
+  const genericComposeContactId = isGeneric
+    ? String(embeddedComposeContactId || routeParams.get("composeContactId") || "")
     : "";
-  const wellnessComposeReturnTo = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessComposeReturnTo")
-    : "";
-  const travelScheduleContactId = isTravel && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("travelScheduleContactId")
-    : "";
-  const wellnessScheduleContactId = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessScheduleContactId")
-    : "";
-  const wellnessScheduleReturnTo = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessScheduleReturnTo")
-    : "";
+  const travelComposeTo = isTravel ? routeParams.get("travelComposeTo") || "" : "";
+  const wellnessComposeTo = isWellness ? routeParams.get("wellnessComposeTo") || "" : "";
+  const wellnessComposeReturnTo = isWellness ? routeParams.get("wellnessComposeReturnTo") || "" : "";
+  const travelScheduleContactId = isTravel ? routeParams.get("travelScheduleContactId") || "" : "";
+  const wellnessScheduleContactId = isWellness ? routeParams.get("wellnessScheduleContactId") || "" : "";
+  const wellnessScheduleReturnTo = isWellness ? routeParams.get("wellnessScheduleReturnTo") || "" : "";
   const scheduleContactId = travelScheduleContactId || wellnessScheduleContactId;
   const canAssignMeetingStaff = user?.role === "ADMIN";
   const [emails, setEmails] = useState([]);
@@ -302,15 +303,16 @@ export default function Inbox() {
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
 
-  const [showCompose, setShowCompose] = useState(Boolean((isTravel && travelComposeTo) || (isWellness && wellnessComposeTo)));
+  const initialComposeTo = genericComposeTo || travelComposeTo || wellnessComposeTo;
+  const [showCompose, setShowCompose] = useState(Boolean(initialComposeTo));
   const [composeData, setComposeData] = useState(() => ({
-    to: travelComposeTo || wellnessComposeTo || "",
+    to: initialComposeTo,
     cc: "",
     bcc: "",
     subject: "",
     body: "",
   }));
-  const [composeContactId, setComposeContactId] = useState("");
+  const [composeContactId, setComposeContactId] = useState(genericComposeContactId);
   const [composeTone, setComposeTone] = useState("professional");
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false);
@@ -358,14 +360,15 @@ export default function Inbox() {
   const [detail, setDetail] = useState(null);
 
   useEffect(() => {
-    const composeTo = isTravel ? travelComposeTo : wellnessComposeTo;
-    if ((!isTravel && !isWellness) || !composeTo) return;
+    const composeTo = genericComposeTo || travelComposeTo || wellnessComposeTo;
+    if (!composeTo) return;
     setComposeData((current) => ({
       ...current,
       to: composeTo,
     }));
+    if (isGeneric) setComposeContactId(genericComposeContactId);
     setShowCompose(true);
-  }, [isTravel, isWellness, travelComposeTo, wellnessComposeTo]);
+  }, [genericComposeContactId, genericComposeTo, isGeneric, travelComposeTo, wellnessComposeTo]);
 
   useEffect(() => {
     const contactId = isTravel ? travelScheduleContactId : wellnessScheduleContactId;
@@ -512,7 +515,7 @@ export default function Inbox() {
         setLoading(true);
         if (canAssignMeetingStaff) setStaffLoading(true);
         const [, contactData, patientData, staffData] = await Promise.all([
-          loadEmailsPage({ page: 1, reset: true }),
+          composeOnly ? Promise.resolve([]) : loadEmailsPage({ page: 1, reset: true }),
           fetchApi("/api/contacts"),
           fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
           canAssignMeetingStaff
@@ -540,7 +543,7 @@ export default function Inbox() {
     return () => {
       cancelled = true;
     };
-  }, [loadEmailsPage, canAssignMeetingStaff]);
+  }, [loadEmailsPage, canAssignMeetingStaff, composeOnly]);
 
   useEffect(() => {
     if (!didInitialLoadRef.current) return;
@@ -573,6 +576,7 @@ export default function Inbox() {
     setComposeContactId("");
     setComposeAttachments([]);
     composeFileInputRef.current = null;
+    if (composeOnly) onComposeClose?.();
     if (returnToOrigin && isWellness && wellnessComposeReturnTo?.startsWith("/")) {
       navigate(wellnessComposeReturnTo);
     }
@@ -893,7 +897,11 @@ export default function Inbox() {
 
       notify.success("Email sent successfully.");
       closeCompose(false);
-      await loadEmailsPage({ page: 1, reset: true });
+      if (composeOnly) {
+        onComposeSent?.();
+      } else {
+        await loadEmailsPage({ page: 1, reset: true });
+      }
     } catch (err) {
       console.error(err);
       notify.error("Failed to send email. Please try again.");
@@ -1118,6 +1126,7 @@ export default function Inbox() {
         animation: "fadeIn 0.5s ease-out",
       }}
     >
+      <div style={{ display: composeOnly ? "none" : "contents" }}>
       <header
         style={{
           display: "flex",
@@ -1398,6 +1407,7 @@ export default function Inbox() {
             </div>
           </div>
         )}
+      </div>
       </div>
 
       {showCompose && (

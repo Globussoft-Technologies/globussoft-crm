@@ -528,6 +528,43 @@ describe('cron/sequenceEngine — processStep email', () => {
 // ─── processStep — sms branch ──────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStep sms', () => {
+  test('Generic CRM resolves the selected tenant SMS template at send time', async () => {
+    prisma.emailTemplate.findFirst.mockResolvedValue({
+      id: 81,
+      body: 'Latest approved copy for {{contact.name}} from [Company].',
+    });
+    const enrollment = enrollmentWith();
+    const step = stepWith({
+      kind: 'sms',
+      emailTemplateId: 81,
+      smsBody: 'Old saved copy that must not be sent.',
+    });
+
+    await processStep(step, enrollment);
+
+    expect(prisma.emailTemplate.findFirst).toHaveBeenCalledWith({
+      where: { id: 81, tenantId: 'tenant-A', channel: 'SMS' },
+      select: { id: true, body: true },
+    });
+    expect(prisma.smsMessage.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        body: 'Latest approved copy for Jane Doe from Acme.',
+      }),
+    }));
+  });
+
+  test('non-Generic CRM keeps the existing inline SMS body behavior', async () => {
+    await processStep(stepWith({
+      kind: 'sms',
+      emailTemplateId: 81,
+      smsBody: 'Wellness reminder for {{contact.name}}.',
+    }), enrollmentWith({ sequence: { tenant: { vertical: 'wellness' } } }));
+
+    expect(prisma.emailTemplate.findFirst).not.toHaveBeenCalled();
+    expect(prisma.smsMessage.create.mock.calls[0][0].data.body)
+      .toBe('Wellness reminder for Jane Doe.');
+  });
+
   test('contact has phone → writes SmsMessage with rendered body + QUEUED', async () => {
     const enrollment = enrollmentWith();
     const step = stepWith({

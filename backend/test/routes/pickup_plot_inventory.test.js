@@ -2944,10 +2944,45 @@ describe('customer pickup status', () => {
       }),
     }));
     expect(response.body.status).toBe('PICKUP_LOCATION_CAPTURED');
+    expect(eventBus.emitEvent).toHaveBeenCalledWith(
+      'pickup_point.created',
+      expect.objectContaining({
+        pickupPointId: 91,
+        contactId: 61,
+        eventId: expect.stringMatching(/^91-\d+$/),
+      }),
+      7,
+      undefined,
+    );
     expect(assignmentWhatsApp.safeNotifyCustomerPickupPlotAssignments).toHaveBeenCalledWith({
       tenantId: 7,
       contactId: 61,
     });
+  });
+
+  test('emits the same sequence trigger path when an existing pickup location changes', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
+    prisma.customerPickup.upsert.mockResolvedValue({
+      id: 91, tenantId: 7, contactId: 61, pickupAddress: '55 New Pickup Road, Bengaluru',
+      updatedAt: new Date('2026-10-23T08:00:00.000Z'), contact: { id: 61, name: 'Priya Shah' },
+    });
+
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/customer-pickups/61')
+      .send({ pickupAddress: '55 New Pickup Road, Bengaluru' });
+
+    expect(response.status).toBe(200);
+    expect(eventBus.emitEvent).toHaveBeenCalledWith(
+      'pickup_point.updated',
+      expect.objectContaining({
+        pickupPointId: 91,
+        contactId: 61,
+        eventId: '91-1792742400000',
+      }),
+      7,
+      undefined,
+    );
   });
 
   test('prevents a USER from changing another user\'s pickup location', async () => {

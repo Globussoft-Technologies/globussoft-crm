@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import Inbox from '../pages/Inbox';
 import './TransportDriverWorkspace.css';
 
 const BROKER_STEPS = [
@@ -52,6 +53,7 @@ export default function BrokerCustomerWorkspace() {
   const [search, setSearch] = useState('');
   const [updating, setUpdating] = useState(null);
   const [assigning, setAssigning] = useState(null);
+  const [emailCustomer, setEmailCustomer] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,7 +145,8 @@ export default function BrokerCustomerWorkspace() {
   };
 
   return (
-    <main className="transport-workspace" data-testid="broker-customer-workspace">
+    <>
+      <main className="transport-workspace" data-testid="broker-customer-workspace">
       <section className="transport-summary" aria-label="Customer summary">
         <div><span className="transport-summary-icon total"><Users size={18} /></span><span><strong>{summary.total}</strong><small>All customers</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Ready for visit</small></span></div>
@@ -185,14 +188,28 @@ export default function BrokerCustomerWorkspace() {
             assignmentOptions={data?.assignmentOptions || []}
             onAdvance={(status, details) => advanceWorkflow(customer, status, details)}
             onAssign={(targetProfileId) => assignSalesExecutive(customer, targetProfileId)}
+            onEmail={() => setEmailCustomer(customer)}
           />
         ))}
       </section>
-    </main>
+      </main>
+      {emailCustomer && (
+        <Inbox
+          composeOnly
+          initialComposeTo={emailCustomer.email}
+          initialComposeContactId={emailCustomer.id}
+          onComposeClose={() => setEmailCustomer(null)}
+          onComposeSent={() => {
+            window.history.pushState({}, '', '/inbox');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }}
+        />
+      )}
+    </>
   );
 }
 
-function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign }) {
+function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign, onEmail }) {
   const [visitScheduledAt, setVisitScheduledAt] = useState('');
   const [selectedPlotId, setSelectedPlotId] = useState(String(customer.plot?.id || ''));
   const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
@@ -339,8 +356,25 @@ function CustomerCard({ customer, updating, assigning, adminOverview, assignment
       )}
 
       <footer style={{ marginTop: 'auto' }}>
-        {customer.email && <a className="transport-map-button" href={`mailto:${customer.email}`}><Mail size={16} /> Email</a>}
-        {customer.phone && <a className="transport-primary-button" href={`tel:${customer.phone}`}><Phone size={16} /> Call customer</a>}
+        {customer.email && (
+          <button
+            type="button"
+            className="transport-map-button"
+            aria-label={`Email ${customer.name}`}
+            onClick={onEmail}
+          >
+            <Mail size={16} /> Email
+          </button>
+        )}
+        {customer.phone && (
+          <a
+            className="transport-primary-button"
+            href={`/leads?callifiedLeadId=${encodeURIComponent(customer.id)}&leadSearch=${encodeURIComponent(customer.email || customer.phone || customer.name || '')}`}
+            aria-label={`Call ${customer.name}`}
+          >
+            <Phone size={16} /> Call customer
+          </a>
+        )}
       </footer>
     </article>
   );

@@ -20,6 +20,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
 const { sendText } = require("../services/whatsappProvider");
+const { safeHandleInboundPickupPlotFlow } = require("../lib/pickupPlotWhatsAppFlow");
 const {
   captureRawBody,
   verifySignature,
@@ -292,7 +293,11 @@ async function handleMessagesEvent(value, tenantId, req) {
   // Inbound messages
   for (const msg of messages) {
     const from = msg.from;
-    const body = msg.text?.body || msg.caption || "";
+    const body = msg.text?.body
+      || msg.interactive?.list_reply?.title
+      || msg.interactive?.button_reply?.title
+      || msg.caption
+      || "";
     const metaMediaId = msg.image?.id || msg.video?.id || msg.document?.id || msg.audio?.id || null;
     const metaType = msg.type || null;
     const mimeType = msg.image?.mime_type || msg.video?.mime_type || msg.document?.mime_type || msg.audio?.mime_type || null;
@@ -487,6 +492,20 @@ async function handleMessagesEvent(value, tenantId, req) {
         contactPhone: normalizedFrom || from,
         timestamp: msg.timestamp,
         tenantId,
+      });
+    }
+
+    // Generic CRM plot selection is an isolated, opt-in interactive flow. It
+    // handles only our own list-row IDs or the immediate customer reply to a
+    // sequence-sent message explicitly marked as a pickup/plot flow. Manual
+    // sends, unrelated templates and ordinary inbound messages remain untouched.
+    if (!isStopKeyword(body)) {
+      await safeHandleInboundPickupPlotFlow({
+        tenantId,
+        from: normalizedFrom || from,
+        contactId: contact?.id || null,
+        threadId: thread?.id || null,
+        message: msg,
       });
     }
 

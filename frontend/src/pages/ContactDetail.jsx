@@ -350,15 +350,18 @@ export default function ContactDetail() {
   const [dealModal, setDealModal] = useState({ open: false, deal: null });
   const [stageSel, setStageSel] = useState(null);
   const [openSeg, setOpenSeg] = useState(null);
+  const [pendingStageTransition, setPendingStageTransition] = useState(null);
   const [prefs, setPrefs] = useState(loadPrefs);
   const [isCustomizing, setIsCustomizing] = useState(false);
   const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
   const [overviewEditOpen, setOverviewEditOpen] = useState(false);
   const [overviewEdit, setOverviewEdit] = useState({ lifecycle: 'Lead', status: 'Lead' });
   const [overviewEditSaving, setOverviewEditSaving] = useState(false);
+  const [defaultStagesWarningOpen, setDefaultStagesWarningOpen] = useState(false);
   const [lifecycleHistoryOpen, setLifecycleHistoryOpen] = useState(false);
   const [lifecycleHistoryLoading, setLifecycleHistoryLoading] = useState(false);
   const [lifecycleHistory, setLifecycleHistory] = useState([]);
+  const [lifecycleStageSelections, setLifecycleStageSelections] = useState({});
   const [moreOpen, setMoreOpen] = useState(false);
   const [seqPicker, setSeqPicker] = useState(false);
   const [sequences, setSequences] = useState([]);
@@ -408,6 +411,35 @@ export default function ContactDetail() {
       // A storage quota/privacy failure must not interrupt lifecycle editing.
     }
   }, [isGeneric, lifecycleDraft, lifecycleDraftReady, lifecycleDraftStorageKey]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi(`/api/contacts/${id}/lifecycle-history`, { silent: true })
+      .then((result) => {
+        if (!active) return;
+        const history = Array.isArray(result?.data) ? result.data : [];
+        const selections = {};
+        for (const entry of history) {
+          const stageKey = entry?.to?.stageKey;
+          const segment = genericLifecycleSegments.find((item) => item.options.some((option) => option.id === stageKey));
+          if (segment && !selections[segment.id]) selections[segment.id] = stageKey;
+        }
+        setLifecycleHistory(history);
+        setLifecycleStageSelections(selections);
+      })
+      .catch(() => {
+        if (active) setLifecycleStageSelections({});
+      });
+    return () => { active = false; };
+  }, [genericLifecycleSegments, id, isGeneric]);
+
+  useEffect(() => {
+    if (!isGeneric || !contact?.lifecycleStageKey) return;
+    const segment = genericLifecycleSegments.find((item) => item.options.some((option) => option.id === contact.lifecycleStageKey));
+    if (!segment) return;
+    setLifecycleStageSelections((current) => ({ ...current, [segment.id]: contact.lifecycleStageKey }));
+  }, [contact?.lifecycleStageKey, genericLifecycleSegments, isGeneric]);
 
   useEffect(() => {
     const pendingId = pendingLifecycleStageIdRef.current;
@@ -533,11 +565,11 @@ export default function ContactDetail() {
   useEffect(() => {
     if (!overviewEditOpen) return undefined;
     const onKey = (event) => {
-      if (event.key === 'Escape' && !overviewEditSaving) setOverviewEditOpen(false);
+      if (event.key === 'Escape' && !overviewEditSaving && !defaultStagesWarningOpen) setOverviewEditOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [overviewEditOpen, overviewEditSaving]);
+  }, [defaultStagesWarningOpen, overviewEditOpen, overviewEditSaving]);
 
   useEffect(() => {
     if (!lifecycleHistoryOpen) return undefined;
@@ -572,11 +604,22 @@ export default function ContactDetail() {
     }
   }, [contact, id, loadContact, notify]);
 
-  const changeStatus = async (status, lifecycleStageKey) => {
+  const changeStatus = async (status, lifecycleStageKey, lifecycleTransitionReason = '') => {
     if (!contact || (contact.status === status && (!isGeneric || contact.lifecycleStageKey === lifecycleStageKey))) return;
     const prev = contact;
-    const payload = { status, ...(isGeneric && lifecycleStageKey ? { lifecycleStageKey } : {}) };
+    const prevLifecycleStageSelections = lifecycleStageSelections;
+    const selectedSegment = isGeneric
+      ? lifecycleSegments.find((segment) => segment.options.some((option) => option.id === lifecycleStageKey))
+      : null;
+    const payload = {
+      status,
+      ...(isGeneric && lifecycleStageKey ? { lifecycleStageKey } : {}),
+      ...(isGeneric && lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
+    };
     setContact({ ...contact, ...payload });
+    if (selectedSegment) {
+      setLifecycleStageSelections((current) => ({ ...current, [selectedSegment.id]: lifecycleStageKey }));
+    }
     try {
       const updated = await patchContact(id, payload);
       setContact(updated);
@@ -584,6 +627,7 @@ export default function ContactDetail() {
       notify.success(`Status changed to ${status}.`);
     } catch {
       setContact(prev);
+      setLifecycleStageSelections(prevLifecycleStageSelections);
       notify.error('Could not update status.');
     }
   };
@@ -607,8 +651,30 @@ export default function ContactDetail() {
     setOpenSeg(null);
     const opt = segOptionById(stageIdOrLabel, lifecycleSegments) || segOption(stageIdOrLabel, lifecycleSegments);
     if (!opt) return;
+    const nextStageIndex = lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === opt.id));
+    const currentStageIndex = contact?.lifecycleStageKey
+      ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
+      : segIndexOf(defaultStageFor(contact?.status, isWellness, isTravel), lifecycleSegments);
+    const isBackward = isGeneric && currentStageIndex >= 0 && nextStageIndex >= 0 && nextStageIndex < currentStageIndex;
+    if (isGeneric && (opt.negative || isBackward)) {
+      setPendingStageTransition({ option: opt, isBackward, reason: '' });
+      return;
+    }
     setStageSel(opt.id || opt.label);
     changeStatus(opt.backend, opt.id);
+  };
+
+  const confirmStageTransition = async () => {
+    const pending = pendingStageTransition;
+    if (!pending) return;
+    const reason = pending.reason.trim();
+    if (pending.option.negative && !reason) {
+      notify.error('Enter a reason for selecting this negative stage.');
+      return;
+    }
+    setPendingStageTransition(null);
+    setStageSel(pending.option.id || pending.option.label);
+    await changeStatus(pending.option.backend, pending.option.id, reason);
   };
 
   const persistPrefs = (next) => {
@@ -1144,7 +1210,6 @@ export default function ContactDetail() {
     : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
   const activeSeg = segIndexOf(activeStage, lifecycleSegments);
   const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
-
   const openOverviewEditor = () => {
     if (isGeneric) {
       setOverviewEditOpen(true);
@@ -1223,6 +1288,16 @@ export default function ContactDetail() {
     }]);
   };
 
+  const showDefaultLifecycleStages = () => {
+    setDefaultStagesWarningOpen(true);
+  };
+
+  const applyDefaultLifecycleStages = () => {
+    pendingLifecycleStageIdRef.current = PIPELINE_SEGS[0].id;
+    setLifecycleDraft(cloneLifecycleSegments(PIPELINE_SEGS));
+    setDefaultStagesWarningOpen(false);
+  };
+
   const addLifecycleCondition = (stageIndex) => {
     setLifecycleDraft((current) => current.map((segment, index) => {
       if (index !== stageIndex || segment.options.length >= 2) return segment;
@@ -1261,10 +1336,9 @@ export default function ContactDetail() {
     }
   };
 
-  const moveLifecycleStage = (index, direction) => {
+  const moveLifecycleStageTo = (index, target) => {
     setLifecycleDraft((current) => {
-      const target = index + direction;
-      if (target < 0 || target >= current.length) return current;
+      if (!Number.isInteger(target) || target < 0 || target >= current.length) return current;
       const next = [...current];
       [next[index], next[target]] = [next[target], next[index]];
       return next;
@@ -1587,6 +1661,7 @@ export default function ContactDetail() {
                         <div><strong>Manage lifecycle stages</strong><p>Add stages or change their sequence. Updates apply anywhere this lifecycle is shown.</p></div>
                       </div>
                       <div className="cp-stage-manager-actions">
+                        <button type="button" className="cp-action-btn" onClick={showDefaultLifecycleStages}><ListChecks size={13} /> Default stages</button>
                         <button type="button" className="cp-action-btn" onClick={addLifecycleStage}><Plus size={13} /> Add stage</button>
                         <button type="button" className="cp-icon-btn" onClick={() => setOverviewEditOpen(false)} disabled={overviewEditSaving} aria-label="Close lifecycle stage editor"><X size={16} /></button>
                       </div>
@@ -1597,8 +1672,8 @@ export default function ContactDetail() {
                           <div className="cp-stage-manager-order">
                             <span className="cp-stage-manager-number" aria-hidden="true">{index + 1}</span>
                             <div className="cp-stage-manager-move">
-                              <button type="button" className="cp-icon-btn" aria-label={`Move ${segment.title} up`} title="Move up" disabled={index === 0} onClick={() => moveLifecycleStage(index, -1)}><ChevronUp size={14} /></button>
-                              <button type="button" className="cp-icon-btn" aria-label={`Move ${segment.title} down`} title="Move down" disabled={index === lifecycleDraft.length - 1} onClick={() => moveLifecycleStage(index, 1)}><ChevronDown size={14} /></button>
+                              <button type="button" className="cp-icon-btn" aria-label={`Move ${segment.title} up`} title="Move up" disabled={index === 0} onClick={() => moveLifecycleStageTo(index, index - 1)}><ChevronUp size={14} /></button>
+                              <button type="button" className="cp-icon-btn" aria-label={`Move ${segment.title} down`} title="Move down" disabled={index === lifecycleDraft.length - 1} onClick={() => moveLifecycleStageTo(index, index + 1)}><ChevronDown size={14} /></button>
                             </div>
                           </div>
                           <div className="cp-stage-manager-fields">
@@ -1744,8 +1819,13 @@ export default function ContactDetail() {
                     <div className="cp-label">Status</div>
                   </div>
                   <div className="cp-pipeline" role="group" aria-label="Lifecycle stage">
-                    {lifecycleSegments.map((seg, i) => {
-                      const displayTitle = segmentDisplayTitle(seg);
+                    {lifecycleSegments.map((seg) => {
+                      const i = lifecycleSegments.indexOf(seg);
+                      const selectedSegmentOption = isGeneric
+                        ? seg.options.find((option) => option.id === lifecycleStageSelections[seg.id])
+                        : null;
+                      const displayTitle = selectedSegmentOption?.label || segmentDisplayTitle(seg);
+                      const selectedSegmentIsNegative = Boolean(selectedSegmentOption?.negative);
                       return (
                       <div className="cp-chev-wrap" key={seg.id || seg.title}>
                         {seg.options.length === 1 ? (
@@ -1753,16 +1833,16 @@ export default function ContactDetail() {
                             type="button"
                             title={`Move to ${displayTitle}`}
                             onClick={() => pickStage(seg.options[0].id || seg.options[0].label)}
-                            className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}`}
+                            className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative ? ' lost' : ''}`}
                           ><span className="cp-chev-label">{displayTitle}</span></button>
                         ) : (
                           <>
                             <button
                               type="button"
-                              onClick={() => setOpenSeg(openSeg === i ? null : i)}
-                              className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${i === activeSeg && activeNegative ? ' lost' : ''}`}
+                              onClick={() => setOpenSeg(openSeg === seg.id ? null : seg.id)}
+                              className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative || (i === activeSeg && activeNegative) ? ' lost' : ''}`}
                             ><span className="cp-chev-label">{displayTitle}</span> <ChevronDown size={12} /></button>
-                            {openSeg === i && (
+                            {openSeg === seg.id && (
                               <div className="cp-chev-menu">
                                 {seg.options.map((o) => (
                                   <button key={o.id || o.label} type="button" className={o.negative ? 'neg' : ''} onClick={() => pickStage(o.id || o.label)}>{o.label}</button>
@@ -1950,7 +2030,7 @@ export default function ContactDetail() {
                           <span className="cp-block-icon blue"><Zap size={16} /></span>
                           <div>
                             <p>{contact.name} is not part of any sales sequence.</p>
-                            <Link to="/sequences" className="cp-link-btn"><Plus size={12} /> Add to a sequence</Link>
+                            <Link to="/marketing?tab=campaigns" className="cp-link-btn"><Plus size={12} /> Add to a sequence</Link>
                           </div>
                         </div>
                       )}
@@ -2080,6 +2160,7 @@ export default function ContactDetail() {
                         <ArrowRight size={18} aria-hidden="true" />
                         <div><span>To</span><strong>{entry.to?.stage || '(not set)'}</strong>{entry.to?.status && <small>CRM status: {entry.to.status}</small>}</div>
                       </div>
+                      {entry.reason && <div className="cp-lifecycle-history-reason"><strong>Reason:</strong> {entry.reason}</div>}
                       {entry.changedBy?.email && <div className="cp-lifecycle-history-email">{entry.changedBy.email}</div>}
                     </article>
                   ))}
@@ -2157,6 +2238,49 @@ export default function ContactDetail() {
           <div className="cp-btn-row">
             <button type="button" className="cp-action-btn" onClick={() => setConfirmAction(null)}>Cancel</button>
             <button type="button" className="cp-action-btn cp-action-primary" onClick={runConfirmAction}>{confirmAction.confirmLabel}</button>
+          </div>
+        </Modal>
+      )}
+      {defaultStagesWarningOpen && (
+        <Modal title="Reset to default stages?" onClose={() => setDefaultStagesWarningOpen(false)}>
+          <div className="cp-stage-reset-warning" role="alert">
+            This will replace the current lifecycle draft with the five default stages. Custom stages and unsaved stage changes will be removed.
+          </div>
+          <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0.75rem 0 1rem' }}>
+            The Overview will not change until you click Save stages.
+          </p>
+          <div className="cp-btn-row">
+            <button type="button" className="cp-action-btn" onClick={() => setDefaultStagesWarningOpen(false)}>Cancel</button>
+            <button type="button" className="cp-action-btn cp-action-primary" onClick={applyDefaultLifecycleStages}>Use default stages</button>
+          </div>
+        </Modal>
+      )}
+      {pendingStageTransition && (
+        <Modal title={pendingStageTransition.option.negative ? 'Reason required' : 'Go back to a previous stage?'} onClose={() => setPendingStageTransition(null)}>
+          <p style={{ fontSize: '0.85rem', margin: '0 0 1rem' }}>
+            {pendingStageTransition.isBackward
+              ? `Are you sure you want to move back to ${pendingStageTransition.option.label}?`
+              : `Tell us why ${pendingStageTransition.option.label} was selected.`}
+          </p>
+          {pendingStageTransition.option.negative && (
+            <label className="cp-form-row">
+              <span className="cp-form-label">Reason</span>
+              <textarea
+                className="cp-input"
+                rows={3}
+                autoFocus
+                value={pendingStageTransition.reason}
+                onChange={(event) => setPendingStageTransition((current) => ({ ...current, reason: event.target.value }))}
+                placeholder="Enter the reason for this negative stage"
+                aria-label="Negative stage reason"
+              />
+            </label>
+          )}
+          <div className="cp-btn-row">
+            <button type="button" className="cp-action-btn" onClick={() => setPendingStageTransition(null)}>Cancel</button>
+            <button type="button" className="cp-action-btn cp-action-primary" onClick={confirmStageTransition}>
+              {pendingStageTransition.isBackward ? 'Yes, go back' : 'Confirm stage'}
+            </button>
           </div>
         </Modal>
       )}

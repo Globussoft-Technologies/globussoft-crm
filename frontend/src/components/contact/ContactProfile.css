@@ -186,6 +186,7 @@
 .cp-stage-manager-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.9rem 1.25rem; border-top: 1px solid var(--border-color); }
 .cp-stage-manager-footer > span { color: var(--text-secondary); font-size: 0.75rem; }
 .cp-stage-manager-footer .cp-btn-row { margin-top: 0; }
+.cp-stage-reset-warning { padding: 0.75rem 0.85rem; border: 1px solid #f59e0b; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 0.82rem; line-height: 1.45; }
 .cp-lifecycle-right { min-width: 0; }
 .cp-lifecycle-status-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 26px; }
 .cp-lifecycle-status-head .cp-label { margin-bottom: 0; }
@@ -210,6 +211,8 @@
 .cp-lifecycle-history-change small { color: var(--text-secondary); font-size: 0.7rem; }
 .cp-lifecycle-history-change > svg { color: var(--primary-color, var(--accent-color)); }
 .cp-lifecycle-history-email { color: var(--text-secondary); font-size: 0.7rem; }
+.cp-lifecycle-history-reason { color: var(--text-secondary); font-size: 0.75rem; overflow-wrap: anywhere; }
+.cp-lifecycle-history-reason strong { color: var(--text-primary); }
 .cp-lifecycle-history-empty { min-height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.4rem; color: var(--text-secondary); text-align: center; font-size: 0.78rem; }
 .cp-lifecycle-history-empty strong { color: var(--text-primary); font-size: 0.88rem; }
 .cp-ov-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; border-top: 1px solid var(--border-color); }

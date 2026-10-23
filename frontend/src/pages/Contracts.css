@@ -2,6 +2,108 @@
   container-type: inline-size;
 }
 
+.contracts-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.contracts-create-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Keep the compact summary controls in one row. Their typography, padding,
+   icon size, and spacing scale continuously with the available page width. */
+.contracts-stats {
+  flex-wrap: nowrap !important;
+  gap: clamp(0.35rem, 0.75vw, 0.75rem) !important;
+  overflow: hidden;
+}
+
+.contracts-stats > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: clamp(0.28rem, 0.4vw, 0.4rem) clamp(0.55rem, 1vw, 1rem) !important;
+  font-size: clamp(0.65rem, 0.8vw, 0.8rem) !important;
+  gap: clamp(0.2rem, 0.3vw, 0.3rem) !important;
+  white-space: nowrap;
+}
+
+.contracts-stats > span svg {
+  width: clamp(11px, 1vw, 14px) !important;
+  height: clamp(11px, 1vw, 14px) !important;
+  flex-shrink: 0;
+}
+
+.contracts-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1rem;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(3px);
+}
+
+.contracts-create-modal {
+  box-sizing: border-box;
+  width: min(100%, 620px);
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden;
+  overscroll-behavior: auto;
+  margin: 1rem auto;
+  padding: 1.25rem !important;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+}
+
+.contracts-create-modal form {
+  max-height: none;
+  overflow: hidden;
+}
+
+.contracts-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.contracts-modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.contracts-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.contracts-modal-close:hover {
+  background: var(--subtle-bg-2);
+  color: var(--text-primary);
+}
+
 .contracts-grid {
   grid-template-columns: clamp(260px, 27%, 310px) minmax(0, 1fr) !important;
   gap: 1rem !important;
@@ -162,6 +264,17 @@ body[data-vertical="generic"] .app-main > main.generic-page-content > .contracts
 
   .contracts-form-card {
     max-width: 360px;
+  }
+}
+
+@media (max-width: 768px) {
+  .contracts-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .contracts-create-button {
+    justify-content: center;
   }
 }
 

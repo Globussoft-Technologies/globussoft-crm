@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Filter, MapPin, Pencil, Plus, Power, PowerOff, RefreshCw, Save, Search, X } from 'lucide-react';
+import { MapPin, Pencil, Plus, Power, PowerOff, RefreshCw, Save, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import ResizableTableHeader from '../components/ResizableTableHeader';
@@ -222,14 +222,13 @@ export default function PickupInventory() {
             <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input className="input-field" type="search" aria-label="Search pickup inventory" placeholder="Search pickup locations..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 36 }} />
           </label>
-          <label style={{ position: 'relative', flex: '0 0 150px' }}>
-            <Filter size={15} aria-hidden="true" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+          <label style={{ flex: '0 0 150px' }}>
             <select
               className="input-field"
               aria-label="Filter pickup locations by status"
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 34 }}
+              style={{ width: '100%', height: 44, boxSizing: 'border-box' }}
             >
               <option value="all">All statuses</option>
               <option value="active">Active</option>

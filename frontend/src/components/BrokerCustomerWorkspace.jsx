@@ -161,9 +161,9 @@ export default function BrokerCustomerWorkspace() {
             <button key={key} type="button" role="tab" aria-selected={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}</button>
           ))}
         </div>
-        <label style={{ position: 'relative', flex: '1 1 230px', maxWidth: 340 }}>
-          <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-          <input aria-label="Search assigned customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: 11, border: '1px solid var(--border-color)', background: 'var(--card-bg, var(--subtle-bg-2))', color: 'var(--text-primary)' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 230px', maxWidth: 340, padding: '0 10px', border: '1px solid var(--border-color)', borderRadius: 11, background: 'var(--card-bg, var(--subtle-bg-2))' }}>
+          <Search size={16} aria-hidden="true" style={{ flex: '0 0 16px', color: 'var(--text-secondary)' }} />
+          <input aria-label="Search assigned customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" style={{ width: '100%', minWidth: 0, padding: '10px 2px', border: 0, outline: 0, background: 'transparent', color: 'var(--text-primary)' }} />
         </label>
       </div>
 

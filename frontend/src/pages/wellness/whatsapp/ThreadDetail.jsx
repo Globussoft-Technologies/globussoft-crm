@@ -297,11 +297,11 @@ export default function ThreadDetail() {
                   <Sparkles size={14} /> {syncingLead ? 'Syncing…' : 'Sync Lead'}
                 </button>
               )}
-              <button onClick={snoozeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Clock size={14} /> Snooze
+              <button onClick={snoozeThread} className="btn-secondary" title="Snooze" aria-label="Snooze" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Clock size={14} />
               </button>
-              <button onClick={closeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <CheckCheck size={14} /> Close
+              <button onClick={closeThread} className="btn-secondary" title="Close conversation" aria-label="Close conversation" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <CheckCheck size={14} />
               </button>
               {!detail.optedOut ? (
                 <button
@@ -310,7 +310,7 @@ export default function ThreadDetail() {
                   title="Block this number (blocks both inbound + outbound)"
                   style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
                 >
-                  <Ban size={14} /> Block
+                  <Ban size={14} />
                 </button>
               ) : isAdmin && (
                 <button
@@ -329,7 +329,7 @@ export default function ThreadDetail() {
                   title="Delete this conversation (removes all messages from the CRM)"
                   style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
                 >
-                  <Trash2 size={14} /> Delete chat
+                  <Trash2 size={14} />
                 </button>
               )}
             </div>

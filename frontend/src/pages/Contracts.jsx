@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
+import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
@@ -43,6 +43,7 @@ export default function Contracts() {
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   // Server-driven paging: `contracts` holds ONLY the current page (full
@@ -100,6 +101,19 @@ export default function Contracts() {
   useEffect(() => { loadStatic(); }, []);
   // Page effect also fires on mount, so no separate initial loadPage call.
 
+  useEffect(() => {
+    if (!isCreateModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const mainContent = document.querySelector('.app-main > main');
+    const previousMainOverflow = mainContent?.style.overflow;
+    document.body.style.overflow = 'hidden';
+    if (mainContent) mainContent.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (mainContent) mainContent.style.overflow = previousMainOverflow;
+    };
+  }, [isCreateModalOpen]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadPage(); }, [currentPage, pageSize]);
 
@@ -111,6 +125,7 @@ export default function Contracts() {
         body: JSON.stringify(form),
       });
       setForm(EMPTY_FORM);
+      setIsCreateModalOpen(false);
       loadData();
     } catch (err) {
       notify.error('Failed to create contract');
@@ -182,17 +197,26 @@ export default function Contracts() {
 
   return (
     <div className="contracts-page" style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <FileText size={26} color="var(--accent-color)" /> Contracts
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Manage client contracts, track statuses, and oversee agreement lifecycle.
-        </p>
+      <header className="contracts-page-header" style={{ marginBottom: '2.5rem' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <FileText size={26} color="var(--accent-color)" /> Contracts
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Manage client contracts, track statuses, and oversee agreement lifecycle.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary contracts-create-button"
+          onClick={() => setIsCreateModalOpen(true)}
+        >
+          <Plus size={17} /> Create Contract
+        </button>
       </header>
 
       {/* Stats bar */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+      <div className="contracts-stats" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(100,116,139,0.1)', color: '#94a3b8', border: '1px solid rgba(100,116,139,0.3)',
@@ -214,13 +238,24 @@ export default function Contracts() {
         </span>
       </div>
 
-      <div className="contracts-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
-
-        {/* Create Form */}
-        <div className="card contracts-form-card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Create Contract
-          </h3>
+      {isCreateModalOpen && (
+        <div className="contracts-modal-backdrop" role="presentation" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setIsCreateModalOpen(false);
+        }}>
+          <div className="card contracts-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-contract-title">
+            <div className="contracts-modal-header">
+              <h2 id="create-contract-title">
+                <Plus size={20} color="var(--accent-color)" /> Create Contract
+              </h2>
+              <button
+                type="button"
+                className="contracts-modal-close"
+                aria-label="Close create contract dialog"
+                onClick={() => setIsCreateModalOpen(false)}
+              >
+                <X size={20} />
+              </button>
+            </div>
           <form className="contracts-form" onSubmit={createContract} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Contract Title</label>
@@ -302,7 +337,11 @@ export default function Contracts() {
               Create Contract
             </button>
           </form>
+          </div>
         </div>
+      )}
+
+      <div className="contracts-grid" style={{ display: 'block' }}>
 
         {/* Contracts Table */}
         <div className="card contracts-table-card" style={{ padding: '2rem' }}>

@@ -296,12 +296,19 @@ export default function LandingPages() {
   const [genError, setGenError] = useState(null);
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const requested = new URLSearchParams(location.search).get('status');
+    return ['PUBLISHED', 'DRAFT'].includes(requested) ? requested : 'ALL';
+  });
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [copiedId, setCopiedId] = useState(null);
   const [featuringId, setFeaturingId] = useState(null);
   const cardSurfaceStyle = getLandingPageCardStyle(isDarkTheme);
   const metricTileStyle = getLandingPageMetricTileStyle(isDarkTheme);
+  useEffect(() => {
+    const requested = new URLSearchParams(location.search).get('status');
+    setStatusFilter(['PUBLISHED', 'DRAFT'].includes(requested) ? requested : 'ALL');
+  }, [location.search]);
   const themeChoices = useMemo(() => listWanderluxThemePresets(genForm.subBrand), [genForm.subBrand]);
   const activeThemeChoice = useMemo(() => resolveWanderluxThemePreset({
     themeId: genForm.themeId,

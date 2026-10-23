@@ -166,7 +166,7 @@ export default function TripDetail() {
   );
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+    <div className="travel-trip-detail-page" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
@@ -181,7 +181,7 @@ export default function TripDetail() {
       </div>
 
       {/* Tab strip */}
-      <div role="tablist" aria-label="Trip sections" style={{
+      <div className="travel-trip-detail-tabs" role="tablist" aria-label="Trip sections" style={{
         display: "flex", gap: 4, borderBottom: "1px solid var(--border-color)",
         marginTop: 20, marginBottom: 16, flexWrap: "wrap",
       }}>

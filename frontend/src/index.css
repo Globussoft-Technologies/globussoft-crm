@@ -396,6 +396,14 @@ body,
   padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 3vw, 2rem);
 }
 
+/* Generic Leads must be able to grow beyond a short laptop viewport. Layout
+   intentionally locks the generic Leads main pane while the old table used
+   its own viewport; the natural-height Leads grid now needs the page pane to
+   own vertical scrolling so the final row and pagination cannot be clipped. */
+.app-main > main.generic-page-content:has(.leads-page-root--generic) {
+  overflow-y: auto !important;
+}
+
 /* Page components have accumulated their own centered max-width wrappers and
    horizontal padding over time. Normalize only the first page-content root;
    dialogs and nested cards retain their intentional sizing. */
@@ -2683,18 +2691,6 @@ body[data-vertical="travel"] .travel-nav-section-items .nav-link {
   font-size: 0.72rem;
 }
 
-body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
-  content: "";
-  position: absolute;
-  left: -1.7rem;
-  top: 50%;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, #d7dceb);
-  transform: translateY(-50%);
-}
-
 /* Generic desktop navigation uses the same inline accordion pattern as the
    Travel sidebar while keeping the active product theme's colors. */
 body[data-vertical="generic"] .generic-nav-section {
@@ -2910,10 +2906,6 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
 [data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link.active {
   background: color-mix(in srgb, var(--accent-color) 20%, var(--surface-color));
   color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
-}
-
-[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
-  background: color-mix(in srgb, var(--accent-color) 35%, var(--surface-color));
 }
 
 [data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger,
@@ -3988,30 +3980,30 @@ table.leads-table thead th {
   background-color: var(--modal-bg);
 }
 
-/* Freshsales-style Generic CRM grid: the page chrome stays fixed while the
-   records own the available viewport and scroll inside their table shell. */
+/* Generic CRM grid: records grow with their content and the page owns vertical
+   overflow when the complete grid does not fit in the viewport. */
 .leads-split-table--no-topbar {
   max-height: none !important;
   overflow-x: clip !important;
-  overflow-y: auto !important;
+  overflow-y: visible !important;
 }
 
 .leads-page-root--generic {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  height: auto;
+  min-height: 100%;
   padding: 1.25rem !important;
   overflow-x: hidden;
-  overflow-y: hidden;
+  overflow-y: auto;
   background: var(--bg-color);
 }
 
 .leads-page-root--generic .leads-content-shell {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: auto;
   gap: 0 !important;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .leads-page-root--generic .leads-toolbar-shell {
@@ -4025,9 +4017,9 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-split-table--no-topbar {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   height: auto;
-  min-height: 0;
+  min-height: auto;
   max-height: none !important;
   box-sizing: border-box;
   border-radius: 0 !important;
@@ -4036,38 +4028,9 @@ table.leads-table thead th {
 }
 
 /* Keep the single Generic CRM horizontal scrollbar at the bottom of the
-   fixed records viewport, including pages with fewer rows. */
+   records grid, including pages with fewer rows. */
 .leads-page-root--generic .leads-split-table--no-topbar {
   align-items: stretch;
-}
-
-/* Below a partial page of Generic CRM leads, keep the unused fixed-height
-   viewport as one clean surface. The real Name-column border still ends with
-   the last lead row, without visually splitting the empty area in two. */
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-frozen-pane {
-  background-color: var(--modal-bg);
-  border-right-color: transparent;
-}
-
-/* A short result set leaves most of the fixed records viewport unused. Use
-   one opaque surface across both panes so the nested frozen pane does not
-   double-blend the translucent card color and appear as a different shade. */
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty),
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-scroll-pane,
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-scroll-pane
-  > .top-scroll-sync,
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-scroll-pane
-  .top-scroll-sync__bottom {
-  background-color: var(--modal-bg);
 }
 
 /* Generic CRM only: keep the zero-record message inside the visible table
@@ -4106,9 +4069,8 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
-  /* Grow to fill short pages, but never shrink below the table's natural
-     height on 15/25/50/100-row pages. Shrinking clipped the scrollable half
-     while the frozen Name pane continued rendering every row. */
+  /* Never shrink below the table's natural height; the page handles vertical
+     overflow while this wrapper remains responsible for horizontal scrolling. */
   flex: 1 0 auto;
 }
 
@@ -4308,14 +4270,6 @@ table.leads-table thead th {
 
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table tbody tr {
   height: 40px;
-}
-
-.leads-page-root--generic
-  .leads-split-table--density-compact.leads-split-table--sparse
-  table.leads-table
-  tbody
-  tr {
-  height: 48px;
 }
 
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table th,
@@ -8549,3 +8503,14 @@ body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-se
 .public-selection-card button { min-height: 2.8rem; border: 0; border-radius: 10px; background: var(--primary-color, var(--accent-color, #4f46e5)); color: var(--button-text, #fff); font-weight: 700; cursor: pointer; }
 .public-selection-card button:disabled { opacity: .65; cursor: wait; }
 .public-selection-error { margin: 0; color: var(--danger-color, #b42318); }
+
+/* Keep the deals toolbar controls on one shared height. */
+.generic-deals-toolbar select[aria-label="Date range"] {
+  height: 38px !important;
+}
+
+.generic-deals-toolbar > div:last-child > button[aria-label="Deal settings"] {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 8px !important;
+}

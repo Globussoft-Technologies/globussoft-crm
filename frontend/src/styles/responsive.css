@@ -1044,6 +1044,52 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
+/* The desktop sidebar still reserves about 250px at tablet widths, so the
+   remaining app-main header can be narrower than the viewport suggests. Keep
+   the shared header on one line between 900px and 1099px by using compact
+   icon controls and a flexible search field. */
+@media (min-width: 900px) and (max-width: 1099px) {
+  .app-topbar {
+    flex-wrap: nowrap !important;
+    gap: 4px !important;
+    padding: 6px 8px !important;
+  }
+
+  .app-header-search {
+    order: 0;
+    flex: 1 1 220px;
+    width: auto;
+    margin-right: 0 !important;
+  }
+
+  .omnibar-root {
+    width: clamp(145px, 30vw, 276px) !important;
+    min-width: 0 !important;
+  }
+
+  .app-tenant-chip {
+    margin-right: auto;
+    max-width: min(180px, 30vw) !important;
+  }
+
+  .app-profile-name,
+  .app-tour-label {
+    display: none !important;
+  }
+
+  .app-tour-launcher,
+  .app-theme-toggle,
+  .app-logout-button {
+    flex: 0 0 auto;
+    justify-content: center;
+    padding-inline: 5px !important;
+  }
+
+  .app-profile-button {
+    padding-inline: 4px !important;
+  }
+}
+
 /* Quote Builder has several fixed two-column grids. Keep its summary and
    pricing controls readable when the sidebar has consumed tablet width. */
 @media (max-width: 899px) {

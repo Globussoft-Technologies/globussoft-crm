@@ -353,6 +353,19 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Tickets')).toBeTruthy();
     });
 
+    it('uses the shared navigation font size for integration buttons and links', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+
+      const dashboard = screen.getByText('Dashboard').closest('a');
+      const adsGpt = screen.getByRole('button', { name: 'Open AdsGPT' });
+      const callified = screen.getByRole('button', { name: 'Open Callified dashboard' });
+
+      const sharedSize = 'var(--sidebar-nav-font-size, 0.85rem)';
+      expect(dashboard).toHaveStyle({ fontSize: sharedSize });
+      expect(adsGpt).toHaveStyle({ fontSize: sharedSize });
+      expect(callified).toHaveStyle({ fontSize: sharedSize });
+    });
+
     it('keeps the Dashboard date filter when its active sidebar link is selected again', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN', path: '/dashboard?from=2026-10-16&to=2026-10-22' });
       const dashboardLink = screen.getByText('Dashboard').closest('a');

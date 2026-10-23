@@ -1043,7 +1043,6 @@ const Sidebar = ({
           textAlign: "left",
           cursor: adsLoading ? "wait" : "pointer",
           fontFamily: "inherit",
-          fontSize: "inherit",
         }}
       >
         {adsLoading ? (
@@ -1105,7 +1104,6 @@ const Sidebar = ({
           textAlign: "left",
           cursor: callifiedLoading ? "wait" : "pointer",
           fontFamily: "inherit",
-          fontSize: "inherit",
         }}
       >
         {callifiedLoading ? (
@@ -2914,7 +2912,7 @@ const navStyle = {
   // compositor in "live layer" mode for nav-links  drop it.)
   transition: "background-color 0.2s ease, color 0.2s ease",
   textDecoration: "none",
-  fontSize: "0.9rem",
+  fontSize: "var(--sidebar-nav-font-size, 0.85rem)",
   flexShrink: 0,
 };
 

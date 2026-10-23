@@ -2405,6 +2405,7 @@ aside.glass.app-sidebar {
 }
 
 .app-sidebar {
+  --sidebar-nav-font-size: 0.85rem;
   contain: layout paint style;
   transition: none;
   /* NOTE: `will-change: transform` is intentionally NOT here on the outer
@@ -2706,15 +2707,15 @@ body[data-vertical="generic"] .generic-nav-section-trigger {
   min-height: 40px;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.5rem;
+  gap: 0.35rem;
+  padding: 0.3rem 0.4rem;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
   color: var(--text-primary) !important;
   cursor: pointer;
   font: inherit;
-  font-size: 0.9rem;
+  font-size: var(--sidebar-nav-font-size, 0.85rem);
   font-weight: 400;
   text-align: left;
 }
@@ -2730,6 +2731,7 @@ body[data-vertical="generic"] .generic-nav-section-trigger.is-active {
 
 body[data-vertical="generic"] .generic-nav-section-label {
   flex: 1;
+  min-width: 0;
 }
 
 body[data-vertical="generic"] .generic-nav-section-trigger > svg:last-child {
@@ -2744,8 +2746,8 @@ body[data-vertical="generic"] .generic-nav-section-trigger > svg:last-child.is-c
 body[data-vertical="generic"] .generic-nav-section-icon {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border-radius: 7px;
   background: transparent;
   color: var(--text-secondary);
@@ -8495,7 +8497,7 @@ body[data-vertical="generic"] table.pickup-plot-leads-table {
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
-  background-color: var(--popover-bg) !important;
+  background-color: var(--table-header-bg) !important;
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {

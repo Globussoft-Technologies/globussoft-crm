@@ -215,7 +215,7 @@ describe('GET /api/travel/suppliers/import-template', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/csv/);
-    expect(res.text.trim()).toBe(
+    expect(res.text.replace(/\r?\n$/, '')).toBe(
       '\uFEFFsubBrand,name,supplierCategory,contactPerson,phone,email,gstin,addressLine,beneficiaryName,bankName,bankAccountNumber,ifscCode',
     );
     expect(res.text).not.toContain('paymentTermsKind');

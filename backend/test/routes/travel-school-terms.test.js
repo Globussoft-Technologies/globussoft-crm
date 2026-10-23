@@ -51,7 +51,15 @@ describe('GET /api/travel-school-terms/template', () => {
   });
 
   test('XLSX template has the same blank, focused schema', async () => {
-    const res = await request(makeApp()).get('/api/travel-school-terms/template?format=xlsx');
+    const res = await request(makeApp())
+      .get('/api/travel-school-terms/template?format=xlsx')
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+        response.on('error', callback);
+      });
     expect(res.status).toBe(200);
     const parsed = parseXlsxBuffer(res.body);
     expect(parsed.headers).toEqual(['schoolName', 'board', 'type', 'label', 'startDate', 'endDate']);

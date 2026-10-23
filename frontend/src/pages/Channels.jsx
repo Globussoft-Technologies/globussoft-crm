@@ -327,7 +327,7 @@ export default function Channels() {
                 Save. Twilio's senderId is a phone number, so leave it
                 unconstrained. */}
             {[{ provider: 'msg91', label: 'MSG91', fields: [{ key: 'apiKey', label: 'API Key', secret: true }, { key: 'senderId', label: 'Sender ID (6 chars)', maxLength: 6, pattern: '[A-Za-z0-9]{6}', helper: 'Exactly 6 alphanumeric characters (DLT-registered).' }, { key: 'dltEntityId', label: 'DLT Entity ID' }] },
-              { provider: 'twilio', label: 'Twilio', fields: [{ key: 'apiKey', label: 'Account SID' }, { key: 'authToken', label: 'Auth Token', secret: true }, { key: 'senderId', label: 'Phone Number' }] }
+              { provider: 'twilio', label: 'Twilio', fields: [{ key: 'apiKey', label: 'Account SID', secret: true }, { key: 'authToken', label: 'Auth Token', secret: true }, { key: 'senderId', label: 'Phone Number' }] }
             ].map(p => (
               <ConfigCard
                 key={p.provider}

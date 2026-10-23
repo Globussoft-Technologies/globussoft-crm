@@ -54,11 +54,57 @@ test('non-admin cannot create pickup locations', async ({ request }) => {
   expect(response.status()).toBe(403);
 });
 
+test('admin imports pickup locations while non-admin import stays forbidden', async ({ request }) => {
+  const importedName = `${RUN_TAG} Imported Gate`;
+  const [response, forbidden] = await Promise.all([
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/locations/import`, {
+      headers: headers(adminToken),
+      data: { rows: [
+        { name: `${RUN_TAG} Main Gate`, address: '11 Updated Test Avenue', maxAssignments: '20', isActive: 'TRUE' },
+        { name: importedName, address: '12 Import Avenue', maxAssignments: '', isActive: 'TRUE' },
+      ] },
+    }),
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/locations/import`, {
+      headers: headers(userToken),
+      data: { rows: [{ name: `${RUN_TAG} Forbidden Import`, address: '99 Test Avenue' }] },
+    }),
+  ]);
+  expect(response.status()).toBe(200);
+  expect(await response.json()).toMatchObject({ total: 2, created: 1, updated: 1 });
+  expect(forbidden.status()).toBe(403);
+
+  const inventory = await request.get(`${BASE_URL}/api/pickup-plot-inventory`, { headers: headers(adminToken) });
+  const body = await inventory.json();
+  expect(body.pickupLocations.some((row) => row.name === importedName && row.address === '12 Import Avenue')).toBeTruthy();
+  expect(body.pickupLocations.some((row) => row.id === locationId && row.maxAssignments === 20)).toBeTruthy();
+});
+
 test('non-admin cannot manage billing persons', async ({ request }) => {
   const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/billing-persons`, {
     headers: headers(userToken),
   });
   expect(response.status()).toBe(403);
+});
+
+test('workspace calling routes validate campaign input and hide unassigned customers', async ({ request }) => {
+  const missingContactId = 2147483647;
+  const [context, aiCall, manualCall] = await Promise.all([
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/calling/customers/${missingContactId}/context`, {
+      headers: headers(adminToken),
+    }),
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/calling/customers/${missingContactId}/ai-call`, {
+      headers: headers(adminToken), data: {},
+    }),
+    request.post(`${BASE_URL}/api/pickup-plot-inventory/calling/customers/${missingContactId}/manual-call`, {
+      headers: headers(adminToken), data: {},
+    }),
+  ]);
+  expect(context.status()).toBe(404);
+  expect((await context.json()).code).toBe('CALLING_CUSTOMER_NOT_FOUND');
+  expect(aiCall.status()).toBe(400);
+  expect((await aiCall.json()).code).toBe('MISSING_CAMPAIGN_ID');
+  expect(manualCall.status()).toBe(400);
+  expect((await manualCall.json()).code).toBe('MISSING_CAMPAIGN_ID');
 });
 
 test('staff work assignment directory includes User staff but excludes elevated system roles', async ({ request }) => {
@@ -266,6 +312,39 @@ test('plot creation rejects missing mandatory inventory fields', async ({ reques
     error: 'Plot number is required.',
     code: 'VALIDATION_ERROR',
   });
+});
+
+test('admin imports CSV/Excel-shaped plot rows and gets row-level validation errors', async ({ request }) => {
+  const importedName = `${RUN_TAG} Imported Plot`;
+  const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/plots/import`, {
+    headers: headers(adminToken),
+    data: { rows: [{
+      name: importedName, plotNumber: 'IMP-1', block: 'I', address: '28 Import Road',
+      pickupLocationNames: `${RUN_TAG} Main Gate`, area: '1500', areaUnit: 'SQ_FT',
+      price: '375000', availability: 'AVAILABLE', roadWidth: '35 ft', facing: 'NORTH',
+      propertyType: 'RESIDENTIAL', isActive: 'TRUE',
+    }] },
+  });
+  expect(response.status()).toBe(200);
+  expect(await response.json()).toMatchObject({ total: 1, created: 1, updated: 0 });
+
+  const invalid = await request.post(`${BASE_URL}/api/pickup-plot-inventory/plots/import`, {
+    headers: headers(adminToken),
+    data: { rows: [{
+      name: `${RUN_TAG} Bad Import`, plotNumber: 'BAD-1', block: 'B', address: '29 Import Road',
+      pickupLocationNames: 'Location that does not exist', area: '1000', areaUnit: 'SQ_FT',
+      price: '100000', availability: 'AVAILABLE', roadWidth: '20 ft',
+      propertyType: 'RESIDENTIAL', isActive: 'TRUE',
+    }] },
+  });
+  expect(invalid.status()).toBe(400);
+  expect(await invalid.json()).toMatchObject({
+    code: 'IMPORT_VALIDATION_ERROR',
+    errors: [{ row: 2, error: 'Pickup location "Location that does not exist" was not found.' }],
+  });
+
+  const inventory = await request.get(`${BASE_URL}/api/pickup-plot-inventory`, { headers: headers(adminToken) });
+  expect((await inventory.json()).plots.some((row) => row.name === importedName && row.plotNumber === 'IMP-1')).toBeTruthy();
 });
 
 test('list returns the tagged tenant-scoped location, plot, and summary', async ({ request }) => {

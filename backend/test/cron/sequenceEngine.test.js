@@ -150,6 +150,8 @@ import {
   classifyGenericEmailOpen,
   isLikelyHumanGenericEmailOpen,
   genericSequenceOptOutReason,
+  trimGenericSmsProviderConfig,
+  dispatchGenericSequenceSms,
 } from '../../cron/sequenceEngine.js';
 
 beforeAll(() => {
@@ -528,6 +530,41 @@ describe('cron/sequenceEngine — processStep email', () => {
 // ─── processStep — sms branch ──────────────────────────────────────────────
 
 describe('cron/sequenceEngine — processStep sms', () => {
+  test('Generic CRM trims provider values and records thrown provider errors as FAILED', async () => {
+    const resolveConfig = vi.fn().mockResolvedValue({
+      provider: 'twilio',
+      apiKey: ' test-twilio-account-sid ',
+      authToken: ' token ',
+      senderId: ' +14155552671 ',
+    });
+    const send = vi.fn().mockRejectedValue(new Error('Twilio rejected credentials'));
+
+    await expect(dispatchGenericSequenceSms({
+      messageId: 'sms-1',
+      tenantId: 'tenant-A',
+      to: '+919876543210',
+      body: 'Hello',
+    }, { resolveProviderConfig: resolveConfig, sendSms: send })).resolves.toMatchObject({ success: false });
+
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'test-twilio-account-sid',
+      authToken: 'token',
+      senderId: '+14155552671',
+    }));
+    expect(prisma.smsMessage.update).toHaveBeenCalledWith({
+      where: { id: 'sms-1' },
+      data: expect.objectContaining({ status: 'FAILED', errorMessage: 'Twilio rejected credentials' }),
+    });
+  });
+
+  test('provider trimming helper does not mutate the supplied config', () => {
+    const provider = { provider: 'twilio', apiKey: ' sid ', authToken: ' token ', senderId: ' +1 ' };
+    expect(trimGenericSmsProviderConfig(provider)).toEqual({
+      provider: 'twilio', apiKey: 'sid', authToken: 'token', senderId: '+1',
+    });
+    expect(provider.apiKey).toBe(' sid ');
+  });
+
   test('Generic CRM resolves the selected tenant SMS template at send time', async () => {
     prisma.emailTemplate.findFirst.mockResolvedValue({
       id: 81,

@@ -323,6 +323,54 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(card?.parentElement).toHaveClass("settings-grid");
   });
 
+  it("shows Twilio settings only in Generic CRM", async () => {
+    const genericView = renderSettings({
+      authValue: {
+        tenant: baseTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+    expect(await screen.findByTestId("generic-twilio-settings")).toBeInTheDocument();
+    genericView.unmount();
+
+    const wellnessTenant = { ...baseTenant, vertical: "wellness" };
+    fetchApiMock.mockImplementation(buildDefaultFetch({ tenant: wellnessTenant }));
+    renderSettings({
+      authValue: {
+        tenant: wellnessTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+    await screen.findByRole("heading", { name: "Organization Settings" });
+    expect(screen.queryByTestId("generic-twilio-settings")).not.toBeInTheDocument();
+  });
+
+  it("shows Google Maps configuration only to Generic CRM admins", async () => {
+    const genericView = renderSettings({
+      authValue: {
+        tenant: baseTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+    expect(await screen.findByRole("heading", { name: "Google Maps Address Search" })).toBeInTheDocument();
+    genericView.unmount();
+
+    const travelTenant = { ...baseTenant, vertical: "travel" };
+    fetchApiMock.mockImplementation(buildDefaultFetch({ tenant: travelTenant }));
+    renderSettings({
+      authValue: {
+        tenant: travelTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+    await screen.findByText(/Configure Google reCAPTCHA v2 checkbox keys for Travel web forms/i);
+    expect(screen.queryByRole("heading", { name: "Google Maps Address Search" })).not.toBeInTheDocument();
+  });
+
   it("explains that web form reCAPTCHA requires a v2 checkbox key pair", () => {
     renderSettings({
       authValue: {

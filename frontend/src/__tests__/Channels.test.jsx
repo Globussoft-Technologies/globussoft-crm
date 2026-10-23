@@ -235,16 +235,17 @@ describe('<Channels /> — #586 save-lie regression', () => {
 
     // The Twilio card has labels "Account SID" / "Auth Token" / "Phone Number".
     // The MSG91 card has "API Key" / "Sender ID (6 chars)" / "DLT Entity ID".
-    // Find the Twilio Account SID input via its placeholder.
-    const twilioSidInput = screen.getByPlaceholderText('Account SID');
-    await user.type(twilioSidInput, 'AC12345');
+    // Account SID is protected; use Twilio's editable sender number to
+    // exercise per-provider state isolation.
+    const twilioPhoneInput = screen.getByPlaceholderText('Phone Number');
+    await user.type(twilioPhoneInput, '+14155552671');
 
     // MSG91's persisted senderId must STILL render unchanged (state isolation).
     expect(screen.getByDisplayValue('GLBSMS')).toBeInTheDocument();
     // #651 — masked credential rendered as pill, not as input; match last4 substring.
     expect(screen.getByText(/A7B9/)).toBeInTheDocument();
-    // And the Twilio Account SID input now holds what we typed.
-    expect(twilioSidInput).toHaveValue('AC12345');
+    // And the Twilio phone input now holds what we typed.
+    expect(twilioPhoneInput).toHaveValue('+14155552671');
   });
 
   it('Save on MSG91 card fires PUT /api/sms/config/msg91 then re-reads /api/sms/config', async () => {
@@ -370,7 +371,7 @@ describe('<Channels /> — SMS provider cards (extended)', () => {
     // MSG91 card distinguishing input — DLT Entity ID is MSG91-specific.
     expect(screen.getByPlaceholderText('DLT Entity ID')).toBeInTheDocument();
     // Twilio card distinguishing input — Account SID is Twilio-specific.
-    expect(screen.getByPlaceholderText('Account SID')).toBeInTheDocument();
+    expect(screen.getByText('Account SID')).toBeInTheDocument();
     // And both card headings exist. MSG91 + Twilio.
     expect(screen.getByText('MSG91')).toBeInTheDocument();
     expect(screen.getByText('Twilio')).toBeInTheDocument();

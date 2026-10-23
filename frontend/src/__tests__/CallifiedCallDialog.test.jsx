@@ -137,6 +137,19 @@ describe('CallifiedCallDialog', () => {
     expect(screen.queryByTestId('callified-call-mode-ai')).not.toBeInTheDocument();
   });
 
+  test('renders provider connection errors in a structured theme-aware notice', async () => {
+    fetchApiMock.mockRejectedValue(
+      new Error('The saved API key looks invalid or expired.'),
+    );
+    renderDialog();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('callified-dialog-notice--danger');
+    expect(alert).toHaveTextContent('Unable to connect to Callified');
+    expect(alert).toHaveTextContent('The saved API key looks invalid or expired.');
+    expect(screen.getByTestId('callified-call-dialog')).toHaveClass('callified-dialog-overlay');
+  });
+
   test('opens on the first active campaign so the dialog is ready to call', async () => {
     // Contract changed: the dialog used to open with nothing selected and both
     // modes disabled. A default is now chosen, and the notice below the field

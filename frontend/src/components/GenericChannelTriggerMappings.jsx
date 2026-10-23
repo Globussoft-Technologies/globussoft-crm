@@ -165,6 +165,32 @@ function addStepButtonLabel(type) {
   return 'Add next step';
 }
 
+function waitSummary(wait) {
+  if (!wait) return '';
+  const amount = Number(wait.amount) || 1;
+  const unit = amount === 1 ? String(wait.unit || 'days').replace(/s$/, '') : (wait.unit || 'days');
+  return `wait ${amount} ${unit}, then `;
+}
+
+function addedStepMessage(type, channelLabel, wait) {
+  const prefix = waitSummary(wait);
+  if (type === 'reply') return `Next step added: ${prefix}check for a ${channelLabel.toLowerCase()} reply and send the matching response.`;
+  if (type === 'field') return `Next step added: ${prefix}check a CRM column and send the matching response.`;
+  if (type === 'stop') return 'Next step added: stop the sequence for contacts that reach this point.';
+  return `Next step added: ${prefix}send the next ${channelLabel} message.`;
+}
+
+function removedStepMessage(type, channelLabel, removedWait) {
+  const label = type === 'reply'
+    ? `${channelLabel} reply condition`
+    : type === 'field'
+      ? 'CRM column condition'
+      : type === 'stop'
+        ? 'stop action'
+        : `${channelLabel} message`;
+  return `Step removed: ${label}${removedWait ? ' and its wait condition' : ''}.`;
+}
+
 export default function GenericChannelTriggerMappings({ channel, campaigns, editCampaignId = null, onEditLoaded, onSaved, onDirty, onViewSequences }) {
   const notify = useNotify();
   const isSms = channel === 'SMS';
@@ -303,6 +329,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
       return updated;
     });
     setScrollTargetId(addedStep.id);
+    notify.success(addedStepMessage(type, channelLabel, wait));
   };
   useEffect(() => {
     if (!scrollTargetId) return;
@@ -351,6 +378,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
       notify.error(validationMessages.join(' '));
       return;
     }
+    notify.info(`Saving ${stepsToSave.length} sequence step${stepsToSave.length === 1 ? '' : 's'} and activating the ${channelLabel} automation…`);
     setSaving(true);
     try {
       const selectedTrigger = TRIGGERS.find(item => item.value === trigger) || TRIGGERS[0];
@@ -426,7 +454,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
         <article style={automationBlockStyle} aria-label={`${channelLabel} sequence trigger`}>
           <div style={nodeHeadingStyle}><span style={stepBadgeStyle}><Zap size={13} /></span><span>WHEN · TRIGGER</span></div>
           <label style={fieldLabelStyle} htmlFor={`${channel}-sequence-trigger`}>Start this sequence when</label>
-          <select id={`${channel}-sequence-trigger`} aria-label={`${channelLabel} sequence trigger`} className="input-field" value={trigger} onFocus={() => { if (!editCampaignId && trigger === 'contact.created' && steps.length === 1) { onDirty?.(); setSteps(presetSteps(trigger, steps[0].templateId)); } }} onChange={event => { const value = event.target.value; onDirty?.(); setTrigger(value); setSteps(presetSteps(value)); setAddTypes({}); setOpenAddCards({}); setDraftSteps({}); }} style={selectStyle}>{TRIGGERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          <select id={`${channel}-sequence-trigger`} aria-label={`${channelLabel} sequence trigger`} className="input-field" value={trigger} onFocus={() => { if (!editCampaignId && trigger === 'contact.created' && steps.length === 1) { onDirty?.(); setSteps(presetSteps(trigger, steps[0].templateId)); } }} onChange={event => { const value = event.target.value; const selectedTrigger = TRIGGERS.find(item => item.value === value); onDirty?.(); setTrigger(value); setSteps(presetSteps(value)); setAddTypes({}); setOpenAddCards({}); setDraftSteps({}); notify.info(`Starting event updated: ${selectedTrigger?.label || value}. The sequence will begin when this happens.`); }} style={selectStyle}>{TRIGGERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         </article>
         {trigger === 'payment.due' && <>
           <div style={connectorStyle} aria-hidden="true"><ArrowDown size={17} /></div>
@@ -444,7 +472,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
           {index > 0 && step.type === 'send' && !precedingWait && <ComplianceGate channelLabel={channelLabel} />}
           <div style={connectorStyle} aria-hidden="true"><ArrowDown size={17} /></div>
           <article style={automationBlockStyle} aria-label={`${channelLabel} sequence step ${index + 1}`}>
-            {index > 0 && <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { onDirty?.(); setSteps(current => current.filter(item => item.id !== step.id && item.id !== precedingWait?.id)); }} style={removeStyle}><Trash2 size={15} /></button>}
+            {index > 0 && <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { onDirty?.(); setSteps(current => current.filter(item => item.id !== step.id && item.id !== precedingWait?.id)); notify.info(removedStepMessage(step.type, channelLabel, Boolean(precedingWait))); }} style={removeStyle}><Trash2 size={15} /></button>}
             {precedingWait && <div style={combinedWaitStyle}>
               <StepEditor step={precedingWait} index={index - 1} stepNumber={visibleStepNumber(steps, index)} sendNumber={0} templates={templates} fields={conditionFields} loadFieldValues={loadFieldValues} update={patch => updateStep(precedingWait.id, patch)} channel={channel} channelLabel={channelLabel} ChannelIcon={ChannelIcon} />
             </div>}

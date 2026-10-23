@@ -17,6 +17,16 @@ const paymentLink = requireCJS('../../lib/paymentLink');
 paymentLink.createInvoicePaymentLink = vi.fn();
 const eventBus = requireCJS('../../lib/eventBus');
 eventBus.emitEvent = vi.fn().mockResolvedValue();
+const callifiedClient = requireCJS('../../services/callifiedClient');
+callifiedClient.listCampaigns = vi.fn();
+callifiedClient.initiateCallForContact = vi.fn();
+callifiedClient.normalizeCallifiedPhone = vi.fn((phone) => String(phone || ''));
+const callifiedBridge = requireCJS('../../lib/callifiedAgentBridge');
+callifiedBridge.startBrowserCall = vi.fn();
+const callifiedDnpRetry = requireCJS('../../lib/callifiedDnpRetryEngine');
+callifiedDnpRetry.clearDnpRetryState = vi.fn();
+const audit = requireCJS('../../lib/audit');
+audit.writeAudit = vi.fn();
 const { createSelectionToken } = requireCJS('../../lib/genericPickupPlotSelection');
 
 prisma.tenant = prisma.tenant || {};
@@ -34,6 +44,7 @@ prisma.plotInstallment = prisma.plotInstallment || {};
 prisma.plotInvoiceItem = prisma.plotInvoiceItem || {};
 prisma.plotWorkflowEvent = prisma.plotWorkflowEvent || {};
 prisma.contact = prisma.contact || {};
+prisma.callLog = prisma.callLog || {};
 prisma.role = prisma.role || {};
 prisma.user = prisma.user || {};
 prisma.userRole = prisma.userRole || {};
@@ -49,6 +60,7 @@ prisma.plotSite.update = vi.fn();
 prisma.plotSite.updateMany = vi.fn();
 prisma.contact.findMany = vi.fn();
 prisma.contact.update = vi.fn();
+prisma.callLog.findFirst = vi.fn();
 prisma.user.findMany = vi.fn();
 prisma.user.create = vi.fn();
 prisma.user.update = vi.fn();
@@ -150,7 +162,13 @@ beforeEach(() => {
   prisma.user.findFirst.mockResolvedValue(null);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.contact.findFirst.mockResolvedValue(null);
+  prisma.callLog.findFirst.mockResolvedValue(null);
   prisma.plotBooking.findFirst.mockResolvedValue(null);
+  callifiedClient.listCampaigns.mockResolvedValue([]);
+  callifiedClient.initiateCallForContact.mockResolvedValue({ callifiedLeadId: 901, callId: 'call-ai-1' });
+  callifiedBridge.startBrowserCall.mockResolvedValue({ callifiedLeadId: 902, callSid: 'call-manual-1', bridgeTicket: 'ticket', bridgePath: '/ws/callified-agent' });
+  callifiedDnpRetry.clearDnpRetryState.mockResolvedValue();
+  audit.writeAudit.mockResolvedValue();
   prisma.plotBooking.findMany.mockResolvedValue([]);
   prisma.plotBooking.create.mockResolvedValue({ id: 91, bookingNumber: 'BOOK-TEST', status: 'PLOT_RESERVED' });
   prisma.plotBooking.update.mockResolvedValue({ id: 91 });
@@ -2695,7 +2713,116 @@ describe('pickup and plot inventory tenant/vertical isolation', () => {
   });
 });
 
+describe('Generic CRM transport and Sales Executive calling', () => {
+  const assignedProfile = {
+    id: 41,
+    customerIdsJson: '[61]',
+    plotSiteIdsJson: '[30]',
+    assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+  };
+  const customer = { id: 61, name: 'Priya Shah', phone: '9000022222', email: 'priya@example.com', company: 'Acme' };
+
+  test('loads the Callified context only for a customer assigned to the signed-in workspace user', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue(assignedProfile);
+    prisma.plotBroker.findFirst.mockResolvedValue(null);
+    prisma.contact.findFirst.mockResolvedValue(customer);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .get('/api/pickup-plot-inventory/calling/customers/61/context');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ contactId: 61, patientName: 'Priya Shah', phoneValid: true });
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 61, tenantId: 7, deletedAt: null },
+      select: { id: true, name: true, phone: true, email: true, company: true },
+    });
+  });
+
+  test('does not expose an unassigned customer to a workspace user', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({ ...assignedProfile, assignmentPairsJson: '[]', customerIdsJson: '[]' });
+    prisma.plotBroker.findFirst.mockResolvedValue(null);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .get('/api/pickup-plot-inventory/calling/customers/61/context');
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('CALLING_CUSTOMER_NOT_FOUND');
+    expect(prisma.contact.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('starts an AI call for an assigned customer with the selected campaign', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue(assignedProfile);
+    prisma.plotBroker.findFirst.mockResolvedValue(null);
+    prisma.contact.findFirst.mockResolvedValue(customer);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .post('/api/pickup-plot-inventory/calling/customers/61/ai-call')
+      .send({ campaignId: 77 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(callifiedClient.initiateCallForContact).toHaveBeenCalledWith({
+      tenantId: 7, contactId: 61, campaignId: 77, userId: 3,
+      interest: 'Generic CRM pickup and plot customer',
+    });
+    expect(audit.writeAudit).toHaveBeenCalledWith(
+      'CallifiedCall', 'INITIATE', '901', 3, 7,
+      expect.objectContaining({ surface: 'generic_pickup_plot_workspace', mode: 'ai', contactId: 61, campaignId: 77 }),
+    );
+  });
+
+  test('starts a manual browser call for an assigned customer', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue(assignedProfile);
+    prisma.transportPerson.findFirst.mockResolvedValue(null);
+    prisma.contact.findFirst.mockResolvedValue(customer);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .post('/api/pickup-plot-inventory/calling/customers/61/manual-call')
+      .send({ campaignId: 88 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(callifiedBridge.startBrowserCall).toHaveBeenCalledWith({
+      tenantId: 7, contactId: 61, campaignId: 88, userId: 3,
+      interest: 'Generic CRM pickup and plot customer',
+    });
+    expect(response.body).toMatchObject({ callifiedLeadId: 902, callSid: 'call-manual-1', contactId: 61 });
+  });
+});
+
 describe('pickup location mutations', () => {
+  test('imports pickup locations by updating matching names and creating new rows', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([{ id: 20, name: 'Main Gate' }]);
+    prisma.pickupLocation.create.mockResolvedValue({ id: 21, name: 'South Gate' });
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/locations/import').send({
+      rows: [
+        { name: 'Main Gate', address: '11 Updated Market Road', maxAssignments: '25', isActive: 'TRUE' },
+        { name: 'South Gate', address: '12 Market Road', maxAssignments: '', isActive: 'FALSE' },
+      ],
+    });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toEqual({ total: 2, created: 1, updated: 1 });
+    expect(prisma.pickupLocation.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7 }, select: { id: true, name: true },
+    });
+    expect(prisma.pickupLocation.update).toHaveBeenCalledWith({
+      where: { id: 20 }, data: expect.objectContaining({ address: '11 Updated Market Road', maxAssignments: 25, isActive: true }),
+    });
+    expect(prisma.pickupLocation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ name: 'South Gate', tenantId: 7, maxAssignments: null, isActive: false }),
+    });
+  });
+
+  test('rejects the complete pickup import when any row is invalid', async () => {
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/locations/import').send({
+      rows: [{ name: 'Bad Gate', address: 'x', isActive: 'sometimes' }],
+    });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ code: 'IMPORT_VALIDATION_ERROR', errors: [{ row: 2 }] });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.pickupLocation.create).not.toHaveBeenCalled();
+  });
+
   test('creates a tenant-scoped location with a Google Maps link', async () => {
     prisma.pickupLocation.create.mockResolvedValue({ id: 20, name: 'Main Gate', isActive: true });
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/locations').send({
@@ -2766,6 +2893,41 @@ describe('plot/site mutations', () => {
     area: '1200', areaUnit: 'SQ_FT', price: '250000', roadWidth: '30 ft',
     propertyType: 'RESIDENTIAL', availability: 'AVAILABLE', notes: '', isActive: true,
   };
+
+  test('imports plots with tenant pickup-location names and upserts by name and plot number', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([{ id: 4, name: 'North Gate' }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Plot A-1', plotNumber: 'A-1' }]);
+    prisma.plotSite.create.mockResolvedValue({ id: 31, name: 'Plot A-2', plotNumber: 'A-2' });
+    const rows = [
+      { ...requiredPlotFields, pickupLocationNames: 'North Gate' },
+      { ...requiredPlotFields, plotNumber: 'A-2', pickupLocationNames: 'North Gate', isActive: 'FALSE' },
+    ];
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots/import').send({ rows });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toEqual({ total: 2, created: 1, updated: 1 });
+    expect(prisma.plotSite.update).toHaveBeenCalledWith({
+      where: { id: 30 },
+      data: expect.objectContaining({ pickupLocationId: 4, pickupLocationIdsJson: '[4]', isActive: true }),
+    });
+    expect(prisma.plotSite.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ plotNumber: 'A-2', pickupLocationId: 4, tenantId: 7, isActive: false }),
+    });
+  });
+
+  test('returns the spreadsheet row number when an imported pickup location is unknown', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([]);
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots/import').send({
+      rows: [{ ...requiredPlotFields, pickupLocationNames: 'Missing Gate' }],
+    });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'IMPORT_VALIDATION_ERROR',
+      errors: [{ row: 2, error: 'Pickup location "Missing Gate" was not found.' }],
+    });
+    expect(prisma.plotSite.create).not.toHaveBeenCalled();
+  });
 
   test.each([
     ['plotNumber', 'Plot number'], ['block', 'Block'], ['address', 'Address'],

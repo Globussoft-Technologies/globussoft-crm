@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import CallifiedCallDialog from './CallifiedCallDialog';
 import './TransportDriverWorkspace.css';
 
 const STATUS_STEPS = [
@@ -44,6 +45,7 @@ export default function TransportDriverWorkspace() {
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState('');
   const [filter, setFilter] = useState('active');
+  const [callCustomer, setCallCustomer] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -152,14 +154,28 @@ export default function TransportDriverWorkspace() {
             updating={updating === assignment.assignmentKey}
             adminOverview={Boolean(data?.isAdminOverview)}
             onAdvance={() => advance(assignment)}
+            onCall={() => setCallCustomer(assignment.customer)}
           />
         ))}
       </section>
+      {callCustomer && (
+        <CallifiedCallDialog
+          customer={{ name: callCustomer.name, phone: callCustomer.phone, subtitle: callCustomer.company || null }}
+          endpoints={{
+            context: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/context`,
+            campaigns: '/api/pickup-plot-inventory/calling/campaigns',
+            aiCall: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/ai-call`,
+            manualCall: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/manual-call`,
+          }}
+          historyHref="/callified-data"
+          onClose={() => setCallCustomer(null)}
+        />
+      )}
     </main>
   );
 }
 
-function TripCard({ assignment, featured, updating, adminOverview, onAdvance }) {
+function TripCard({ assignment, featured, updating, adminOverview, onAdvance, onCall }) {
   const index = statusIndex(assignment.status);
   const current = STATUS_STEPS[index];
   const next = STATUS_STEPS[index + 1];
@@ -187,7 +203,7 @@ function TripCard({ assignment, featured, updating, adminOverview, onAdvance }) 
       <div className="transport-passenger">
         <span><UserRound size={17} /></span>
         <div><small>Customer</small><strong>{assignment.customer?.name || 'Not assigned'}</strong></div>
-        {assignment.customer?.phone && <a href={`tel:${assignment.customer.phone}`} aria-label={`Call ${assignment.customer.name}`}><Phone size={16} /> Call</a>}
+        {assignment.customer?.phone && <button type="button" onClick={onCall} aria-label={`Call ${assignment.customer.name}`}><Phone size={16} /> Call</button>}
       </div>
 
       <div className="transport-progress" aria-label={`Trip progress: ${current.label}`}>

@@ -234,6 +234,7 @@ describe('<Developer /> — page surface, API key + webhook CRUD, agent activity
     expect(screen.getByText(/glbs_def34\*+/)).toBeInTheDocument();
     // Sub-brand badge ('tmc') renders on the scoped key only.
     expect(screen.getByText('tmc')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /API credentials data/i })).toHaveClass('developer-api-data-scroll');
   });
 
   it('Generate Key button: disabled when name input is empty (no POST possible)', async () => {
@@ -519,6 +520,9 @@ describe('<Developer /> — page surface, API key + webhook CRUD, agent activity
     expect(screen.getByText(/polling every 3s · 2 entries/i)).toBeInTheDocument();
     // Commit short-hash (first 7 chars) renders in the Detail cell.
     expect(screen.getByText(/\[abc1234\]/)).toBeInTheDocument();
+    const activityRegion = screen.getByRole('region', { name: /Live agent activity data/i });
+    expect(activityRegion).toHaveClass('developer-activity-table-scroll');
+    expect(within(activityRegion).getByRole('table')).toHaveClass('developer-activity-table');
   });
 
   // ─────────────────────────────────────────────────────────────────────

@@ -98,12 +98,16 @@ describe('<CPQ /> — page surface', () => {
     expect(
       screen.getByRole('heading', { name: /Deal Selection/i }),
     ).toBeInTheDocument();
+    expect(document.querySelector('.cpq-page')).toBeTruthy();
+    expect(document.querySelector('.cpq-workspace')).toBeTruthy();
+    expect(document.querySelector('.cpq-builder-panel')).toBeTruthy();
 
     // Counter renders even before data arrives — initially "0 deals".
     expect(screen.getByText(/0 deals/i)).toBeInTheDocument();
 
     // After fetch resolves the counter flips to "3 deals".
     expect(await screen.findByText(/3 deals/i)).toBeInTheDocument();
+    expect(document.querySelector('.cpq-deal-list')).toBeTruthy();
   });
 
   it('initial mount fires GET /api/deals (single call, no params)', async () => {

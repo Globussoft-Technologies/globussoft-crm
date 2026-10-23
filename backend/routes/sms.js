@@ -17,6 +17,15 @@ const { writeAudit } = require("../lib/audit");
 // stripped before reaching prisma).
 const SMS_SECRET_FIELDS = ["apiKey", "authToken"];
 
+function isGenericCrmRequest(req) {
+  return (req.user?.vertical || "generic") === "generic";
+}
+
+function trimGenericProviderValue(req, value) {
+  if (!isGenericCrmRequest(req) || typeof value !== "string") return value;
+  return value.trim();
+}
+
 // ─── Send SMS ────────────────────────────────────────────────────────────────
 router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
   try {
@@ -618,7 +627,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
       if (typeof v === "object") continue; // GET shape echoed back — skip
       if (typeof v !== "string") continue; // ignore garbage
       if (looksLikeMaskedSentinel(v)) continue; // legacy masked sentinel
-      cleanSecrets[f] = encryptCredential(v);
+      cleanSecrets[f] = encryptCredential(trimGenericProviderValue(req, v));
       rotatedFields.push(f);
     }
 
@@ -630,7 +639,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
         provider,
         apiKey: cleanSecrets.apiKey !== undefined ? cleanSecrets.apiKey : "",
         authToken: cleanSecrets.authToken !== undefined ? cleanSecrets.authToken : null,
-        senderId: senderId || null,
+        senderId: trimGenericProviderValue(req, senderId) || null,
         dltEntityId: dltEntityId || null,
         isActive: isActive !== undefined ? isActive : true,
         settings: settings || null,
@@ -639,7 +648,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
       },
       update: {
         ...cleanSecrets,
-        ...(senderId !== undefined && { senderId }),
+        ...(senderId !== undefined && { senderId: trimGenericProviderValue(req, senderId) }),
         ...(dltEntityId !== undefined && { dltEntityId }),
         ...(isActive !== undefined && { isActive }),
         ...(settings !== undefined && { settings }),

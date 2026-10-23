@@ -354,7 +354,7 @@ export default function Projects() {
           </h3>
 
           {projects.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <div className="projects-empty-state" style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
               <FolderKanban size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No projects yet. Create one to get started.</p>
             </div>
@@ -459,7 +459,7 @@ export default function Projects() {
             </div>
           )}
           {projects.length > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+            <div className="projects-pagination" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
                 Showing {startItem}-{endItem} of {total} project{total !== 1 ? 's' : ''}
               </p>

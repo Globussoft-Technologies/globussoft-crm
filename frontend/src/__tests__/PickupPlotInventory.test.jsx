@@ -7,8 +7,10 @@ const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({ fetchApi: (...args) => fetchApiMock(...args) }));
 
 const geocodeSuggestMock = vi.fn();
+const googleAddressSuggestMock = vi.fn();
 vi.mock('../lib/geocoder', () => ({
   geocodeSuggest: (...args) => geocodeSuggestMock(...args),
+  googleAddressSuggest: (...args) => googleAddressSuggestMock(...args),
 }));
 
 const notify = { success: vi.fn(), error: vi.fn(), info: vi.fn(), confirm: vi.fn() };
@@ -56,6 +58,8 @@ beforeEach(() => {
   });
   geocodeSuggestMock.mockReset();
   geocodeSuggestMock.mockResolvedValue([]);
+  googleAddressSuggestMock.mockReset();
+  googleAddressSuggestMock.mockResolvedValue([]);
   Object.values(notify).forEach((mock) => mock.mockReset());
 });
 
@@ -339,7 +343,7 @@ describe('<PickupPlotInventory />', () => {
   });
 
   it('suggests matching addresses and fills the selected result', async () => {
-    geocodeSuggestMock.mockResolvedValueOnce([
+    googleAddressSuggestMock.mockResolvedValueOnce([
       {
         lat: 12.9352,
         lng: 77.6245,
@@ -360,7 +364,7 @@ describe('<PickupPlotInventory />', () => {
     fireEvent.change(addressInput, { target: { value: 'Koramangala' } });
 
     expect(await screen.findByRole('listbox', { name: 'Address suggestions' })).toBeInTheDocument();
-    expect(geocodeSuggestMock).toHaveBeenCalledWith('Koramangala', 6);
+    expect(googleAddressSuggestMock).toHaveBeenCalledWith('Koramangala', 6);
     expect(screen.getByRole('listbox', { name: 'Address suggestions' }).querySelectorAll('[role="option"]')).toHaveLength(2);
 
     fireEvent.keyDown(addressInput, { key: 'ArrowDown' });
@@ -407,5 +411,35 @@ describe('<PickupPlotInventory />', () => {
       '/api/pickup-plot-inventory/plots/9/status',
       { method: 'PATCH', body: JSON.stringify({ isActive: false }) },
     ));
+  });
+
+  it('imports plots from the CSV/Excel dialog and reloads the inventory', async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/plots/import' && options?.method === 'POST') {
+        return Promise.resolve({ total: 1, created: 0, updated: 1 });
+      }
+      if (url === '/api/pickup-plot-inventory' && !options) return Promise.resolve(inventory);
+      return Promise.resolve({});
+    });
+    renderPage();
+    await screen.findByText('Plot A-9');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
+    expect(screen.getByRole('dialog', { name: 'Import plots and sites' })).toBeInTheDocument();
+    const csv = 'Plot / Site name,Plot number,Block,Address,Pickup location names,Area,Area unit,Price,Availability,Road width,Facing,Property type,Notes,Active\nPlot A-9,A-9,A,25 Lake Road,North Gate,1200,SQ_FT,250000,AVAILABLE,30 ft,EAST,RESIDENTIAL,,TRUE\n';
+    fireEvent.change(screen.getByLabelText('CSV or Excel file'), {
+      target: { files: [new File([csv], 'plots.csv', { type: 'text/csv' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Import data' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/plots/import',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const importCall = fetchApiMock.mock.calls.find(([url]) => url.endsWith('/plots/import'));
+    expect(JSON.parse(importCall[1].body).rows[0]).toMatchObject({
+      name: 'Plot A-9', plotNumber: 'A-9', pickupLocationNames: 'North Gate', areaUnit: 'SQ_FT',
+    });
+    await waitFor(() => expect(notify.success).toHaveBeenCalledWith('Import complete: 0 created, 1 updated.'));
   });
 });

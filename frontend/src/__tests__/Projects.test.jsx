@@ -177,6 +177,10 @@ describe('<Projects /> — page surface', () => {
     expect(
       screen.getByRole('heading', { name: /Projects/i })
     ).toBeInTheDocument();
+    expect(document.querySelector('.projects-board-card')).toBeTruthy();
+    await screen.findByRole('table', { name: 'Projects table' });
+    expect(document.querySelector('.projects-table-scroll')).toBeTruthy();
+    expect(document.querySelector('.projects-pagination')).toBeTruthy();
 
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);

@@ -4,6 +4,14 @@ import { MemoryRouter } from 'react-router-dom';
 import BrokerCustomerWorkspace from '../components/BrokerCustomerWorkspace';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
+vi.mock('../components/CallifiedCallDialog', () => ({
+  default: ({ customer, endpoints, historyHref, onClose }) => (
+    <div role="dialog" aria-label={`Call ${customer.name}`} data-manual-endpoint={endpoints.manualCall} data-history-href={historyHref}>
+      <span>Call Customer</span>
+      <button type="button" onClick={onClose}>Close call dialog</button>
+    </div>
+  ),
+}));
 import { fetchApi } from '../utils/api';
 
 const response = {
@@ -121,7 +129,7 @@ describe('<BrokerCustomerWorkspace />', () => {
     expect(screen.queryByText('Li Wei')).toBeNull();
   });
 
-  it('opens the full email composer over Sales Workspace and keeps the Callified link', async () => {
+  it('opens the full email composer and the in-place Callified dialog over Sales Workspace', async () => {
     fetchApi.mockResolvedValueOnce(response);
     render(<MemoryRouter><BrokerCustomerWorkspace /></MemoryRouter>);
 
@@ -130,8 +138,10 @@ describe('<BrokerCustomerWorkspace />', () => {
     expect(screen.getByLabelText('To:')).toHaveValue('li@example.com');
     expect(screen.getByTestId('broker-customer-workspace')).toBeInTheDocument();
 
-    const call = screen.getByRole('link', { name: 'Call Li Wei' });
-    expect(call).toHaveAttribute('href', '/leads?callifiedLeadId=61&leadSearch=li%40example.com');
+    fireEvent.click(screen.getByRole('button', { name: 'Call Li Wei' }));
+    const callDialog = screen.getByRole('dialog', { name: 'Call Li Wei' });
+    expect(callDialog).toHaveAttribute('data-manual-endpoint', '/api/pickup-plot-inventory/calling/customers/61/manual-call');
+    expect(callDialog).toHaveAttribute('data-history-href', '/callified-data');
   });
 
   it('sends from the embedded composer and then opens Inbox', async () => {

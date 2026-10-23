@@ -189,14 +189,14 @@ export default function Developer() {
           </p>
         )}
         {agentActivity.length === 0 ? (
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>
+          <p className="developer-activity-card__empty" style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>
             No agent activity yet. Dispatched agents append entries here as they progress —
             you'll see start, milestone, and finish events with file paths + commit hashes
             as they land.
           </p>
         ) : (
-          <div style={{ maxHeight: 320, overflowY: 'auto', overflowX: 'auto', fontSize: '0.85rem', fontFamily: 'monospace' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div className="developer-activity-table-scroll" role="region" aria-label="Live agent activity data" tabIndex={0} style={{ maxHeight: 320, overflowY: 'auto', overflowX: 'auto', fontSize: '0.85rem', fontFamily: 'monospace' }}>
+            <table className="developer-activity-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-color, #fff)' }}>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
                   <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Time</th>
@@ -286,7 +286,7 @@ export default function Developer() {
             <button className="btn-primary" type="submit" disabled={!newKeyName.trim()}>Generate Key</button>
           </form>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="developer-api-data-scroll" role="region" aria-label="API credentials data" tabIndex={0} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {keys.map(k => (
               <div key={k.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                 <div>
@@ -350,7 +350,7 @@ export default function Developer() {
             <button className="btn-secondary" type="submit" style={{ width: '100%' }}>Register Target Endpoint</button>
           </form>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="developer-api-data-scroll" role="region" aria-label="Webhook listeners data" tabIndex={0} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {hooks.map(h => (
               <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                 <div>

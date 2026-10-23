@@ -38,6 +38,43 @@ const { writeAudit } = require('../lib/audit');
 const { resolveSendGridConfig } = require('../services/travelSendGrid');
 const { sendSms, resolveProviderConfig } = require('../services/smsProvider');
 
+function trimGenericSmsProviderConfig(provider) {
+  if (!provider) return provider;
+  return {
+    ...provider,
+    apiKey: typeof provider.apiKey === 'string' ? provider.apiKey.trim() : provider.apiKey,
+    authToken: typeof provider.authToken === 'string' ? provider.authToken.trim() : provider.authToken,
+    senderId: typeof provider.senderId === 'string' ? provider.senderId.trim() : provider.senderId,
+  };
+}
+
+async function dispatchGenericSequenceSms({ messageId, tenantId, to, body }, dependencies = {}) {
+  const resolveConfig = dependencies.resolveProviderConfig || resolveProviderConfig;
+  const send = dependencies.sendSms || sendSms;
+  const provider = trimGenericSmsProviderConfig(await resolveConfig(prisma, tenantId));
+  if (!provider) {
+    await prisma.smsMessage.update({
+      where: { id: messageId },
+      data: { status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' },
+    });
+    return { success: false, error: 'No SMS provider configured for tenant' };
+  }
+
+  let sent;
+  try {
+    sent = await send({ ...provider, to, body });
+  } catch (error) {
+    sent = { success: false, error: error?.message || 'SMS provider request failed' };
+  }
+  await prisma.smsMessage.update({
+    where: { id: messageId },
+    data: sent.success
+      ? { status: 'SENT', provider: provider.provider, providerMsgId: sent.providerMsgId || null, errorMessage: null }
+      : { status: 'FAILED', provider: provider.provider, errorMessage: sent.error || 'SMS provider rejected the message' },
+  });
+  return sent;
+}
+
 // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
 // SequenceStep.attachmentRefsJson entries with kind='flyer'.
 //
@@ -809,17 +846,11 @@ async function executeReceiverAction(action, enrollment, ctx, stepId = null) {
         tenantId: enrollment.tenantId,
       },
     });
-    const provider = await resolveProviderConfig(prisma, enrollment.tenantId);
-    if (!provider) {
-      await prisma.smsMessage.update({ where: { id: message.id }, data: { status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' } });
-      return {};
-    }
-    const sent = await sendSms({ ...provider, to: enrollment.contact.phone, body: body || 'Automated sequence message' });
-    await prisma.smsMessage.update({
-      where: { id: message.id },
-      data: sent.success
-        ? { status: 'SENT', provider: provider.provider, providerMsgId: sent.providerMsgId || null }
-        : { status: 'FAILED', provider: provider.provider, errorMessage: sent.error || 'SMS provider rejected the message' },
+    await module.exports.dispatchGenericSequenceSms({
+      messageId: message.id,
+      tenantId: enrollment.tenantId,
+      to: enrollment.contact.phone,
+      body: body || 'Automated sequence message',
     });
     return {};
   }
@@ -1104,18 +1135,12 @@ async function processStep(step, enrollment) {
         },
       });
       if (isGenericSequence) {
-        const provider = await resolveProviderConfig(prisma, enrollment.tenantId);
-        if (!provider) {
-          await prisma.smsMessage.update({ where: { id: message.id }, data: { status: 'FAILED', errorMessage: 'No SMS provider configured for tenant' } });
-        } else {
-          const sent = await sendSms({ ...provider, to: enrollment.contact.phone, body: body || 'Automated sequence message' });
-          await prisma.smsMessage.update({
-            where: { id: message.id },
-            data: sent.success
-              ? { status: 'SENT', provider: provider.provider, providerMsgId: sent.providerMsgId || null }
-              : { status: 'FAILED', provider: provider.provider, errorMessage: sent.error || 'SMS provider rejected the message' },
-          });
-        }
+        await module.exports.dispatchGenericSequenceSms({
+          messageId: message.id,
+          tenantId: enrollment.tenantId,
+          to: enrollment.contact.phone,
+          body: body || 'Automated sequence message',
+        });
       }
     }
     return { advance: true };
@@ -1721,4 +1746,6 @@ module.exports = {
   classifyGenericEmailOpen,
   isLikelyHumanGenericEmailOpen,
   genericSequenceOptOutReason,
+  trimGenericSmsProviderConfig,
+  dispatchGenericSequenceSms,
 };

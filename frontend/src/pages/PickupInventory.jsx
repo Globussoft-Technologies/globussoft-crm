@@ -4,8 +4,9 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import AddressAutocomplete from '../components/AddressAutocomplete';
+import InventorySpreadsheetImport from '../components/InventorySpreadsheetImport';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
-import { googleMapsCoordinateUrl, googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
+import { googleMapsCoordinateUrl, googleMapsPlaceUrl, googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
 import './PickupInventory.css';
 
 const PICKUP_INVENTORY_COLUMNS = [
@@ -18,6 +19,24 @@ const PICKUP_INVENTORY_COLUMNS = [
   { label: 'Updated at', width: 140, minWidth: 120 },
   { label: 'Actions', width: 190, minWidth: 180 },
 ];
+
+const PICKUP_IMPORT_COLUMNS = [
+  { key: 'name', header: 'Location name' },
+  { key: 'address', header: 'Address' },
+  { key: 'googleMapsLink', header: 'Google Maps link' },
+  { key: 'maxAssignments', header: 'Maximum assignments' },
+  { key: 'notes', header: 'Notes' },
+  { key: 'isActive', header: 'Active' },
+];
+
+const PICKUP_IMPORT_EXAMPLE = {
+  name: 'North Gate',
+  address: '10 Market Road, Bengaluru',
+  googleMapsLink: 'https://maps.google.com/?q=12.9716,77.5946',
+  maxAssignments: '25',
+  notes: 'Primary pickup point',
+  isActive: 'TRUE',
+};
 
 function mapsUrl(location) {
   return location.googleMapsLink
@@ -237,6 +256,18 @@ export default function PickupInventory() {
             </select>
           </label>
           <button type="button" className="btn-secondary pickup-inventory-refresh" onClick={load} disabled={loading} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><RefreshCw size={15} /> Refresh</button>
+          <InventorySpreadsheetImport
+            entityLabel="pickup locations"
+            endpoint="/api/pickup-plot-inventory/locations/import"
+            templateBaseName="pickup-locations-import-template"
+            sheetName="Pickup locations"
+            columns={PICKUP_IMPORT_COLUMNS}
+            example={PICKUP_IMPORT_EXAMPLE}
+            onImported={async (result) => {
+              notify.success(`Import complete: ${result.created || 0} created, ${result.updated || 0} updated.`);
+              await load();
+            }}
+          />
           <button type="button" className="btn-primary pickup-inventory-add" onClick={openAddLocation} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><Plus size={15} /> Add Pickup Location</button>
         </div>
       </header>
@@ -348,6 +379,7 @@ export default function PickupInventory() {
                 <input className="input-field" aria-label="Location name *" required maxLength={150} value={newLocation.name} onChange={(event) => setNewLocation((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Bangalore Palace" />
               </label>
               <AddressAutocomplete
+                provider="google"
                 label="Pickup address *"
                 required
                 placeholder="Start typing a pickup location address..."
@@ -355,7 +387,9 @@ export default function PickupInventory() {
                 onChange={(address) => setNewLocation((current) => ({ ...current, address, googleMapsLink: '' }))}
                 onSelect={(suggestion) => setNewLocation((current) => ({
                   ...current,
-                  googleMapsLink: googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
+                  googleMapsLink: suggestion.place_id
+                    ? googleMapsPlaceUrl(suggestion.place_id, suggestion.display_name)
+                    : googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
                 }))}
               />
               <label style={{ display: 'grid', gap: 6, fontSize: '.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Maximum assignments
@@ -385,6 +419,7 @@ export default function PickupInventory() {
                 <input className="input-field" aria-label="Edit location name *" required maxLength={150} value={editingLocation.name} onChange={(event) => setEditingLocation((current) => ({ ...current, name: event.target.value }))} />
               </label>
               <AddressAutocomplete
+                provider="google"
                 label="Edit pickup address *"
                 required
                 placeholder="Start typing a pickup location address..."
@@ -392,7 +427,9 @@ export default function PickupInventory() {
                 onChange={(address) => setEditingLocation((current) => ({ ...current, address, googleMapsLink: '' }))}
                 onSelect={(suggestion) => setEditingLocation((current) => ({
                   ...current,
-                  googleMapsLink: googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
+                  googleMapsLink: suggestion.place_id
+                    ? googleMapsPlaceUrl(suggestion.place_id, suggestion.display_name)
+                    : googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
                 }))}
               />
             </div>

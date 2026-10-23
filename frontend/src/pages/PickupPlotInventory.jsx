@@ -17,6 +17,7 @@ import AddressAutocomplete from '../components/AddressAutocomplete';
 import MultiSelectDropdown from '../components/MultiSelectDropdown';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import CompactPickupLocationCell from '../components/CompactPickupLocationCell';
+import InventorySpreadsheetImport from '../components/InventorySpreadsheetImport';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { googleMapsSearchUrl } from '../utils/googleMaps';
 
@@ -94,6 +95,40 @@ const PLOT_INVENTORY_COLUMNS = [
   { label: 'Status', width: 115, minWidth: 90 },
   { label: 'Actions', width: 110, minWidth: 90 },
 ];
+
+const PLOT_IMPORT_COLUMNS = [
+  { key: 'name', header: 'Plot / Site name' },
+  { key: 'plotNumber', header: 'Plot number' },
+  { key: 'block', header: 'Block' },
+  { key: 'address', header: 'Address' },
+  { key: 'pickupLocationNames', header: 'Pickup location names' },
+  { key: 'area', header: 'Area' },
+  { key: 'areaUnit', header: 'Area unit' },
+  { key: 'price', header: 'Price' },
+  { key: 'availability', header: 'Availability' },
+  { key: 'roadWidth', header: 'Road width' },
+  { key: 'facing', header: 'Facing' },
+  { key: 'propertyType', header: 'Property type' },
+  { key: 'notes', header: 'Notes' },
+  { key: 'isActive', header: 'Active' },
+];
+
+const PLOT_IMPORT_EXAMPLE = {
+  name: 'Koramangala',
+  plotNumber: 'A-101',
+  block: 'A',
+  address: 'Koramangala, Bengaluru, Karnataka',
+  pickupLocationNames: 'North Gate | South Gate',
+  area: '1200',
+  areaUnit: 'SQ_FT',
+  price: '2500000',
+  availability: 'AVAILABLE',
+  roadWidth: '30 ft',
+  facing: 'EAST',
+  propertyType: 'RESIDENTIAL',
+  notes: '',
+  isActive: 'TRUE',
+};
 
 const fieldStyle = { width: '100%', marginTop: 5, boxSizing: 'border-box' };
 const labelStyle = { display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' };
@@ -436,6 +471,18 @@ export default function PickupPlotInventory() {
             maxVisibleRows={4}
             width={130}
           />
+          <InventorySpreadsheetImport
+            entityLabel="plots and sites"
+            endpoint="/api/pickup-plot-inventory/plots/import"
+            templateBaseName="plots-and-sites-import-template"
+            sheetName="Plots and sites"
+            columns={PLOT_IMPORT_COLUMNS}
+            example={PLOT_IMPORT_EXAMPLE}
+            onImported={async (result) => {
+              notify.success(`Import complete: ${result.created || 0} created, ${result.updated || 0} updated.`);
+              await loadInventory();
+            }}
+          />
           <button className="btn-primary" onClick={() => openPlot()} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}>
             <Plus size={16} /> Add Plot / Site
           </button>
@@ -591,6 +638,7 @@ export default function PickupPlotInventory() {
             {activePickupLocations.length === 0 && <div style={{ marginTop: 5, color: 'var(--text-secondary)', fontSize: '.76rem' }}>No active pickup locations are available. Add one in Pickup Inventory first.</div>}
           </div>
           <AddressAutocomplete
+            provider="google"
             style={{ gridColumn: '1 / -1' }}
             label="Address *"
             required

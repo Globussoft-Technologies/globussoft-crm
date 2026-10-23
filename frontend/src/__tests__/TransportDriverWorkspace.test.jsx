@@ -7,6 +7,14 @@ const { notifyMock } = vi.hoisted(() => ({
   notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn(), confirm: vi.fn() },
 }));
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyMock }));
+vi.mock('../components/CallifiedCallDialog', () => ({
+  default: ({ customer, endpoints, historyHref, onClose }) => (
+    <div role="dialog" aria-label={`Call ${customer.name}`} data-ai-endpoint={endpoints.aiCall} data-history-href={historyHref}>
+      <span>Call Customer</span>
+      <button type="button" onClick={onClose}>Close call dialog</button>
+    </div>
+  ),
+}));
 import { fetchApi } from '../utils/api';
 
 const driverData = {
@@ -58,7 +66,11 @@ describe('<TransportDriverWorkspace />', () => {
     expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
     expect(screen.getByText('North Gate')).toBeInTheDocument();
     expect(screen.getByText('Green Acres')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /call priya shah/i })).toHaveAttribute('href', 'tel:9000022222');
+    const callButton = screen.getByRole('button', { name: /call priya shah/i });
+    fireEvent.click(callButton);
+    const callDialog = screen.getByRole('dialog', { name: 'Call Priya Shah' });
+    expect(callDialog).toHaveAttribute('data-ai-endpoint', '/api/pickup-plot-inventory/calling/customers/61/ai-call');
+    expect(callDialog).toHaveAttribute('data-history-href', '/callified-data');
     expect(screen.getByRole('link', { name: /open route/i })).toHaveAttribute('href', expect.stringContaining('google.com/maps/dir'));
   });
 

@@ -220,7 +220,7 @@ export default function WinLoss() {
       </div>
 
       {/* Recent closed deals */}
-      <div className="card" style={{ padding: 0, overflow: 'visible', marginBottom: '2rem' }}>
+      <div className="card win-loss-closed-deals-card" style={{ padding: 0, overflow: 'visible', marginBottom: '2rem' }}>
         <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--glass-border)' }}>
           <h3 style={{ margin: 0 }}>Recent Closed Deals</h3>
         </div>
@@ -229,8 +229,8 @@ export default function WinLoss() {
         ) : closedDeals.length === 0 ? (
           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No closed deals in this range.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <TopScrollSync verticalOverflow="auto">
+          <table className="win-loss-closed-deals-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <th style={th}>Deal</th>

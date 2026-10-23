@@ -394,6 +394,7 @@ jobs:
             tests/web-form-folders-api.spec.js \
             tests/sales-teams-api.spec.js \
             tests/geocode-api.spec.js \
+            tests/google-maps-settings-api.spec.js \
             tests/wellness-location-assignments-api.spec.js \
             tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \

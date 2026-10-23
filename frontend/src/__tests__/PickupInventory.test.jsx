@@ -4,8 +4,10 @@ import PickupInventory from '../pages/PickupInventory';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
 const geocodeSuggestMock = vi.fn();
+const googleAddressSuggestMock = vi.fn();
 vi.mock('../lib/geocoder', () => ({
   geocodeSuggest: (...args) => geocodeSuggestMock(...args),
+  googleAddressSuggest: (...args) => googleAddressSuggestMock(...args),
 }));
 const notify = { success: vi.fn(), error: vi.fn() };
 vi.mock('../utils/notify', () => ({ useNotify: () => notify }));
@@ -32,6 +34,8 @@ beforeEach(() => {
   notify.error.mockReset();
   geocodeSuggestMock.mockReset();
   geocodeSuggestMock.mockResolvedValue([]);
+  googleAddressSuggestMock.mockReset();
+  googleAddressSuggestMock.mockResolvedValue([]);
   window.localStorage.removeItem('pickup-inventory-column-widths');
 });
 
@@ -79,10 +83,10 @@ describe('<PickupInventory />', () => {
   });
 
   it('saves the selected address coordinates as an exact Google Maps link', async () => {
-    geocodeSuggestMock.mockResolvedValueOnce([{
-      lat: 12.9352,
-      lng: 77.6245,
-      display_name: 'CA-17, Koramangala, Bengaluru, India',
+    googleAddressSuggestMock.mockResolvedValueOnce([{
+      place_id: 'ChIJ-koramangala',
+      display_name: 'CA-17, Koramangala, Bengaluru, Karnataka 560034, India',
+      provider: 'google',
     }]);
     fetchApi.mockResolvedValueOnce(payload).mockResolvedValueOnce({ id: 5 }).mockResolvedValueOnce(payload);
     render(<PickupInventory />);
@@ -102,7 +106,7 @@ describe('<PickupInventory />', () => {
       url === '/api/pickup-plot-inventory/locations' && options?.method === 'POST'
     ));
     expect(JSON.parse(createCall[1].body).googleMapsLink).toBe(
-      'https://www.google.com/maps/search/?api=1&query=12.9352%2C77.6245',
+      'https://www.google.com/maps/search/?api=1&query=CA-17%2C%20Koramangala%2C%20Bengaluru%2C%20Karnataka%20560034%2C%20India&query_place_id=ChIJ-koramangala',
     );
   });
 
@@ -280,5 +284,34 @@ describe('<PickupInventory />', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search pickup inventory' }), { target: { value: 'North' } });
     expect(screen.queryByText('Closed Gate')).not.toBeInTheDocument();
     expect(screen.getByText('No pickup locations found.')).toBeInTheDocument();
+  });
+
+  it('imports pickup locations from the CSV/Excel dialog and reloads the inventory', async () => {
+    fetchApi.mockResolvedValueOnce(payload)
+      .mockResolvedValueOnce({ total: 1, created: 1, updated: 0 })
+      .mockResolvedValueOnce(payload);
+    render(<PickupInventory />);
+    await screen.findByText('North Gate');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
+    expect(screen.getByRole('dialog', { name: 'Import pickup locations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CSV template' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Excel template' })).toBeInTheDocument();
+    const csv = 'Location name,Address,Google Maps link,Maximum assignments,Notes,Active\nSouth Gate,"18 Residency Road, Bengaluru",,12,Evening pickup,TRUE\n';
+    fireEvent.change(screen.getByLabelText('CSV or Excel file'), {
+      target: { files: [new File([csv], 'pickup-locations.csv', { type: 'text/csv' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Import data' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/locations/import',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const importCall = fetchApi.mock.calls.find(([url]) => url.endsWith('/locations/import'));
+    expect(JSON.parse(importCall[1].body).rows[0]).toMatchObject({
+      name: 'South Gate', address: '18 Residency Road, Bengaluru', maxAssignments: '12', isActive: 'TRUE',
+    });
+    await waitFor(() => expect(notify.success).toHaveBeenCalledWith('Import complete: 1 created, 0 updated.'));
+    expect(screen.queryByRole('dialog', { name: 'Import pickup locations' })).not.toBeInTheDocument();
   });
 });

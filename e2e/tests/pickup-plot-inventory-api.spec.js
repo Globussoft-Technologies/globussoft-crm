@@ -223,11 +223,19 @@ test('generic lead users can read only the scoped pickup workflow projection', a
 });
 
 test('a user without transport workspace permission is denied before profile lookup', async ({ request }) => {
-  const response = await request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons/me`, {
-    headers: headers(userToken),
-  });
-  expect(response.status()).toBe(403);
-  expect((await response.json()).code).toBe('RBAC_DENIED');
+  const [workspaceResponse, scheduleResponse] = await Promise.all([
+    request.get(`${BASE_URL}/api/pickup-plot-inventory/transport-persons/me`, {
+      headers: headers(userToken),
+    }),
+    request.patch(`${BASE_URL}/api/pickup-plot-inventory/transport-persons/me/assignments/customer-1-plot-1/schedule`, {
+      headers: headers(userToken),
+      data: { scheduledDropOffAt: new Date(Date.now() + 86_400_000).toISOString() },
+    }),
+  ]);
+  expect(workspaceResponse.status()).toBe(403);
+  expect((await workspaceResponse.json()).code).toBe('RBAC_DENIED');
+  expect(scheduleResponse.status()).toBe(403);
+  expect((await scheduleResponse.json()).code).toBe('RBAC_DENIED');
 });
 
 test('a user without site visit workspace permission is denied before profile lookup', async ({ request }) => {

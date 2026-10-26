@@ -66,4 +66,14 @@ describe('Pickup & Plot table scroll cards', () => {
     expect(activeTabRule[1]).toMatch(/background:\s*var\(--popover-bg,\s*var\(--modal-bg,\s*var\(--surface-color\)\)\)/);
     expect(activeTabRule[1]).not.toMatch(/background:\s*(?:#fff|rgba?\()/);
   });
+
+  it('keeps the transport schedule calendar and save controls easy to target', () => {
+    const workspaceCss = readFileSync(resolve(process.cwd(), 'src/components/TransportDriverWorkspace.css'), 'utf8');
+    expect(workspaceCss).toMatch(
+      /\.transport-trip-times input\[type="datetime-local"\]::-webkit-calendar-picker-indicator\s*\{[^}]*width:\s*20px[^}]*height:\s*20px/s,
+    );
+    expect(workspaceCss).toMatch(
+      /\.transport-save-time-check\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*border:\s*1px solid var\(--border-color\)/s,
+    );
+  });
 });

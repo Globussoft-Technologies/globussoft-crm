@@ -12,3 +12,24 @@ test('shows workflow progress without history pagination controls', () => {
   expect(screen.queryByRole('button', { name: 'Newer history' })).not.toBeInTheDocument();
   expect(screen.queryByText(/History page/)).not.toBeInTheDocument();
 });
+
+test('shows the transport pickup and drop-off times from the customer workflow', () => {
+  const customer = {
+    contactId: 61,
+    contact: { name: 'Converted Customer' },
+    workflow: {
+      transport: {
+        status: 'COMPLETED',
+        pickupAt: '2026-10-06T09:15:00.000Z',
+        dropOffAt: '2026-10-06T10:00:00.000Z',
+      },
+    },
+    workflowHistory: [],
+  };
+  render(<PickupCustomerStatusDialog customer={customer} onClose={() => {}} />);
+
+  const details = screen.getByTestId('customer-status-details');
+  expect(details).toHaveTextContent('Pickup time');
+  expect(details).toHaveTextContent('Site visit / drop-off time');
+  expect(details).toHaveTextContent('2026');
+});

@@ -54,7 +54,11 @@ const payload = {
         { id: 4, stage: 'BILLING', toStatus: 'INVOICE_SENT', label: 'Invoice sent', occurredAt: '2026-10-06T13:00:00.000Z' },
       ],
       workflow: {
-        transport: { status: 'PICKED_UP', updatedAt: '2026-10-06T11:00:00.000Z', assignee: { id: 41, name: 'Sant' } },
+        transport: {
+          status: 'PICKED_UP', updatedAt: '2026-10-06T11:00:00.000Z',
+          pickupAt: '2026-10-06T11:00:00.000Z', dropOffAt: '2026-10-06T11:45:00.000Z',
+          assignee: { id: 41, name: 'Sant' },
+        },
         broker: { status: 'PLOT_SELECTED', updatedAt: '2026-10-06T12:00:00.000Z', assignee: { id: 51, name: 'Sanjeev' } },
         billing: { status: 'INVOICE_SENT', updatedAt: '2026-10-06T13:00:00.000Z' },
       },
@@ -125,8 +129,12 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByRole('table', { name: 'Customer list' })).toBeInTheDocument();
     expect(screen.getByTestId('selected-customer-details')).toBeInTheDocument();
     expect(screen.getByText('42 Lake View Road, Bengaluru')).toBeInTheDocument();
-    expect(screen.getByRole('table', { name: 'Selected customer details' })).toHaveTextContent('Sant');
-    expect(screen.getByRole('table', { name: 'Selected customer details' })).toHaveTextContent('Billing: Invoice sent');
+    const customerDetails = screen.getByRole('table', { name: 'Selected customer details' });
+    expect(customerDetails).toHaveTextContent('Sant');
+    expect(customerDetails).toHaveTextContent('Pickup time');
+    expect(customerDetails).toHaveTextContent('Site visit / drop-off time');
+    expect(customerDetails).toHaveTextContent('2026');
+    expect(customerDetails).toHaveTextContent('Billing: Invoice sent');
     expect(screen.getByRole('link', { name: 'Open pickup location for Priya Shah in Google Maps' })).toHaveAttribute(
       'href',
       'https://www.google.com/maps/search/?api=1&query=42%20Lake%20View%20Road%2C%20Bengaluru',

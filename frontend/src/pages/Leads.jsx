@@ -10189,7 +10189,7 @@ const Leads = () => {
           )}
         </div>
         <div
-          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
           onWheel={isGeneric ? (event) => {
             const grid = event.currentTarget;
             const scrollbar = grid.querySelector(".top-scroll-sync__sticky-bottom");
@@ -10235,10 +10235,8 @@ const Leads = () => {
                   borderRadius: "16px",
                   background: "var(--surface-color)",
                   flex: "0 0 auto",
-                  // Let the complete generic table establish its natural
-                  // height so the horizontal scrollbar sits at the table's
-                  // actual bottom, not at the bottom of a nested viewport.
-                  // The inner TopScrollSync wrapper owns horizontal overflow.
+                  // CSS bounds this Generic CRM table viewport so only the
+                  // records move beneath the sticky column headers.
                   // Generic order: toolbar (1) → table (2) → pagination (3).
                   order: 2,
                 }

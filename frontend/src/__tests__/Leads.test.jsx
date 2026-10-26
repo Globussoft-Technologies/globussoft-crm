@@ -851,14 +851,57 @@ describe('Leads Freshsales-style list UI affordances', () => {
     );
   });
 
-  it('lets a short Generic table use its natural content height', async () => {
+  it('uses a natural compact height when Generic CRM has fewer than 10 leads', async () => {
     const { container } = renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     const tableShell = container.querySelector('.leads-split-table');
+    expect(container.querySelector('.leads-page-root')).toHaveClass('leads-page-root--generic');
+    expect(tableShell).toHaveClass('leads-split-table--no-topbar');
+    expect(tableShell).toHaveClass('leads-split-table--compact-count');
     expect(tableShell).not.toHaveClass('leads-split-table--sparse');
     expect(tableShell).not.toHaveClass('leads-split-table--empty');
     expect(tableShell).toHaveStyle({ flex: '0 0 auto' });
+  });
+
+  it('collapses 10 displayed Generic CRM leads only in Compact density', async () => {
+    const tenLeads = Array.from({ length: 10 }, (_, index) => ({
+      ...leadRows[index % leadRows.length],
+      id: 200 + index,
+      name: `Lead ${index + 1}`,
+      email: `lead${index + 1}@example.com`,
+    }));
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve({
+          data: tenLeads,
+          total: 30,
+          page: 1,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return originalFetch(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Lead 10');
+
+    const tableShell = container.querySelector('.leads-split-table');
+    expect(tableShell).not.toHaveClass(
+      'leads-split-table--compact-count',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Table density: comfortable/i }));
+    fireEvent.click(
+      within(screen.getByRole('menu', { name: 'Table density' })).getByRole(
+        'menuitemradio',
+        { name: 'Compact' },
+      ),
+    );
+
+    expect(tableShell).toHaveClass('leads-split-table--compact-count');
   });
 
   it('keeps secondary lead actions available in the mobile disclosure', async () => {

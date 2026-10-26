@@ -234,6 +234,8 @@ function CustomerDetails({ customer, isAdmin, commissionUpdatingId, onUpdateComm
     ["CRM status", customer.contact?.status], ["Interested plot area", customer.contact?.interestedPlotArea],
     ["Pickup location", <PickupLocationLink key="pickup" address={customer.pickupAddress} customerName={customer.contact?.name} />],
     ["Transport person", customer.workflow?.transport?.assignee?.name || customer.transportPerson?.name],
+    ["Pickup time", formatPickupStatusDate(customer.workflow?.transport?.pickupAt || customer.workflow?.transport?.scheduledPickupAt || customer.pickupAt || customer.scheduledPickupAt)],
+    ["Site visit / drop-off time", formatPickupStatusDate(customer.workflow?.transport?.dropOffAt || customer.workflow?.transport?.scheduledDropOffAt || customer.dropOffAt || customer.scheduledDropOffAt)],
     ["Sales Executive", customer.workflow?.broker?.assignee?.name],
     ["Current status", `${PICKUP_STAGE_LABELS[customer.currentStage] || "Transport"}: ${formatPickupStatus(customer.currentStatus || customer.status)}`],
   ];

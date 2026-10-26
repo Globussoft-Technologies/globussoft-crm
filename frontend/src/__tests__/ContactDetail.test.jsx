@@ -318,7 +318,8 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('Hello from SMS')).toBeInTheDocument();
     expect(profile.getByText('Sent renewal quote')).toBeInTheDocument();
     expect(profile.getAllByText('Priya Sharma', { exact: true }).length).toBeGreaterThan(0);
-    expect(profile.queryByRole('button', { name: /WhatsApp/i })).toBeNull();
+    expect(profile.getAllByRole('button', { name: 'WhatsApp' })).toHaveLength(2);
+    expect(profile.getByRole('button', { name: 'New WhatsApp' })).toBeInTheDocument();
   });
 
   it('shows the Generic CRM SMS delivery status and provider error', async () => {

@@ -2,13 +2,13 @@
 //
 // Resolves a destination → the Wikipedia article's lead image (keyless action
 // API, follows redirects like Banaras → Varanasi), downloads the bytes, and
-// banner-crops them with jimp to a wide 1200×360 strip so the PDF can place a
+// banner-crops them with sharp to a wide 1200×360 strip so the PDF can place a
 // clean full-width banner. Everything is best-effort: ANY failure (offline /
 // outbound-restricted server, no image, bad bytes) returns null and the PDF
 // simply renders without the banner.
 //
 // Mirror of the frontend's keyless Wikipedia approach (utils/destinationPhotos)
-// but standalone for the backend (axios + jimp, with an in-memory cache).
+// but standalone for the backend (axios + sharp, with an in-memory cache).
 
 const axios = require("axios");
 
@@ -72,21 +72,14 @@ async function resolveThumbUrl(title, ax) {
 }
 
 // Cover-crop to a wide banner so the PDF gets a clean full-width strip. Falls
-// back to the raw buffer if jimp isn't usable on these bytes.
+// back to the raw buffer if sharp isn't usable on these bytes.
 async function bannerCrop(buf) {
   try {
-    const { Jimp } = await import("jimp");
-    const img = await Jimp.read(buf);
-    const target = 1200 / 360;
-    const w = img.bitmap.width;
-    const h = img.bitmap.height;
-    const ratio = w / h;
-    let cw; let ch; let cx; let cy;
-    if (ratio > target) { ch = h; cw = Math.round(h * target); cx = Math.round((w - cw) / 2); cy = 0; }
-    else { cw = w; ch = Math.round(w / target); cx = 0; cy = Math.round((h - ch) / 2); }
-    img.crop({ x: cx, y: cy, w: cw, h: ch });
-    img.resize({ w: 1200, h: 360 });
-    return await img.getBuffer("image/jpeg");
+    const sharp = require("sharp");
+    return await sharp(buf)
+      .resize(1200, 360, { fit: "cover", position: "centre" })
+      .jpeg()
+      .toBuffer();
   } catch (_e) {
     return buf; // raw bytes still render (just not banner-cropped)
   }

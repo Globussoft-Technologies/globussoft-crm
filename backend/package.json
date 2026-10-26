@@ -46,7 +46,6 @@
     "googleapis": "^171.4.0",
     "helmet": "^8.1.0",
     "imap": "^0.8.19",
-    "jimp": "^1.6.1",
     "jsonwebtoken": "^9.0.3",
     "mailgun.js": "^13.0.0",
     "marked": "^18.0.5",

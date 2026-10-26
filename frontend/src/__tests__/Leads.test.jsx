@@ -611,6 +611,34 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
+  it('replaces a persisted web-form filter when opened from View in Leads', async () => {
+    window.sessionStorage.setItem(
+      'globuscrm.leads.filters.v1.1.1',
+      JSON.stringify([
+        { field: 'webForm', operator: 'contains', values: ['Previous Form'] },
+        { field: 'source', operator: 'contains', values: ['Website'] },
+      ]),
+    );
+
+    renderLeads(authValue, ['/leads?webForm=EmpMonitor%20Demo']);
+    await screen.findByText('Alice Lead');
+
+    await waitFor(() => {
+      const matchingRequest = fetchApiMock.mock.calls
+        .map(([url]) => url)
+        .filter((url) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead'))
+        .map((url) => new URL(url, 'http://localhost'))
+        .map((url) => JSON.parse(url.searchParams.get('filters') || '[]'))
+        .find((filters) => filters.some((filter) =>
+          filter.field === 'webForm' && filter.values.includes('EmpMonitor Demo')));
+
+      expect(matchingRequest).toEqual([
+        { field: 'source', operator: 'contains', values: ['Website'] },
+        { field: 'webForm', operator: 'contains', values: ['EmpMonitor Demo'] },
+      ]);
+    });
+  });
+
   it('shows Plot Assign as a default generic column and reuses the customer assignment workflow', async () => {
     const originalFetch = fetchApiMock.getMockImplementation();
     fetchApiMock.mockImplementation((url, options) => {

@@ -2037,11 +2037,13 @@ router.get("/filter-values/:field", async (req, res) => {
         .map((v) => ({ value: v, label: v }));
       return res.json({ values });
     }
-    // Web-Form values (generic vertical only): distinct form names actually
-    // used by in-scope contacts. Resolved through the submissions join (the
-    // name lives on WebForm, not Contact) and deduped in JS like the tags
-    // branch below. Rejected for non-generic tenants, mirroring the
-    // `verticals` gate on column-backed fields.
+    // Web-Form values (generic vertical only): start from every form in the
+    // account, then attach the number of visible contacts for that form. The
+    // old submission-only scan omitted forms with zero submissions and was
+    // capped at 1,000 rows, so the filter could not represent the account's
+    // complete form library. Counts are deduped by contact because a contact
+    // can submit the same form more than once; this keeps them aligned with
+    // the Leads table's row count.
     if (req.params.field === "webForm") {
       const tenant = await prisma.tenant.findUnique({
         where: { id: tenantId },
@@ -2052,26 +2054,57 @@ router.get("/filter-values/:field", async (req, res) => {
           .status(404)
           .json({ error: "Unknown filter field", code: "UNKNOWN_FIELD" });
       }
-      const rows = await prisma.webFormSubmission.findMany({
+      const forms = await prisma.webForm.findMany({
+        where: { tenantId, scope: "generic" },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      });
+
+      if (forms.length === 0) return res.json({ values: [] });
+
+      const formIds = forms.map((form) => form.id);
+      const rows = await prisma.webFormSubmission.groupBy({
+        by: ["webFormId", "contactId"],
         where: {
           tenantId,
-          ...(statusScope
-            ? { contact: { status: statusScope, deletedAt: null } }
-            : {}),
+          scope: "generic",
+          webFormId: { in: formIds },
+          contact: {
+            is: {
+              tenantId,
+              deletedAt: null,
+              ...(statusScope ? { status: statusScope } : {}),
+              ...(!canViewAllLeads(req)
+                ? { assignedToId: req.user.userId }
+                : {}),
+            },
+          },
         },
-        select: { webForm: { select: { name: true } } },
-        orderBy: { submittedAt: "desc" },
-        take: 1000,
       });
-      const seen = new Set();
-      const values = [];
+
+      const formNames = new Map(forms.map((form) => [form.id, form.name]));
+      const seenContactsByName = new Set();
+      const countsByName = new Map();
       for (const row of rows) {
-        const name = row.webForm?.name;
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
-        values.push({ value: name, label: name });
+        const name = formNames.get(row.webFormId);
+        if (!name || row.contactId == null) continue;
+        const key = `${name}\u0000${row.contactId}`;
+        if (seenContactsByName.has(key)) continue;
+        seenContactsByName.add(key);
+        countsByName.set(name, (countsByName.get(name) || 0) + 1);
       }
-      values.sort((a, b) => a.label.localeCompare(b.label));
+
+      const values = [];
+      const seenNames = new Set();
+      for (const form of forms) {
+        if (!form.name || seenNames.has(form.name)) continue;
+        seenNames.add(form.name);
+        values.push({
+          value: form.name,
+          label: form.name,
+          count: countsByName.get(form.name) || 0,
+        });
+      }
       return res.json({ values });
     }
     if (TRACKING_FILTER_FIELDS[req.params.field]) {

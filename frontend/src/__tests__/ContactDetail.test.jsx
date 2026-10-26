@@ -182,6 +182,27 @@ describe('ContactDetail — current profile contract', () => {
     expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
   });
 
+  it('keeps Generic CRM neighbor navigation in Leads and labels it as leads', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?status=Lead&limit=200') {
+        return Promise.resolve([{ id: 42 }, { id: 43 }]);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic' });
+
+    const profile = await getProfile();
+    expect(profile.getByRole('button', { name: 'Previous lead' })).toBeInTheDocument();
+    fireEvent.click(profile.getByRole('button', { name: 'Next lead' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Lead&limit=200', { silent: true });
+    });
+    expect(await screen.findByRole('heading', { name: 'Leads' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
+  });
+
   it('sends the lead sequence action to Marketing Campaign sequences', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ listType: 'leads', vertical: 'generic' });
@@ -226,6 +247,26 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('Q3 Renewal')).toBeInTheDocument();
     expect(profile.getByText('Add-on package')).toBeInTheDocument();
     expect(profile.getAllByRole('button', { name: 'Add deal' }).length).toBeGreaterThan(0);
+  });
+
+  it('uses the normal action-button colour for Add deal in Generic CRM only', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    const genericPage = renderPage({ vertical: 'generic' });
+    await getProfile();
+
+    const genericActionBar = genericPage.container.querySelector('.cp-actions-bar');
+    const genericAddDeal = within(genericActionBar).getByRole('button', { name: 'Add deal' });
+    expect(genericAddDeal).toHaveClass('cp-action-btn');
+    expect(genericAddDeal).not.toHaveClass('cp-action-primary');
+
+    genericPage.unmount();
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    const wellnessPage = renderPage({ vertical: 'wellness' });
+    await getProfile();
+
+    const wellnessActionBar = wellnessPage.container.querySelector('.cp-actions-bar');
+    expect(within(wellnessActionBar).getByRole('button', { name: 'Add appointment' }))
+      .toHaveClass('cp-action-primary');
   });
 
   it('shows Generic Customize-table fields and web-form tracking in Contact details', async () => {

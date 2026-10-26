@@ -181,14 +181,13 @@ function getBuiltinColumns(tableKey, vertical) {
 }
 
 function getDefaultVisibleColumns(tableKey, vertical) {
-  // Preserve the established Generic Leads first-load layout. The broader
-  // catalog remains available through the picker, but existing Generic users
-  // should not suddenly receive every optional column after this change.
+  // Generic Leads starts with the compact calling-focused layout requested by
+  // the CRM team. The broader catalog remains available through the picker.
   if (vertical === "generic" && tableKey === "leads") {
     return [
-      "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm", "lifecycleStage",
-      "medium", "location", "pickupLocation", "plotAssign", "overallPickupStatus", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
-      "callStatus", "callifiedAi", "callifiedScore",
+      "name", "phone", "email", "campaign", "callStatus", "callifiedAi",
+      "callifiedScore", "source", "webForm", "createdAt", "lastUpdated",
+      "actions",
     ];
   }
   return getBuiltinColumns(tableKey, vertical).map((c) => c.key);

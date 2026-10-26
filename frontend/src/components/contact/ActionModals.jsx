@@ -389,7 +389,7 @@ export function WhatsappModal({ contact, onClose, onDone }) {
     e.preventDefault();
     setSending(true);
     try {
-      await sendWhatsapp({ to: contact.phone, body, contactId: contact.id });
+      await sendWhatsapp({ to: contact.whatsappPhone || contact.phone, body, contactId: contact.id });
       notify.success('WhatsApp message sent.');
       onDone();
       onClose();
@@ -402,7 +402,7 @@ export function WhatsappModal({ contact, onClose, onDone }) {
   return (
     <Modal title={`WhatsApp ${contact.name || ''}`} onClose={onClose}>
       <form onSubmit={submit} className="cp-form">
-        <FormRow label="To"><input className="cp-input" value={contact.phone || ''} disabled /></FormRow>
+        <FormRow label="To"><input className="cp-input" value={contact.whatsappPhone || contact.phone || ''} disabled /></FormRow>
         <FormRow label="Message"><textarea className="cp-textarea" required rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your message…" /></FormRow>
         <div className="cp-btn-row">
           <button type="button" className="cp-action-btn" onClick={onClose}>Cancel</button>

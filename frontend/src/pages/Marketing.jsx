@@ -46,7 +46,7 @@
  * the existing sanitize-helper coverage, with no new model required.
  */
 import React, { useState, useEffect, useMemo, useContext, useRef } from 'react';
-import { ArrowLeft, ArrowRight, Copy, Code, Layout, Blocks, CheckCircle2, GripVertical, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText, Pause, Play } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Copy, Code, Layout, Blocks, CheckCircle2, GripVertical, Megaphone, Plus, BarChart, Send, MousePointerClick, MessageSquare, X, Save, Trash2, Edit3, Calendar, FileText, Pause, Play, Settings2 } from 'lucide-react';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -59,8 +59,11 @@ import GenericCampaignWizard from '../components/GenericCampaignWizard';
 import GenericCampaignTemplates from '../components/GenericCampaignTemplates';
 import GenericWhatsAppTriggerMappings from '../components/GenericWhatsAppTriggerMappings';
 import GenericChannelTriggerMappings from '../components/GenericChannelTriggerMappings';
+import TwilioSettingsCard from '../components/TwilioSettingsCard';
+import WhatsAppMetaConfigCard from '../components/WhatsAppMetaConfigCard';
 import { GENERIC_SEQUENCE_TRIGGERS, GENERIC_WHATSAPP_SEQUENCE_TRIGGERS } from '../utils/genericSequenceTriggers';
 import { installFormNavigationGuard } from '../utils/formNavigationGuard';
+import { usePermissions } from '../hooks/usePermissions';
 
 const NAME_MAX = 100;
 const SMS_BODY_MAX = 480; // 3 segments worth — provider chunks into 160-char SMSes
@@ -283,6 +286,7 @@ export default function Marketing() {
   const notify = useNotify();
   const { tenant } = useContext(AuthContext);
   const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
+  const { hasPermission } = usePermissions();
   const pageTitle = isGeneric ? 'Marketing Sequences' : 'Marketing';
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = new URLSearchParams(window.location.search).get('tab');
@@ -320,6 +324,7 @@ export default function Marketing() {
   const [editingSequenceId, setEditingSequenceId] = useState(null);
   const [sequenceBuilderOpen, setSequenceBuilderOpen] = useState(false);
   const [sequenceBuilderDirty, setSequenceBuilderDirty] = useState(false);
+  const [channelConfigOpen, setChannelConfigOpen] = useState(null);
   const [campaignDateFilter, setCampaignDateFilter] = useState(EMPTY_DATE_FILTER);
   const [campaignRangeStart, campaignRangeEnd] = resolveDateRange(campaignDateFilter);
   const sequenceSensors = useSensors(
@@ -1059,9 +1064,14 @@ ${fields.map(f => {
           {isGeneric && sequenceBuilderOpen && activeTab === 'campaigns' && <GenericChannelTriggerMappings channel="EMAIL" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
           {isGeneric && sequenceBuilderOpen && activeTab === 'sms' && <GenericChannelTriggerMappings channel="SMS" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
           {isGeneric && !sequenceBuilderOpen && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '1.25rem' }}>
-            {activeTab === 'campaigns' && !selectingDrafts && (
-              <button type="button" className="btn-secondary" onClick={() => setSelectingDrafts(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
-                <CheckCircle2 size={15} /> Select drafts
+            {['sms', 'whatsapp'].includes(activeTab) && hasPermission('settings', 'manage') && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setChannelConfigOpen(activeTab)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <Settings2 size={15} /> Configure {activeTab === 'sms' ? 'SMS' : 'WhatsApp'}
               </button>
             )}
             <button type="button" className="btn-primary" onClick={() => { setSequenceBuilderDirty(false); setEditingSequenceId(null); setSequenceBuilderOpen(true); }} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -1231,6 +1241,31 @@ ${fields.map(f => {
 
       {/* ─── Campaign Editor Modal (#495) ─── */}
       {activeTab === 'templates' && isGeneric && <GenericCampaignTemplates />}
+      {isGeneric && channelConfigOpen && (
+        <div style={channelConfigBackdropStyle} onClick={() => setChannelConfigOpen(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="messaging-config-title"
+            className="modal"
+            onClick={(event) => event.stopPropagation()}
+            style={{ width: 'min(900px, 96vw)', maxHeight: channelConfigOpen === 'sms' ? 'none' : '92vh', overflowY: channelConfigOpen === 'sms' ? 'visible' : 'auto', padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: 16, background: 'var(--modal-bg)', color: 'var(--text-primary)', opacity: 1, backdropFilter: 'none', WebkitBackdropFilter: 'none', boxShadow: '0 25px 50px rgba(0,0,0,0.35)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <h2 id="messaging-config-title" style={{ margin: 0, fontSize: '1.3rem' }}>Configure {channelConfigOpen === 'sms' ? 'SMS' : 'WhatsApp'}</h2>
+                <p style={{ margin: '0.35rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                  Connect the {channelConfigOpen === 'sms' ? 'SMS channel' : 'WhatsApp Business account'} used by your Generic CRM sequences.
+                </p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={() => setChannelConfigOpen(null)} aria-label={`Close ${channelConfigOpen === 'sms' ? 'SMS' : 'WhatsApp'} configuration`} style={{ padding: '0.45rem' }}>
+                <X size={18} />
+              </button>
+            </div>
+            {channelConfigOpen === 'sms' ? <TwilioSettingsCard embedded /> : <WhatsAppMetaConfigCard embedded />}
+          </div>
+        </div>
+      )}
       {editingCampaign && !isGeneric && (
         <div style={modalBackdropStyle} onClick={() => setEditingCampaign(null)}>
           <div role="dialog" aria-label={editingCampaign.id ? 'Edit campaign' : 'Create campaign'} className="card modal" onClick={(e) => e.stopPropagation()} style={{ padding: '2rem', width: '720px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8)' }}>
@@ -1673,6 +1708,12 @@ const modalBackdropStyle = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   zIndex: 1000,
   padding: '1rem',
+};
+
+const channelConfigBackdropStyle = {
+  ...modalBackdropStyle,
+  background: 'transparent',
+  backdropFilter: 'none',
 };
 
 const fieldLabelStyle = {

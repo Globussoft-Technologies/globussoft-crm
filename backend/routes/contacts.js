@@ -3466,11 +3466,15 @@ const updateContactById = async (req, res) => {
           return res.status(400).json({ error: "Lifecycle stage configuration is invalid", code: "INVALID_LIFECYCLE_STAGE_CONFIG" });
         }
         const option = (Array.isArray(stages) ? stages : [])
-          .flatMap((stage) => Array.isArray(stage?.options) ? stage.options : [])
+          .flatMap((stage) => Array.isArray(stage?.options)
+            ? stage.options.map((item, optionIndex) => ({
+                ...item,
+                negative: optionIndex > 0 || item?.negative === true,
+              }))
+            : [])
           .find((item) => item?.id === lifecycleStageKey);
-        const effectiveStatus = updateData.status === undefined ? existing.status : updateData.status;
-        if (!option || option.status !== effectiveStatus) {
-          return res.status(400).json({ error: "Lifecycle stage does not match the contact status", code: "INVALID_LIFECYCLE_STAGE" });
+        if (!option) {
+          return res.status(400).json({ error: "Invalid lifecycle stage", code: "INVALID_LIFECYCLE_STAGE" });
         }
         if (option.negative === true && !lifecycleTransitionReason) {
           return res.status(400).json({ error: "A reason is required for a negative lifecycle stage", code: "NEGATIVE_STAGE_REASON_REQUIRED" });

@@ -16,7 +16,7 @@ const cellStyle = {
   verticalAlign: 'top',
 };
 
-export default function WebFormLeadsModal({ form, onClose }) {
+export default function WebFormLeadsModal({ form, onClose, onOpenLead }) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
@@ -41,6 +41,10 @@ export default function WebFormLeadsModal({ form, onClose }) {
   }, [form.id, page, search]);
 
   const fields = data?.fields || form.fields || [];
+  const openLead = (lead) => {
+    if (!lead.contactId || !onOpenLead) return;
+    onOpenLead(lead.contactId);
+  };
   return (
     <Modal open title={`Leads — ${form.name}`} onClose={onClose} size="large" style={{ minWidth: 0, height: '80vh', maxHeight: '80vh', boxSizing: 'border-box', background: 'var(--modal-bg)' }} contentStyle={{ overflow: 'hidden', padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
@@ -69,9 +73,26 @@ export default function WebFormLeadsModal({ form, onClose }) {
                   : lead.contactId
                     ? 'This submission is no longer a Lead and is not present in Leads'
                     : 'This submission no longer has a lead record in Leads';
+                const canOpenLead = Boolean(onOpenLead && lead.contactId && !isMissingFromLeads);
                 const rowCellStyle = isMissingFromLeads ? { ...cellStyle, color: '#b91c1c', backgroundColor: 'rgba(239, 68, 68, 0.1)' } : cellStyle;
                 return (
-                <tr key={lead.id} title={isMissingFromLeads ? `Marked red: not an active Lead. ${missingMessage}` : undefined} aria-label={isMissingFromLeads ? 'Submission not present in Leads' : undefined} style={isMissingFromLeads ? { display: 'table-row', color: '#b91c1c', backgroundColor: 'rgba(239, 68, 68, 0.1)' } : { display: 'table-row' }}>
+                <tr
+                  key={lead.id}
+                  className={canOpenLead ? 'table-row-hover' : undefined}
+                  role={canOpenLead ? 'link' : undefined}
+                  tabIndex={canOpenLead ? 0 : undefined}
+                  title={isMissingFromLeads ? `Marked red: not an active Lead. ${missingMessage}` : canOpenLead ? 'Open lead detail' : undefined}
+                  aria-label={isMissingFromLeads ? 'Submission not present in Leads' : canOpenLead ? `Open submitted lead ${displayValue(lead.values.find((value) => value != null && value !== ''))}` : undefined}
+                  onClick={() => { if (canOpenLead) openLead(lead); }}
+                  onKeyDown={(event) => {
+                    if (!canOpenLead || (event.key !== 'Enter' && event.key !== ' ')) return;
+                    event.preventDefault();
+                    openLead(lead);
+                  }}
+                  style={isMissingFromLeads
+                    ? { display: 'table-row', color: '#b91c1c', backgroundColor: 'rgba(239, 68, 68, 0.1)' }
+                    : { display: 'table-row', cursor: canOpenLead ? 'pointer' : undefined }}
+                >
                   {fields.map((field, index) => <td key={`${field.id}-${index}`} style={rowCellStyle}>{displayValue(lead.values[index])}</td>)}
                   <td style={rowCellStyle}>{formatDateTime(lead.createdAt)}</td><td style={rowCellStyle}>{formatDateTime(lead.updatedAt)}</td>
                 </tr>

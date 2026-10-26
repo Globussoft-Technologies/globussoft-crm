@@ -1168,6 +1168,44 @@ test.each(['generic', 'wellness', 'travel'])('View All Leads is available only f
   }
 });
 
+test('clicking a Generic web-form submission opens its lead profile', async () => {
+  installFetchMock();
+  const baseFetch = fetchApiMock.getMockImplementation();
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (url.startsWith('/api/forms/101/leads?')) {
+      return Promise.resolve({
+        fields: FORM_FIXTURE.fields,
+        total: 1,
+        page: 1,
+        limit: 10,
+        leads: [{
+          id: 501,
+          contactId: 77,
+          values: ['Submitted customer'],
+          createdAt: '2026-10-26T10:00:00.000Z',
+          updatedAt: '2026-10-26T10:00:00.000Z',
+        }],
+      });
+    }
+    return baseFetch(url, opts);
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/forms']}>
+      <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}>
+        <WebForms />
+        <NavigationProbe />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+
+  await screen.findByText('Brand intake');
+  fireEvent.click(screen.getByRole('button', { name: 'View All Leads' }));
+  fireEvent.click(await screen.findByRole('link', { name: 'Open submitted lead Submitted customer' }));
+
+  expect(screen.getByTestId('navigation-probe-path')).toHaveTextContent('/leads/77');
+});
+
 test('Changing folder views closes and resets the new folder editor', async () => {
   installFetchMock();
   const baseFetch = fetchApiMock.getMockImplementation();

@@ -381,6 +381,26 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/forms');
     });
 
+    it('hides the missing pages and external launchers when disabled for a Generic tenant', async () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', hiddenPagePaths: [
+        '/reports', '/pickup-work-assignments', '/integrations/adsgpt', '/integrations/callified',
+      ] });
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Open AdsGPT' })).toBeNull());
+      expect(screen.queryByRole('button', { name: 'Open Callified dashboard' })).toBeNull();
+      expect(screen.queryByText('Reports')).toBeNull();
+      expect(screen.queryByText('Assign Staff Work')).toBeNull();
+      expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['/integrations/adsgpt', 'Open AdsGPT', 'Open Callified dashboard'],
+      ['/integrations/callified', 'Open Callified dashboard', 'Open AdsGPT'],
+    ])('hides %s without hiding the other integration', async (path, hidden, visible) => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', hiddenPagePaths: [path] });
+      await waitFor(() => expect(screen.queryByRole('button', { name: hidden })).toBeNull());
+      expect(screen.getByRole('button', { name: visible })).toBeInTheDocument();
+    });
+
     it('hides legacy generic links when the tenant disables their page path', async () => {
       renderSidebar({
         vertical: 'generic',

@@ -34,6 +34,17 @@ describe('tenant page visibility normalization', () => {
     expect(visibility.isPathHidden('/travel/tallying', ['/travel/tally'])).toBe(false);
   });
 
+  it('exposes missing Generic pages and integration shortcuts only for Generic tenants', () => {
+    const paths = ['/reports', '/pickup-work-assignments', '/integrations/adsgpt', '/integrations/callified'];
+    expect(visibility.normalizeHiddenPaths(paths, 'generic')).toEqual([...paths].sort());
+    for (const vertical of ['wellness', 'travel']) {
+      const catalog = visibility.getTenantPageVisibilityCatalog(vertical);
+      for (const path of paths) expect(catalog.some(page => page.path === path)).toBe(false);
+    }
+    const catalog = visibility.getTenantPageVisibilityCatalog('generic');
+    for (const path of paths) expect(catalog.filter(page => page.path === path)).toHaveLength(1);
+  });
+
   it('includes legacy generic sidebar routes in the visibility catalog', () => {
     expect(visibility.normalizeHiddenPaths([
       '/invoices',

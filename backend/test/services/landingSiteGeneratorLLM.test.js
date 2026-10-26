@@ -104,6 +104,10 @@ describe("generateLandingSiteContent", () => {
     // resolves in exactly one call, not a Gemini-then-OpenAI fallback.
     seedByok({ providerId: "openai", apiKey: "openai-key", model: "gpt-4o-mini" });
 
+    const eventDate = "15 August 2026";
+    const eventYear = eventDate.match(/\b(?:19|20)\d{2}\b/)[0];
+    const staleYear = String(Number(eventYear) - 1);
+
     const modelPayload = {
       suggestedTitle: "Hair Treatment Consultation",
       suggestedSlug: "hair-treatment-consultation",
@@ -116,7 +120,7 @@ describe("generateLandingSiteContent", () => {
       },
       content: {
         heroKicker: "VISIT - CALL - WRITE",
-        heroTitleLine1: "Hair Treatment",
+        heroTitleLine1: `Hair Treatment ${staleYear}`,
         heroTitleLine2: "Consultation",
         heroCopy:
           "Glow Studio invites people exploring hair treatment options to register for a professional consultation day.",
@@ -153,7 +157,7 @@ describe("generateLandingSiteContent", () => {
       campaignGoal: "book consultations",
       audience: "people exploring hair treatment options",
       location: "Bangalore",
-      eventDate: "15 August 2026",
+      eventDate,
       eventTime: "10:00 AM - 4:00 PM",
       eventLocation: "Harbor Wellness Centre",
       ctaText: "Register Now",
@@ -168,6 +172,8 @@ describe("generateLandingSiteContent", () => {
     expect(result.model).toBe("gpt-4o-mini");
     const body = JSON.stringify(result.blocks);
     expect(body).toContain("Hair Treatment Consultation");
+    expect(body).toContain(`Hair Treatment ${eventYear}`);
+    expect(body).not.toContain(`Hair Treatment ${staleYear}`);
     expect(body).toContain("Glow Studio");
     expect(body).not.toContain("Contact Us");
     expect(body).toContain("people exploring hair treatment options");

@@ -72,6 +72,89 @@ const phoneMatches = (input) => {
 const parseLimit = (v, def = 50, max = 200) => Math.min(parseInt(v) || def, max);
 const parseOffset = (v) => parseInt(v) || 0;
 
+const GENERIC_PLOT_INVENTORY_PURPOSE = "plot-inventory-read";
+const PLOT_INVENTORY_AVAILABILITIES = new Set([
+  "AVAILABLE",
+  "HOLD",
+  "BOOKED",
+  "REGISTERED",
+  "RESERVED",
+  "SOLD",
+]);
+
+function parseStrictInventoryInteger(value, { defaultValue, min = 0, max }) {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  const text = String(value).trim();
+  if (!/^\d+$/.test(text)) return null;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return null;
+  return parsed;
+}
+
+function parseStoredInventoryIds(value) {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return Array.isArray(parsed)
+      ? parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+function requireGenericPlotInventory(req, res, next) {
+  if (req.tenant?.vertical !== "generic") {
+    return res.status(404).json({
+      error: "Plot inventory is not available for this CRM vertical",
+      code: "PLOT_INVENTORY_NOT_AVAILABLE",
+    });
+  }
+
+  // Legacy tenant-wide keys (purpose=null) remain valid. A purpose-scoped
+  // key must explicitly be minted for this read-only catalog. This check is
+  // deliberately local to this endpoint; external leads and every existing
+  // partner route retain their current authentication behavior.
+  const purpose = req.apiKey?.purpose || null;
+  if (purpose !== null && purpose !== GENERIC_PLOT_INVENTORY_PURPOSE) {
+    return res.status(403).json({
+      error: "API key is not scoped for plot inventory",
+      code: "WRONG_KEY_PURPOSE",
+    });
+  }
+
+  next();
+}
+
+function serializeExternalPlot(plot, pickupLocationMap) {
+  const pickupLocationIds = [
+    ...parseStoredInventoryIds(plot.pickupLocationIdsJson),
+    ...(plot.pickupLocationId ? [Number(plot.pickupLocationId)] : []),
+  ].filter((id, index, ids) => Number.isInteger(id) && id > 0 && ids.indexOf(id) === index);
+
+  const price = plot.price === null || plot.price === undefined
+    ? null
+    : Number(plot.price.toString());
+
+  return {
+    id: plot.id,
+    name: plot.name,
+    plotNumber: plot.plotNumber,
+    block: plot.block,
+    address: plot.address,
+    referenceCode: plot.referenceCode,
+    area: plot.area,
+    areaUnit: plot.areaUnit,
+    roadWidth: plot.roadWidth,
+    facing: plot.facing,
+    propertyType: plot.propertyType,
+    price: Number.isFinite(price) ? price : null,
+    availability: plot.availability,
+    updatedAt: plot.updatedAt,
+    pickupLocations: pickupLocationIds.map((id) => pickupLocationMap.get(id)).filter(Boolean),
+  };
+}
+
 const LEAD_BODY_KEYS = new Set([
   "name", "phone", "email", "source", "submitSource", "submittedSource",
   "submit_source", "leadSource", "lead_source", "note", "utm",
@@ -1021,6 +1104,139 @@ router.get("/locations", async (req, res) => {
 });
 
 // ── Appointments: list by date, create new ─────────────────────────
+
+// ── Generic CRM plot/site inventory (read-only partner projection) ────────
+//
+// This is intentionally separate from /api/pickup-plot-inventory. The latter
+// is an internal admin/workspace endpoint and includes operational data that
+// must never be sent to a customer website (customers, assignments, notes,
+// boundaries, and booking details). This route exposes only active inventory,
+// is tenant-scoped by externalAuth, and is unavailable to wellness/travel
+// tenants so vertical data cannot cross the partner boundary.
+router.get("/plot-inventory", requireGenericPlotInventory, async (req, res) => {
+  try {
+    const limit = parseStrictInventoryInteger(req.query.limit, { defaultValue: 50, min: 1, max: 100 });
+    const offset = parseStrictInventoryInteger(req.query.offset, { defaultValue: 0, min: 0, max: 1_000_000 });
+    if (limit === null) {
+      return res.status(400).json({ error: "limit must be an integer from 1 to 100", code: "INVALID_LIMIT" });
+    }
+    if (offset === null) {
+      return res.status(400).json({ error: "offset must be a non-negative integer", code: "INVALID_OFFSET" });
+    }
+
+    const availability = req.query.availability ? String(req.query.availability).trim().toUpperCase() : null;
+    if (availability && !PLOT_INVENTORY_AVAILABILITIES.has(availability)) {
+      return res.status(400).json({
+        error: `availability must be one of: ${[...PLOT_INVENTORY_AVAILABILITIES].join(", ")}`,
+        code: "INVALID_AVAILABILITY",
+      });
+    }
+
+    const search = req.query.q === undefined ? "" : String(req.query.q).trim();
+    if (search.length > 120) {
+      return res.status(400).json({ error: "q must be 120 characters or fewer", code: "INVALID_SEARCH" });
+    }
+
+    const pickupLocationId = parseStrictInventoryInteger(req.query.pickupLocationId, {
+      defaultValue: null,
+      min: 1,
+      max: Number.MAX_SAFE_INTEGER,
+    });
+    if (pickupLocationId === null && req.query.pickupLocationId !== undefined && req.query.pickupLocationId !== "") {
+      return res.status(400).json({ error: "pickupLocationId must be a positive integer", code: "INVALID_PICKUP_LOCATION" });
+    }
+
+    const where = tenantWhere(req, {
+      isActive: true,
+      ...(availability ? { availability } : {}),
+      ...(pickupLocationId
+        ? {
+          OR: [
+            { pickupLocationId },
+            { pickupLocationIdsJson: { contains: `"${pickupLocationId}"` } },
+          ],
+        }
+        : {}),
+      ...(search
+        ? {
+          AND: [{
+            OR: [
+              { name: { contains: search } },
+              { plotNumber: { contains: search } },
+              { block: { contains: search } },
+              { address: { contains: search } },
+              { referenceCode: { contains: search } },
+              { propertyType: { contains: search } },
+            ],
+          }],
+        }
+        : {}),
+    });
+
+    const select = {
+      id: true,
+      name: true,
+      plotNumber: true,
+      block: true,
+      address: true,
+      referenceCode: true,
+      area: true,
+      areaUnit: true,
+      roadWidth: true,
+      facing: true,
+      propertyType: true,
+      price: true,
+      availability: true,
+      pickupLocationId: true,
+      pickupLocationIdsJson: true,
+      updatedAt: true,
+    };
+
+    const [total, plots] = await Promise.all([
+      prisma.plotSite.count({ where }),
+      prisma.plotSite.findMany({
+        where,
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        skip: offset,
+        take: limit,
+        select,
+      }),
+    ]);
+
+    const pickupLocationIds = [...new Set(plots.flatMap((plot) => [
+      ...parseStoredInventoryIds(plot.pickupLocationIdsJson),
+      ...(plot.pickupLocationId ? [Number(plot.pickupLocationId)] : []),
+    ]).filter((id) => Number.isInteger(id) && id > 0))];
+    const pickupLocations = pickupLocationIds.length
+      ? await prisma.pickupLocation.findMany({
+        where: { tenantId: req.tenantId, id: { in: pickupLocationIds }, isActive: true },
+        select: { id: true, name: true, address: true, googleMapsLink: true },
+        orderBy: { name: "asc" },
+      })
+      : [];
+    const pickupLocationMap = new Map(pickupLocations.map((location) => [location.id, {
+      id: location.id,
+      name: location.name,
+      address: location.address,
+      googleMapsLink: location.googleMapsLink,
+    }]));
+
+    return res.json({
+      data: plots.map((plot) => serializeExternalPlot(plot, pickupLocationMap)),
+      total,
+      limit,
+      offset,
+      hasMore: offset + plots.length < total,
+      meta: {
+        vertical: "generic",
+        currency: req.tenant.defaultCurrency || null,
+      },
+    });
+  } catch (e) {
+    console.error("[external] plot inventory:", e.message);
+    return res.status(500).json({ error: "Failed to list plot inventory", code: "PLOT_INVENTORY_LOAD_FAILED" });
+  }
+});
 
 router.get("/appointments", async (req, res) => {
   try {

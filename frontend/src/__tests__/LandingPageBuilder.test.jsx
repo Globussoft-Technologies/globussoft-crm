@@ -1300,16 +1300,16 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
     );
   });
 
-  it('disables publish in the generic landing-site builder when another page is already live', async () => {
+  it('allows multiple generic landing sites to be published independently', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
       if (url === '/api/landing-pages/42' && method === 'GET') {
-        return Promise.resolve({ ...samplePageDraft, templateType: 'generic-site-wellness-v1' });
+        return Promise.resolve({ ...samplePageDraft, templateType: 'generic-site-real_estate-v2' });
       }
       if (url === '/api/landing-pages' && method === 'GET') {
         return Promise.resolve([
-          { id: 43, title: 'Hair Treatment Live', slug: 'hair-treatment-live', status: 'PUBLISHED', templateType: 'generic-site-wellness-v1' },
-          { id: 42, title: 'Spring Launch', slug: 'spring-launch', status: 'DRAFT', templateType: 'generic-site-wellness-v1' },
+          { id: 43, title: 'Homes Live', slug: 'homes-live', status: 'PUBLISHED', templateType: 'generic-site-real_estate-v2' },
+          { id: 42, title: 'Spring Launch', slug: 'spring-launch', status: 'DRAFT', templateType: 'generic-site-real_estate-v2' },
         ]);
       }
       if (url === '/api/landing-pages/42/publish-check' && method === 'GET') return Promise.resolve({ ok: true, issues: [] });
@@ -1318,20 +1318,20 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
     });
 
     const user = userEvent.setup();
-    renderBuilder('/landing-sites/builder/42', 'wellness');
+    renderBuilder('/landing-sites/builder/42', 'generic');
 
     await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+    expect(screen.getByText('Generic Landing Page Editor')).toBeInTheDocument();
+    expect(screen.queryByText('Click components on the left to add them')).not.toBeInTheDocument();
 
     const publishButton = screen.getByRole('button', { name: /^Publish$/i });
-    expect(publishButton).toBeDisabled();
-    expect(publishButton.title).toMatch(/only one published landing site/i);
+    expect(publishButton).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: /^Check$/i }));
     await waitFor(() => {
       const publishButtons = screen.getAllByRole('button', { name: /^Publish$/i });
       const modalButton = publishButtons.find((btn) => btn !== publishButton);
-      expect(modalButton).toBeDisabled();
-      expect(modalButton.title).toMatch(/only one published landing site/i);
+      expect(modalButton).toBeEnabled();
     });
   });
 

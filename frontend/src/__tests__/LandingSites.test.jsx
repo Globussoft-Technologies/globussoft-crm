@@ -270,6 +270,30 @@ describe('<LandingSites /> wellness generate modal', () => {
     expect(screen.queryByRole('textbox', { name: /Sector/i })).not.toBeInTheDocument();
   });
 
+  it('uses generic campaign names and copy instead of wellness toolkits', async () => {
+    const user = userEvent.setup();
+    renderPage('generic');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate Landing Site/i })).toBeInTheDocument());
+    await user.click(screen.getAllByRole('button', { name: /Generate Landing Site/i })[0]);
+
+    expect(screen.getByText('Generic campaign palette')).toBeInTheDocument();
+    expect(screen.getByText('Blueprint clarity')).toBeInTheDocument();
+    expect(screen.getByText('Conversion flow')).toBeInTheDocument();
+    expect(screen.queryByText('Botanical calm')).not.toBeInTheDocument();
+    expect(screen.queryByText('Clinical trust')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Q4 Product Launch')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Business or organization/i)).toHaveAttribute('placeholder', 'Northstar Digital');
+    expect(screen.getByLabelText(/Campaign objective/i)).toHaveAttribute('placeholder', 'capture qualified leads');
+    expect(screen.getByLabelText(/Target audience/i)).toHaveAttribute('placeholder', 'decision-makers comparing solutions');
+    expect(screen.getByLabelText(/Launch date/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Campaign location/i)).toHaveAttribute('placeholder', 'Office, venue, or online');
+
+    await user.click(screen.getByLabelText('Use custom colors'));
+    expect(screen.getByText('Custom campaign colors')).toBeInTheDocument();
+    expect(screen.queryByText('Custom wellness colors')).not.toBeInTheDocument();
+  });
+
   it('filters wellness landing sites by created date and keeps the live page pinned first', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
@@ -289,7 +313,7 @@ describe('<LandingSites /> wellness generate modal', () => {
     expect(screen.getByText('Hair Treatment Launch')).toBeInTheDocument();
     expect(screen.queryByText('Hair Consultation Draft')).toBeNull();
   });
-  it('pins the published landing site first and disables draft publish when another page is already live', async () => {
+  it('pins the published landing site first while allowing another page to be published', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
       if (String(url).startsWith('/api/landing-sites') && method === 'GET') return Promise.resolve(makeLandingSitesResponse([LANDING_SITE_FIXTURE[1]], LANDING_SITE_FIXTURE[0], false));
@@ -302,8 +326,7 @@ describe('<LandingSites /> wellness generate modal', () => {
     expect(screen.getByRole('heading', { level: 3, name: 'Hair Treatment Launch' })).toBeInTheDocument();
 
     const publishButton = screen.getByRole('button', { name: /^Publish$/i });
-    expect(publishButton).toBeDisabled();
-    expect(publishButton.title).toMatch(/only one published landing site/i);
+    expect(publishButton).toBeEnabled();
   });
 
   it('loads the next page when the infinite-scroll sentinel enters view', async () => {

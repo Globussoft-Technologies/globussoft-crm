@@ -55,6 +55,36 @@ import TwilioSettingsCard from "../components/TwilioSettingsCard";
 const DEFAULT_BRAND_COLOR = "#3b82f6";
 const DEFAULT_TRANSFER_PORT = { ftp: 21, ftps: 21, sftp: 22 };
 
+function LandingSitesSettingsCard() {
+  const [config, setConfig] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    fetchApi('/api/landing-sites/config')
+      .then(setConfig)
+      .catch((err) => setError(err?.message || 'Could not load landing-site configuration.'));
+  }, []);
+  return (
+    <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }} data-testid="landing-sites-settings-card">
+      <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <Globe2 size={20} color="var(--accent-color)" /> Landing Sites
+      </h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+        Generic landing-site generation uses the organization AI provider below and Pexels for campaign imagery. Secrets are read server-side and are never exposed in the browser.
+      </p>
+      {error ? <p style={{ color: 'var(--danger-color)', fontSize: '0.85rem' }}>{error}</p> : config && (
+        <div style={{ display: 'grid', gap: '0.55rem', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}><span>AI generation</span><strong style={{ color: config.aiConfigured ? '#059669' : '#d97706' }}>{config.aiConfigured ? 'Configured' : 'Needs configuration'}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}><span>Pexels images</span><strong style={{ color: config.pexelsConfigured ? '#059669' : '#d97706' }}>{config.pexelsConfigured ? 'Configured' : 'Missing backend key'}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}><span>Image source</span><strong>{config.imageProvider}</strong></div>
+        </div>
+      )}
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '1rem', marginBottom: 0 }}>
+        Configure tenant AI access in AI Settings. Configure <code>PEXELS_API_KEY</code> in the backend environment before publishing image-rich pages.
+      </p>
+    </div>
+  );
+}
+
 export default function Settings() {
   const notify = useNotify();
   const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
@@ -2634,6 +2664,7 @@ export default function Settings() {
               AI provider resolver state so every tenant can either configure
               BYOK or request CRM-managed AI access from one place. */}
           {hasPermission("settings", "manage") && <OrganizationAiSettingsCard />}
+          {hasPermission("settings", "manage") && isGenericVertical && <LandingSitesSettingsCard />}
 
           {/* WhatsApp / Meta Configuration — per-tenant Meta Cloud API
               credentials. Every organization connects its OWN WhatsApp

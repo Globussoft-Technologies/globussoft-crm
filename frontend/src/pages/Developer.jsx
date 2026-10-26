@@ -14,6 +14,11 @@ const TRAVEL_SUB_BRANDS = [
   { value: 'visasure', label: 'Visa Sure' },
 ];
 
+const GENERIC_API_KEY_PURPOSES = [
+  { value: '', label: 'Tenant-wide external API' },
+  { value: 'plot-inventory-read', label: 'Plot inventory (read-only)' },
+];
+
 // #899 — webhook event catalogue: original 3 + 5 added in ticks #36-#41 + #47.
 // Backend emits via backend/lib/eventBus.js (see safeEmitEvent + canonical
 // catalogue JSDoc); subscribers receive via webhookDelivery.js.
@@ -32,6 +37,7 @@ export default function Developer() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isTravelTenant = user?.tenant?.vertical === 'travel';
+  const isGenericTenant = user?.tenant?.vertical === 'generic';
   const [keys, setKeys] = useState([]);
   const [hooks, setHooks] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
@@ -44,6 +50,7 @@ export default function Developer() {
   // #899 — empty string = tenant-wide; 'tmc'|'rfu'|'travelstall'|'visasure'
   // = scoped. Only the sub-brand-scoped variant matters on travel tenants.
   const [newKeySubBrand, setNewKeySubBrand] = useState('');
+  const [newKeyPurpose, setNewKeyPurpose] = useState('');
   const [newHook, setNewHook] = useState({ event: 'deal.created', targetUrl: '' });
 
   // ── S121 — CSP Violations observability surface ───────────────────────
@@ -127,10 +134,12 @@ export default function Developer() {
       // validates against the whitelist and rejects unknown values 400.
       const body = { name: trimmed };
       if (isTravelTenant && newKeySubBrand) body.subBrand = newKeySubBrand;
+      if (isGenericTenant && newKeyPurpose) body.purpose = newKeyPurpose;
       const { rawKey } = await fetchApi('/api/developer/apikeys', { method: 'POST', body: JSON.stringify(body) });
       notify.success(`API key created. Save it securely — it won't be shown again.\n\n${rawKey}`, { ttl: 30000 });
       setNewKeyName('');
       setNewKeySubBrand('');
+      setNewKeyPurpose('');
       loadDevData();
     } catch(err) {
       notify.error("Failed to create key.");
@@ -283,6 +292,19 @@ export default function Developer() {
                 ))}
               </select>
             )}
+            {isGenericTenant && (
+              <select
+                className="input-field"
+                style={{ margin: 0, minWidth: 220 }}
+                value={newKeyPurpose}
+                onChange={e => setNewKeyPurpose(e.target.value)}
+                aria-label="API access scope"
+              >
+                {GENERIC_API_KEY_PURPOSES.map(purpose => (
+                  <option key={purpose.value || 'tenant-wide'} value={purpose.value}>{purpose.label}</option>
+                ))}
+              </select>
+            )}
             <button className="btn-primary" type="submit" disabled={!newKeyName.trim()}>Generate Key</button>
           </form>
 
@@ -297,6 +319,11 @@ export default function Developer() {
                     {k.subBrand && (
                       <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: 10, background: 'rgba(59,130,246,0.12)', color: 'var(--accent-color)', fontWeight: 600 }} title={`Scoped to sub-brand: ${k.subBrand}`}>
                         {k.subBrand}
+                      </span>
+                    )}
+                    {k.purpose && (
+                      <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: 10, background: 'rgba(16,185,129,0.12)', color: 'var(--success-color)', fontWeight: 600 }} title={`Scoped to purpose: ${k.purpose}`}>
+                        {k.purpose}
                       </span>
                     )}
                   </h4>

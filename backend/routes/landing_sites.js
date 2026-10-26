@@ -4,42 +4,28 @@ const { verifyToken } = require('../middleware/auth');
 const { snapshotSafe, VERSION_SOURCES } = require('../lib/landingPageVersions');
 const { generateLandingSiteContent } = require('../services/landingSiteGeneratorLLM');
 const { hydrateWellnessLandingImages } = require('../services/wellnessLandingImages');
+const { hydrateGenericLandingImages } = require('../services/genericLandingImages');
 const { normalizeSectorKey, SECTORS } = require('../services/landingSitePrompts');
+const { getTenantAiState } = require('../lib/aiProviderManagement');
+const { isValidPhoneOrEmpty } = require('../lib/validators');
+const {
+  isPageAllowedForVertical,
+  isWellnessSector,
+  normalizeVertical,
+  verticalWhere,
+} = require('../lib/landingPageVertical');
 
 const router = express.Router();
 const GENERIC_PREFIX = 'generic-site-';
 
 
 function landingSiteVerticalWhere(vertical) {
-  const key = String(vertical || "").trim().toLowerCase();
-  if (key === "generic") {
-    return {
-      templateType: { startsWith: GENERIC_PREFIX },
-      NOT: [
-        { templateType: { startsWith: "generic-site-health" } },
-        { templateType: { startsWith: "generic-site-hospital" } },
-        { templateType: { startsWith: "generic-site-fitness" } },
-      ],
-    };
-  }
-  if (key === "wellness") {
-    return {
-      OR: [
-        { templateType: { startsWith: "generic-site-health" } },
-        { templateType: { startsWith: "generic-site-hospital" } },
-        { templateType: { startsWith: "generic-site-fitness" } },
-      ],
-    };
-  }
-  return { templateType: { startsWith: GENERIC_PREFIX } };
+  return verticalWhere(vertical);
 }
-function isGenericPage(page) {
-  return Boolean(page && typeof page.templateType === 'string' && page.templateType.startsWith(GENERIC_PREFIX));
-}
-
 function sectorKeyFromTemplateType(templateType) {
-  if (typeof templateType !== 'string' || !templateType.startsWith(GENERIC_PREFIX)) return 'general';
-  return templateType.slice(GENERIC_PREFIX.length).replace(/-v1$/, '') || 'general';
+  if (typeof templateType !== 'string') return 'general';
+  const value = templateType.replace(/^generic-(?:site|campaign)-/, '').replace(/^wellness-site-/, '');
+  return value.replace(/-v[12]$/, '') || 'general';
 }
 
 function sectorLabelFromTemplateType(templateType) {
@@ -62,6 +48,8 @@ function mapLandingSiteRow(page) {
 
 router.get('/', verifyToken, async (req, res) => {
   try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+    const tenantVertical = normalizeVertical(tenant?.vertical);
     const pageParam = Number.parseInt(req.query.page, 10);
     const limitParam = Number.parseInt(req.query.limit, 10);
     const paginated = Number.isFinite(pageParam) || Number.isFinite(limitParam);
@@ -75,7 +63,7 @@ router.get('/', verifyToken, async (req, res) => {
 
     const baseWhere = {
       tenantId: req.user.tenantId,
-      templateType: { startsWith: GENERIC_PREFIX },
+      ...landingSiteVerticalWhere(tenantVertical),
       ...(Object.keys(createdAt).length ? { createdAt } : {}),
     };
     const select = {
@@ -139,13 +127,14 @@ router.get('/', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/sectors', verifyToken, async (_req, res) => {
+router.get('/sectors', verifyToken, async (req, res) => {
+  const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+  const tenantVertical = normalizeVertical(tenant?.vertical);
+  if (tenantVertical === 'travel') return res.json({ sectors: [] });
+  if (tenantVertical === 'wellness') return res.json({ sectors: [{ key: 'wellness', label: 'Wellness' }] });
   res.json({
     sectors: [
       { key: 'general', label: 'General' },
-      { key: 'travel', label: 'Travel' },
-      { key: 'health', label: 'Health' },
-      { key: 'hospital', label: 'Hospital' },
       { key: 'real_estate', label: 'Real Estate' },
       { key: 'education', label: 'Education' },
       { key: 'law_firm', label: 'Law Firm' },
@@ -153,16 +142,44 @@ router.get('/sectors', verifyToken, async (_req, res) => {
       { key: 'hospitality', label: 'Hospitality' },
       { key: 'retail', label: 'Retail' },
       { key: 'technology', label: 'Technology' },
-      { key: 'fitness', label: 'Fitness' },
       { key: 'finance', label: 'Finance' },
     ],
   });
+});
+
+router.get('/config', verifyToken, async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+    const vertical = normalizeVertical(tenant?.vertical);
+    const aiState = await getTenantAiState(req.user.tenantId);
+    res.json({
+      vertical,
+      pexelsConfigured: Boolean(process.env.PEXELS_API_KEY),
+      aiConfigured: aiState?.resolverAccess !== 'none',
+      aiAccess: aiState?.resolverAccess || 'none',
+      imageProvider: 'pexels',
+    });
+  } catch (err) {
+    console.error('[landing-sites] config failed:', err);
+    res.status(500).json({ error: 'Failed to load landing-site configuration' });
+  }
 });
 
 router.post('/generate', verifyToken, async (req, res) => {
   try {
     const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, eventDate, eventTime, eventLocation, tone, ctaText, imageMode, wellnessTheme, wellnessCustomColors, wellnessCustomBaseThemeId, wellnessLayout, autoCreate = true } = req.body || {};
     const normalizedSector = normalizeSectorKey(sectorKey);
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+    const tenantVertical = normalizeVertical(tenant?.vertical);
+    if (tenantVertical === 'travel') {
+      return res.status(409).json({ error: 'Travel tenants must use travel landing pages.', code: 'VERTICAL_ROUTE_MISMATCH' });
+    }
+    if (tenantVertical === 'wellness' && !isWellnessSector(normalizedSector)) {
+      return res.status(409).json({ error: 'Wellness tenants can only create wellness landing sites.', code: 'VERTICAL_ROUTE_MISMATCH' });
+    }
+    if (tenantVertical === 'generic' && isWellnessSector(normalizedSector)) {
+      return res.status(409).json({ error: 'Generic tenants cannot create wellness landing sites.', code: 'VERTICAL_ROUTE_MISMATCH' });
+    }
     const result = await generateLandingSiteContent({
       tenantId: req.user.tenantId,
       userId: req.user.userId,
@@ -201,7 +218,9 @@ router.post('/generate', verifyToken, async (req, res) => {
     if (!autoCreate) return res.json(result);
 
     const baseSlug = slugify(result.suggestedSlug || campaignName || `${normalizedSector}-landing-site`);
-    const templateType = `${GENERIC_PREFIX}${normalizedSector}-v1`;
+    const templateType = tenantVertical === 'wellness'
+      ? `wellness-site-${normalizedSector}-v1`
+      : `${GENERIC_PREFIX}${normalizedSector}-v2`;
     const baseData = {
       title: String(result.suggestedTitle || campaignName || `${normalizedSector} Landing Site`).slice(0, 200),
       templateType,
@@ -242,17 +261,92 @@ router.post('/generate', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/public/:slug', async (req, res) => {
+router.get('/public/:vertical/:tenantId/:slug', async (req, res) => {
   try {
+    const vertical = normalizeVertical(req.params.vertical);
+    if (!['generic', 'wellness'].includes(vertical) || String(req.params.vertical).toLowerCase() !== vertical) {
+      return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
+    }
+    const tenantId = Number.parseInt(req.params.tenantId, 10);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
     const slug = String(req.params.slug || '').trim();
     if (!slug) return res.status(400).json({ error: 'Slug is required' });
-    const page = await prisma.landingPage.findFirst({ where: { slug, status: 'PUBLISHED', ...landingSiteVerticalWhere(req.query.vertical) } });
-    if (!page) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
-    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (normalizeVertical(tenant?.vertical) !== vertical) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
+    const page = await prisma.landingPage.findFirst({ where: { tenantId, slug, status: 'PUBLISHED', ...landingSiteVerticalWhere(vertical) } });
+    if (!page || !isPageAllowedForVertical(page, vertical)) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
+    const hydrated = vertical === 'wellness'
+      ? await hydrateWellnessLandingImages(page, { db: prisma, persist: true })
+      : await hydrateGenericLandingImages(page, { db: prisma, persist: true });
+    res.json({ ...hydrated, vertical });
   } catch (err) {
     console.error('[landing-sites] public fetch failed:', err);
     res.status(500).json({ error: 'Failed to load landing site' });
   }
 });
+
+async function resolveScopedPublicLandingSite(req) {
+  const vertical = normalizeVertical(req.params.vertical);
+  if (!['generic', 'wellness'].includes(vertical) || String(req.params.vertical).toLowerCase() !== vertical) return null;
+  const tenantId = Number.parseInt(req.params.tenantId, 10);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return null;
+  const slug = String(req.params.slug || '').trim();
+  if (!slug) return null;
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  if (normalizeVertical(tenant?.vertical) !== vertical) return null;
+  const page = await prisma.landingPage.findFirst({
+    where: { tenantId, slug, status: 'PUBLISHED', ...landingSiteVerticalWhere(vertical) },
+  });
+  return page && isPageAllowedForVertical(page, vertical) ? page : null;
+}
+
+router.post('/public/:vertical/:tenantId/:slug/submit', express.json(), async (req, res) => {
+  try {
+    const page = await resolveScopedPublicLandingSite(req);
+    if (!page) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const firstName = String(body.first_name || body.firstName || '').trim();
+    const lastName = String(body.last_name || body.lastName || '').trim();
+    const contactName = String(body.name || `${firstName} ${lastName}` || 'Website enquiry').trim() || 'Website enquiry';
+    const email = String(body.email || body.email_address || '').trim().toLowerCase();
+    const phone = String(body.phone || body.phone_number || '').trim();
+    if (!email) return res.status(400).json({ error: 'Email is required', code: 'MISSING_FIELDS' });
+    if (!isValidPhoneOrEmpty(phone)) return res.status(400).json({ error: 'Please enter a valid phone number', code: 'INVALID_PHONE' });
+
+    const company = String(body.company || body.organization || '').trim() || null;
+    const serviceInterest = String(body.service_interest || body.interest || body.subject || '').trim() || null;
+    const sourceLabel = `Landing Site: ${page.title}`;
+    const existing = await prisma.contact.findFirst({ where: { email, tenantId: page.tenantId, deletedAt: null } });
+    const contact = existing
+      ? await prisma.contact.update({ where: { id: existing.id }, data: { name: contactName, phone: phone || null, company, source: 'inbound:webform', treatmentOfInterest: serviceInterest } })
+      : await prisma.contact.create({ data: { name: contactName, email, phone: phone || null, company, status: 'Lead', source: 'inbound:webform', firstTouchSource: sourceLabel, treatmentOfInterest: serviceInterest, aiScore: 30, tenantId: page.tenantId } });
+
+    await prisma.deal.create({ data: { title: `Landing Site Inbound: ${page.title}`, amount: 0, stage: 'lead', contactId: contact.id, tenantId: page.tenantId } });
+    await prisma.landingPage.update({ where: { id: page.id }, data: { submissions: { increment: 1 } } });
+    await prisma.landingPageAnalytics.create({ data: { landingPageId: page.id, eventType: 'FORM_SUBMIT', visitorIp: req.ip, metadata: JSON.stringify(body), tenantId: page.tenantId } });
+    if (req.io) req.io.emit('deal_updated', {});
+    return res.json({ success: true, message: 'Thank you for your submission!' });
+  } catch (err) {
+    console.error('[landing-sites] public submit failed:', err);
+    return res.status(500).json({ error: 'Submission failed', code: 'SUBMISSION_FAILED' });
+  }
+});
+
+router.get('/public/:vertical/:tenantId/:slug/track', async (req, res) => {
+  try {
+    const page = await resolveScopedPublicLandingSite(req);
+    if (page) {
+      await prisma.landingPageAnalytics.create({ data: { landingPageId: page.id, eventType: String(req.query.event || 'VISIT').slice(0, 50), visitorIp: req.ip, userAgent: req.headers['user-agent'], tenantId: page.tenantId } });
+    }
+  } catch (err) {
+    console.warn('[landing-sites] public tracking skipped:', err.message || err);
+  }
+  return res.status(204).end();
+});
+
+// The former /public/:slug endpoint was ambiguous because slugs are unique
+// per tenant, not globally. Never resolve it by searching all tenants.
+router.get('/public/:slug', (_req, res) => res.status(404).json({ error: 'Landing site route requires a tenant boundary', code: 'LANDING_SITE_ROUTE_REQUIRES_TENANT' }));
 
 module.exports = router;

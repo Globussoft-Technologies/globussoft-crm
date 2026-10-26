@@ -131,7 +131,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows', requiredPermission: { module: 'playbooks', action: 'read' } },
   { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder', requiredPermission: { module: 'booking_pages', action: 'read' }, sidebarHidden: true },
   { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms', requiredPermission: { module: 'web_forms', action: 'read' } },
-  { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' }, sidebarHidden: true },
+  { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' } },
   { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' } },
   { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'document_templates', action: 'read' } },
   { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures', requiredPermission: { module: 'documents', action: 'read' } },

@@ -990,10 +990,10 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Sandbox')).toBeNull();
     });
 
-    it('keeps requested product pages out of the Generic CRM sidebar for admins and managers', () => {
+    it('keeps requested product pages out of the Generic CRM sidebar but shows Landing Sites', () => {
       const hiddenLabels = [
         'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
-        'Lead Scoring', 'Approvals', 'Workflows', 'Knowledge Base', 'Landing Sites',
+        'Lead Scoring', 'Approvals', 'Workflows', 'Knowledge Base',
         'Sequences', 'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
       ];
 
@@ -1002,6 +1002,7 @@ describe('Sidebar — load-bearing render surface', () => {
         for (const label of hiddenLabels) {
           expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
         }
+        expect(screen.getByText('Landing Sites')).toBeTruthy();
         unmount();
       }
     });

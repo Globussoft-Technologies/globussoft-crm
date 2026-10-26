@@ -1739,6 +1739,14 @@ export default function App() {
                     <Route path="/trips" element={<TripsResolver />} />
                     <Route path="/trips/:tripRef" element={<TripsShareResolver />} />
                     <Route
+                      path="/landing-sites/:tenantId/:slug"
+                      element={<LandingSiteResolver vertical="generic" />}
+                    />
+                    <Route
+                      path="/wellness/landing-sites/:tenantId/:slug"
+                      element={<LandingSiteResolver vertical="wellness" />}
+                    />
+                    <Route
                       path="/landing-sites/:slug"
                       element={<LandingSiteResolver />}
                     />

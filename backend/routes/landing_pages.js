@@ -12,6 +12,13 @@ const { verifyToken } = require("../middleware/auth");
 
 const { renderPage } = require("../services/landingPageRenderer");
 const { hydrateWellnessLandingImages } = require("../services/wellnessLandingImages");
+const { hydrateGenericLandingImages } = require("../services/genericLandingImages");
+const {
+  isGenericLandingPage,
+  isPageAllowedForVertical,
+  normalizeVertical,
+  verticalWhere,
+} = require("../lib/landingPageVertical");
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 const {
   applyLandingPagePaymentToTrip,
@@ -24,13 +31,17 @@ const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalm
 const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
 function publicFeaturedVerticalWhere(vertical) {
   const key = String(vertical || "").trim().toLowerCase();
-  if (key !== "travel") return {};
-  return {
-    OR: [
-      { subBrand: { in: ["tmc", "rfu", "travelstall", "visasure"] } },
-      { templateType: { in: ["wanderlux-v1", "educational-trip-v1", "religious-tour-v1", "family-trip-v1", "luxury-tour-v1", "travel-premium-v1"] } },
-    ],
-  };
+  // Every endpoint using this helper is part of the legacy travel public
+  // contract. Keep the filter active even when callers omit ?vertical or
+  // pass another vertical so a generic/wellness page cannot leak into /trips.
+  if (key === "generic" || key === "wellness") return { templateType: "__travel_route_only__" };
+  return verticalWhere("travel");
+}
+
+function isTravelPublicPage(page) {
+  // Rows created before templateType was introduced remain valid legacy
+  // travel rows. All explicitly typed pages must satisfy the travel contract.
+  return !page?.templateType || isTravelLandingPage(page);
 }
 
 const landingPageGeneratorLLM = require("../services/landingPageGeneratorLLM");
@@ -69,7 +80,17 @@ const landingRegistrationDocUpload = multer({
 const prisma = require("../lib/prisma");
 const { hardDeleteContact } = require("../lib/contactHardDelete");
 
-const GENERIC_LANDING_SITE_PREFIX = "generic-site-";
+async function getTenantVertical(tenantId) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  return tenant?.vertical ? normalizeVertical(tenant.vertical) : null;
+}
+
+async function getOwnedLandingPageForVertical(id, req) {
+  const page = await prisma.landingPage.findFirst({ where: { id, tenantId: req.user.tenantId } });
+  if (!page) return null;
+  const vertical = await getTenantVertical(req.user.tenantId);
+  return !vertical || isPageAllowedForVertical(page, vertical) ? page : null;
+}
 
 async function purgeLegacyContactTombstone(email, tenantId) {
   if (!email || !tenantId) return;
@@ -95,16 +116,6 @@ async function upsertContactByEmail({ email, tenantId, update, create }) {
 }
 
 
-
-function isGenericLandingSite(page) {
-
-  return Boolean(
-
-    page && typeof page.templateType === "string" && page.templateType.startsWith(GENERIC_LANDING_SITE_PREFIX)
-
-  );
-
-}
 
 async function syncPromotionalLandingPage(page, req) {
   if (!isTravelLandingPage(page)) return null;
@@ -590,7 +601,8 @@ router.get("/", verifyToken, async (req, res) => {
 
     // @@index([tenantId, subBrand, status]) carries this lookup.
 
-    const where = { tenantId: req.user.tenantId };
+    const vertical = await getTenantVertical(req.user.tenantId);
+    const where = { tenantId: req.user.tenantId, ...(vertical ? verticalWhere(vertical) : {}) };
 
     const subBrandFilter = req.query.subBrand;
 
@@ -1297,9 +1309,10 @@ router.get("/public/status/:id", async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({
       where: { id: pageId, status: "PUBLISHED" },
-      select: { id: true, status: true },
+      select: { id: true, status: true, templateType: true, subBrand: true },
     });
     if (!page) return res.status(404).json({ error: "Landing page is not published", code: "PAGE_NOT_PUBLISHED" });
+    if (!isTravelPublicPage(page)) return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
     return res.json({ published: true, pageId: page.id });
   } catch (err) {
     console.error("[LandingPages] public/status error:", err.message);
@@ -1341,7 +1354,7 @@ router.get("/public/featured", async (req, res) => {
     // When present, resolve "the current published page for this customer"
     // directly and do not require a sub-brand hint.
     const where = customerId
-      ? { tenantId: customerId, status: "PUBLISHED" }
+      ? { tenantId: customerId, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) }
       : { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
 
     if (!customerId) {
@@ -1374,6 +1387,8 @@ router.get("/public/featured", async (req, res) => {
 
         title: true,
 
+        templateType: true,
+
         destination: true,
 
         subBrand: true,
@@ -1394,6 +1409,10 @@ router.get("/public/featured", async (req, res) => {
 
       });
 
+    }
+
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
     }
 
     res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
@@ -1589,7 +1608,7 @@ router.get("/public/featured-full", async (req, res) => {
     // customerId maps to tenantId here so one embed can always resolve the
     // currently published landing page for one customer account.
     const where = customerId
-      ? { tenantId: customerId, status: "PUBLISHED" }
+      ? { tenantId: customerId, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) }
       : { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
 
     if (!customerId) {
@@ -1660,6 +1679,10 @@ router.get("/public/featured-full", async (req, res) => {
 
       });
 
+    }
+
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
     }
 
     const publicPage = await preparePublicLandingPage(page);
@@ -1753,6 +1776,10 @@ router.get("/public/by-slug/:slug", async (req, res) => {
 
       });
 
+    }
+
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
     }
 
     const publicPage = await preparePublicLandingPage(page);
@@ -1859,6 +1886,10 @@ router.get("/public/by-id/:id", async (req, res) => {
 
       });
 
+    }
+
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
     }
 
     const publicPage = await preparePublicLandingPage(page);
@@ -1968,6 +1999,10 @@ router.get("/public/by-trip/:tripId", async (req, res) => {
 
     }
 
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
+    }
+
     const publicPage = await preparePublicLandingPage(page);
     let parsedContent = publicPage.content;
 
@@ -2032,6 +2067,7 @@ router.get("/public/featured-html", async (req, res) => {
     });
 
     if (!page) return res.status(404).json({ error: "No featured page.", code: "NO_FEATURED_PAGE" });
+    if (!isTravelPublicPage(page)) return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
 
     const publicPage = await preparePublicLandingPage(page);
     const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
@@ -3261,11 +3297,17 @@ router.get("/:id", verifyToken, async (req, res) => {
 
   try {
 
-    const page = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const page = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!page) return res.status(404).json({ error: "Page not found" });
 
-    res.json(await hydrateWellnessLandingImages(page, { db: prisma, persist: true }));
+    const vertical = await getTenantVertical(req.user.tenantId);
+    const hydrated = vertical === 'wellness'
+      ? await hydrateWellnessLandingImages(page, { db: prisma, persist: true })
+      : vertical === 'generic'
+        ? await hydrateGenericLandingImages(page, { db: prisma, persist: true })
+        : page;
+    res.json(hydrated);
 
   } catch (_err) { res.status(500).json({ error: "Failed to fetch page" }); }
 
@@ -3295,6 +3337,7 @@ const TRAVEL_TEMPLATE_TYPES = new Set([
 function isTravelLandingPage(page) {
   const subBrand = typeof page?.subBrand === "string" ? page.subBrand.toLowerCase() : "";
   const templateType = typeof page?.templateType === "string" ? page.templateType.toLowerCase() : "";
+  if (templateType.startsWith("generic-") || templateType.startsWith("wellness-site-")) return false;
   return VALID_TRAVEL_SUB_BRANDS.has(subBrand) || TRAVEL_TEMPLATE_TYPES.has(templateType);
 }
 
@@ -3323,6 +3366,17 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const trimmedTitle = title.trim();
+
+    const tenantVertical = await getTenantVertical(req.user.tenantId);
+    if (tenantVertical === 'generic' && templateType && !isGenericLandingPage({ templateType })) {
+      return res.status(409).json({ error: 'This route only creates generic landing sites.', code: 'VERTICAL_ROUTE_MISMATCH' });
+    }
+    if (tenantVertical === 'wellness' && templateType && !isPageAllowedForVertical({ templateType }, 'wellness')) {
+      return res.status(409).json({ error: 'This route only creates wellness landing sites.', code: 'VERTICAL_ROUTE_MISMATCH' });
+    }
+    if (tenantVertical === 'travel' && templateType && !isPageAllowedForVertical({ templateType, subBrand }, 'travel')) {
+      return res.status(409).json({ error: 'Travel landing pages must use the travel routes.', code: 'VERTICAL_ROUTE_MISMATCH' });
+    }
 
 
 
@@ -3494,7 +3548,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
   try {
 
-    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
 
@@ -3863,7 +3917,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
 
   try {
 
-    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
 
@@ -5226,11 +5280,7 @@ router.get("/:id/publish-check", verifyToken, async (req, res) => {
 
   try {
 
-    const existing = await prisma.landingPage.findFirst({
-
-      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
-
-    });
+    const existing = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
 
@@ -5252,7 +5302,7 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
 
   try {
 
-    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
 
@@ -5265,44 +5315,6 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
     // authoritative draft-to-live path. Travel pages continue to use their
 
     // existing publish/feature workflow untouched.
-
-    if (isGenericLandingSite(existing)) {
-
-      const currentPublishedLandingSite = await prisma.landingPage.findFirst({
-
-        where: {
-
-          tenantId: req.user.tenantId,
-
-          templateType: { startsWith: GENERIC_LANDING_SITE_PREFIX },
-
-          status: "PUBLISHED",
-
-          NOT: { id: existing.id },
-
-        },
-
-        select: { id: true, title: true, slug: true },
-
-      });
-
-      if (currentPublishedLandingSite) {
-
-        return res.status(409).json({
-
-          error: `Only one published landing site is allowed at a time. Unpublish "${currentPublishedLandingSite.title}" first.`,
-
-          code: "ANOTHER_LANDING_SITE_PUBLISHED",
-
-          currentPublishedLandingSite,
-
-        });
-
-      }
-
-    }
-
-
 
     // Publish-gate enforcement. Default behaviour is BLOCK on any
 
@@ -5381,7 +5393,7 @@ router.post("/:id/unpublish", verifyToken, async (req, res) => {
 
   try {
 
-    const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
 
@@ -5603,7 +5615,7 @@ router.post("/:id/duplicate", verifyToken, async (req, res) => {
 
   try {
 
-    const orig = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const orig = await getOwnedLandingPageForVertical(parseInt(req.params.id), req);
 
     if (!orig) return res.status(404).json({ error: "Page not found" });
 
@@ -6059,6 +6071,10 @@ publicRouter.get("/:slug/json", async (req, res) => {
 
     }
 
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Landing page is not available on the travel route", code: "VERTICAL_ROUTE_MISMATCH" });
+    }
+
     const publicPage = await preparePublicLandingPage(page);
     let parsedContent = publicPage.content;
 
@@ -6092,7 +6108,7 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" } });
     const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
-    if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
+    if (!page || !isTravelPublicPage(page) || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
     // Registration starts here; travel documents are collected later in the
     // parent portal and are not part of the landing-page payment flow.
     const studentName = String(fields.student_name || fields.studentName || fields.student || fields.name || fields.fullName || "").trim();
@@ -6192,8 +6208,8 @@ publicRouter.post("/:slug/registration-documents", (req, res, next) => {
   });
 }, async (req, res) => {
   try {
-    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" }, select: { id: true, tripId: true, tenantId: true, content: true } });
-    if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" }, select: { id: true, tripId: true, tenantId: true, content: true, templateType: true, subBrand: true } });
+    if (!page || !isTravelPublicPage(page) || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
     const tripType = await resolveLandingPageTripType(page);
     const isDomesticTrip = !tripRequiresPassport(tripType);
     const token = String(req.body?.draftToken || "").trim();
@@ -6244,9 +6260,9 @@ publicRouter.get("/:slug/payment-balance", async (req, res) => {
     if (!draftToken) return res.status(400).json({ error: "Registration draft required", code: "INVALID_DRAFT" });
     const page = await prisma.landingPage.findFirst({
       where: { slug: String(req.params.slug || "").trim(), status: "PUBLISHED" },
-      select: { id: true, tenantId: true, tripId: true, content: true },
+      select: { id: true, tenantId: true, tripId: true, content: true, templateType: true, subBrand: true },
     });
-    if (!page) return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
+    if (!page || !isTravelPublicPage(page)) return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
     const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken } });
     if (!draft || Number(draft.tenantId) !== Number(page.tenantId || 1)
       || Number(draft.tripId) !== Number(page.tripId)
@@ -6290,6 +6306,10 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
 
     if (!page) {
       return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
+    }
+
+    if (!isTravelPublicPage(page)) {
+      return res.status(404).json({ error: "Page not found", code: "VERTICAL_ROUTE_MISMATCH" });
     }
 
     const paymentConfig = getLandingPagePaymentConfig(page);
@@ -6602,8 +6622,8 @@ publicRouter.get("/:slug/payment-status", async (req, res) => {
     const slug = String(req.params.slug || "").trim();
     const draftToken = typeof req.query.draftToken === "string" ? req.query.draftToken.trim() : "";
     if (!draftToken) return res.json({ paid: false });
-    const page = await prisma.landingPage.findFirst({ where: { slug, status: "PUBLISHED" }, select: { id: true, tenantId: true } });
-    if (!page) return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
+    const page = await prisma.landingPage.findFirst({ where: { slug, status: "PUBLISHED" }, select: { id: true, tenantId: true, templateType: true, subBrand: true } });
+    if (!page || !isTravelPublicPage(page)) return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
     const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken } });
     if (!draft || Number(draft.landingPageId) !== Number(page.id)) return res.json({ paid: false });
     const payments = await prisma.payment.findMany({ where: { tenantId: page.tenantId || 1 }, select: { id: true, gatewayId: true, status: true, metadata: true } });
@@ -6669,6 +6689,10 @@ publicRouter.get("/:slug", async (req, res) => {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
 
     if (!page) return res.status(404).send("<h1>Page not found</h1>");
+
+    // /p/:slug is the travel public contract. Generic and wellness pages
+    // must resolve through their tenant-scoped vertical routes instead.
+    if (!isTravelPublicPage(page)) return res.status(404).send("<h1>Page not found</h1>");
 
     if (page.status !== "PUBLISHED") return res.redirect(302, "/trips");
 
@@ -8232,7 +8256,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
     const page = await prisma.landingPage.findUnique({ where: { id: pageId } });
 
-    if (!page) return res.status(404).json({ error: "Page not found" });
+    if (!page || !isTravelPublicPage(page)) return res.status(404).json({ error: "Page not found", code: "VERTICAL_ROUTE_MISMATCH" });
 
     const tenantId = page.tenantId || 1;
 
@@ -8918,7 +8942,7 @@ publicRouter.get("/:slug/track", async (req, res) => {
 
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
 
-    if (page) {
+    if (page && isTravelPublicPage(page)) {
 
       await prisma.landingPageAnalytics.create({
 

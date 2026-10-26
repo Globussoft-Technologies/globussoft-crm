@@ -14,6 +14,8 @@ let locationId;
 let plotId;
 let transportPersonId;
 let brokerId;
+let externalApiKey;
+let externalApiKeyId;
 
 async function login(request, email) {
   const response = await request.post(`${BASE_URL}/api/auth/login`, {
@@ -29,6 +31,23 @@ test.beforeAll(async ({ request }) => {
   test.skip(!IS_LOCAL_STACK, 'Inventory CRUD creates durable fixtures and runs only against the disposable CI-local stack.');
   adminToken = await login(request, 'admin@globussoft.com');
   userToken = await login(request, 'user@crm.com');
+
+  const keyResponse = await request.post(`${BASE_URL}/api/developer/apikeys`, {
+    headers: headers(adminToken),
+    data: { name: `${RUN_TAG} plot inventory`, purpose: 'plot-inventory-read' },
+  });
+  expect(keyResponse.status()).toBe(201);
+  const keyBody = await keyResponse.json();
+  externalApiKey = keyBody.rawKey;
+  externalApiKeyId = keyBody.key.id;
+});
+
+test.afterAll(async ({ request }) => {
+  if (externalApiKeyId) {
+    await request.delete(`${BASE_URL}/api/developer/apikeys/${externalApiKeyId}`, {
+      headers: headers(adminToken),
+    }).catch(() => {});
+  }
 });
 
 test('admin creates a pickup location with Google Maps link', async ({ request }) => {
@@ -304,6 +323,27 @@ test('admin creates and edits a plot assigned to the pickup location', async ({ 
     plotNumber: 'A-101', block: 'A', area: '2', areaUnit: 'KATHA', roadWidth: '40 ft',
     facing: 'EAST', propertyType: 'RESIDENTIAL', availability: 'RESERVED', address: '26 Lake Road',
   });
+});
+
+test('external plot inventory key returns only the safe generic catalog projection', async ({ request }) => {
+  const response = await request.get(
+    `${BASE_URL}/api/v1/external/plot-inventory?q=${encodeURIComponent(RUN_TAG)}&limit=10`,
+    { headers: { 'X-API-Key': externalApiKey } },
+  );
+  expect(response.status()).toBe(200);
+  const body = await response.json();
+  expect(body.meta).toMatchObject({ vertical: 'generic' });
+  const plot = body.data.find((row) => row.id === plotId);
+  expect(plot).toBeTruthy();
+  expect(plot).toMatchObject({
+    name: `${RUN_TAG} Plot A`,
+    plotNumber: 'A-101',
+    availability: 'RESERVED',
+  });
+  expect(plot).not.toHaveProperty('tenantId');
+  expect(plot).not.toHaveProperty('notes');
+  expect(plot).not.toHaveProperty('boundary');
+  expect(plot).not.toHaveProperty('pickupLocationIdsJson');
 });
 
 test('plot creation rejects missing mandatory inventory fields', async ({ request }) => {

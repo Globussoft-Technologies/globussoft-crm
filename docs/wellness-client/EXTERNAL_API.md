@@ -36,7 +36,7 @@ Recording stays on the dialer's storage; the CRM only stores the URL. The CRM us
 
 ## 2. Getting an API key
 
-Each partner gets one or more API keys, scoped to a **tenant**. A key gives full read/write access to that tenant's CRM data — treat it like a password.
+Each partner gets one or more API keys, scoped to a **tenant**. A legacy tenant-wide key gives the existing external API its current read/write access — treat it like a password. For the Generic CRM plot catalog, prefer a purpose-scoped `plot-inventory-read` key; it can read only the safe plot-inventory projection.
 
 ### Demo keys (Enhanced Wellness tenant)
 
@@ -346,6 +346,64 @@ X-API-Key: glbs_…
 **Response 201:** the created Visit row.
 
 If the caller is a `Contact` (not yet a `Patient`), create the Patient first via the (internal) wellness API or an admin will do it post-call. We can add a `POST /patients` external endpoint if needed — let us know.
+
+---
+
+### 3.7 Generic CRM plot/site inventory (read-only)
+
+This endpoint is available only for **Generic CRM** tenants. It is separate from the internal `/api/pickup-plot-inventory` admin endpoint and never returns customers, assignments, notes, boundary data, booking records, or tenant identifiers.
+
+Prefer generating an API key from **Developer → API Credentials** with the scope **Plot inventory (read-only)**. A legacy tenant-wide key also works for backward compatibility. Wellness and travel tenants receive `404 PLOT_INVENTORY_NOT_AVAILABLE`.
+
+#### GET `/plot-inventory`
+
+```bash
+GET /api/v1/external/plot-inventory?q=Green%20Valley&availability=AVAILABLE&limit=50&offset=0
+X-API-Key: glbs_…
+```
+
+Supported query parameters:
+
+- `q` — optional search across name, plot number, block, address, reference code, and property type.
+- `availability` — optional `AVAILABLE`, `HOLD`, `BOOKED`, `REGISTERED`, `RESERVED`, or `SOLD` filter.
+- `pickupLocationId` — optional pickup-location filter.
+- `limit` — optional, 1–100; default 50.
+- `offset` — optional non-negative offset; default 0.
+
+Only active plots are returned. Prices are JSON numbers and the response currency is in `meta.currency`.
+
+```json
+{
+  "data": [
+    {
+      "id": 101,
+      "name": "Green Valley Site A",
+      "plotNumber": "A-102",
+      "block": "A",
+      "address": "Sarjapur Road, Bengaluru, Karnataka",
+      "referenceCode": "GV-A102",
+      "area": "1350",
+      "areaUnit": "SQ_FT",
+      "roadWidth": "30 ft",
+      "facing": "EAST",
+      "propertyType": "RESIDENTIAL",
+      "price": 2850000,
+      "availability": "AVAILABLE",
+      "updatedAt": "2026-10-20T10:00:00.000Z",
+      "pickupLocations": [
+        { "id": 7, "name": "Green Valley Gate", "address": "Sarjapur Road, Bengaluru", "googleMapsLink": "https://maps.google.com/?q=12.9,77.6" }
+      ]
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "hasMore": false,
+  "meta": { "vertical": "generic", "currency": "INR" }
+}
+```
+
+Keep the API key on the partner server or in a server-side environment variable. Do not put it in browser JavaScript; if a browser needs the data, proxy this request through the partner website backend.
 
 ---
 

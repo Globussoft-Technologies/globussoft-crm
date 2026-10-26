@@ -40,6 +40,10 @@ const S = {
   subtle: "var(--hover-bg)",
 };
 
+function CardFrame({ embedded, children, ...props }) {
+  return embedded ? <>{children}</> : <div {...props}>{children}</div>;
+}
+
 // Severity → translucent tint + token text colour. Works on light and dark
 // because the tint is an alpha wash over whatever the surface happens to be.
 const SEVERITY_STYLES = {
@@ -188,7 +192,7 @@ function CopyRow({ label, value, hint }) {
   );
 }
 
-export default function WhatsAppMetaConfigCard() {
+export default function WhatsAppMetaConfigCard({ embedded = false }) {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -321,7 +325,8 @@ export default function WhatsAppMetaConfigCard() {
   const connected = state?.status?.status === "CONNECTED";
 
   return (
-    <div
+    <CardFrame
+      embedded={embedded}
       className="card"
       style={{
         border: `1px solid ${S.border}`,
@@ -528,6 +533,6 @@ export default function WhatsAppMetaConfigCard() {
           )}
         </>
       )}
-    </div>
+    </CardFrame>
   );
 }

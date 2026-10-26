@@ -20355,7 +20355,15 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         </section>
       ) : null}
 
-      {canViewFormLeads && leadsForm && <WebFormLeadsModal key={leadsForm.id} form={leadsForm} onClose={() => setLeadsForm(null)} />}
+      {canViewFormLeads && leadsForm && <WebFormLeadsModal
+        key={leadsForm.id}
+        form={leadsForm}
+        onClose={() => setLeadsForm(null)}
+        onOpenLead={navigateForm ? (contactId) => {
+          setLeadsForm(null);
+          navigateForm(`/leads/${contactId}`);
+        } : undefined}
+      />}
       {folderToDelete && typeof document !== "undefined" ? createPortal(
         <div className="wf-folder-delete-overlay">
           <div className="wf-folder-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="wf-folder-delete-title" aria-describedby="wf-folder-delete-description" onKeyDown={(event) => { if (event.key === "Escape" && !deletingFolder) setFolderToDelete(null); }}>

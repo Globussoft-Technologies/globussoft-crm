@@ -21,6 +21,7 @@ const TEMPLATE_FILTERS = [
 const EMPTY_TEMPLATE = { name: '', subject: '', category: 'General', body: '', channel: 'EMAIL' };
 const TEMPLATE_DRAFT_PREFIX = 'globuscrm:campaign-template-draft:v1';
 const GENERIC_SYSTEM_CATEGORY_PREFIX = 'System: Generic CRM:';
+const GENERIC_SMS_MESSAGE_LIMIT = 150;
 
 function SortableTemplateCard({ template, index, total, disabled, onMove, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(template.id), disabled });
@@ -682,6 +683,18 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
     pickupPlotTokenCount > 1
     || new RegExp(`\\{\\{${pickupPlotLinkIndex}\\}\\}[^a-z0-9]*$`, 'i').test(String(editor?.body || '').trim())
   ));
+  const isWhatsAppTemplate = editor?.whatsappBusinessTemplate || editor?.channel === 'WHATSAPP';
+  const messageRangeLimit = !isWhatsAppTemplate && editor?.channel === 'SMS'
+      ? GENERIC_SMS_MESSAGE_LIMIT
+      : null;
+  const messagePlainText = String(editor?.body || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .trim();
+  const messagePartCount = messageRangeLimit
+    ? Math.max(1, Math.ceil(messagePlainText.length / messageRangeLimit))
+    : 1;
   const previewChannelLabel = preview?.source?.channel === 'SMS' ? 'SMS' : preview?.source?.channel === 'WHATSAPP' ? 'WhatsApp' : 'Email';
   const selectedPreviewContact = contacts.find(contact => String(contact.id) === String(previewContactId));
   const normalizedPreviewContactQuery = previewContactQuery.trim().toLowerCase();
@@ -834,6 +847,14 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
               </div>
               {personalizationOpen && <div className="generic-template-modal__picker" style={personalizationMenuStyle}>{Object.entries(groupedFields).map(([group, groupFields]) => <div key={group}><strong style={{ display: 'block', margin: '0.2rem 0 0.3rem' }}>{group}</strong>{groupFields.map(field => <button type="button" key={field.key} onClick={() => insertVariable(field)} style={variableButtonStyle}>{field.label}</button>)}</div>)}</div>}
               <div ref={editorRef} contentEditable role="textbox" aria-label={editor.whatsappBusinessTemplate ? 'WhatsApp message' : 'Email body'} onFocus={() => setPersonalizationTarget('body')} onInput={() => setEditor(current => ({ ...current, body: fromEditorHtml(editorRef.current) }))} data-placeholder={editor.whatsappBusinessTemplate ? 'Write your WhatsApp message here...' : 'Write your email here...'} style={richEditorStyle} />
+              {messageRangeLimit && <div aria-label="Message range" aria-live="polite" style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                <span>{messagePlainText.length}/{messageRangeLimit} characters per message</span>
+                <span>{messagePartCount} {messagePartCount === 1 ? 'message' : 'messages'}</span>
+              </div>}
+              {isWhatsAppTemplate && <div aria-label="Message range" aria-live="polite" style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                {messagePlainText.length} characters · 1 approved template message (not split)
+              </div>}
+              {messageRangeLimit && <small style={{ color: 'var(--text-secondary)' }}>Part count is an estimate. Links stay intact and may use a longer standalone message.</small>}
             </div>
             <aside className="generic-template-scrollbar generic-template-modal__personalization" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}><h4 style={{ fontSize: '0.85rem', margin: 0 }}>Personalization</h4><span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{editorFields.length} tags</span></div>

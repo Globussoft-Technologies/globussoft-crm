@@ -231,6 +231,45 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     expect(screen.queryByRole('button', { name: 'Push Campaigns' })).not.toBeInTheDocument();
   });
 
+  it('opens only the configuration matching each Generic CRM sequence channel', async () => {
+    wireFetch({ campaigns: [], sms: [], whatsapp: [] });
+    renderMarketing(GENERIC_USER);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'WhatsApp Sequences' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Configure WhatsApp' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Configure WhatsApp' });
+    expect(dialog.parentElement).toHaveStyle({ background: 'transparent', backdropFilter: 'none' });
+    expect(dialog).not.toHaveClass('card');
+    expect(dialog).toHaveStyle({ background: 'var(--modal-bg)', color: 'var(--text-primary)', opacity: '1', backdropFilter: 'none' });
+    expect(dialog.querySelector(':scope > .card')).not.toBeInTheDocument();
+    expect(await within(dialog).findByText('WhatsApp / Meta Configuration')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Twilio SMS')).not.toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/config/status', { silent: true });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close WhatsApp configuration' }));
+    fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Configure SMS' }));
+
+    const smsDialog = screen.getByRole('dialog', { name: 'Configure SMS' });
+    expect(smsDialog).toHaveStyle({ maxHeight: 'none', overflowY: 'visible' });
+    expect(smsDialog.querySelector(':scope > .card')).not.toBeInTheDocument();
+    expect(await within(smsDialog).findByText('Twilio SMS')).toBeInTheDocument();
+    expect(within(smsDialog).queryByText('WhatsApp / Meta Configuration')).not.toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/sms/config');
+
+    fireEvent.click(within(smsDialog).getByRole('button', { name: 'Close SMS configuration' }));
+    expect(screen.queryByRole('dialog', { name: 'Configure SMS' })).not.toBeInTheDocument();
+  });
+
+  it('does not add messaging configuration controls outside Generic CRM', async () => {
+    wireFetch();
+    renderMarketing(WELLNESS_USER);
+
+    expect(await screen.findByRole('heading', { name: 'Marketing' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Configure (SMS|WhatsApp)/ })).not.toBeInTheDocument();
+  });
+
   it.each([
     ['Email', 'campaigns'],
     ['SMS', 'sms'],
@@ -241,11 +280,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
 
     expect(await screen.findByRole('button', { name: 'Add a condition' })).toBeInTheDocument();
-    if (tab === 'campaigns') {
-      expect(screen.getByRole('button', { name: 'Select drafts' })).toBeInTheDocument();
-    } else {
-      expect(screen.queryByRole('button', { name: 'Select drafts' })).not.toBeInTheDocument();
-    }
+    expect(screen.queryByRole('button', { name: 'Select drafts' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
   });
 

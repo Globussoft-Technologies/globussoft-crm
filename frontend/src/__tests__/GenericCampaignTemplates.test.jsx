@@ -224,15 +224,30 @@ describe('Generic CRM template personalization', () => {
     expect(await screen.findByRole('dialog', { name: 'Create campaign template' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: 'generic_custom_notice' } });
     const body = screen.getByRole('textbox', { name: 'WhatsApp message' });
-    body.textContent = 'Hello, thanks for getting in touch.';
+    body.textContent = 'W'.repeat(251);
     fireEvent.input(body);
+    expect(screen.getByLabelText('Message range')).toHaveTextContent('251 characters');
+    expect(screen.getByLabelText('Message range')).toHaveTextContent('1 approved template message (not split)');
     expect(screen.getByRole('combobox', { name: 'Template Type' })).toHaveValue('WHATSAPP');
     fireEvent.click(screen.getByRole('button', { name: 'Save Template' }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/templates', expect.objectContaining({ method: 'POST' })));
     const request = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/whatsapp/templates' && options?.method === 'POST');
-    expect(JSON.parse(request[1].body)).toMatchObject({ name: 'generic_custom_notice', body: 'Hello, thanks for getting in touch.', variableMapping: {} });
+    expect(JSON.parse(request[1].body)).toMatchObject({ name: 'generic_custom_notice', body: 'W'.repeat(251), variableMapping: {} });
     window.history.pushState({}, '', '/marketing');
+  });
+
+  it('shows the 150-character range and message count for Generic CRM SMS templates', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=SMS');
+    render(<GenericCampaignTemplates />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+    const body = screen.getByRole('textbox', { name: 'Email body' });
+    body.textContent = 'S'.repeat(151);
+    fireEvent.input(body);
+
+    expect(screen.getByLabelText('Message range')).toHaveTextContent('151/150 characters per message');
+    expect(screen.getByLabelText('Message range')).toHaveTextContent('2 messages');
   });
 
   it('suggests a Meta-compatible WhatsApp name while the operator types', async () => {

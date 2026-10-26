@@ -11,6 +11,10 @@ const EMPTY_CONFIG = {
   isActive: false,
 };
 
+function CardFrame({ embedded, children, ...props }) {
+  return embedded ? <>{children}</> : <div {...props}>{children}</div>;
+}
+
 function SecretRow({ label, value, onRotate }) {
   const configured = Boolean(value && typeof value === "object" && value.configured);
   const last4 = configured ? value.last4 || "****" : "Not configured";
@@ -69,7 +73,7 @@ function RotateCredentialDialog({ field, label, onClose, onSaved }) {
   );
 }
 
-export default function TwilioSettingsCard() {
+export default function TwilioSettingsCard({ embedded = false }) {
   const notify = useNotify();
   const [config, setConfig] = useState(EMPTY_CONFIG);
   const [loading, setLoading] = useState(true);
@@ -122,7 +126,7 @@ export default function TwilioSettingsCard() {
   };
 
   return (
-    <div className="card" data-testid="generic-twilio-settings" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+    <CardFrame embedded={embedded} className="card" data-testid="generic-twilio-settings" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
       <h3 style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "1.25rem", fontWeight: 600, marginBottom: "0.35rem" }}>
         <MessageSquareText size={20} color="var(--primary-color, var(--accent-color))" /> Twilio SMS
       </h3>
@@ -148,6 +152,6 @@ export default function TwilioSettingsCard() {
         </div>
       )}
       {rotating && <RotateCredentialDialog field={rotating.field} label={rotating.label} onClose={() => setRotating(null)} onSaved={rotate} />}
-    </div>
+    </CardFrame>
   );
 }

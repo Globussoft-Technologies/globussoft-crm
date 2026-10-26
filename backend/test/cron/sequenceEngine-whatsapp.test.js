@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { processStep, receiverConditionMatches } from '../../cron/sequenceEngine.js';
+import { queueWhatsAppSequenceTemplate } from '../../lib/genericCampaignAutomation.js';
 
 const enqueueSend = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/whatsappQueue.js', () => ({ getQueue: () => ({ enqueueSend }) }));
@@ -29,6 +30,7 @@ beforeEach(() => {
   prisma.waOutboundJob = { create: vi.fn().mockResolvedValue({ id: 60, status: 'PENDING' }) };
   prisma.campaign = { updateMany: vi.fn().mockResolvedValue({ count: 1 }) };
   enqueueSend.mockReset().mockResolvedValue({});
+  prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 });
 
 describe('Generic WhatsApp sequence execution', () => {
@@ -45,6 +47,49 @@ describe('Generic WhatsApp sequence execution', () => {
       body: 'Hi Jane', templateName: 'follow_up', contactId: 7, threadId: 44,
     }) }));
     expect(prisma.waOutboundJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ messageId: 22, tenantId: 1 }) }));
+  });
+
+  test('keeps long approved templates as one template send without requiring inbound activity', async () => {
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({
+      id: 9,
+      name: 'long_follow_up',
+      body: 'W'.repeat(251),
+      variableMapping: '{}',
+    });
+    prisma.whatsAppMessage.create
+      .mockResolvedValueOnce({ id: 22 })
+      .mockResolvedValueOnce({ id: 23 });
+
+    await processStep({
+      id: 8,
+      position: 0,
+      kind: 'whatsapp',
+      conditionJson: JSON.stringify({ version: 1, whatsappTemplateId: 9 }),
+    }, enrollment());
+
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledTimes(1);
+    expect(prisma.whatsAppMessage.create.mock.calls[0][0].data).toMatchObject({ body: 'W'.repeat(251), templateName: 'long_follow_up' });
+    expect(prisma.waOutboundJob.create).toHaveBeenCalledTimes(1);
+    expect(prisma.waOutboundJob.create.mock.calls[0][0].data.messageId).toBe(22);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  test('queue failure rolls back the duplicate marker and allows a complete retry', async () => {
+    let persisted = false;
+    prisma.whatsAppMessage.findFirst.mockImplementation(async () => persisted ? { id: 22 } : null);
+    const tx = {
+      whatsAppMessage: { create: vi.fn(async () => { persisted = true; return { id: 22 }; }) },
+      waOutboundJob: { create: vi.fn().mockRejectedValueOnce(new Error('queue unavailable')).mockResolvedValue({ id: 60, status: 'PENDING' }) },
+    };
+    prisma.$transaction.mockImplementation(async callback => {
+      try { return await callback(tx); } catch (error) { persisted = false; throw error; }
+    });
+    const options = { templateId: 9, enrollment: enrollment(), stepId: 8 };
+    await expect(queueWhatsAppSequenceTemplate(options)).rejects.toThrow('queue unavailable');
+    expect(persisted).toBe(false);
+    await expect(queueWhatsAppSequenceTemplate(options)).resolves.toMatchObject({ queued: true, messageIds: [22] });
+    expect(tx.waOutboundJob.create).toHaveBeenCalledTimes(2);
+    await expect(queueWhatsAppSequenceTemplate(options)).resolves.toMatchObject({ queued: false, reason: 'duplicate' });
   });
 
   test('reply condition only matches an inbound message sent after the latest sequence message', async () => {

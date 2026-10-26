@@ -7,6 +7,7 @@ vi.mock('../../lib/whatsappQueue.js', () => ({
 }));
 
 beforeEach(() => {
+  prisma.$transaction = vi.fn(async callback => callback(prisma));
   prisma.tenant = { findUnique: vi.fn().mockResolvedValue({ vertical: 'generic' }) };
   prisma.contact = { findFirst: vi.fn().mockResolvedValue({ id: 7, status: 'Lead', email: 'lead@example.com', phone: '9876543210' }) };
   prisma.leadCustomFieldValue = { findMany: vi.fn().mockResolvedValue([]) };

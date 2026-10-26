@@ -87,13 +87,13 @@ const readLifecycleDraft = (storageKey) => {
     const draft = parsed.map((segment) => ({
       id: String(segment?.id || ''),
       title: String(segment?.title ?? ''),
-      options: (Array.isArray(segment?.options) ? segment.options : []).map((option) => ({
+      options: (Array.isArray(segment?.options) ? segment.options : []).map((option, optionIndex) => ({
         id: String(option?.id || ''),
         label: String(option?.label ?? ''),
         backend: ['Lead', 'Prospect', 'Customer', 'Junk', 'Churned'].includes(option?.backend)
           ? option.backend
           : 'Lead',
-        negative: Boolean(option?.negative),
+        negative: optionIndex > 0 || Boolean(option?.negative),
       })).filter((option) => option.id),
     })).filter((segment) => segment.id && segment.options.length);
     return draft.length ? draft : null;
@@ -109,11 +109,11 @@ const normalizeLifecycleSegments = (raw) => {
     const normalized = parsed.map((segment) => ({
       id: String(segment.id || ''),
       title: String(segment.title || '').trim(),
-      options: (Array.isArray(segment.options) ? segment.options : []).map((option) => ({
+      options: (Array.isArray(segment.options) ? segment.options : []).map((option, optionIndex) => ({
         id: String(option.id || ''),
         label: String(option.label || '').trim(),
         backend: option.status || option.backend,
-        negative: Boolean(option.negative),
+        negative: optionIndex > 0 || Boolean(option.negative),
       })),
     })).filter((segment) => segment.id && segment.title && segment.options.length);
     return normalized.length ? normalized : cloneLifecycleSegments(PIPELINE_SEGS);
@@ -345,6 +345,7 @@ export default function ContactDetail() {
   const [modal, setModal] = useState(null);
   const [genericCallLead, setGenericCallLead] = useState(null);
   const [activitiesRefreshKey, setActivitiesRefreshKey] = useState(0);
+  const [conversationRefreshKey, setConversationRefreshKey] = useState(0);
   const [wellnessCallTarget, setWellnessCallTarget] = useState(null);
   const [activityPreset, setActivityPreset] = useState('Note');
   const [dealModal, setDealModal] = useState({ open: false, deal: null });
@@ -605,14 +606,14 @@ export default function ContactDetail() {
   }, [contact, id, loadContact, notify]);
 
   const changeStatus = async (status, lifecycleStageKey, lifecycleTransitionReason = '') => {
-    if (!contact || (contact.status === status && (!isGeneric || contact.lifecycleStageKey === lifecycleStageKey))) return;
+    if (!contact || (isGeneric ? contact.lifecycleStageKey === lifecycleStageKey : contact.status === status)) return;
     const prev = contact;
     const prevLifecycleStageSelections = lifecycleStageSelections;
     const selectedSegment = isGeneric
       ? lifecycleSegments.find((segment) => segment.options.some((option) => option.id === lifecycleStageKey))
       : null;
     const payload = {
-      status,
+      ...(!isGeneric ? { status } : {}),
       ...(isGeneric && lifecycleStageKey ? { lifecycleStageKey } : {}),
       ...(isGeneric && lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
     };
@@ -624,7 +625,9 @@ export default function ContactDetail() {
       const updated = await patchContact(id, payload);
       setContact(updated);
       await loadContact();
-      notify.success(`Status changed to ${status}.`);
+      notify.success(isGeneric
+        ? `Lifecycle stage changed to ${selectedSegment?.options.find((option) => option.id === lifecycleStageKey)?.label || lifecycleStageKey}.`
+        : `Status changed to ${status}.`);
     } catch {
       setContact(prev);
       setLifecycleStageSelections(prevLifecycleStageSelections);
@@ -707,17 +710,21 @@ export default function ContactDetail() {
 
   const goNeighbor = async (dir) => {
     try {
-      const list = await fetchApi('/api/contacts?limit=200', { silent: true });
+      const list = await fetchApi(
+        showGenericLeadsBackdrop ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
+        { silent: true },
+      );
       const arr = Array.isArray(list) ? list : list?.data || [];
       const idx = arr.findIndex((c) => String(c.id) === String(id));
       const target = idx >= 0 ? arr[idx + dir] : null;
       if (target) {
-        navigate(`/contacts/${target.id}`, { state: location.state });
+        navigate(`${showGenericLeadsBackdrop ? '/leads' : '/contacts'}/${target.id}`, { state: location.state });
       } else {
-        notify.info(dir > 0 ? 'This is the last contact.' : 'This is the first contact.');
+        const recordLabel = showGenericLeadsBackdrop ? 'lead' : 'contact';
+        notify.info(dir > 0 ? `This is the last ${recordLabel}.` : `This is the first ${recordLabel}.`);
       }
     } catch {
-      notify.error('Could not load contacts.');
+      notify.error(`Could not load ${showGenericLeadsBackdrop ? 'leads' : 'contacts'}.`);
     }
   };
 
@@ -785,7 +792,9 @@ export default function ContactDetail() {
     setConfirmAction({
       key: 'delete',
       title: `Delete ${contact.name}?`,
-      body: 'The contact will be moved to trash. You can restore it later from the contacts list.',
+      body: isGeneric
+        ? 'Do you want to delete this contact permanently? This action cannot be undone.'
+        : 'The contact will be moved to trash. You can restore it later from the contacts list.',
       confirmLabel: 'Delete',
     });
   };
@@ -874,7 +883,11 @@ export default function ContactDetail() {
       setGenericCallLead(contact);
       return;
     }
-    if ((kind === 'call' || kind === 'sms' || kind === 'whatsapp') && !contact.phone) {
+    if (kind === 'whatsapp' && !(contact.whatsappPhone || contact.phone)) {
+      notify.error('Add a WhatsApp or phone number first.');
+      return;
+    }
+    if ((kind === 'call' || kind === 'sms') && !contact.phone) {
       notify.error('Add a phone number first.');
       return;
     }
@@ -1205,7 +1218,7 @@ export default function ContactDetail() {
   const selectedStageOption = (stageSel && (segOptionById(stageSel, lifecycleSegments) || segOption(stageSel, lifecycleSegments)))
     || (isGeneric && contact.lifecycleStageKey ? segOptionById(contact.lifecycleStageKey, lifecycleSegments) : null);
   const fallbackStageOption = lifecycleSegments.flatMap((segment) => segment.options).find((option) => option.backend === contact.status);
-  const activeStage = selectedStageOption && (isTravel || selectedStageOption.backend === contact.status)
+  const activeStage = selectedStageOption && (isGeneric || isTravel || selectedStageOption.backend === contact.status)
     ? selectedStageOption.label
     : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
   const activeSeg = segIndexOf(activeStage, lifecycleSegments);
@@ -1235,11 +1248,11 @@ export default function ContactDetail() {
         const cleaned = lifecycleDraft.map((segment) => ({
           id: segment.id,
           title: segmentDisplayTitle(segment).trim(),
-          options: segment.options.map((option) => ({
+          options: segment.options.map((option, optionIndex) => ({
             id: option.id,
             label: option.label.trim(),
             status: option.backend,
-            negative: Boolean(option.negative),
+            negative: optionIndex > 0 || Boolean(option.negative),
           })),
         }));
         if (cleaned.some((segment) => !segment.title || segment.options.some((option) => !option.label))) {
@@ -1308,7 +1321,7 @@ export default function ContactDetail() {
           id: conditionId,
           label: 'New condition',
           backend: 'Lead',
-          negative: false,
+          negative: true,
         }],
       };
     }));
@@ -1581,32 +1594,46 @@ export default function ContactDetail() {
         <div className="cp-header-right">
           <button type="button" className="cp-action-btn" onClick={() => setActiveTab('details')}><FileText size={13} /> See all details</button>
           <div className="cp-nav-btns">
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title="Previous contact" aria-label="Previous contact"><ChevronLeft size={14} /></button>
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title="Next contact" aria-label="Next contact"><ChevronRight size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`} aria-label={`Previous ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title={`Next ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`} aria-label={`Next ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`}><ChevronRight size={14} /></button>
           </div>
         </div>
       </div>
 
       <div className="cp-actions-bar">
-        {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
-        {!isTravel && (isGeneric || contact.phone) && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
-        <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
-        <button type="button" className="cp-action-btn" onClick={() => (isWellness ? navigate('/tasks') : openAction('task'))}><CheckSquare size={13} /> Task</button>
-        <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
-        <button type="button" className="cp-action-btn" onClick={() => { setActivityPreset('Call'); setModal('activity'); }}><TrendingUp size={13} /> {isWellness ? 'Care activities' : 'Sales activities'}</button>
-        <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
-        {!isWellness && !isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('sms')}><MessageSquare size={13} /> SMS</button>}
+        {isGeneric ? (
+          <>
+            {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
+            {contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('sms')}><MessageSquare size={13} /> SMS</button>}
+            {(contact.whatsappPhone || contact.phone) && <button type="button" className="cp-action-btn" onClick={() => openAction('whatsapp')}><MessageSquare size={13} /> WhatsApp</button>}
+            <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>
+            <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
+            <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
+            <button type="button" className="cp-action-btn" onClick={() => openAction('task')}><CheckSquare size={13} /> Task</button>
+            <button type="button" className="cp-action-btn" onClick={openContactDeal}><Plus size={13} /> Add deal</button>
+          </>
+        ) : (
+          <>
+            {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
+            {!isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
+            <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
+            <button type="button" className="cp-action-btn" onClick={() => (isWellness ? navigate('/tasks') : openAction('task'))}><CheckSquare size={13} /> Task</button>
+            <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
+            <button type="button" className="cp-action-btn" onClick={() => { setActivityPreset('Call'); setModal('activity'); }}><TrendingUp size={13} /> {isWellness ? 'Care activities' : 'Sales activities'}</button>
+            <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
+          </>
+        )}
         <div className="cp-more-wrap" ref={moreRef}>
           <button type="button" className="cp-action-btn" onClick={() => setMoreOpen((o) => !o)} title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen}><MoreHorizontal size={13} /></button>
           {moreOpen && (
             <div className="cp-more-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>
-              <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>
+              {!isGeneric && <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>}
+              {!isGeneric && <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>}
               <button type="button" role="menuitem" className="neg" onClick={askDelete}><Trash2 size={13} /> Delete</button>
-              {!isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
+              {!isGeneric && !isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
               <button type="button" role="menuitem" onClick={handleExport}><Download size={13} /> Export</button>
-              {!isTravel && <button type="button" role="menuitem" onClick={handleUnsubscribe}><BellOff size={13} /> Unsubscribe</button>}
-              <button type="button" role="menuitem" className="neg" onClick={askForget}><UserX size={13} /> Forget</button>
+              {!isGeneric && !isTravel && <button type="button" role="menuitem" onClick={handleUnsubscribe}><BellOff size={13} /> Unsubscribe</button>}
+              {!isGeneric && <button type="button" role="menuitem" className="neg" onClick={askForget}><UserX size={13} /> Forget</button>}
             </div>
           )}
         </div>
@@ -1691,7 +1718,7 @@ export default function ContactDetail() {
                                 {segment.options.length > 1 && <label className="cp-stage-manager-field"><span>Condition {optionIndex + 1}</span><input className="cp-input" aria-label={`${segment.title} condition ${optionIndex + 1}`} value={option.label} onChange={(event) => setLifecycleDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: item.options.map((value, valueIndex) => valueIndex === optionIndex ? { ...value, label: event.target.value } : value) } : item))} /></label>}
                                 <label className="cp-stage-manager-field">
                                   <span>CRM status</span>
-                                  <select className="cp-input" aria-label={`${option.label} CRM status`} value={option.backend} onChange={(event) => setLifecycleDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: item.options.map((value, valueIndex) => valueIndex === optionIndex ? { ...value, backend: event.target.value, negative: ['Junk', 'Churned'].includes(event.target.value) } : value) } : item))}>
+                                  <select className="cp-input" aria-label={`${option.label} CRM status`} value={option.backend} onChange={(event) => setLifecycleDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: item.options.map((value, valueIndex) => valueIndex === optionIndex ? { ...value, backend: event.target.value, negative: valueIndex > 0 || ['Junk', 'Churned'].includes(event.target.value) } : value) } : item))}>
                                     {['Lead', 'Prospect', 'Customer', 'Junk', 'Churned'].map((status) => <option key={status} value={status}>{status}</option>)}
                                   </select>
                                 </label>
@@ -2095,7 +2122,7 @@ export default function ContactDetail() {
           )}
 
           {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} lifecycleStageLabel={isGeneric ? activeStage : ''} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
-          {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel || isWellness} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
+          {activeTab === 'conversations' && <ConversationsTab key={`conversation-${conversationRefreshKey}`} contact={contact} contactId={id} hideSms={isTravel || isWellness} showWhatsapp={isGeneric} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
           {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
@@ -2130,7 +2157,7 @@ export default function ContactDetail() {
         />
       )}
       {modal === 'sms' && <SmsModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
-      {modal === 'whatsapp' && <WhatsappModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
+      {modal === 'whatsapp' && <WhatsappModal contact={contact} onClose={() => setModal(null)} onDone={() => { setConversationRefreshKey((current) => current + 1); refresh(); }} />}
       {modal === 'task' && <TaskModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'meeting' && <MeetingModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'activity' && <ActivityModal contact={contact} presetType={activityPreset} onClose={() => setModal(null)} onDone={refresh} />}

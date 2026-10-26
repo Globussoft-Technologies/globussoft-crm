@@ -590,6 +590,20 @@ describe('cron/sequenceEngine — processStep sms', () => {
     }));
   });
 
+  test('Generic CRM sends SMS content over 150 characters as separate messages', async () => {
+    const body = 'S'.repeat(151);
+    prisma.emailTemplate.findFirst.mockResolvedValue({ id: 81, body });
+    prisma.smsMessage.create
+      .mockResolvedValueOnce({ id: 'sms-1' })
+      .mockResolvedValueOnce({ id: 'sms-2' });
+
+    await processStep(stepWith({ kind: 'sms', emailTemplateId: 81 }), enrollmentWith());
+
+    expect(prisma.smsMessage.create).toHaveBeenCalledTimes(2);
+    expect(prisma.smsMessage.create.mock.calls.map(([call]) => call.data.body.length)).toEqual([150, 1]);
+    expect(prisma.smsMessage.update).toHaveBeenCalledTimes(2);
+  });
+
   test('non-Generic CRM keeps the existing inline SMS body behavior', async () => {
     await processStep(stepWith({
       kind: 'sms',
@@ -600,6 +614,17 @@ describe('cron/sequenceEngine — processStep sms', () => {
     expect(prisma.emailTemplate.findFirst).not.toHaveBeenCalled();
     expect(prisma.smsMessage.create.mock.calls[0][0].data.body)
       .toBe('Wellness reminder for Jane Doe.');
+  });
+
+  test('does not split long SMS content for non-Generic CRM sequences', async () => {
+    const body = 'W'.repeat(151);
+
+    await processStep(stepWith({ kind: 'sms', smsBody: body }), enrollmentWith({
+      sequence: { tenant: { vertical: 'wellness' } },
+    }));
+
+    expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
+    expect(prisma.smsMessage.create.mock.calls[0][0].data.body).toBe(body);
   });
 
   test('contact has phone → writes SmsMessage with rendered body + QUEUED', async () => {
@@ -632,8 +657,10 @@ describe('cron/sequenceEngine — processStep sms', () => {
       sequence: { tenant: { vertical: 'generic', name: 'Generic CRM' } },
     }));
 
-    expect(prisma.smsMessage.create.mock.calls[0][0].data.body)
+    const parts = prisma.smsMessage.create.mock.calls.map(([call]) => call.data.body);
+    expect(parts.join(''))
       .toMatch(/^Submit pickup and plot: http:\/\/localhost:5173\/pickup-plot-selection\/.+/);
+    expect(parts.filter(part => part.startsWith('http://localhost:5173/pickup-plot-selection/'))).toHaveLength(1);
   });
 
   test('contact has no phone → no write, still advances', async () => {

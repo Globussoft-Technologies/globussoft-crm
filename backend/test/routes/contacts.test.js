@@ -1507,25 +1507,47 @@ describe('PUT /api/contacts/:id — update', () => {
 
   test('persists a configured Generic CRM lifecycle stage without changing its broad status', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
-    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, lifecycleStageKey: 'new' });
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, lifecycleStageKey: 'interested' });
 
     const res = await request(makeApp())
       .patch('/api/contacts/9001')
-      .send({ status: 'Lead', lifecycleStageKey: 'new' });
+      .send({ lifecycleStageKey: 'interested' });
 
     expect(res.status).toBe(200);
     expect(prisma.contact.update.mock.calls[0][0].data).toMatchObject({
-      status: 'Lead',
-      lifecycleStageKey: 'new',
+      lifecycleStageKey: 'interested',
     });
+    expect(prisma.contact.update.mock.calls[0][0].data).not.toHaveProperty('status');
   });
 
   test('requires a reason for a negative Generic CRM lifecycle stage', async () => {
-    prisma.contact.findFirst.mockResolvedValueOnce({ ...SAMPLE_CONTACT, status: 'Churned', lifecycleStageKey: 'lost' });
+    prisma.contact.findFirst.mockResolvedValueOnce({ ...SAMPLE_CONTACT, status: 'Lead', lifecycleStageKey: 'interested' });
 
     const res = await request(makeApp())
       .patch('/api/contacts/9001')
-      .send({ status: 'Churned', lifecycleStageKey: 'churned' });
+      .send({ lifecycleStageKey: 'churned' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NEGATIVE_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('requires a reason for the second condition even when its configured status is not negative', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({ ...SAMPLE_CONTACT, lifecycleStageKey: 'qualified' });
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify([{
+        id: 'decision',
+        title: 'Approved / Needs review',
+        options: [
+          { id: 'approved', label: 'Approved', status: 'Customer', negative: false },
+          { id: 'needs-review', label: 'Needs review', status: 'Prospect', negative: false },
+        ],
+      }]),
+    });
+
+    const res = await request(makeApp())
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'needs-review' });
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'NEGATIVE_STAGE_REASON_REQUIRED' });
@@ -1533,7 +1555,7 @@ describe('PUT /api/contacts/:id — update', () => {
   });
 
   test('records a negative lifecycle-stage reason in the audit transition without passing it to Prisma', async () => {
-    const existing = { ...SAMPLE_CONTACT, status: 'Churned', lifecycleStageKey: 'lost' };
+    const existing = { ...SAMPLE_CONTACT, status: 'Lead', lifecycleStageKey: 'interested' };
     const updated = { ...existing, lifecycleStageKey: 'churned' };
     prisma.contact.findFirst.mockResolvedValueOnce(existing);
     prisma.contact.update.mockResolvedValueOnce(updated);
@@ -1541,7 +1563,7 @@ describe('PUT /api/contacts/:id — update', () => {
 
     const res = await request(makeApp())
       .patch('/api/contacts/9001')
-      .send({ status: 'Churned', lifecycleStageKey: 'churned', lifecycleTransitionReason: 'Customer cancelled renewal' });
+      .send({ lifecycleStageKey: 'churned', lifecycleTransitionReason: 'Customer cancelled renewal' });
 
     expect(res.status).toBe(200);
     expect(prisma.contact.update.mock.calls[0][0].data).not.toHaveProperty('lifecycleTransitionReason');

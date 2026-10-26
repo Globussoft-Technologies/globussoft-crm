@@ -49,6 +49,7 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifyInfo = vi.fn();
 const notifySuccess = vi.fn();
+const notifyPrompt = vi.fn();
 const navigateMock = vi.fn();
 vi.mock('../utils/notify', () => ({
   useNotify: () => ({
@@ -56,7 +57,7 @@ vi.mock('../utils/notify', () => ({
     info: notifyInfo,
     success: notifySuccess,
     confirm: () => Promise.resolve(true),
-    prompt: () => Promise.resolve(''),
+    prompt: notifyPrompt,
   }),
 }));
 
@@ -69,6 +70,7 @@ beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('external lookup disabled in unit tests')));
+  notifyPrompt.mockReset().mockResolvedValue('');
 });
 
 afterEach(() => {
@@ -1290,7 +1292,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.getByText('Open full detail')).toBeInTheDocument();
   });
 
-  it('keeps the Name column fixed for generic CRM and renders saved visible columns in order', async () => {
+  it('keeps Name and Actions fixed and hides unchecked Callified columns', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -1316,7 +1318,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
         th.textContent.replace(/\s+/g, ' ').trim(),
       );
-      expect(headers.slice(0, 13)).toEqual([
+      expect(headers).toEqual([
         'Name',
         'Phone',
         'Company',
@@ -1325,10 +1327,6 @@ describe('Leads Freshsales-style list UI affordances', () => {
         'Created',
         'Source',
         'Lead Score',
-        'Callified Campaign',
-        'Call Status',
-        'Callified AI call',
-        'Callified Score',
         'Actions',
       ]);
     });
@@ -1361,6 +1359,49 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(filtersToolbar.style.height).toBe('');
     expect(filtersToolbar).toContainElement(actionsToolbar);
     expect(screen.queryByRole('button', { name: 'Go back' })).toBeNull();
+  });
+
+  it('renders the generic reset layout in its requested column order', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: [
+            'name', 'phone', 'email', 'campaign', 'callStatus', 'callifiedAi',
+            'callifiedScore', 'source', 'webForm', 'createdAt', 'lastUpdated',
+            'actions',
+          ],
+          availableColumns: [
+            { key: 'name', label: 'Name', lockedVisible: true },
+            { key: 'phone', label: 'Phone' },
+            { key: 'email', label: 'Email' },
+            { key: 'campaign', label: 'Callified Campaign' },
+            { key: 'callStatus', label: 'Call Status' },
+            { key: 'callifiedAi', label: 'Callified AI call' },
+            { key: 'callifiedScore', label: 'Callified Score' },
+            { key: 'source', label: 'Source' },
+            { key: 'webForm', label: 'Web Form' },
+            { key: 'createdAt', label: 'Created' },
+            { key: 'lastUpdated', label: 'Last Updated' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Smith');
+
+    await waitFor(() => {
+      const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
+        th.textContent.replace(/\s+/g, ' ').trim(),
+      );
+      expect(headers).toEqual([
+        'Name', 'Phone', 'Email', 'Callified Campaign', 'Call Status',
+        'Callified AI call', 'Callified Score', 'Source', 'Web Form',
+        'Created', 'Last Updated', 'Actions',
+      ]);
+    });
   });
 
   it('lets the wheel move across columns when the short Generic grid has no rows to scroll', async () => {
@@ -1846,7 +1887,11 @@ function leadsFetchMock(url, opts) {
   }
   if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
     return Promise.resolve({
-      visible: ['name', 'email', 'company', 'phone', 'aiScore', 'source', 'status', 'tags', 'assignedTo', 'createdAt'],
+      visible: [
+        'name', 'email', 'company', 'phone', 'aiScore', 'source', 'status',
+        'tags', 'assignedTo', 'createdAt', 'campaign', 'callStatus',
+        'callifiedAi', 'callifiedScore',
+      ],
       availableColumns: [
         { key: 'name', label: 'Name' },
         { key: 'email', label: 'Email' },
@@ -1858,6 +1903,10 @@ function leadsFetchMock(url, opts) {
         { key: 'tags', label: 'Tags' },
         { key: 'assignedTo', label: 'Assigned To' },
         { key: 'createdAt', label: 'Created' },
+        { key: 'campaign', label: 'Callified Campaign' },
+        { key: 'callStatus', label: 'Call Status' },
+        { key: 'callifiedAi', label: 'Callified AI call' },
+        { key: 'callifiedScore', label: 'Callified Score' },
       ],
     });
   }
@@ -4314,7 +4363,7 @@ describe('Leads extended Freshsales-parity columns', () => {
         return Promise.resolve({
           value: JSON.stringify([
             { id: 'new', title: 'New', options: [{ id: 'new', label: 'New', status: 'Lead' }] },
-            { id: 'interest', title: 'Interest', options: [{ id: 'interested', label: 'Interested', status: 'Lead' }] },
+            { id: 'interest', title: 'Interest', options: [{ id: 'interested', label: 'Interested', status: 'Prospect' }] },
           ]),
         });
       }
@@ -4351,6 +4400,56 @@ describe('Leads extended Freshsales-parity columns', () => {
       '/api/contacts/201',
       expect.objectContaining({ method: 'PUT' }),
     );
+  });
+
+  it('keeps a lifecycle edit in the same lead list and asks for a negative-condition reason', async () => {
+    notifyPrompt.mockResolvedValue('No valid requirement');
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve([EXTENDED_LEAD]);
+      }
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'lifecycleStage'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'lifecycleStage', label: 'Lifecycle Stage' },
+          ],
+        });
+      }
+      if (url === '/api/tenant-settings/generic.contactLifecycleStages' && opts?.silent === true) {
+        return Promise.resolve({
+          value: JSON.stringify([
+            { id: 'interest', title: 'Interested / Unqualified', options: [
+              { id: 'interested', label: 'Interested', status: 'Prospect', negative: false },
+              { id: 'unqualified', label: 'Unqualified', status: 'Prospect', negative: false },
+            ] },
+          ]),
+        });
+      }
+      if (url === '/api/contacts/201' && opts?.method === 'PATCH') {
+        return Promise.resolve({ ...EXTENDED_LEAD, lifecycleStageKey: 'unqualified' });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(genericAuth);
+    await screen.findByText('Interested');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Lifecycle Stage for Aarav Sharma' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Edit Lifecycle Stage for Aarav Sharma' }), {
+      target: { value: 'Unqualified' },
+    });
+
+    await waitFor(() => expect(notifyPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Reason required',
+      message: 'Tell us why Unqualified was selected.',
+    })));
+    const patchCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/201' && opts?.method === 'PATCH');
+    expect(JSON.parse(patchCall[1].body)).toEqual({
+      lifecycleStageKey: 'unqualified',
+      lifecycleTransitionReason: 'No valid requirement',
+    });
+    expect(JSON.parse(patchCall[1].body)).not.toHaveProperty('status');
   });
 });
 

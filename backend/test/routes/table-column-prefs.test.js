@@ -74,16 +74,15 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys.indexOf('webForm')).toBe(keys.indexOf('source') + 1);
   });
 
-  test('first-ever load defaults every builtin visible, including Web Form', async () => {
+  test('first-ever generic Leads load uses the compact calling-focused default', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 
     expect(res.status).toBe(200);
-    expect(res.body.visible).toContain('webForm');
-    expect(res.body.visible).toContain('lifecycleStage');
-    expect(res.body.visible).toContain('location');
-    expect(res.body.visible).toContain('pickupLocation');
-    expect(res.body.visible).toContain('plotAssign');
-    expect(res.body.visible).toContain('overallPickupStatus');
+    expect(res.body.visible).toEqual([
+      'name', 'phone', 'email', 'campaign', 'callStatus', 'callifiedAi',
+      'callifiedScore', 'source', 'webForm', 'createdAt', 'lastUpdated',
+      'actions',
+    ]);
     expect(res.body.availableColumns.find((c) => c.key === 'location')).toMatchObject({
       label: 'Location',
     });
@@ -132,8 +131,8 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys.indexOf('lifecycleStage')).toBe(keys.indexOf('webForm') + 1);
     expect(keys.indexOf('medium')).toBe(keys.indexOf('lifecycleStage') + 1);
     expect(keys.indexOf('medium')).not.toBe(keys.indexOf('source') + 1);
-    // First-ever load defaults Medium visible (every builtin is visible).
-    expect(res.body.visible).toContain('medium');
+    // Medium stays available but is opt-in under the compact default.
+    expect(res.body.visible).not.toContain('medium');
   });
 
   test('contacts catalog is unchanged (no Web Form column there)', async () => {

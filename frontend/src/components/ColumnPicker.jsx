@@ -42,22 +42,20 @@ export default function ColumnPicker({
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
   const loadedOnce = useRef(false);
-  // Reset is intentionally narrower than the first-load table fallback.
-  // Keep the established generic CRM column set stable so resetting does
-  // not unexpectedly opt users into campaign/scoring columns.
+  // Generic Leads reset matches the first-load calling-focused layout.
+  // Every other catalog column remains available as an opt-in choice.
   const leadsDefaultColumns = [
     "name",
     "phone",
     "email",
-    "company",
+    "campaign",
+    "callStatus",
+    "callifiedAi",
+    "callifiedScore",
     "source",
     "webForm",
     "createdAt",
     "lastUpdated",
-    "companySize",
-    "pickupLocation",
-    "plotAssign",
-    "overallPickupStatus",
     "actions",
   ];
 

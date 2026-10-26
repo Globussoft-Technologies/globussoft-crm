@@ -6,7 +6,7 @@ import { formatMoney } from '../../utils/money';
 import { formatDate, formatDateTime } from '../../utils/date';
 import {
   assignOwner, deleteAttachment, fetchAttachments, fetchEmailThreads,
-  fetchActivities, fetchScore, fetchSiblings, fetchSmsMessages, patchContact,
+  fetchActivities, fetchScore, fetchSiblings, fetchSmsMessages, fetchWhatsappMessages, patchContact,
   updateDeal, uploadContactFiles,
 } from './contactActions';
 import { DEAL_STAGES } from './contactProfileConfig';
@@ -86,7 +86,7 @@ export function DetailsTab({ contact, staff, refresh }) {
   );
 }
 
-export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = false, richText = false }) {
+export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = false, showWhatsapp = false, richText = false }) {
   const [filter, setFilter] = useState('all');
   const [openedEmail, setOpenedEmail] = useState(null);
   const [items, setItems] = useState([]);
@@ -94,8 +94,9 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [sms, threads] = await Promise.all([
+    const [sms, whatsapp, threads] = await Promise.all([
       fetchSmsMessages(contactId),
+      showWhatsapp ? fetchWhatsappMessages(contactId) : Promise.resolve([]),
       fetchEmailThreads(),
     ]);
     const email = contact.email ? contact.email.toLowerCase() : null;
@@ -127,11 +128,22 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
         errorMessage: m.errorMessage,
         createdAt: m.createdAt || m.sentAt || m.timestamp,
       })),
+      ...whatsapp.map((m) => ({
+        id: `whatsapp-${m.id}`,
+        channel: 'whatsapp',
+        direction: m.direction || 'OUTBOUND',
+        body: m.body,
+        personName: m.contactName || m.contact?.name || m.name || contact.name,
+        participant: m.direction === 'INBOUND' ? (m.from || m.sender) : (m.to || m.recipient),
+        status: m.status,
+        errorMessage: m.errorMessage,
+        createdAt: m.createdAt || m.sentAt || m.timestamp,
+      })),
       ...emailItems,
     ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     setItems(norm);
     setLoading(false);
-  }, [contact.email, contact.name, contactId]);
+  }, [contact.email, contact.name, contactId, showWhatsapp]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -164,12 +176,13 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
     <div className="cp-card">
       <h3>Conversation ({items.length})</h3>
       <div className="cp-filters">
-        {[['all', 'All'], ['email', 'Email'], ...(!hideSms ? [['sms', 'SMS']] : [])].map(([k, label]) => (
+        {[['all', 'All'], ['email', 'Email'], ...(!hideSms ? [['sms', 'SMS']] : []), ...(showWhatsapp ? [['whatsapp', 'WhatsApp']] : [])].map(([k, label]) => (
           <button key={k} type="button" className={`cp-filter${filter === k ? ' active' : ''}`} onClick={() => setFilter(k)}>{label}</button>
         ))}
         <span style={{ flex: 1 }} />
         {contact.email && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('email')}>New email</button>}
         {!hideSms && contact.phone && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('sms')}>New SMS</button>}
+        {showWhatsapp && (contact.whatsappPhone || contact.phone) && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('whatsapp')}>New WhatsApp</button>}
       </div>
       {loading ? (
         <div className="cp-empty">Loading conversations…</div>
@@ -195,11 +208,11 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
                     <div className="cp-msg-meta">
                       {m.channel} • {formatDateTime(m.createdAt)}
                       {m.participant ? ` • ${m.direction === 'INBOUND' ? 'From' : 'To'} ${m.participant}` : ''}
-                      {m.channel === 'sms' && m.status ? ` • ${m.status}` : ''}
+                      {['sms', 'whatsapp'].includes(m.channel) && m.status ? ` • ${m.status}` : ''}
                     </div>
                     {m.subject && <div className="cp-msg-subject">{m.subject}</div>}
                     <div>{m.body || '—'}</div>
-                    {m.channel === 'sms' && m.status === 'FAILED' && m.errorMessage && (
+                    {['sms', 'whatsapp'].includes(m.channel) && m.status === 'FAILED' && m.errorMessage && (
                       <div style={{ color: 'var(--danger-color, #dc2626)', fontSize: '0.75rem', marginTop: '0.35rem' }}>
                         Delivery failed: {m.errorMessage}
                       </div>

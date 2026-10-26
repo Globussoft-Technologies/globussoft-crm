@@ -304,6 +304,12 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "callifiedAi",
   "callifiedScore",
 ];
+const CALLIFIED_LEAD_COLUMN_KEYS = new Set([
+  "campaign",
+  "callStatus",
+  "callifiedAi",
+  "callifiedScore",
+]);
 const ensureGenericPlotAssignCatalog = (columns) => {
   if (!Array.isArray(columns)) return columns;
   const withoutPlotAssign = columns.filter(
@@ -2256,10 +2262,11 @@ const Leads = () => {
         try {
           const stages = JSON.parse(setting?.value || '[]');
           setGenericLifecycleOptions((Array.isArray(stages) ? stages : []).flatMap((stage) => (
-            Array.isArray(stage?.options) ? stage.options.map((option) => ({
+            Array.isArray(stage?.options) ? stage.options.map((option, optionIndex) => ({
               id: String(option.id || ''),
               label: String(option.label || ''),
               status: option.status,
+              negative: optionIndex > 0 || option.negative === true,
             })) : []
           )).filter((option) => option.id && option.label && option.status));
         } catch (_error) {
@@ -5547,14 +5554,30 @@ const Leads = () => {
         ]
       : []),
   ].filter(
-    (column) =>
-      !isGeneric ||
-      !["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(
-        column.key,
-      ) ||
-      !Array.isArray(visibleColumns) ||
-      visibleColumns.includes(column.key),
+    (column) => {
+      if (!isGeneric) return true;
+      if (CALLIFIED_LEAD_COLUMN_KEYS.has(column.key)) {
+        return preferredVisibleColumns.includes(column.key);
+      }
+      if (["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(column.key)) {
+        return !Array.isArray(visibleColumns) || visibleColumns.includes(column.key);
+      }
+      return true;
+    },
   );
+  const firstCallifiedColumnIndex = preferredVisibleColumns.findIndex((key) =>
+    CALLIFIED_LEAD_COLUMN_KEYS.has(key),
+  );
+  const leadUserColumnsBeforeCallified = firstCallifiedColumnIndex < 0
+    ? leadUserColumnDefs
+    : leadUserColumnDefs.filter(
+        (column) => preferredVisibleColumns.indexOf(column.key) < firstCallifiedColumnIndex,
+      );
+  const leadUserColumnsAfterCallified = firstCallifiedColumnIndex < 0
+    ? []
+    : leadUserColumnDefs.filter(
+        (column) => preferredVisibleColumns.indexOf(column.key) > firstCallifiedColumnIndex,
+      );
   const isLeadFixedColumnVisible = (key) =>
     leadFixedExtraColumnDefs.some((column) => column.key === key);
   const getCustomFieldFilterKind = (fieldType) => {
@@ -7260,7 +7283,7 @@ const Leads = () => {
         );
       case "lifecycleStage": {
         const configuredStage = isGeneric
-          ? genericLifecycleOptions.find((option) => option.id === lead.lifecycleStageKey && option.status === lead.status)
+          ? genericLifecycleOptions.find((option) => option.id === lead.lifecycleStageKey)
           : null;
         const lifecycleOptions = isGeneric && genericLifecycleOptions.length
           ? genericLifecycleOptions
@@ -7279,9 +7302,25 @@ const Leads = () => {
           onSave: async (row, _field, selectedLabel) => {
             const option = lifecycleOptions.find((item) => item.label === selectedLabel);
             if (!option) return;
+            let lifecycleTransitionReason = '';
+            if (isGeneric && option.negative) {
+              const reason = await notify.prompt({
+                title: 'Reason required',
+                message: `Tell us why ${option.label} was selected.`,
+                placeholder: 'Enter the reason for this negative stage',
+                confirmText: 'Confirm stage',
+              });
+              lifecycleTransitionReason = String(reason || '').trim();
+              if (!lifecycleTransitionReason) return false;
+            }
             const updated = await fetchApi(`/api/contacts/${row.id}`, {
               method: "PATCH",
-              body: JSON.stringify({ status: option.status, ...(isGeneric && genericLifecycleOptions.length ? { lifecycleStageKey: option.id } : {}) }),
+              body: JSON.stringify(isGeneric && genericLifecycleOptions.length
+                ? {
+                    lifecycleStageKey: option.id,
+                    ...(lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
+                  }
+                : { status: option.status }),
             });
             setLeads((current) => current.map((item) => item.id === row.id ? { ...item, ...updated } : item));
           },
@@ -10514,7 +10553,7 @@ const Leads = () => {
                           />
                         ) : null,
                       )}
-                    {leadUserColumnDefs.map((column) => (
+                    {leadUserColumnsBeforeCallified.map((column) => (
                       <Fragment key={column.key}>
                         {renderLeadUserHeaderCell(column)}
                       </Fragment>
@@ -10587,6 +10626,11 @@ const Leads = () => {
                           label: "Callified Score",
                         }),
                       )}
+                    {leadUserColumnsAfterCallified.map((column) => (
+                      <Fragment key={column.key}>
+                        {renderLeadUserHeaderCell(column)}
+                      </Fragment>
+                    ))}
                     {isTravel &&
                       renderColumnHeaderCell(
                         "subBrand",
@@ -10729,7 +10773,7 @@ const Leads = () => {
                             </div>
                           </td>
                         )}
-                        {leadUserColumnDefs.map((column) => (
+                        {leadUserColumnsBeforeCallified.map((column) => (
                           <Fragment key={column.key}>
                             {renderLeadUserBodyCell(lead, column)}
                           </Fragment>
@@ -11292,6 +11336,11 @@ const Leads = () => {
                             })()}
                           </td>
                         )}
+                        {leadUserColumnsAfterCallified.map((column) => (
+                          <Fragment key={column.key}>
+                            {renderLeadUserBodyCell(lead, column)}
+                          </Fragment>
+                        ))}
                         {isTravel && (
                           <td
                             style={getBodyCellStyle("subBrand", {

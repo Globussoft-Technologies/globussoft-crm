@@ -569,32 +569,43 @@ async function queueWhatsAppSequenceTemplate({ templateId, enrollment, context =
   });
   if (!thread) return { queued: false, reason: "thread_unavailable" };
 
-  const message = await prisma.whatsAppMessage.create({
-    data: {
-      to: recipientPhone.replace(/\D/g, ""),
-      from: config.phoneNumberId,
-      body: renderWhatsAppTemplate(template.body, parameters),
-      direction: "OUTBOUND",
-      status: "QUEUED",
-      templateName: template.name,
-      contactId: contact.id,
-      tenantId: enrollment.tenantId,
-      threadId: thread.id,
-      interactiveJson: JSON.stringify({
-        sequenceKey: duplicateKey,
-        sequenceEnrollmentId: enrollment.id,
-        sequenceId: enrollment.sequenceId,
-        sequenceStepId: stepId,
-        branch,
-        // Activates the inbound native-list flow only when this exact message
-        // came from a sequence step using a pickup/plot template. Manual sends
-        // and unrelated sequence templates never receive this marker.
-        pickupPlotFlow,
-        parameters,
-      }),
-    },
+  const renderedBody = renderWhatsAppTemplate(template.body, parameters);
+  // Approved templates must remain template sends, including outside the
+  // customer-service window. A local preview limit is not a transport limit.
+  // Persist the message and DB-backed queue job together: a queue failure
+  // must not leave a duplicate marker that prevents a later retry.
+  const message = await prisma.$transaction(async (tx) => {
+    const created = await tx.whatsAppMessage.create({
+      data: {
+        to: recipientPhone.replace(/\D/g, ""),
+        from: config.phoneNumberId,
+        body: renderedBody,
+        direction: "OUTBOUND",
+        status: "QUEUED",
+        templateName: template.name,
+        contactId: contact.id,
+        tenantId: enrollment.tenantId,
+        threadId: thread.id,
+        interactiveJson: JSON.stringify({
+          sequenceKey: duplicateKey,
+          sequenceEnrollmentId: enrollment.id,
+          sequenceId: enrollment.sequenceId,
+          sequenceStepId: stepId,
+          branch,
+          messagePart: 1,
+          messagePartCount: 1,
+          sourceTemplateName: template.name,
+          // Activates the inbound native-list flow only when this exact message
+          // came from a sequence step using a pickup/plot template. Manual sends
+          // and unrelated sequence templates never receive this marker.
+          pickupPlotFlow,
+          parameters,
+        }),
+      },
+    });
+    await require("./whatsappQueue").getQueue().enqueueSend({ messageId: created.id, tenantId: enrollment.tenantId, db: tx });
+    return created;
   });
-  await require("./whatsappQueue").getQueue().enqueueSend({ messageId: message.id, tenantId: enrollment.tenantId });
   const campaign = (enrollment.sequence.campaigns || []).find(item => item.status === "Active" && item.channel === "WHATSAPP");
   if (campaign?.id) {
     await prisma.campaign.updateMany({
@@ -602,7 +613,7 @@ async function queueWhatsAppSequenceTemplate({ templateId, enrollment, context =
       data: { sent: { increment: 1 } },
     }).catch(() => {});
   }
-  return { queued: true, messageId: message.id, threadId: thread.id };
+  return { queued: true, messageId: message.id, messageIds: [message.id], threadId: thread.id };
 }
 
 function genericCampaignEventRecordId(eventName, payload, hydrated, contact) {

@@ -53,8 +53,11 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.tenantSetting = prisma.tenantSetting || {};
 prisma.tenantSetting.findUnique = vi.fn();
+prisma.webForm = prisma.webForm || {};
+prisma.webForm.findMany = vi.fn();
 prisma.webFormSubmission = prisma.webFormSubmission || {};
 prisma.webFormSubmission.findMany = vi.fn();
+prisma.webFormSubmission.groupBy = vi.fn();
 prisma.$queryRaw = vi.fn();
 const callifiedClient = requireCJS("../../services/callifiedClient");
 callifiedClient.listCampaigns = vi.fn();
@@ -109,7 +112,9 @@ beforeEach(() => {
     .mockResolvedValue({ vertical: "generic" });
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
+  prisma.webForm.findMany.mockReset().mockResolvedValue([]);
   prisma.webFormSubmission.findMany.mockReset().mockResolvedValue([]);
+  prisma.webFormSubmission.groupBy.mockReset().mockResolvedValue([]);
   callifiedClient.listCampaigns.mockReset().mockResolvedValue([]);
 });
 
@@ -1513,12 +1518,17 @@ describe("webForm relation filter (generic Leads only)", () => {
     expect(call.where.AND).toBeUndefined();
   });
 
-  test("filter-values/webForm returns distinct used form names, alpha-sorted", async () => {
-    prisma.webFormSubmission.findMany.mockResolvedValue([
-      { webForm: { name: "Contact Us" } },
-      { webForm: { name: "Demo Request" } },
-      { webForm: { name: "Contact Us" } },
-      { webForm: null },
+  test("filter-values/webForm returns every form with visible lead counts", async () => {
+    prisma.webForm.findMany.mockResolvedValue([
+      { id: 2, name: "Contact Us" },
+      { id: 1, name: "Demo Request" },
+      { id: 3, name: "Unused Form" },
+    ]);
+    prisma.webFormSubmission.groupBy.mockResolvedValue([
+      { webFormId: 2, contactId: 11 },
+      { webFormId: 2, contactId: 12 },
+      { webFormId: 2, contactId: 11 },
+      { webFormId: 1, contactId: 13 },
     ]);
 
     const res = await request(makeApp()).get(
@@ -1528,13 +1538,25 @@ describe("webForm relation filter (generic Leads only)", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       values: [
-        { value: "Contact Us", label: "Contact Us" },
-        { value: "Demo Request", label: "Demo Request" },
+        { value: "Contact Us", label: "Contact Us", count: 2 },
+        { value: "Demo Request", label: "Demo Request", count: 1 },
+        { value: "Unused Form", label: "Unused Form", count: 0 },
       ],
     });
-    // Status scoping flows through the contact relation.
-    const args = prisma.webFormSubmission.findMany.mock.calls[0][0];
-    expect(args.where.contact).toMatchObject({ status: "Lead" });
+    expect(prisma.webForm.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, scope: "generic" },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    // Status scoping and the caller's assignment scope flow through the
+    // contact relation, while deleted contacts are excluded from the count.
+    const args = prisma.webFormSubmission.groupBy.mock.calls[0][0];
+    expect(args.where).toMatchObject({
+      tenantId: 1,
+      scope: "generic",
+      webFormId: { in: [2, 1, 3] },
+      contact: { is: { tenantId: 1, status: "Lead", deletedAt: null } },
+    });
   });
 
   test("filter-values/webForm 404s for non-generic tenants", async () => {

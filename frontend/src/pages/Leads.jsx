@@ -2491,13 +2491,16 @@ const Leads = () => {
   // ?filters=<JSON> (backend/routes/contacts.js FILTERABLE_FIELDS) so it
   // isn't bounded by the same ?limit=500 cap fetchLeads already applies.
   const leadFiltersStorageKey = `${LEADS_FILTERS_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const webFormFromUrl = isGeneric
+    ? String(drillParams.get("webForm") || "").trim()
+    : "";
   const [advancedFilters, setAdvancedFilters] = useState(() => {
     if (!isGeneric || typeof window === "undefined") return [];
     try {
       const saved = JSON.parse(
         window.sessionStorage.getItem(leadFiltersStorageKey) || "[]",
       );
-      return Array.isArray(saved)
+      const restored = Array.isArray(saved)
         ? saved.filter(
             (filter) =>
               filter &&
@@ -2506,8 +2509,16 @@ const Leads = () => {
               Array.isArray(filter.values),
           )
         : [];
+      return webFormFromUrl
+        ? [
+            ...restored.filter((filter) => filter?.field !== "webForm"),
+            { field: "webForm", operator: "contains", values: [webFormFromUrl] },
+          ]
+        : restored;
     } catch (_err) {
-      return [];
+      return webFormFromUrl
+        ? [{ field: "webForm", operator: "contains", values: [webFormFromUrl] }]
+        : [];
     }
   });
 
@@ -2608,14 +2619,26 @@ const Leads = () => {
     if (source) setSourceFilter(source);
     if (assignee) setAssigneeFilter(assignee);
     if (webForm) {
-      setAdvancedFilters((prev) =>
-        prev.some((f) => f?.field === "webForm")
-          ? prev
-          : [
-              ...prev,
-              { field: "webForm", operator: "contains", values: [webForm] },
-            ],
-      );
+      // A Web Forms modal opens Leads as a deep link. Replace a previously
+      // persisted web-form filter so the link always represents the form the
+      // user just selected; unrelated advanced filters remain active.
+      setAdvancedFilters((prev) => {
+        const currentWebFormFilters = prev.filter(
+          (filter) => filter?.field === "webForm",
+        );
+        if (
+          currentWebFormFilters.length === 1 &&
+          currentWebFormFilters[0].operator === "contains" &&
+          currentWebFormFilters[0].values?.length === 1 &&
+          String(currentWebFormFilters[0].values[0]) === webForm
+        ) {
+          return prev;
+        }
+        return [
+          ...prev.filter((filter) => filter?.field !== "webForm"),
+          { field: "webForm", operator: "contains", values: [webForm] },
+        ];
+      });
     }
     // Read once per URL — re-running on every render would fight the user's
     // own changes to the dropdowns.

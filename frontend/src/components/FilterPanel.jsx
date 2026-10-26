@@ -42,6 +42,13 @@ const SEARCHABLE_VALUE_FIELD_KEYS = new Set([
   "browser", "operatingSystem", "deviceType",
 ]);
 
+const displayFilterValue = (option) => {
+  if (option?.count === undefined || option?.count === null) {
+    return option?.label;
+  }
+  return `${option.label} (${Number(option.count) || 0})`;
+};
+
 export default function FilterPanel({
   fieldsUrl,
   valuesUrl,
@@ -104,6 +111,10 @@ export default function FilterPanel({
     () =>
       Array.isArray(allowedFieldKeys) ? new Set(allowedFieldKeys) : null,
     [allowedFieldKeys],
+  );
+  const summaryHasWebForm = Object.prototype.hasOwnProperty.call(
+    summaryDrafts,
+    "webForm",
   );
 
   const closePanel = useCallback(() => {
@@ -1210,7 +1221,7 @@ export default function FilterPanel({
                     )}
                     <div
                       className={
-                        isFreshsalesLayout
+                        isFreshsalesLayout && !summaryHasWebForm
                           ? "filter-panel-summary-search filter-panel-summary-search--hidden"
                           : "filter-panel-summary-search"
                       }
@@ -1234,8 +1245,8 @@ export default function FilterPanel({
                       <input
                         value={summaryValueSearch}
                         onChange={(e) => setSummaryValueSearch(e.target.value)}
-                        placeholder="Search values…"
-                        aria-label="Search values"
+                        placeholder={summaryHasWebForm ? "Search web forms…" : "Search values…"}
+                        aria-label={summaryHasWebForm ? "Search web forms" : "Search values"}
                         style={{
                           width: "100%",
                           padding: "0.45rem 0.6rem 0.45rem 2rem",
@@ -1573,7 +1584,7 @@ export default function FilterPanel({
                                         whiteSpace: "nowrap",
                                       }}
                                     >
-                                      {opt.label}
+                                      {displayFilterValue(opt)}
                                     </span>
                                   </label>
                                 ))}
@@ -2067,7 +2078,7 @@ export default function FilterPanel({
                                       whiteSpace: "nowrap",
                                     }}
                                   >
-                                    {opt.label}
+                                    {displayFilterValue(opt)}
                                   </span>
                                 </label>
                               ));

@@ -17,3 +17,32 @@ test.each(['firstName', 'lastName', 'utm_source'])('%s choices use remote search
   ));
   expect(await screen.findByRole('checkbox', { name: 'John' })).toBeInTheDocument();
 });
+
+test('shows web form lead counts beside every form option', async () => {
+  fetchApi.mockResolvedValue({ values: [
+    { value: 'Globus CRM', label: 'Globus CRM', count: 31 },
+    { value: 'Unused form', label: 'Unused form', count: 0 },
+  ] });
+  render(<FilterPanel fieldsUrl="/api/contacts/filter-fields" valuesUrl={valuesUrl}
+    fieldKey="webForm" fieldLabel="Web Form" fieldKind="text" autoOpen filters={[]} onChange={() => {}} />);
+  expect(await screen.findByRole('checkbox', { name: 'Globus CRM (31)' })).toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: 'Unused form (0)' })).toBeInTheDocument();
+});
+
+test('shows a search box for web forms in the compact filter summary', async () => {
+  fetchApi.mockImplementation((url) => Promise.resolve(url === '/api/contacts/filter-fields'
+    ? { fields: [{ field: 'webForm', label: 'Web Form', kind: 'text' }] }
+    : { values: [
+      { value: 'Demo Form', label: 'Demo Form', count: 0 },
+      { value: 'Social Reel Farm', label: 'Social Reel Farm', count: 4 },
+    ] }));
+  render(<FilterPanel fieldsUrl="/api/contacts/filter-fields" valuesUrl={valuesUrl}
+    layoutVariant="freshsales" filters={[{ field: 'webForm', label: 'Web Form', kind: 'text', operator: 'contains', values: [] }]} onChange={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Filter by' }));
+  const search = await screen.findByRole('textbox', { name: 'Search web forms' });
+  expect(search).toHaveAttribute('placeholder', 'Search web forms…');
+  expect(await screen.findByRole('checkbox', { name: 'Social Reel Farm (4)' })).toBeInTheDocument();
+  fireEvent.change(search, { target: { value: 'Demo' } });
+  expect(screen.getByRole('checkbox', { name: 'Demo Form (0)' })).toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: 'Social Reel Farm (4)' })).not.toBeInTheDocument();
+});

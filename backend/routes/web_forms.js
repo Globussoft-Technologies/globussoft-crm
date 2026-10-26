@@ -2461,7 +2461,6 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
     const search = String(req.query.search || "").trim().slice(0, 200);
     const where = {
       tenantId, scope: "generic", webFormId: id,
-      contact: { is: { tenantId } },
       ...(search ? { OR: [
         { payloadJson: { contains: search } },
         { filesJson: { contains: search } },
@@ -2474,15 +2473,23 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
         where, skip: (page - 1) * limit, take: limit,
         orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
         select: { id: true, payloadJson: true, filesJson: true,
-          contact: { select: { id: true, createdAt: true, updatedAt: true } } },
+          submittedAt: true,
+          contact: { select: { id: true, createdAt: true, updatedAt: true, deletedAt: true, status: true, assignedToId: true } } },
       }),
     ]);
     const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
     res.json({ fields, total, page, limit, leads: submissions.map((row) => {
       const payload = parseJson(row.payloadJson, {}) || {};
       const files = parseJson(row.filesJson, []) || [];
-      return { id: row.id, contactId: row.contact.id,
-        createdAt: row.contact.createdAt, updatedAt: row.contact.updatedAt,
+      const contact = row.contact;
+      const canViewAllLeads = ["ADMIN", "MANAGER"].includes(req.user.role);
+      const isLead = Boolean(contact && contact.status === "Lead" && !contact.deletedAt
+        && (canViewAllLeads || Number(contact.assignedToId) === Number(req.user.userId)));
+      return { id: row.id, contactId: contact?.id || null,
+        createdAt: contact?.createdAt || row.submittedAt,
+        updatedAt: contact?.updatedAt || row.submittedAt,
+        deletedAt: contact?.deletedAt || null,
+        isLead,
         values: fields.map((field) => field.fieldType === "file"
           ? files.filter((file) => file.fieldKey === field.sourceKey).map((file) => file.originalName)
           : payload[field.sourceKind === "custom" ? `custom:${field.sourceKey}` : field.sourceKey] ?? null),

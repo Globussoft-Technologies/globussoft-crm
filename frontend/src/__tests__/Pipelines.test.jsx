@@ -158,17 +158,10 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     expect(screen.getAllByRole('button', { name: /^Delete$/i }).length).toBe(2);
   });
 
-  it('every card renders a "View Pipeline" link pointing at /pipeline?pipelineId=<id>', async () => {
+  it('does not link pipeline cards to the Deals and Pipelines page', async () => {
     render(<Pipelines />);
     await screen.findByText('Enterprise Sales');
-    const links = screen.getAllByRole('link', { name: /View Pipeline/i });
-    expect(links.length).toBe(3);
-    const hrefs = links.map((l) => l.getAttribute('href')).sort();
-    expect(hrefs).toEqual([
-      '/pipeline?pipelineId=11',
-      '/pipeline?pipelineId=12',
-      '/pipeline?pipelineId=13',
-    ]);
+    expect(screen.queryByRole('link', { name: /View Pipeline/i })).not.toBeInTheDocument();
   });
 
   it('empty-state renders "No pipelines yet" + a centered Create button when GET returns []', async () => {

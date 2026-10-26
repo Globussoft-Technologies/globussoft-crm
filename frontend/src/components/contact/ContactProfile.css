@@ -357,6 +357,7 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-deal-field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.78rem; color: var(--text-primary); position: relative; }
 .cp-deal-field > span:first-child { font-weight: 600; }
 .cp-deal-field b { color: #dc2626; }
+.cp-modal[aria-label="Deal type configuration"] .cp-deal-field:has(> textarea.cp-textarea) { display: none; }
 .cp-deal-split-label { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 1rem; }
 .cp-deal-split { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 1rem; }
 .cp-deal-chip { display: inline-flex; align-items: center; gap: 0.5rem; width: fit-content; padding: 0.3rem 0.4rem 0.3rem 0.3rem; border-radius: 6px; background: rgba(59,130,246,0.08); font-size: 0.82rem; }

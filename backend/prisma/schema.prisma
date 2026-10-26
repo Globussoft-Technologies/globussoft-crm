@@ -1363,6 +1363,7 @@ model Deal {
   currency        String    @default("USD")
   probability     Int       @default(50)
   stage           String    @default("lead") // lead, contacted, proposal, won, lost
+  dealType        String?
   pipelineId      Int? // links to Pipeline.id
   expectedClose   DateTime?
   lostReason      String?

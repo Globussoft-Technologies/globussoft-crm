@@ -41,6 +41,19 @@ function mockLists(overrides = {}) {
     if (url.startsWith('/api/contacts') && method === 'GET') {
       return Promise.resolve(overrides.contacts ?? CONTACTS);
     }
+    if (url.includes('/api/tenant-settings/generic.dealTypes')) {
+      return Promise.resolve(overrides.dealTypesSetting ?? {
+        value: JSON.stringify([{ id: 'new-business', name: 'New Business', isDefault: true, stages: [{ id: 'new', name: 'New' }, { id: 'qualified', name: 'Sales Qualified' }] }]),
+      });
+    }
+    if (url.includes('/api/tenant-settings/generic.contactLifecycleStages')) {
+      return Promise.resolve(overrides.lifecycleSetting ?? {
+        value: JSON.stringify([
+          { id: 'new', title: 'New', options: [{ id: 'new', label: 'New' }] },
+          { id: 'qualified', title: 'Qualified', options: [{ id: 'qualified', label: 'Sales Qualified' }] },
+        ]),
+      });
+    }
     if (url === '/api/pipeline_stages') return Promise.resolve(overrides.stages ?? STAGES);
     if (url.startsWith('/api/pipelines')) return Promise.resolve(overrides.pipelines ?? []);
     if (url.startsWith('/api/staff')) return Promise.resolve(overrides.staff ?? []);
@@ -68,23 +81,27 @@ beforeEach(() => {
 });
 
 describe('DealModal — add deal drawer', () => {
-  it('prefills "<name> Deal", shows the contact chip and loads dynamic stages', async () => {
+  it('prefills an internal title, hides generic-only fields, and loads dynamic stages', async () => {
     mockLists();
     renderModal();
-    expect(await screen.findByDisplayValue('Rakesh Rana Deal')).toBeTruthy();
+    expect(await screen.findByText('Add deal')).toBeTruthy();
+    expect(screen.queryByLabelText('Deal name')).toBeNull();
+    expect(screen.queryByText('Related account')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add products/ })).toBeNull();
+    expect(screen.queryByLabelText('Pipeline')).toBeNull();
     expect(screen.getByText('Rakesh Rana')).toBeTruthy();
     const stage = await screen.findByLabelText('Deal stage');
     await waitFor(() => {
       expect(within(stage).getByRole('option', { name: 'Sales Qualified' })).toBeTruthy();
     });
-    expect(stage.value).toBe('lead');
+    expect(stage.value).toBe('new');
   });
 
   it('creates the deal with title, value, stage and contact on Save', async () => {
     mockLists();
     const user = userEvent.setup();
     const { onClose, onDone } = renderModal();
-    await screen.findByDisplayValue('Rakesh Rana Deal');
+    await screen.findByText('Add deal');
     await user.clear(screen.getByLabelText('Deal value'));
     await user.type(screen.getByLabelText('Deal value'), '50000');
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -94,7 +111,7 @@ describe('DealModal — add deal drawer', () => {
       const body = JSON.parse(call[1].body);
       expect(body.title).toBe('Rakesh Rana Deal');
       expect(body.amount).toBe(50000);
-      expect(body.stage).toBe('lead');
+      expect(body.stage).toBe('new');
       expect(body.contactId).toBe(7);
       expect(body.currency).toBe('USD');
     });
@@ -103,57 +120,39 @@ describe('DealModal — add deal drawer', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks save with an error when the deal name is empty', async () => {
-    mockLists();
-    const user = userEvent.setup();
-    renderModal();
-    await screen.findByDisplayValue('Rakesh Rana Deal');
-    await user.clear(screen.getByLabelText('Deal name *'));
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect(notifyObj.error).toHaveBeenCalledWith('Enter a deal name.');
-    expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/deals' && c[1]?.method === 'POST')).toBe(false);
-  });
-
   it('blocks save with an error when the deal value is empty', async () => {
     mockLists();
-    const user = userEvent.setup();
     renderModal();
-    await screen.findByDisplayValue('Rakesh Rana Deal');
+    await screen.findByText('Add deal');
     await user.clear(screen.getByLabelText('Deal value'));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(notifyObj.error).toHaveBeenCalledWith('Enter a deal value of 0 or more.');
     expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/deals' && c[1]?.method === 'POST')).toBe(false);
   });
 
-  it('product lines total flows into the deal value', async () => {
+  it('does not render product controls for generic CRM', async () => {
     mockLists();
-    const user = userEvent.setup();
     renderModal();
-    await screen.findByDisplayValue('Rakesh Rana Deal');
-    await user.click(screen.getByRole('button', { name: /Add products/ }));
-    await user.click(screen.getByRole('button', { name: /Add product/ }));
-    await user.clear(screen.getByLabelText('Product 1 quantity'));
-    await user.type(screen.getByLabelText('Product 1 quantity'), '2');
-    await user.type(screen.getByLabelText('Product 1 price'), '2500');
-    expect(screen.getByLabelText('Deal value').value).toBe('5000');
+    await screen.findByText('Add deal');
+    expect(screen.queryByRole('button', { name: /Add products/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add product/ })).toBeNull();
   });
 
-  it('Show all fields reveals probability and pipeline', async () => {
+  it('does not render extra probability or expected-close fields for generic CRM', async () => {
     mockLists({ pipelines: [{ id: 3, name: 'Enterprise' }] });
-    const user = userEvent.setup();
     renderModal();
-    await screen.findByDisplayValue('Rakesh Rana Deal');
+    await screen.findByText('Add deal');
     expect(screen.queryByLabelText('Probability %')).toBeNull();
-    await user.click(screen.getByRole('button', { name: /Show all fields/ }));
-    expect(await screen.findByLabelText('Probability %')).toBeTruthy();
-    expect(screen.getByLabelText('Pipeline')).toBeTruthy();
+    expect(screen.queryByLabelText('Expected close')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Show all fields|Hide extra fields/ })).toBeNull();
+    expect(screen.queryByLabelText('Pipeline')).toBeNull();
     expect(screen.queryByRole('button', { name: /Customize fields/ })).toBeNull();
   });
 
-  it('falls back to legacy stages when the stages endpoint fails', async () => {
+  it('falls back to default deal-type stages when the deal-type setting fails', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/contacts')) return Promise.resolve(CONTACTS);
-      if (url === '/api/pipeline_stages') return Promise.reject(new Error('down'));
+      if (url.includes('/api/tenant-settings/generic.dealTypes')) return Promise.reject(new Error('down'));
       if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
       if (url.startsWith('/api/staff')) return Promise.resolve([]);
       return Promise.resolve([]);
@@ -161,7 +160,7 @@ describe('DealModal — add deal drawer', () => {
     renderModal();
     const stage = await screen.findByLabelText('Deal stage');
     await waitFor(() => {
-      expect(within(stage).getByRole('option', { name: 'proposal' })).toBeTruthy();
+      expect(within(stage).getByRole('option', { name: 'Contracted' })).toBeTruthy();
     });
   });
 });

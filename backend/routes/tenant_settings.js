@@ -109,6 +109,36 @@ function validateTenantSettingValue(key, rawValue) {
       }
     }
   }
+  if (key === KEYS.GENERIC_DEAL_TYPES) {
+    let types;
+    try {
+      types = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_DEAL_TYPES", error: "Deal types must be valid JSON." };
+    }
+    if (!Array.isArray(types) || types.length < 1 || types.length > 50) {
+      return { ok: false, code: "INVALID_DEAL_TYPES", error: "Deal types must contain between 1 and 50 types." };
+    }
+    const typeIds = new Set();
+    for (const type of types) {
+      const id = String(type?.id || "").trim();
+      const name = String(type?.name || "").trim();
+      const stages = Array.isArray(type?.stages) ? type.stages : [];
+      if (!id || id.length > 80 || typeIds.has(id) || !name || name.length > 80 || stages.length < 1 || stages.length > 50) {
+        return { ok: false, code: "INVALID_DEAL_TYPES", error: "Each deal type needs a unique id, a name, and between 1 and 50 stages." };
+      }
+      typeIds.add(id);
+      const stageIds = new Set();
+      for (const stage of stages) {
+        const stageId = String(stage?.id || "").trim();
+        const stageName = String(stage?.name || "").trim();
+        if (!stageId || stageId.length > 80 || stageIds.has(stageId) || !stageName || stageName.length > 80) {
+          return { ok: false, code: "INVALID_DEAL_TYPES", error: "Each deal type stage needs a unique id and name." };
+        }
+        stageIds.add(stageId);
+      }
+    }
+  }
   if (key === KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES) {
     const n = Number(rawValue);
     if (!Number.isInteger(n) || n < 1 || n > 10) {

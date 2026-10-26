@@ -4,6 +4,7 @@ import { Building2, Download, FileText, Plus, Trash2, Upload } from 'lucide-reac
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDate, formatDateTime } from '../../utils/date';
+import { fetchApi } from '../../utils/api';
 import {
   assignOwner, deleteAttachment, fetchAttachments, fetchEmailThreads,
   fetchActivities, fetchScore, fetchSiblings, fetchSmsMessages, fetchWhatsappMessages, patchContact,
@@ -13,6 +14,9 @@ import { DEAL_STAGES } from './contactProfileConfig';
 import { FormRow, Modal, Stars } from './ProfileWidgets';
 import { isRichTextMarkup, richTextToPlainText, RichText } from '../../utils/richText';
 import RichTextNotePreview from './RichTextNotePreview';
+
+const DEFAULT_GENERIC_DEAL_STAGES = ['New Lead', 'Contracted', 'Negotiation', 'Won', 'Lost'];
+const dealStageId = (name) => String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
 export function DetailsTab({ contact, staff, refresh }) {
   const notify = useNotify();
@@ -390,18 +394,32 @@ export function AccountsTab({ contact, refresh, patchField, isTravel = false }) 
   );
 }
 
-export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isTravel = false, onOpenAppointment, onOpenTravelDeal }) {
+export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isTravel = false, isGeneric = false, onOpenAppointment, onOpenTravelDeal }) {
   const notify = useNotify();
   const deals = contact.deals || [];
   const [appointments, setAppointments] = useState(contact.appointments || []);
   const total = deals.reduce((n, d) => n + (Number(d.amount) || 0), 0);
   const [savingId, setSavingId] = useState(null);
+  const [dealTypeConfigs, setDealTypeConfigs] = useState([]);
 
   useEffect(() => {
     if (!isWellness) return undefined;
     setAppointments(contact.appointments || []);
     return undefined;
   }, [contact.appointments, isWellness]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi('/api/tenant-settings/generic.dealTypes', { silent: true }).then((setting) => {
+      if (!active) return;
+      try {
+        const parsed = typeof setting?.value === 'string' ? JSON.parse(setting.value) : setting?.value;
+        setDealTypeConfigs(Array.isArray(parsed) ? parsed : []);
+      } catch { setDealTypeConfigs([]); }
+    }).catch(() => { if (active) setDealTypeConfigs([]); });
+    return () => { active = false; };
+  }, [isGeneric]);
 
   if (isWellness) {
     return (
@@ -434,6 +452,12 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
       setSavingId(null);
     }
   };
+  const stagesForDeal = (deal) => {
+    if (!isGeneric) return DEAL_STAGES.map((name) => ({ value: name, label: name }));
+    const config = dealTypeConfigs.find((type) => type.name === deal.dealType) || dealTypeConfigs.find((type) => type.isDefault) || dealTypeConfigs[0];
+    const stages = Array.isArray(config?.stages) && config.stages.length ? config.stages : DEFAULT_GENERIC_DEAL_STAGES.map((name) => ({ name }));
+    return stages.map((stage) => ({ value: stage.id || dealStageId(stage.name), label: stage.name }));
+  };
 
   return (
     <div className="cp-card">
@@ -451,7 +475,7 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
               <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>{formatMoney(d.amount, { currency: d.currency })}{d.expectedClose ? ` • closes ${formatDate(d.expectedClose)}` : ''}</span>
             </button>
             <select className="cp-input cp-stage-select" value={d.stage} disabled={savingId === d.id} onChange={(e) => changeStage(d, e.target.value)}>
-              {DEAL_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {stagesForDeal(d).map((stageOption) => <option key={stageOption.value} value={stageOption.value}>{stageOption.label}</option>)}
             </select>
           </div>
         ))

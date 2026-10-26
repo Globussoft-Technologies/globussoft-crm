@@ -1013,6 +1013,7 @@ const Sidebar = ({
   // Ref-backed impl + stable useMemo identity  same perf rationale as Link.
   const adsGptImplRef = useRef(null);
   adsGptImplRef.current = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
+    if (!isTravel && !isWellness && isTenantPageHidden("/integrations/adsgpt", hiddenPagePaths)) return null;
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
@@ -1071,6 +1072,7 @@ const Sidebar = ({
     icon: Icon = PhoneCall,
     label = "Callified",
   }) => {
+    if (!isTravel && !isWellness && isTenantPageHidden("/integrations/callified", hiddenPagePaths)) return null;
     const handleClick = async (e) => {
       e.preventDefault();
       if (callifiedLoading) return;

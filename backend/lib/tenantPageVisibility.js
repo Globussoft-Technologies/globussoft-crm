@@ -30,6 +30,37 @@ const REQUIRED_PAGE_PATHS = new Set(['/home', '/dashboard', '/wellness', '/trave
 // unchanged.
 const LEGACY_GENERIC_PAGE_CATALOG = [
   {
+    path: '/reports',
+    label: 'Reports',
+    description: 'CRM reports',
+    category: 'Analytics & Reports',
+    requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
+    path: '/pickup-work-assignments',
+    label: 'Assign Staff Work',
+    description: 'Assign customers and plots to operational staff',
+    category: 'Pickup & Plot',
+    requiredPermissions: [{ module: 'staff', action: 'manage' }],
+  },
+  // Visibility keys for external launchers, not internal SPA destinations.
+  // They control navigation only; integration credentials and APIs retain
+  // their existing authorization rules.
+  {
+    path: '/integrations/adsgpt',
+    label: 'AdsGPT',
+    description: 'Show the AdsGPT external dashboard shortcut',
+    category: 'Integrations',
+    requiredPermissions: [],
+  },
+  {
+    path: '/integrations/callified',
+    label: 'Callified',
+    description: 'Show the Callified external dashboard shortcut',
+    category: 'Integrations',
+    requiredPermissions: [],
+  },
+  {
     path: '/invoices',
     label: 'Invoices',
     description: 'Invoice ledger + payment links',

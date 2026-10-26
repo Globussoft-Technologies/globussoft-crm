@@ -1258,6 +1258,43 @@ describe('transport person mutations', () => {
     );
   });
 
+  test.each(['both', 'pickup only', 'drop-off only'])('rejects drop-off before pickup when updating %s', async mode => {
+    const earlier = new Date(Date.now() + 86_400_000).toISOString();
+    const later = new Date(Date.now() + 90_000_000).toISOString();
+    const saved = { status: 'ASSIGNED' };
+    const body = {};
+    if (mode === 'pickup only') saved.scheduledDropOffAt = earlier;
+    else body.scheduledDropOffAt = earlier;
+    if (mode === 'drop-off only') saved.scheduledPickupAt = later;
+    else body.scheduledPickupAt = later;
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: JSON.stringify({ 'customer-61-plot-30': saved }), isActive: true,
+    });
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/schedule')
+      .send(body);
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('INVALID_TRANSPORT_SCHEDULE_ORDER');
+    expect(prisma.transportPerson.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('preserves an existing pickup when saving a later drop-off independently', async () => {
+    const scheduledPickupAt = new Date(Date.now() + 86_400_000).toISOString();
+    const scheduledDropOffAt = new Date(Date.now() + 90_000_000).toISOString();
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: JSON.stringify({ 'customer-61-plot-30': { status: 'ASSIGNED', scheduledPickupAt } }), isActive: true,
+    });
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/schedule')
+      .send({ scheduledDropOffAt });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ scheduledPickupAt, scheduledDropOffAt });
+  });
+
   test('rejects a past time without changing the independently saved pickup time', async () => {
     const scheduledPickupAt = new Date(Date.now() + 86_400_000).toISOString();
     const pastDropOffAt = new Date(Date.now() - 86_400_000).toISOString();

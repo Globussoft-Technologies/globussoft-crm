@@ -2022,6 +2022,14 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/schedule", requir
     const previousStatus = statuses[assignment.assignmentKey]
       || statuses[`customer-${assignment.customer?.id}`]
       || {};
+    // Partial updates must also respect the other time already saved on the trip.
+    const effectivePickupDate = pickupDate || (previousStatus.scheduledPickupAt
+      ? new Date(previousStatus.scheduledPickupAt) : null);
+    const effectiveDropOffDate = dropOffDate || (previousStatus.scheduledDropOffAt
+      ? new Date(previousStatus.scheduledDropOffAt) : null);
+    if (effectivePickupDate && effectiveDropOffDate && effectiveDropOffDate < effectivePickupDate) {
+      return res.status(400).json({ error: "Drop-off time cannot be earlier than pickup time.", code: "INVALID_TRANSPORT_SCHEDULE_ORDER" });
+    }
     statuses[assignment.assignmentKey] = {
       ...previousStatus,
       status: assignment.status,

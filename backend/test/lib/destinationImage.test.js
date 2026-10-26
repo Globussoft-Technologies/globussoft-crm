@@ -3,7 +3,7 @@
  * backend/lib/destinationImage.js — server-side destination hero photo for the
  * itinerary PDF. Verifies title resolution, the two-step Wikipedia fetch, and
  * that every failure mode degrades to null (so the PDF still renders). axios is
- * injected; jimp banner-cropping falls back to the raw buffer on non-images,
+ * injected; sharp banner-cropping falls back to the raw buffer on non-images,
  * so the canned bytes round-trip as a Buffer.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
@@ -35,7 +35,7 @@ function makeAxios({ thumbUrl = 'https://upload/img.jpg', bytes = Buffer.from('r
 }
 
 describe('fetchDestinationImageBuffer', () => {
-  test('resolves the lead image then returns its bytes (jimp falls back to raw on non-image)', async () => {
+  test('resolves the lead image then returns its bytes (sharp falls back to raw on non-image)', async () => {
     const axiosStub = makeAxios();
     const buf = await fetchDestinationImageBuffer('Tokyo', { axios: axiosStub });
     expect(Buffer.isBuffer(buf)).toBe(true);
@@ -43,6 +43,13 @@ describe('fetchDestinationImageBuffer', () => {
     // First call hits the CORS action API; second downloads the image.
     expect(axiosStub.get.mock.calls[0][0]).toContain('en.wikipedia.org/w/api.php');
     expect(axiosStub.get.mock.calls[1][0]).toBe('https://upload/img.jpg');
+  });
+
+  test('crops a real image to a 1200 by 360 JPEG banner', async () => {
+    const sharp = require('sharp');
+    const bytes = await sharp({ create: { width: 200, height: 200, channels: 3, background: '#338866' } }).png().toBuffer();
+    const result = await fetchDestinationImageBuffer('Tokyo', { axios: makeAxios({ bytes }) });
+    expect(await sharp(result).metadata()).toMatchObject({ width: 1200, height: 360, format: 'jpeg' });
   });
 
   test('caches by title — a second call does not re-fetch', async () => {

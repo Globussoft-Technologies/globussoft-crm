@@ -90,6 +90,8 @@ export default function PickupCustomerStatusDialog({ customer, onClose }) {
             <StatusDetail label="Assigned plot" value={customer.assignedPlot?.name} />
             <StatusDetail label="Plot address" value={customer.assignedPlot?.address} />
             <StatusDetail label="Transport person" value={customer.workflow?.transport?.assignee?.name || customer.transportPerson?.name} />
+            <StatusDetail label="Pickup time" value={formatPickupStatusDate(customer.workflow?.transport?.pickupAt || customer.workflow?.transport?.scheduledPickupAt || customer.pickupAt || customer.scheduledPickupAt)} />
+            <StatusDetail label="Site visit / drop-off time" value={formatPickupStatusDate(customer.workflow?.transport?.dropOffAt || customer.workflow?.transport?.scheduledDropOffAt || customer.dropOffAt || customer.scheduledDropOffAt)} />
             <StatusDetail label="Sales Executive" value={customer.workflow?.broker?.assignee?.name} />
             <StatusDetail label="Overall status" value={`${PICKUP_STAGE_LABELS[customer.currentStage] || 'Transport'}: ${formatPickupStatus(customer.currentStatus || customer.status)}`} />
             <StatusDetail label="Last updated" value={formatPickupStatusDate(customer.currentStatusUpdatedAt || customer.statusUpdatedAt)} />

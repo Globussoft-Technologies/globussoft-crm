@@ -231,17 +231,23 @@ function CustomerCard({ customer, updating, assigning, adminOverview, assignment
   const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
   const initials = String(customer.name || '?').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const workflowStatus = customer.brokerWorkflow?.status;
-  const index = workflowIndex(workflowStatus);
-  const currentStep = SPECIAL_STEPS[workflowStatus] || BROKER_STEPS[index];
-  const needsSchedule = ['READY_TO_SCHEDULE', 'NO_SHOW'].includes(workflowStatus);
-  const needsAttendance = workflowStatus === 'REMINDER_SENT';
+  const siteVisitAt = customer.brokerWorkflow?.visitScheduledAt || customer.dropOffAt || customer.scheduledDropOffAt;
+  const canMarkPlotShown = customer.tripCompleted
+    && Boolean(siteVisitAt)
+    && ['READY_TO_SCHEDULE', 'VISIT_SCHEDULED', 'VISIT_CONFIRMED', 'REMINDER_SENT'].includes(workflowStatus);
+  const index = workflowIndex(canMarkPlotShown ? 'ATTENDED' : workflowStatus);
+  const currentStep = canMarkPlotShown
+    ? { label: 'Ready to show plot', action: 'Mark plot shown', next: 'PLOT_SHOWN' }
+    : SPECIAL_STEPS[workflowStatus] || BROKER_STEPS[index];
+  const needsSchedule = workflowStatus === 'NO_SHOW';
+  const needsAttendance = workflowStatus === 'REMINDER_SENT' && !canMarkPlotShown;
   const needsPlotSelection = workflowStatus === 'PLOT_SHOWN';
   const handedToBilling = workflowStatus === 'PLOT_SELECTED';
   const noShow = workflowStatus === 'NO_SHOW';
 
   const submitSchedule = () => {
     if (!visitScheduledAt) return;
-    onAdvance(workflowStatus === 'NO_SHOW' ? 'VISIT_RESCHEDULED' : 'VISIT_SCHEDULED', { visitScheduledAt });
+    onAdvance('VISIT_RESCHEDULED', { visitScheduledAt });
   };
   return (
     <article className="transport-trip-card" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -264,13 +270,14 @@ function CustomerCard({ customer, updating, assigning, adminOverview, assignment
       <div style={{ display: 'grid', gap: 9, color: 'var(--text-secondary)', fontSize: '.82rem' }}>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><MapPin size={15} /> {customer.plot ? plotLabel(customer.plot) : 'Plot not assigned'}</span>
         {customer.plot?.address && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Building2 size={15} /> {customer.plot.address}</span>}
-        {customer.brokerWorkflow?.visitScheduledAt && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><CalendarClock size={15} /> {new Date(customer.brokerWorkflow.visitScheduledAt).toLocaleString()}</span>}
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Clock3 size={15} /> Pickup time: {customer.pickupAt || customer.scheduledPickupAt ? new Date(customer.pickupAt || customer.scheduledPickupAt).toLocaleString() : 'Pending'}</span>
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><CalendarClock size={15} /> Site visit time: {siteVisitAt ? new Date(siteVisitAt).toLocaleString() : 'Pending'}</span>
       </div>
 
       <div style={{ padding: 12, borderRadius: 12, background: customer.tripCompleted ? 'rgba(16,185,129,.10)' : 'var(--subtle-bg-2)', color: customer.tripCompleted ? '#047857' : 'var(--text-secondary)', fontSize: '.8rem', fontWeight: 700 }}>
         {customer.tripCompleted
           ? 'Trip completed — customer is ready for site visit management.'
-          : 'Trip not completed. Site visit actions unlock after the customer reaches the plot.'}
+          : 'Trip is not started yet.'}
       </div>
 
       {customer.tripCompleted && customer.brokerWorkflow && (

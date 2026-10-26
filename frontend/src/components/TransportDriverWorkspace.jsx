@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
+  Check,
   CheckCircle2,
   Clock3,
   MapPin,
@@ -26,6 +27,20 @@ const STATUS_STEPS = [
 ];
 
 const statusIndex = (status) => Math.max(0, STATUS_STEPS.findIndex((step) => step.key === status));
+
+function formatTripTime(value) {
+  if (!value) return 'Pending';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Pending' : date.toLocaleString();
+}
+
+function toDateTimeLocal(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - (date.getTimezoneOffset() * 60_000));
+  return local.toISOString().slice(0, 16);
+}
 
 function directionsUrl(assignment) {
   const origin = assignment.pickup?.address || assignment.pickup?.name;
@@ -97,7 +112,13 @@ export default function TransportDriverWorkspace() {
         ...current,
         assignments: current.assignments.map((row) => (
           row.assignmentKey === assignment.assignmentKey
-            ? { ...row, status: result.status, statusUpdatedAt: result.statusUpdatedAt }
+            ? {
+              ...row,
+              status: result.status,
+              statusUpdatedAt: result.statusUpdatedAt,
+              pickupAt: result.pickupAt,
+              dropOffAt: result.dropOffAt,
+            }
             : row
         )),
       }));
@@ -111,6 +132,47 @@ export default function TransportDriverWorkspace() {
       }
     } catch (err) {
       setError(err?.message || 'Could not update the trip status.');
+    } finally {
+      setUpdating('');
+    }
+  };
+
+  const saveSchedule = async (assignment, schedule) => {
+    const currentMinute = new Date();
+    currentMinute.setSeconds(0, 0);
+    const containsPastTime = Object.values(schedule).some((value) => {
+      const candidate = new Date(value);
+      return Number.isNaN(candidate.getTime()) || candidate < currentMinute;
+    });
+    if (containsPastTime) {
+      setError('Pickup and drop-off times must be the present time or a future time.');
+      return;
+    }
+    setUpdating(assignment.assignmentKey);
+    setError('');
+    try {
+      const profileQuery = data?.isAdminOverview && assignment.assignedStaff?.profileId
+        ? `?assignedProfileId=${encodeURIComponent(assignment.assignedStaff.profileId)}`
+        : '';
+      const result = await fetchApi(
+        `/api/pickup-plot-inventory/transport-persons/me/assignments/${encodeURIComponent(assignment.assignmentKey)}/schedule${profileQuery}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(Object.fromEntries(
+            Object.entries(schedule).map(([key, value]) => [key, new Date(value).toISOString()]),
+          )),
+        },
+      );
+      setData((current) => ({
+        ...current,
+        assignments: current.assignments.map((row) => (
+          row.assignmentKey === assignment.assignmentKey ? { ...row, ...result } : row
+        )),
+      }));
+      const savedLabel = schedule.scheduledPickupAt ? 'Pickup time' : 'Drop-off time';
+      notify.success(`${savedLabel} saved for ${assignment.customer?.name || 'this trip'}.`);
+    } catch (err) {
+      setError(err?.message || 'Could not save the pickup and drop-off times.');
     } finally {
       setUpdating('');
     }
@@ -154,6 +216,7 @@ export default function TransportDriverWorkspace() {
             updating={updating === assignment.assignmentKey}
             adminOverview={Boolean(data?.isAdminOverview)}
             onAdvance={() => advance(assignment)}
+            onSaveSchedule={(schedule) => saveSchedule(assignment, schedule)}
             onCall={() => setCallCustomer(assignment.customer)}
           />
         ))}
@@ -175,11 +238,44 @@ export default function TransportDriverWorkspace() {
   );
 }
 
-function TripCard({ assignment, featured, updating, adminOverview, onAdvance, onCall }) {
+function TripCard({ assignment, featured, updating, adminOverview, onAdvance, onSaveSchedule, onCall }) {
   const index = statusIndex(assignment.status);
   const current = STATUS_STEPS[index];
   const next = STATUS_STEPS[index + 1];
   const mapUrl = directionsUrl(assignment);
+  const [pickupTime, setPickupTime] = useState(toDateTimeLocal(assignment.pickupAt || assignment.scheduledPickupAt));
+  const [dropOffTime, setDropOffTime] = useState(toDateTimeLocal(assignment.dropOffAt || assignment.scheduledDropOffAt));
+  const [pickupTimeError, setPickupTimeError] = useState('');
+  const [dropOffTimeError, setDropOffTimeError] = useState('');
+  const [earliestTime, setEarliestTime] = useState(() => toDateTimeLocal(new Date()));
+  const savedPickupTime = toDateTimeLocal(assignment.pickupAt || assignment.scheduledPickupAt);
+  const savedDropOffTime = toDateTimeLocal(assignment.dropOffAt || assignment.scheduledDropOffAt);
+  const pickupIsPast = Boolean(pickupTime && pickupTime < earliestTime);
+  const dropOffIsPast = Boolean(dropOffTime && dropOffTime < earliestTime);
+  const updateScheduleTime = (value, setValue, setFieldError) => {
+    const latestAllowedTime = toDateTimeLocal(new Date());
+    setEarliestTime(latestAllowedTime);
+    if (value && value < latestAllowedTime) {
+      setValue('');
+      setFieldError('Choose the present time or a future time');
+      return;
+    }
+    setFieldError('');
+    setValue(value);
+  };
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setEarliestTime(toDateTimeLocal(new Date())),
+      30_000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    setPickupTime(toDateTimeLocal(assignment.pickupAt || assignment.scheduledPickupAt));
+  }, [assignment.pickupAt, assignment.scheduledPickupAt]);
+  useEffect(() => {
+    setDropOffTime(toDateTimeLocal(assignment.dropOffAt || assignment.scheduledDropOffAt));
+  }, [assignment.dropOffAt, assignment.scheduledDropOffAt]);
   return (
     <article className={`transport-trip-card${featured ? ' featured' : ''}`}>
       <header>
@@ -189,7 +285,14 @@ function TripCard({ assignment, featured, updating, adminOverview, onAdvance, on
           <h2>{assignment.customer?.name || 'Assigned transport'}</h2>
           <p>{assignment.customer?.company || assignment.drop?.referenceCode || 'Pickup and drop assignment'}</p>
         </div>
-        <span className={`transport-status status-${assignment.status.toLowerCase()}`}>{current.label}</span>
+        <div className="transport-trip-header-right">
+          <span className={`transport-status status-${assignment.status.toLowerCase()}`}>{current.label}</span>
+          <div className="transport-trip-times" aria-label={`Pickup and drop-off times for ${assignment.customer?.name || 'assigned transport'}`}>
+            <div className="transport-time-field"><Clock3 size={16} /><span><small>Pickup time</small><input type="datetime-local" min={earliestTime} aria-label={`Pickup time for ${assignment.customer?.name || 'assigned transport'}`} aria-invalid={Boolean(pickupTimeError || pickupIsPast)} value={pickupTime} disabled={Boolean(assignment.pickupAt) || assignment.status === 'COMPLETED'} onChange={(event) => updateScheduleTime(event.target.value, setPickupTime, setPickupTimeError)} /><em className={pickupTimeError || pickupIsPast ? 'invalid' : ''}>{pickupTimeError || (pickupIsPast ? 'Choose the present time or a future time' : 'Present or future time only')}</em></span>{assignment.status !== 'COMPLETED' && <button type="button" className="transport-save-time-check" aria-label="Save pickup time" title="Save pickup time" disabled={updating || !pickupTime || pickupIsPast || pickupTime === savedPickupTime} onClick={() => onSaveSchedule({ scheduledPickupAt: pickupTime })}><Check size={18} strokeWidth={2.5} /></button>}</div>
+            <div className="transport-time-field"><Clock3 size={16} /><span><small>Drop-off / site visit time</small><input type="datetime-local" min={earliestTime} aria-label={`Drop-off time for ${assignment.customer?.name || 'assigned transport'}`} aria-invalid={Boolean(dropOffTimeError || dropOffIsPast)} value={dropOffTime} disabled={Boolean(assignment.dropOffAt) || assignment.status === 'COMPLETED'} onChange={(event) => updateScheduleTime(event.target.value, setDropOffTime, setDropOffTimeError)} /><em className={dropOffTimeError || dropOffIsPast ? 'invalid' : ''}>{dropOffTimeError || (dropOffIsPast ? 'Choose the present time or a future time' : 'Present or future time only')}</em></span>{assignment.status !== 'COMPLETED' && <button type="button" className="transport-save-time-check" aria-label="Save drop-off time" title="Save drop-off time" disabled={updating || !dropOffTime || dropOffIsPast || dropOffTime === savedDropOffTime} onClick={() => onSaveSchedule({ scheduledDropOffAt: dropOffTime })}><Check size={18} strokeWidth={2.5} /></button>}</div>
+            {(assignment.pickupAt || assignment.dropOffAt) && <small className="transport-actual-time-note">Recorded from trip progress: {assignment.pickupAt ? `pickup ${formatTripTime(assignment.pickupAt)}` : ''}{assignment.pickupAt && assignment.dropOffAt ? ', ' : ''}{assignment.dropOffAt ? `drop-off ${formatTripTime(assignment.dropOffAt)}` : ''}</small>}
+          </div>
+        </div>
       </header>
 
       <div className="transport-route">

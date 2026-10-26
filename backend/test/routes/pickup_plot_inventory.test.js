@@ -350,7 +350,7 @@ describe('Generic CRM admin workspace overview', () => {
     prisma.transportPerson.findMany.mockResolvedValue([{
       id: 41, name: 'Sant Kumar', isActive: true,
       assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
-      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED","updatedAt":"2026-10-15T10:00:00.000Z"}}',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED","updatedAt":"2026-10-15T10:00:00.000Z","pickupAt":"2026-10-15T09:20:00.000Z","dropOffAt":"2026-10-15T10:00:00.000Z"}}',
     }]);
     prisma.contact.findMany.mockResolvedValue([{ id: 61, name: 'Priya Shah' }]);
     prisma.plotSite.findMany.mockResolvedValue([{ id: 30, name: 'Plot 30' }]);
@@ -363,6 +363,8 @@ describe('Generic CRM admin workspace overview', () => {
       expect.objectContaining({
         id: 61,
         tripCompleted: true,
+        pickupAt: '2026-10-15T09:20:00.000Z',
+        dropOffAt: '2026-10-15T10:00:00.000Z',
         awaitingAssignment: true,
         assignedStaff: null,
       }),
@@ -1191,6 +1193,92 @@ describe('transport person mutations', () => {
     expect(JSON.parse(update.data.assignmentStatusJson)['customer-61-plot-30'].status).toBe('HEADING_TO_PICKUP');
   });
 
+  test('records pickup and drop-off times on the shared transport assignment', async () => {
+    const pickupAt = '2026-10-26T08:30:00.000Z';
+    prisma.transportPerson.findFirst
+      .mockResolvedValueOnce({
+        id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+        assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+        assignmentStatusJson: '{"customer-61-plot-30":{"status":"ARRIVED_AT_PICKUP"}}', isActive: true,
+      })
+      .mockResolvedValueOnce({
+        id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+        assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+        assignmentStatusJson: JSON.stringify({
+          'customer-61-plot-30': { status: 'ARRIVED_AT_DROP', pickupAt },
+        }),
+        isActive: true,
+      });
+
+    const pickedUp = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/status')
+      .send({ status: 'PICKED_UP' });
+    const completed = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/status')
+      .send({ status: 'COMPLETED' });
+
+    expect(pickedUp.status, JSON.stringify(pickedUp.body)).toBe(200);
+    expect(pickedUp.body.pickupAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(pickedUp.body.dropOffAt).toBeNull();
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    expect(completed.body.pickupAt).toBe(pickupAt);
+    expect(completed.body.dropOffAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    const saved = JSON.parse(prisma.transportPerson.updateMany.mock.calls[1][0].data.assignmentStatusJson)['customer-61-plot-30'];
+    expect(saved).toMatchObject({ status: 'COMPLETED', pickupAt, dropOffAt: completed.body.dropOffAt });
+  });
+
+  test('schedules pickup and drop-off times from the transport trip card', async () => {
+    const scheduledPickupAt = new Date(Date.now() + 86_400_000).toISOString();
+    const scheduledDropOffAt = new Date(Date.now() + 90_000_000).toISOString();
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"ASSIGNED"}}', isActive: true,
+    });
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/schedule')
+      .send({ scheduledPickupAt, scheduledDropOffAt });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toMatchObject({
+      assignmentKey: 'customer-61-plot-30',
+      scheduledPickupAt,
+      scheduledDropOffAt,
+    });
+    const saved = JSON.parse(prisma.transportPerson.updateMany.mock.calls[0][0].data.assignmentStatusJson)['customer-61-plot-30'];
+    expect(saved).toMatchObject({
+      status: 'ASSIGNED',
+      scheduledPickupAt,
+      scheduledDropOffAt,
+    });
+    expect(audit.writeAudit).toHaveBeenCalledWith(
+      'TransportPerson', 'SCHEDULE_TRIP', '41', 3, 7,
+      expect.objectContaining({ assignmentKey: 'customer-61-plot-30' }),
+    );
+  });
+
+  test('rejects a past time without changing the independently saved pickup time', async () => {
+    const scheduledPickupAt = new Date(Date.now() + 86_400_000).toISOString();
+    const pastDropOffAt = new Date(Date.now() - 86_400_000).toISOString();
+    prisma.transportPerson.findFirst.mockResolvedValue({
+      id: 41, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: JSON.stringify({
+        'customer-61-plot-30': { status: 'ASSIGNED', scheduledPickupAt },
+      }),
+      isActive: true,
+    });
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61-plot-30/schedule')
+      .send({ scheduledDropOffAt: pastDropOffAt });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('TRANSPORT_SCHEDULE_IN_PAST');
+    expect(prisma.transportPerson.updateMany).not.toHaveBeenCalled();
+  });
+
   test('claims a customer when the first transport person accepts and removes it from peers', async () => {
     prisma.transportPerson.findFirst.mockResolvedValue({
       id: 41, userId: 3, tenantId: 7, pickupLocationIdsJson: '[4]',
@@ -1692,7 +1780,7 @@ describe('plot broker mutations', () => {
     prisma.plotBroker.findFirst.mockResolvedValue({
       id: 51, userId: 3, tenantId: 7, name: 'Sanjeev', phone: '9000011111', agency: 'Prime Realty',
       commissionPercent: 2.5, customerIdsJson: '[61,62]', plotSiteIdsJson: '[30,31]',
-      workflowStatusJson: '{"customer-61":{"status":"VISIT_SCHEDULED","updatedAt":"2026-10-06T11:00:00.000Z","visitScheduledAt":"2026-10-07T10:00:00.000Z"}}',
+      workflowStatusJson: null,
       isActive: true,
     });
     prisma.contact.findMany.mockResolvedValue([
@@ -1705,7 +1793,7 @@ describe('plot broker mutations', () => {
     ]);
     prisma.transportPerson.findMany.mockResolvedValue([{
       customerIdsJson: '[61,62]', plotSiteIdsJson: '[30,31]',
-      assignmentStatusJson: '{"customer-61":{"status":"COMPLETED","updatedAt":"2026-10-06T10:00:00.000Z"},"customer-62":{"status":"PICKED_UP"}}',
+      assignmentStatusJson: '{"customer-61":{"status":"COMPLETED","pickupAt":"2026-10-06T09:15:00.000Z","dropOffAt":"2026-10-06T10:00:00.000Z","updatedAt":"2026-10-06T10:00:00.000Z"},"customer-62":{"status":"PICKED_UP"}}',
     }]);
 
     const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/brokers/me');
@@ -1719,7 +1807,8 @@ describe('plot broker mutations', () => {
           expect.objectContaining({ id: 30, plotNumber: 'A-24' }),
           expect.objectContaining({ id: 31, plotNumber: 'B-25' }),
         ]),
-        brokerWorkflow: { status: 'VISIT_SCHEDULED', updatedAt: '2026-10-06T11:00:00.000Z', visitScheduledAt: '2026-10-07T10:00:00.000Z' },
+        pickupAt: '2026-10-06T09:15:00.000Z', dropOffAt: '2026-10-06T10:00:00.000Z',
+        brokerWorkflow: { status: 'VISIT_SCHEDULED', updatedAt: null, visitScheduledAt: '2026-10-06T10:00:00.000Z' },
       }),
       expect.objectContaining({ id: 62, tripCompleted: false, tripMessage: 'Trip not completed', plot: expect.objectContaining({ id: 31 }) }),
     ]);
@@ -1766,6 +1855,33 @@ describe('plot broker mutations', () => {
     const update = prisma.plotBroker.updateMany.mock.calls[0][0];
     expect(update.where).toMatchObject({ id: 51, tenantId: 7 });
     expect(JSON.parse(update.data.workflowStatusJson)['customer-61-plot-30'].status).toBe('VISIT_CONFIRMED');
+  });
+
+  test('uses the transport drop-off and allows the Sales Executive to mark the plot shown immediately', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 3, tenantId: 7, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      workflowStatusJson: null, isActive: true,
+    });
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41, customerIdsJson: '[61]', plotSiteIdsJson: '[30]',
+      assignmentStatusJson: '{"customer-61":{"status":"COMPLETED","dropOffAt":"2026-10-06T10:00:00.000Z"}}',
+    }]);
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/customers/61/workflow')
+      .send({ status: 'PLOT_SHOWN' });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toMatchObject({
+      customerId: 61,
+      status: 'PLOT_SHOWN',
+      visitScheduledAt: '2026-10-06T10:00:00.000Z',
+    });
+    const savedStatus = JSON.parse(prisma.plotBroker.updateMany.mock.calls[0][0].data.workflowStatusJson);
+    expect(savedStatus['customer-61-plot-30']).toMatchObject({
+      status: 'PLOT_SHOWN',
+      visitScheduledAt: '2026-10-06T10:00:00.000Z',
+    });
   });
 
   test('rejects a stale Sales Executive workflow update', async () => {
@@ -3819,7 +3935,7 @@ describe('customer pickup status', () => {
     prisma.transportPerson.findMany.mockResolvedValue([{
       id: 41, name: 'Sant', phone: '9000011111', customerIdsJson: '[61]',
       assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
-      assignmentStatusJson: '{"customer-61":{"status":"PICKED_UP","updatedAt":"2026-10-06T11:00:00.000Z"}}',
+      assignmentStatusJson: '{"customer-61":{"status":"PICKED_UP","updatedAt":"2026-10-06T11:00:00.000Z","pickupAt":"2026-10-06T11:00:00.000Z"}}',
       updatedAt: new Date('2026-10-06T10:30:00.000Z'),
     }]);
     prisma.plotSite.findMany.mockResolvedValue([{
@@ -3849,7 +3965,10 @@ describe('customer pickup status', () => {
       assignedPlot: { id: 30, name: 'Plot 24', address: 'North Avenue' },
       currentStage: 'transport', currentStatus: 'PICKED_UP',
       workflow: {
-        transport: { status: 'PICKED_UP', assignee: { id: 41, name: 'Sant' } },
+        transport: {
+          status: 'PICKED_UP', pickupAt: '2026-10-06T11:00:00.000Z', dropOffAt: null,
+          assignee: { id: 41, name: 'Sant' },
+        },
         broker: { status: 'PLOT_SELECTED', assignee: { id: 51, name: 'Sanjeev' } },
         billing: { status: 'INVOICE_SENT' },
       },

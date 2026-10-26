@@ -641,12 +641,40 @@ function completedTransportTrips(transportPeople) {
       const key = assignmentKey(pair.customerId, pair.plotSiteId);
       const saved = statuses[key] || statuses[`customer-${pair.customerId}`];
       if (saved?.status === "COMPLETED") {
-        completedTrips.set(key, { updatedAt: saved.updatedAt || null, transportPersonId: person.id || null });
+        completedTrips.set(key, {
+          updatedAt: saved.updatedAt || null,
+          pickupAt: saved.pickupAt || null,
+          dropOffAt: saved.dropOffAt || saved.updatedAt || null,
+          scheduledPickupAt: saved.scheduledPickupAt || null,
+          scheduledDropOffAt: saved.scheduledDropOffAt || null,
+          transportPersonId: person.id || null,
+        });
         completedTrips.set(pair.customerId, saved.updatedAt || null);
       }
     }
   }
   return completedTrips;
+}
+
+function transportTripDetails(transportPeople) {
+  const trips = new Map();
+  for (const person of transportPeople) {
+    const statuses = parseStoredObject(person.assignmentStatusJson);
+    for (const pair of assignmentPairs(person)) {
+      const key = assignmentKey(pair.customerId, pair.plotSiteId);
+      const saved = statuses[key] || statuses[`customer-${pair.customerId}`] || {};
+      trips.set(key, {
+        status: TRANSPORT_STATUS_FLOW.includes(saved.status) ? saved.status : "ASSIGNED",
+        updatedAt: saved.updatedAt || null,
+        pickupAt: saved.pickupAt || null,
+        dropOffAt: saved.dropOffAt || null,
+        scheduledPickupAt: saved.scheduledPickupAt || null,
+        scheduledDropOffAt: saved.scheduledDropOffAt || null,
+        transportPersonId: person.id || null,
+      });
+    }
+  }
+  return trips;
 }
 
 function normalizeBrokerWorkflowStatus(saved) {
@@ -838,6 +866,10 @@ function buildTransportAssignments(
       assignmentKey: key,
       status,
       statusUpdatedAt: saved.updatedAt || null,
+      pickupAt: saved.pickupAt || null,
+      dropOffAt: saved.dropOffAt || null,
+      scheduledPickupAt: saved.scheduledPickupAt || null,
+      scheduledDropOffAt: saved.scheduledDropOffAt || null,
       customer: customerId ? customerMap.get(customerId) || null : null,
       pickup: customerPickup ? {
         id: customerPickup.id,
@@ -861,6 +893,10 @@ function findCustomerTransportStatus(customerId, transportPeople) {
     return {
       status: TRANSPORT_STATUS_FLOW.includes(saved.status) ? saved.status : "ASSIGNED",
       statusUpdatedAt: saved.updatedAt || person.updatedAt || null,
+      pickupAt: saved.pickupAt || null,
+      dropOffAt: saved.dropOffAt || null,
+      scheduledPickupAt: saved.scheduledPickupAt || null,
+      scheduledDropOffAt: saved.scheduledDropOffAt || null,
       transportPerson: { id: person.id, name: person.name, phone: person.phone },
     };
   }
@@ -912,6 +948,10 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
       transport: {
         status: transport.status,
         updatedAt: transport.statusUpdatedAt,
+        pickupAt: transport.pickupAt,
+        dropOffAt: transport.dropOffAt,
+        scheduledPickupAt: transport.scheduledPickupAt,
+        scheduledDropOffAt: transport.scheduledDropOffAt,
         assignee: transport.transportPerson,
       },
       broker: {
@@ -1936,6 +1976,84 @@ router.get("/transport-persons/me", requirePermission("transport_workspace", "re
   }
 });
 
+router.patch("/transport-persons/me/assignments/:assignmentKey/schedule", requirePermission("transport_workspace", "update"), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const assignedProfileId = adminAssignedProfileId(req);
+    const person = await prisma.transportPerson.findFirst({
+      where: {
+        tenantId,
+        ...(assignedProfileId ? { id: assignedProfileId } : { userId: req.user.userId }),
+        isActive: true,
+      },
+    });
+    if (!person) {
+      return res.status(403).json({ error: "No active transport profile is linked to this login", code: "TRANSPORT_PROFILE_NOT_LINKED" });
+    }
+    const assignments = buildTransportAssignments(
+      person,
+      [],
+      parseStoredArray(person.plotSiteIdsJson).map((id) => ({ id: Number(id) })),
+      parseStoredArray(person.customerIdsJson).map((id) => ({ id: Number(id) })),
+    );
+    const assignment = assignments.find((row) => row.assignmentKey === req.params.assignmentKey);
+    if (!assignment) {
+      return res.status(404).json({ error: "Assigned trip not found", code: "TRANSPORT_ASSIGNMENT_NOT_FOUND" });
+    }
+    if (assignment.status === "COMPLETED") {
+      return res.status(409).json({ error: "Completed trip times cannot be rescheduled.", code: "TRANSPORT_TRIP_COMPLETED" });
+    }
+    const hasPickupTime = req.body?.scheduledPickupAt !== undefined;
+    const hasDropOffTime = req.body?.scheduledDropOffAt !== undefined;
+    if (!hasPickupTime && !hasDropOffTime) {
+      return res.status(400).json({ error: "Choose a pickup or drop-off time.", code: "INVALID_TRANSPORT_SCHEDULE" });
+    }
+    const pickupDate = hasPickupTime ? new Date(req.body.scheduledPickupAt) : null;
+    const dropOffDate = hasDropOffTime ? new Date(req.body.scheduledDropOffAt) : null;
+    if ((pickupDate && Number.isNaN(pickupDate.getTime())) || (dropOffDate && Number.isNaN(dropOffDate.getTime()))) {
+      return res.status(400).json({ error: "Choose a valid pickup or drop-off time.", code: "INVALID_TRANSPORT_SCHEDULE" });
+    }
+    const currentMinute = new Date();
+    currentMinute.setSeconds(0, 0);
+    if ((pickupDate && pickupDate < currentMinute) || (dropOffDate && dropOffDate < currentMinute)) {
+      return res.status(400).json({ error: "Pickup and drop-off times must be the present time or a future time.", code: "TRANSPORT_SCHEDULE_IN_PAST" });
+    }
+    const statuses = parseStoredObject(person.assignmentStatusJson);
+    const previousStatus = statuses[assignment.assignmentKey]
+      || statuses[`customer-${assignment.customer?.id}`]
+      || {};
+    statuses[assignment.assignmentKey] = {
+      ...previousStatus,
+      status: assignment.status,
+      ...(pickupDate ? { scheduledPickupAt: pickupDate.toISOString() } : {}),
+      ...(dropOffDate ? { scheduledDropOffAt: dropOffDate.toISOString() } : {}),
+    };
+    await saveWorkflowOptimistically(
+      prisma.transportPerson,
+      person,
+      "assignmentStatusJson",
+      statuses,
+      tenantId,
+    );
+    await writeAudit("TransportPerson", "SCHEDULE_TRIP", String(person.id), req.user.userId, tenantId, {
+      assignmentKey: assignment.assignmentKey,
+      scheduledPickupAt: statuses[assignment.assignmentKey].scheduledPickupAt || null,
+      scheduledDropOffAt: statuses[assignment.assignmentKey].scheduledDropOffAt || null,
+    });
+    return res.json({
+      assignmentKey: assignment.assignmentKey,
+      scheduledPickupAt: statuses[assignment.assignmentKey].scheduledPickupAt || null,
+      scheduledDropOffAt: statuses[assignment.assignmentKey].scheduledDropOffAt || null,
+      pickupAt: previousStatus.pickupAt || null,
+      dropOffAt: previousStatus.dropOffAt || null,
+    });
+  } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
+    console.error("pickup-plot-inventory PATCH /transport-persons/me/assignments/:assignmentKey/schedule error:", error);
+    return res.status(500).json({ error: "Failed to save pickup and drop-off times", code: "TRANSPORT_SCHEDULE_UPDATE_FAILED" });
+  }
+});
+
 router.patch("/transport-persons/me/assignments/:assignmentKey/status", requirePermission("transport_workspace", "update"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -1971,7 +2089,16 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/status", requireP
     }
     const now = new Date().toISOString();
     const statuses = parseStoredObject(person.assignmentStatusJson);
-    statuses[assignment.assignmentKey] = { status: nextStatus, updatedAt: now };
+    const previousStatus = statuses[assignment.assignmentKey]
+      || statuses[`customer-${assignment.customer?.id}`]
+      || {};
+    statuses[assignment.assignmentKey] = {
+      ...previousStatus,
+      status: nextStatus,
+      updatedAt: now,
+      ...(nextStatus === "PICKED_UP" ? { pickupAt: now } : {}),
+      ...(nextStatus === "COMPLETED" ? { dropOffAt: now } : {}),
+    };
     await prisma.$transaction(async (tx) => {
       if (assignment.status === TRANSPORT_STATUS_FLOW[0] && nextStatus === TRANSPORT_STATUS_FLOW[1]) {
         await claimCustomerForPerson(tx, {
@@ -2000,7 +2127,13 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/status", requireP
         metadata: { transportPersonId: person.id },
       });
     });
-    return res.json({ assignmentKey: assignment.assignmentKey, status: nextStatus, statusUpdatedAt: now });
+    return res.json({
+      assignmentKey: assignment.assignmentKey,
+      status: nextStatus,
+      statusUpdatedAt: now,
+      pickupAt: statuses[assignment.assignmentKey].pickupAt || null,
+      dropOffAt: statuses[assignment.assignmentKey].dropOffAt || null,
+    });
   } catch (error) {
     if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory PATCH /transport-persons/me/assignments/:assignmentKey/status error:", error);
@@ -2030,6 +2163,7 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
       select: { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true },
     }) : [];
     const completedTrips = completedTransportTrips(transportPeople);
+    const tripDetails = transportTripDetails(transportPeople);
     const awaitingBrokerPairs = adminOverview
       ? transportPeople.flatMap(assignmentPairs).filter((pair) => (
           completedTrips.has(assignmentKey(pair.customerId, pair.plotSiteId))
@@ -2066,7 +2200,13 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         const customer = customerMap.get(customerId);
         const key = assignmentKey(customerId, plotSiteId);
         const tripCompleted = completedTrips.has(key);
+        const trip = tripDetails.get(key) || {};
         const brokerWorkflow = brokerStatuses[key] || brokerStatuses[`customer-${customerId}`];
+        const siteVisitAt = trip.dropOffAt || trip.scheduledDropOffAt || null;
+        const brokerStatus = normalizeBrokerWorkflowStatus(brokerWorkflow);
+        const effectiveBrokerStatus = brokerStatus === "READY_TO_SCHEDULE" && siteVisitAt
+          ? "VISIT_SCHEDULED"
+          : brokerStatus;
         const plot = plotMap.get(Number(brokerWorkflow?.plotId || plotSiteId)) || null;
         if (!customer || !plot) return null;
         return {
@@ -2077,12 +2217,16 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
           plotOptions,
           tripCompleted,
           tripCompletedAt: tripCompleted ? completedTrips.get(key)?.updatedAt || null : null,
+          pickupAt: trip.pickupAt || null,
+          dropOffAt: trip.dropOffAt || null,
+          scheduledPickupAt: trip.scheduledPickupAt || null,
+          scheduledDropOffAt: trip.scheduledDropOffAt || null,
           tripMessage: tripCompleted ? "Trip completed" : "Trip not completed",
           ...(tripCompleted ? {
             brokerWorkflow: {
-              status: normalizeBrokerWorkflowStatus(brokerWorkflow),
+              status: effectiveBrokerStatus,
               updatedAt: brokerWorkflow?.updatedAt || null,
-              visitScheduledAt: brokerWorkflow?.visitScheduledAt || null,
+              visitScheduledAt: brokerWorkflow?.visitScheduledAt || siteVisitAt,
             },
           } : {}),
         };
@@ -2101,6 +2245,10 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         plot,
         tripCompleted: true,
         tripCompletedAt: completedTrips.get(key)?.updatedAt || null,
+        pickupAt: completedTrips.get(key)?.pickupAt || null,
+        dropOffAt: completedTrips.get(key)?.dropOffAt || null,
+        scheduledPickupAt: completedTrips.get(key)?.scheduledPickupAt || null,
+        scheduledDropOffAt: completedTrips.get(key)?.scheduledDropOffAt || null,
         tripMessage: "Trip completed",
       });
     }
@@ -2219,7 +2367,12 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
       });
     }
     const statuses = parseStoredObject(broker.workflowStatusJson);
-    const currentStatus = normalizeBrokerWorkflowStatus(statuses[key] || statuses[`customer-${customerId}`]);
+    const savedWorkflow = statuses[key] || statuses[`customer-${customerId}`];
+    const transportSiteVisitAt = completedTrip.dropOffAt || completedTrip.scheduledDropOffAt || null;
+    const normalizedCurrentStatus = normalizeBrokerWorkflowStatus(savedWorkflow);
+    const currentStatus = normalizedCurrentStatus === "READY_TO_SCHEDULE" && transportSiteVisitAt
+      ? "VISIT_SCHEDULED"
+      : normalizedCurrentStatus;
     const requestedStatus = req.body?.status;
     const allowedStatuses = {
       READY_TO_SCHEDULE: ["VISIT_SCHEDULED"],
@@ -2232,7 +2385,10 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
       PLOT_SHOWN: ["PLOT_SELECTED"],
       PLOT_SELECTED: [],
     }[currentStatus] || [];
-    if (!allowedStatuses.includes(requestedStatus)) {
+    const canMarkPlotShownFromTransport = requestedStatus === "PLOT_SHOWN"
+      && Boolean(transportSiteVisitAt)
+      && ["READY_TO_SCHEDULE", "VISIT_SCHEDULED", "VISIT_CONFIRMED", "REMINDER_SENT"].includes(currentStatus);
+    if (!allowedStatuses.includes(requestedStatus) && !canMarkPlotShownFromTransport) {
       return res.status(409).json({
         error: allowedStatuses.length ? `Choose the next site visit step: ${allowedStatuses.join(" or ")}.` : "The site visit workflow is already complete.",
         code: "INVALID_BROKER_WORKFLOW_TRANSITION",
@@ -2241,7 +2397,9 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
       });
     }
     const now = new Date().toISOString();
-    let visitScheduledAt = statuses[key]?.visitScheduledAt || statuses[`customer-${customerId}`]?.visitScheduledAt || null;
+    let visitScheduledAt = statuses[key]?.visitScheduledAt
+      || statuses[`customer-${customerId}`]?.visitScheduledAt
+      || transportSiteVisitAt;
     if (["VISIT_SCHEDULED", "VISIT_RESCHEDULED"].includes(requestedStatus)) {
       const requestedVisitDate = text(req.body?.visitScheduledAt, 80);
       const parsedVisitDate = requestedVisitDate ? new Date(requestedVisitDate) : null;

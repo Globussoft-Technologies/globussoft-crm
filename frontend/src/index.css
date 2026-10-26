@@ -3980,8 +3980,8 @@ table.leads-table thead th {
   background-color: var(--modal-bg);
 }
 
-/* Generic CRM grid: records grow with their content and the page owns vertical
-   overflow when the complete grid does not fit in the viewport. */
+/* Other verticals retain their existing page-owned overflow. The Generic CRM
+   override below gives its records grid a bounded viewport. */
 .leads-split-table--no-topbar {
   max-height: none !important;
   overflow-x: clip !important;
@@ -4018,19 +4018,33 @@ table.leads-table thead th {
 
 .leads-page-root--generic .leads-split-table--no-topbar {
   flex: 0 0 auto;
-  height: auto;
-  min-height: auto;
-  max-height: none !important;
+  height: clamp(300px, calc(100dvh - 24rem), 640px);
+  min-height: 300px;
+  max-height: 640px !important;
   box-sizing: border-box;
   border-radius: 0 !important;
   border-top: 0 !important;
   box-shadow: none;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
 }
 
-/* Keep the single Generic CRM horizontal scrollbar at the bottom of the
-   records grid, including pages with fewer rows. */
+/* The records viewport owns vertical scrolling. Its two sticky table headers
+   keep every column name fixed while rows move, and the synchronized
+   horizontal scrollbar stays pinned to the viewport bottom. */
 .leads-page-root--generic .leads-split-table--no-topbar {
   align-items: stretch;
+}
+
+/* Generic CRM only: collapse short result pages to their natural content
+   height. Ten comfortable rows fill the regular viewport, while ten compact
+   rows need this rule to avoid leaving an empty strip below the last row. */
+.leads-page-root--generic .leads-split-table--compact-count {
+  height: auto;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: visible !important;
+  overscroll-behavior: auto;
 }
 
 /* Generic CRM only: keep the zero-record message inside the visible table
@@ -4069,8 +4083,8 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
-  /* Never shrink below the table's natural height; the page handles vertical
-     overflow while this wrapper remains responsible for horizontal scrolling. */
+  /* Preserve the two split-table halves at the same natural row height while
+     their shared outer viewport handles vertical scrolling. */
   flex: 1 0 auto;
 }
 

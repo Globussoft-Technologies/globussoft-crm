@@ -22,7 +22,6 @@ const EMPTY_TEMPLATE = { name: '', subject: '', category: 'General', body: '', c
 const TEMPLATE_DRAFT_PREFIX = 'globuscrm:campaign-template-draft:v1';
 const GENERIC_SYSTEM_CATEGORY_PREFIX = 'System: Generic CRM:';
 const GENERIC_SMS_MESSAGE_LIMIT = 150;
-const GENERIC_WHATSAPP_MESSAGE_LIMIT = 250;
 
 function SortableTemplateCard({ template, index, total, disabled, onMove, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(template.id), disabled });
@@ -684,9 +683,8 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
     pickupPlotTokenCount > 1
     || new RegExp(`\\{\\{${pickupPlotLinkIndex}\\}\\}[^a-z0-9]*$`, 'i').test(String(editor?.body || '').trim())
   ));
-  const messageRangeLimit = editor?.whatsappBusinessTemplate || editor?.channel === 'WHATSAPP'
-    ? GENERIC_WHATSAPP_MESSAGE_LIMIT
-    : editor?.channel === 'SMS'
+  const isWhatsAppTemplate = editor?.whatsappBusinessTemplate || editor?.channel === 'WHATSAPP';
+  const messageRangeLimit = !isWhatsAppTemplate && editor?.channel === 'SMS'
       ? GENERIC_SMS_MESSAGE_LIMIT
       : null;
   const messagePlainText = String(editor?.body || '')
@@ -853,6 +851,10 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
                 <span>{messagePlainText.length}/{messageRangeLimit} characters per message</span>
                 <span>{messagePartCount} {messagePartCount === 1 ? 'message' : 'messages'}</span>
               </div>}
+              {isWhatsAppTemplate && <div aria-label="Message range" aria-live="polite" style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                {messagePlainText.length} characters · 1 approved template message (not split)
+              </div>}
+              {messageRangeLimit && <small style={{ color: 'var(--text-secondary)' }}>Part count is an estimate. Links stay intact and may use a longer standalone message.</small>}
             </div>
             <aside className="generic-template-scrollbar generic-template-modal__personalization" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}><h4 style={{ fontSize: '0.85rem', margin: 0 }}>Personalization</h4><span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>{editorFields.length} tags</span></div>

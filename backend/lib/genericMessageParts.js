@@ -7,9 +7,32 @@ function splitGenericMessage(value, limit) {
   if (!Number.isInteger(limit) || limit <= 0) throw new TypeError('Message limit must be a positive integer');
 
   const parts = [];
-  for (let offset = 0; offset < text.length; offset += limit) {
-    parts.push(text.slice(offset, offset + limit));
+  let current = '';
+  const flush = () => { if (current) parts.push(current); current = ''; };
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  // Treat links as indivisible tokens, even when adjacent to other text.
+  const tokens = text.match(/https?:\/\/[^\s]+|\s+|(?:(?!https?:\/\/)[^\s])+/gu) || [];
+  for (const token of tokens) {
+    const isUrl = /^https?:\/\//u.test(token);
+    if (isUrl && token.length > limit) {
+      // Signed CRM links can exceed the preferred size. Send them intact as
+      // a standalone message rather than corrupting the token or dropping it.
+      flush();
+      parts.push(token);
+      continue;
+    }
+    if (token.length <= limit) {
+      if (current.length + token.length > limit) flush();
+      current += token;
+      continue;
+    }
+    for (const { segment } of segmenter.segment(token)) {
+      if (segment.length > limit) throw new RangeError('A message character exceeds the part limit');
+      if (current.length + segment.length > limit) flush();
+      current += segment;
+    }
   }
+  flush();
   return parts;
 }
 

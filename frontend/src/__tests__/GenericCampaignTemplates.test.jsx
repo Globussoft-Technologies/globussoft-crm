@@ -226,8 +226,8 @@ describe('Generic CRM template personalization', () => {
     const body = screen.getByRole('textbox', { name: 'WhatsApp message' });
     body.textContent = 'W'.repeat(251);
     fireEvent.input(body);
-    expect(screen.getByLabelText('Message range')).toHaveTextContent('251/250 characters per message');
-    expect(screen.getByLabelText('Message range')).toHaveTextContent('2 messages');
+    expect(screen.getByLabelText('Message range')).toHaveTextContent('251 characters');
+    expect(screen.getByLabelText('Message range')).toHaveTextContent('1 approved template message (not split)');
     expect(screen.getByRole('combobox', { name: 'Template Type' })).toHaveValue('WHATSAPP');
     fireEvent.click(screen.getByRole('button', { name: 'Save Template' }));
 

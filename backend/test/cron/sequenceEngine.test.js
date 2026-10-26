@@ -657,8 +657,10 @@ describe('cron/sequenceEngine — processStep sms', () => {
       sequence: { tenant: { vertical: 'generic', name: 'Generic CRM' } },
     }));
 
-    expect(prisma.smsMessage.create.mock.calls.map(([call]) => call.data.body).join(' '))
+    const parts = prisma.smsMessage.create.mock.calls.map(([call]) => call.data.body);
+    expect(parts.join(''))
       .toMatch(/^Submit pickup and plot: http:\/\/localhost:5173\/pickup-plot-selection\/.+/);
+    expect(parts.filter(part => part.startsWith('http://localhost:5173/pickup-plot-selection/'))).toHaveLength(1);
   });
 
   test('contact has no phone → no write, still advances', async () => {

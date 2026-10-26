@@ -37,6 +37,7 @@ const { sendEmail } = require('../lib/emailSender');
 const { writeAudit } = require('../lib/audit');
 const { resolveSendGridConfig } = require('../services/travelSendGrid');
 const { sendSms, resolveProviderConfig } = require('../services/smsProvider');
+const { GENERIC_SMS_MESSAGE_LIMIT, splitGenericMessage } = require('../lib/genericMessageParts');
 
 function trimGenericSmsProviderConfig(provider) {
   if (!provider) return provider;
@@ -73,6 +74,26 @@ async function dispatchGenericSequenceSms({ messageId, tenantId, to, body }, dep
       : { status: 'FAILED', provider: provider.provider, errorMessage: sent.error || 'SMS provider rejected the message' },
   });
   return sent;
+}
+
+async function queueGenericSequenceSmsParts({ tenantId, to, body, contactId }) {
+  const parts = splitGenericMessage(body, GENERIC_SMS_MESSAGE_LIMIT);
+  const messages = [];
+  for (const part of parts) {
+    const message = await prisma.smsMessage.create({
+      data: {
+        to,
+        body: part,
+        direction: 'OUTBOUND',
+        status: 'QUEUED',
+        contactId,
+        tenantId,
+      },
+    });
+    await module.exports.dispatchGenericSequenceSms({ messageId: message.id, tenantId, to, body: part });
+    messages.push(message);
+  }
+  return messages;
 }
 
 // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
@@ -836,21 +857,11 @@ async function executeReceiverAction(action, enrollment, ctx, stepId = null) {
     });
     if (!template || !enrollment.contact?.phone) return {};
     const body = renderGenericTemplate(normalizeGenericTemplatePlaceholders(template.body || ''), ctx);
-    const message = await prisma.smsMessage.create({
-      data: {
-        to: enrollment.contact.phone,
-        body: body || 'Automated sequence message',
-        direction: 'OUTBOUND',
-        status: 'QUEUED',
-        contactId: enrollment.contact.id,
-        tenantId: enrollment.tenantId,
-      },
-    });
-    await module.exports.dispatchGenericSequenceSms({
-      messageId: message.id,
+    await module.exports.queueGenericSequenceSmsParts({
       tenantId: enrollment.tenantId,
       to: enrollment.contact.phone,
       body: body || 'Automated sequence message',
+      contactId: enrollment.contact.id,
     });
     return {};
   }
@@ -1124,22 +1135,23 @@ async function processStep(step, enrollment) {
           body = `${body.trim()}\n\n${linkLines.join('\n')}`.trim();
         }
       }
-      const message = await prisma.smsMessage.create({
-        data: {
-          to: enrollment.contact.phone,
-          body: body || `Automated sequence message`,
-          direction: 'OUTBOUND',
-          status: 'QUEUED',
-          contactId: enrollment.contact.id,
-          tenantId: enrollment.tenantId,
-        },
-      });
       if (isGenericSequence) {
-        await module.exports.dispatchGenericSequenceSms({
-          messageId: message.id,
+        await module.exports.queueGenericSequenceSmsParts({
           tenantId: enrollment.tenantId,
           to: enrollment.contact.phone,
           body: body || 'Automated sequence message',
+          contactId: enrollment.contact.id,
+        });
+      } else {
+        await prisma.smsMessage.create({
+          data: {
+            to: enrollment.contact.phone,
+            body: body || `Automated sequence message`,
+            direction: 'OUTBOUND',
+            status: 'QUEUED',
+            contactId: enrollment.contact.id,
+            tenantId: enrollment.tenantId,
+          },
         });
       }
     }
@@ -1748,4 +1760,5 @@ module.exports = {
   genericSequenceOptOutReason,
   trimGenericSmsProviderConfig,
   dispatchGenericSequenceSms,
+  queueGenericSequenceSmsParts,
 };

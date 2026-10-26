@@ -47,6 +47,31 @@ describe('Generic WhatsApp sequence execution', () => {
     expect(prisma.waOutboundJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ messageId: 22, tenantId: 1 }) }));
   });
 
+  test('queues rendered WhatsApp content over 250 characters as separate messages, not templates', async () => {
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({
+      id: 9,
+      name: 'long_follow_up',
+      body: 'W'.repeat(251),
+      variableMapping: '{}',
+    });
+    prisma.whatsAppMessage.create
+      .mockResolvedValueOnce({ id: 22 })
+      .mockResolvedValueOnce({ id: 23 });
+
+    await processStep({
+      id: 8,
+      position: 0,
+      kind: 'whatsapp',
+      conditionJson: JSON.stringify({ version: 1, whatsappTemplateId: 9 }),
+    }, enrollment());
+
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalledTimes(2);
+    expect(prisma.whatsAppMessage.create.mock.calls.map(([call]) => call.data.body.length)).toEqual([250, 1]);
+    expect(prisma.whatsAppMessage.create.mock.calls.every(([call]) => call.data.templateName === null)).toBe(true);
+    expect(prisma.waOutboundJob.create).toHaveBeenCalledTimes(2);
+    expect(prisma.waOutboundJob.create.mock.calls.map(([call]) => call.data.messageId)).toEqual([22, 23]);
+  });
+
   test('reply condition only matches an inbound message sent after the latest sequence message', async () => {
     prisma.whatsAppMessage.findFirst
       .mockResolvedValueOnce({ id: 20, threadId: 44, createdAt: new Date('2026-10-21T10:00:00Z') })

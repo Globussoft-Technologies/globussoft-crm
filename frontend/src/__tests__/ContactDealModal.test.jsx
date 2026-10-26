@@ -122,6 +122,7 @@ describe('DealModal — add deal drawer', () => {
 
   it('blocks save with an error when the deal value is empty', async () => {
     mockLists();
+    const user = userEvent.setup();
     renderModal();
     await screen.findByText('Add deal');
     await user.clear(screen.getByLabelText('Deal value'));

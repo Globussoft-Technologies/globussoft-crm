@@ -526,6 +526,21 @@ describe('PUT /api/deals/:id — terminal-stage guard (#173)', () => {
     const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'contracted' });
     expect(res.status).toBe(200);
   });
+  test('legacy untyped deals retain legacy stage transitions', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, stage: 'proposal' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'proposal' });
+    expect(res.status).toBe(200);
+    expect(res.body.stage).toBe('proposal');
+  });
+  test('explicitly assigning a type does not allow unrelated legacy stages', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ dealType: 'New Business', stage: 'proposal' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_STAGE');
+  });
   test('legacy untyped deals validate using the renamed type stages', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ id: 'new-business', name: 'Sales', stages: [{ name: 'Review' }] }]) });

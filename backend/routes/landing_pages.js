@@ -33,7 +33,9 @@ function publicFeaturedVerticalWhere(vertical) {
   // contract. Keep the filter active even when callers omit ?vertical or
   // pass another vertical so a generic/wellness page cannot leak into /trips.
   if (key === "generic" || key === "wellness") return { templateType: "__travel_route_only__" };
-  return verticalWhere("travel");
+  // Legacy pages can have no template type. Keep this in sync with
+  // isTravelPublicPage, while leaving explicit generic/wellness types out.
+  return { OR: [{ templateType: null }, { templateType: "" }, verticalWhere("travel")] };
 }
 
 function isTravelPublicPage(page) {

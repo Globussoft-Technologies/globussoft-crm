@@ -498,6 +498,7 @@ export default function HotelOfferImageGenerator() {
 
           <div style={{ marginTop: 14 }}>
             <input
+              className="travel-file-input"
               type="file"
               multiple
               accept="image/png,image/jpeg,image/webp,image/gif"

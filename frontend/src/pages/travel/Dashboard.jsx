@@ -104,16 +104,16 @@ export default function TravelDashboard() {
 
   return (
     <div className="travel-dashboard-page" style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+      <div className="travel-dashboard-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+          <h1 className="travel-dashboard-title" style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
             <Compass size={28} aria-hidden /> Travel CRM
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, marginBottom: 0 }}>
             {tenant?.name || "Travel Stall"} · {user?.name || user?.email}
           </p>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+        <div className="travel-dashboard-refresh" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
           <button
             type="button"
             onClick={reload}
@@ -124,7 +124,7 @@ export default function TravelDashboard() {
             <RefreshCw size={14} style={refreshing ? { animation: "spin 1s linear infinite" } : undefined} />
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
-          <span style={{ fontSize: 12, color: "var(--text-secondary)", minHeight: 16 }}>
+          <span className="travel-dashboard-updated" style={{ fontSize: 12, color: "var(--text-secondary)", minHeight: 16 }}>
             {lastRefreshedAt ? `Updated ${lastRefreshedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : " "}
           </span>
         </div>
@@ -222,7 +222,7 @@ export default function TravelDashboard() {
             />
           </div>
 
-          <section style={{ ...card, marginTop: 16 }}>
+          <section className="travel-dashboard-section travel-dashboard-recent-trips" style={{ ...card, marginTop: 16 }}>
             <h2 style={sectionTitle}>
               <CalendarIcon size={18} aria-hidden style={{ marginRight: 6, verticalAlign: -3 }} />
               Recent trips
@@ -231,7 +231,7 @@ export default function TravelDashboard() {
               <div style={empty}>No trips yet. Create one via <code>POST /api/travel/trips</code> or the Trips page.</div>
             ) : (
               <TopScrollSync>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table className="travel-dashboard-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
                     <th style={th}>Trip</th>
@@ -252,7 +252,7 @@ export default function TravelDashboard() {
                       <td style={td}>{t.destination}</td>
                       <td style={td}>{fmtDate(t.departDate)}</td>
                       <td style={td}>{fmtDate(t.returnDate)}</td>
-                      <td style={td}><span style={statusBadge(t.status)}>{t.status}</span></td>
+                      <td style={td}><span className="travel-dashboard-status-badge" style={statusBadge(t.status)}>{t.status}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -262,7 +262,7 @@ export default function TravelDashboard() {
           </section>
 
           {isManager && workload && (
-            <section style={{ ...card, marginTop: 16 }}>
+            <section className="travel-dashboard-section travel-dashboard-workload" style={{ ...card, marginTop: 16 }}>
               <h2 style={sectionTitle}>
                 <Users size={18} aria-hidden style={{ marginRight: 6, verticalAlign: -3 }} />
                 Team workload
@@ -271,7 +271,7 @@ export default function TravelDashboard() {
                 <div style={empty}>No open tasks across the team.</div>
               ) : (
                 <TopScrollSync>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="travel-dashboard-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
                       <th style={th}>Staff</th>
@@ -492,6 +492,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
   if (link && hasStatusLinks) {
     return (
       <div
+        className="travel-dashboard-kpi-card"
         role="link"
         tabIndex={0}
         onClick={(event) => {
@@ -521,6 +522,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
   if (link) {
     return (
       <Link
+        className="travel-dashboard-kpi-card"
         to={link}
         style={{
           ...tileStyle,
@@ -540,6 +542,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
   if (clickable) {
     return (
       <div
+        className="travel-dashboard-kpi-card"
         role="button"
         tabIndex={0}
         onClick={onClick}
@@ -559,7 +562,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
       </div>
     );
   }
-  return <div style={{ ...tileStyle, ...style }}>{content}</div>;
+  return <div className="travel-dashboard-kpi-card" style={{ ...tileStyle, ...style }}>{content}</div>;
 }
 function byKeyFooter(obj) {
   if (!obj || Object.keys(obj).length === 0) return null;

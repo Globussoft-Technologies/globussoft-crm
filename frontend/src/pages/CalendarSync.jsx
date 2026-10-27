@@ -2817,6 +2817,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
           <button
             key={card.key}
             type="button"
+            className="calendar-summary-card"
             onClick={() => handleSummaryCardClick(card.key)}
             style={{
               textAlign: "left",

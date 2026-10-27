@@ -998,6 +998,7 @@ export default function Omnibar() {
 
       {showDropdown && (
         <div
+          className="travel-search-results"
           id="omnibar-results"
           role="listbox"
           aria-label="Search results"
@@ -1091,6 +1092,7 @@ export default function Omnibar() {
                       const RowIcon = r.icon || Icon;
                       return (
                         <button
+                          className="travel-search-option"
                           key={optionKey}
                           id={`omnibar-option-${optionKey}`}
                           ref={(node) => {
@@ -1128,6 +1130,7 @@ export default function Omnibar() {
                           }}
                         >
                           <div
+                            className="travel-search-option-icon"
                             style={{
                               background: section.bg,
                               padding: 7,
@@ -1143,6 +1146,7 @@ export default function Omnibar() {
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div
+                              className="travel-search-option-primary"
                               style={{
                                 fontWeight: 500,
                                 fontSize: "0.9rem",
@@ -1154,6 +1158,7 @@ export default function Omnibar() {
                               {r.primary}
                               {r.badge && (
                                 <span
+                                  className="travel-search-option-badge"
                                   style={{
                                     fontSize: "0.65rem",
                                     padding: "0.1rem 0.4rem",
@@ -1173,6 +1178,7 @@ export default function Omnibar() {
                             </div>
                             {r.secondary && (
                               <div
+                                className="travel-search-option-secondary"
                                 style={{
                                   fontSize: "0.78rem",
                                   color: "var(--text-secondary)",

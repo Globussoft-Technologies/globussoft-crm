@@ -35,6 +35,10 @@ const TopScrollSync = ({
   stickyBottom = false,
   topBarLeadingWidth = 0,
   bottomBarLeadingWidth = 0,
+  contentClassName = "",
+  contentRole,
+  contentAriaLabel,
+  contentTabIndex,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -204,7 +208,10 @@ const TopScrollSync = ({
       ) : null}
       <div
         ref={bottomRef}
-        className={`top-scroll-sync__bottom${hideBottomScrollbar || stickyBottom ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}`}
+        role={contentRole}
+        aria-label={contentAriaLabel}
+        tabIndex={contentTabIndex}
+        className={`top-scroll-sync__bottom${hideBottomScrollbar || stickyBottom ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}${contentClassName ? ` ${contentClassName}` : ""}`}
         style={{
           overflowX: stickyBottom
             ? "visible"

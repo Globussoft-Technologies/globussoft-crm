@@ -342,7 +342,7 @@ export default function Reviews() {
       >
         <Filter size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
 
-        <div style={{ position: "relative", minWidth: 200, flex: "1 1 220px" }}>
+        <div className="search-with-leading-icon" style={{ position: "relative", minWidth: 200, flex: "1 1 220px" }}>
           <Search
             size={14}
             aria-hidden

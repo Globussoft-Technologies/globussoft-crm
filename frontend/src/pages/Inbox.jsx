@@ -698,7 +698,7 @@ export default function Inbox({
           </span>
         </div>
         <h4 className="inbox-email-row__subject" style={{ fontWeight: "600", marginBottom: "0.5rem", color: "var(--text-primary)", overflowWrap: "anywhere" }}>{email.subject}</h4>
-        <p className="inbox-email-row__preview" style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "anywhere" }}>
+        <p className="inbox-email-row__preview" style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "anywhere", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 0 }}>
           {isGeneric ? getInboxPreviewText(email.body) : email.body}
         </p>
       </div>
@@ -1115,7 +1115,7 @@ export default function Inbox({
   return (
     <div
       data-testid="inbox-page-shell"
-      className={isGeneric ? "inbox-page-shell--generic" : undefined}
+      className={`inbox-page-shell${isGeneric ? " inbox-page-shell--generic" : ""}`}
       style={{
         width: "100%",
         maxWidth: isGeneric ? "100%" : 1480,
@@ -1163,7 +1163,7 @@ export default function Inbox({
       </header>
 
       <div
-        className={isGeneric ? "card inbox-list-card--generic" : "card"}
+        className={`card inbox-list-card${isGeneric ? " inbox-list-card--generic" : ""}`}
         data-testid="inbox-list-card"
         ref={isGeneric ? undefined : inboxScrollRef}
         onScroll={isGeneric ? undefined : handleInboxScroll}
@@ -1188,9 +1188,9 @@ export default function Inbox({
           </p>
         ) : (
           <div className={isGeneric ? "inbox-list-content" : undefined} style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <div className={isGeneric ? "inbox-toolbar--generic" : undefined} style={{ position: "sticky", top: "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: "-1.25rem 0 0", padding: "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
+            <div className={`inbox-toolbar${isGeneric ? " inbox-toolbar--generic" : ""}`} style={{ position: "sticky", top: "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: "-1.25rem 0 0", padding: "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
               <>
-                <div className={isGeneric ? "inbox-search--generic" : undefined} style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
+                <div className={`inbox-search${isGeneric ? " inbox-search--generic" : ""}`} style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
                   <Search size={18} color="var(--text-secondary)" />
                   <input
                     type="search"
@@ -1198,11 +1198,11 @@ export default function Inbox({
                     placeholder="Search mail"
                     value={inboxSearch}
                     onChange={(event) => setInboxSearch(event.target.value)}
-                    style={{ width: "min(100%, 460px)", border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: "0.9rem" }}
+                    style={{ width: "100%", minWidth: 0, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: "0.9rem" }}
                   />
                 </div>
               {!showMeet && (
-                <div className={isGeneric ? "inbox-date-filter--generic" : undefined} aria-label="Filter mail by date" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flex: "0 1 auto", order: 2, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
+                <div className={`inbox-date-filter${isGeneric ? " inbox-date-filter--generic" : ""}`} aria-label="Filter mail by date" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flex: "0 1 auto", order: 2, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
                   <span>From</span>
                   <input
                     type="date"
@@ -1231,6 +1231,7 @@ export default function Inbox({
               <div
                 role="tablist"
                 aria-label="Email folder"
+                className="inbox-folder-tabs"
                 style={{ display: "flex", gap: "0.25rem", padding: "0.3rem", background: "var(--subtle-bg-2)", border: "1px solid var(--border-color)", borderRadius: "12px", alignSelf: "flex-start", order: 1 }}
               >
               {[
@@ -1246,7 +1247,7 @@ export default function Inbox({
                   style={{
                     padding: "0.4rem 1rem",
                     border: "none",
-                    background: emailFolder === folder.id ? "var(--accent-color)" : "transparent",
+                    background: emailFolder === folder.id ? (isTravel ? "#8f1109" : "var(--accent-color)") : "transparent",
                     color: emailFolder === folder.id ? "#fff" : "var(--text-secondary)",
                     fontWeight: emailFolder === folder.id ? 600 : 500,
                     borderRadius: "6px",
@@ -1258,7 +1259,7 @@ export default function Inbox({
                 </button>
               ))}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
+              <div className="inbox-toolbar-actions" style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
                   <button type="button" aria-label="Refresh inbox" onClick={() => loadEmailsPage({ page: 1, reset: true })} disabled={markingAllRead} title="Refresh" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: markingAllRead ? "not-allowed" : "pointer", opacity: markingAllRead ? 0.5 : 1, padding: "0.45rem" }}><RefreshCw size={17} /></button>
                   <div ref={inboxActionsRef} style={{ position: "relative" }}>
                     <button type="button" aria-label="More inbox actions" title="More" onClick={() => setShowInboxActions((visible) => !visible)} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><MoreVertical size={17} /></button>
@@ -1311,14 +1312,14 @@ export default function Inbox({
                     }
                   }}
                   style={{
-                    padding: "1.5rem",
+                    padding: "1rem 1.25rem",
                     border: "1px solid var(--border-color)",
                     borderRadius: "12px",
                     background: email.read ? "var(--subtle-bg-4)" : "var(--subtle-bg-3)",
                     display: "flex",
-                    gap: "1.5rem",
+                    gap: "1rem",
                     minWidth: 0,
-                    flexWrap: "wrap",
+                    flexWrap: "nowrap",
                     cursor: "pointer",
                     transition: "background 0.18s ease, border-color 0.18s ease",
                   }}
@@ -1338,16 +1339,17 @@ export default function Inbox({
                     <User size={20} color="#fff" />
                   </div>
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
                     <div
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
                         gap: "1rem",
                         marginBottom: "0.5rem",
+                        minWidth: 0,
                       }}
                     >
-                      <p style={{ fontWeight: "bold", fontSize: "1.05rem", overflowWrap: "anywhere" }}>
+                      <p style={{ margin: 0, minWidth: 0, fontWeight: "bold", fontSize: "1.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}
                       </p>
                       <span
@@ -1364,9 +1366,11 @@ export default function Inbox({
                     <h4
                       style={{
                         fontWeight: "600",
-                        marginBottom: "0.5rem",
+                        margin: "0 0 0.5rem",
                         color: "var(--text-primary)",
-                        overflowWrap: "anywhere",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {email.subject}
@@ -1377,7 +1381,10 @@ export default function Inbox({
                         color: "var(--text-secondary)",
                         fontSize: "0.9rem",
                         lineHeight: "1.5",
-                        overflowWrap: "anywhere",
+                        margin: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {isGeneric && isRichTextMarkup(email.body) ? <RichText as="span" value={email.body} /> : email.body}

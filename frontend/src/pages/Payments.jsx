@@ -737,13 +737,14 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com â†’ Settings â
           boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
         }}
       >
-        <TopScrollSync hideTopBar>
+        <TopScrollSync hideTopBar disabled>
           <table
+            className="payment-ledger-table"
             style={{
               width: "100%",
-              minWidth: 1100,
               borderCollapse: "collapse",
               fontSize: "0.85rem",
+              tableLayout: "fixed",
             }}
           >
             <thead>

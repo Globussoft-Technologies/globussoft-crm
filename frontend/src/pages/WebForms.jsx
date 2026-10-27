@@ -13691,20 +13691,16 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           container-type: inline-size;
           display: grid;
           width: 100%;
+          /* Keep the card count stable while there is usable width. The
+             cards, gaps, and their contents then contract together instead
+             of jumping to fewer columns and wrapping early. */
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 14px;
+          gap: clamp(8px, 1.1vw, 14px);
         }
-        /* Card width is based on the library container, not the viewport.
-           Four compact cards need roughly 1,160px including gaps; below
-           that, reduce columns only when the available card width requires
-           it. */
-        @container (max-width: 1159px) {
-          .wf-library-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        }
-        @container (max-width: 839px) {
+        @container (max-width: 639px) {
           .wf-library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
-        @container (max-width: 559px) {
+        @container (max-width: 359px) {
           .wf-library-grid { grid-template-columns: minmax(0, 1fr); }
         }
         .wf-library-card {
@@ -13715,7 +13711,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           gap: 16px;
           box-sizing: border-box;
           min-width: 0;
-          min-height: 306px;
+          min-height: clamp(220px, 24vw, 306px);
           padding: 16px;
           border: 1px solid var(--border-color);
           border-radius: 16px;

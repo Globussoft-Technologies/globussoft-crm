@@ -1,4 +1,11 @@
-/* Travel pages with controls that need a defined row order at narrow widths. */
+is that the sidebar text and icon will reduce based on viewport/* Travel pages with controls that need a defined row order at narrow widths. */
+.travel-trips-page__search {
+  flex: 0 1 240px;
+  width: 240px;
+  min-width: 240px;
+  max-width: 100%;
+}
+
 .curriculum-admin__hint-popover {
   top: calc(100% + 8px) !important;
   bottom: auto !important;

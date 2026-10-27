@@ -9,12 +9,15 @@
 
 @media (min-width: 900px) and (max-width: 1919px) {
   .app-shell {
-    --viewport-control-font: clamp(0.72rem, calc(0.56rem + 0.28vw), 0.875rem);
-    --viewport-body-font: clamp(0.75rem, calc(0.58rem + 0.3vw), 0.9375rem);
-    --viewport-card-padding: clamp(0.7rem, 1.35vw, 1.5rem);
-    --viewport-control-y: clamp(0.3rem, 0.55vw, 0.55rem);
-    --viewport-control-x: clamp(0.45rem, 0.8vw, 0.9rem);
-    --viewport-icon-size: clamp(13px, 1.05vw, 18px);
+    /* Keep the middle value genuinely fluid. The previous coefficients made
+       calc() exceed the clamp maximum at almost every desktop width, which
+       made controls stop shrinking on smaller laptop viewports. */
+    --viewport-control-font: clamp(0.72rem, calc(0.45rem + 0.36vw), 0.875rem);
+    --viewport-body-font: clamp(0.75rem, calc(0.5rem + 0.4vw), 0.9375rem);
+    --viewport-card-padding: clamp(0.7rem, calc(0.35rem + 0.9vw), 1.5rem);
+    --viewport-control-y: clamp(0.3rem, calc(0.18rem + 0.2vw), 0.55rem);
+    --viewport-control-x: clamp(0.45rem, calc(0.25rem + 0.3vw), 0.9rem);
+    --viewport-icon-size: clamp(13px, calc(8px + 0.52vw), 18px);
   }
 
   .app-shell .app-main > main {
@@ -51,7 +54,7 @@
   }
 
   .app-shell .app-main > main :is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text) {
-    font-size: clamp(0.58rem, calc(0.42rem + 0.25vw), 0.75rem) !important;
+    font-size: clamp(0.58rem, calc(0.42rem + 0.18vw), 0.75rem) !important;
   }
 
   .app-shell .app-topbar {
@@ -67,12 +70,12 @@
 
 @media (max-width: 899px) {
   .app-shell {
-    --viewport-control-font: clamp(0.68rem, calc(0.55rem + 0.42vw), 0.82rem);
-    --viewport-body-font: clamp(0.72rem, calc(0.58rem + 0.42vw), 0.875rem);
-    --viewport-card-padding: clamp(0.55rem, 1.8vw, 0.9rem);
-    --viewport-control-y: clamp(0.25rem, 0.75vw, 0.45rem);
-    --viewport-control-x: clamp(0.35rem, 1.1vw, 0.7rem);
-    --viewport-icon-size: clamp(12px, 3.2vw, 16px);
+    --viewport-control-font: clamp(0.68rem, calc(0.4rem + 0.34vw), 0.82rem);
+    --viewport-body-font: clamp(0.72rem, calc(0.45rem + 0.36vw), 0.875rem);
+    --viewport-card-padding: clamp(0.55rem, calc(0.3rem + 0.65vw), 0.9rem);
+    --viewport-control-y: clamp(0.25rem, calc(0.14rem + 0.2vw), 0.45rem);
+    --viewport-control-x: clamp(0.35rem, calc(0.2rem + 0.28vw), 0.7rem);
+    --viewport-icon-size: clamp(12px, calc(8px + 0.5vw), 16px);
   }
 
   .app-shell .app-main > main {
@@ -105,7 +108,7 @@
   }
 
   .app-shell .app-main > main :is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text) {
-    font-size: clamp(0.52rem, 1.9vw, 0.68rem) !important;
+    font-size: clamp(0.52rem, calc(0.4rem + 0.18vw), 0.68rem) !important;
   }
 
   /* The omnibar and its body-mounted-looking result panel are inline-styled;
@@ -230,6 +233,7 @@ body[data-vertical="generic"] main.generic-page-content
   text-indent: 0 !important;
 }
 
+
 .pickup-plot-work-search-wrap > svg {
   left: 10px !important;
 }
@@ -263,12 +267,12 @@ body[data-vertical="generic"] main.generic-page-content
   }
 
   body[data-vertical="generic"] main.generic-page-content .zapier-page-header h1 {
-    font-size: clamp(1.25rem, calc(0.85rem + 1vw), 2rem) !important;
+    font-size: clamp(1.25rem, calc(1.15rem + 0.08vw), 2rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .zapier-page-header > a {
     padding: clamp(0.45rem, 0.8vw, 0.75rem) clamp(0.75rem, 1.5vw, 1.5rem) !important;
-    font-size: clamp(0.68rem, calc(0.5rem + 0.35vw), 0.875rem) !important;
+    font-size: clamp(0.68rem, calc(0.62rem + 0.02vw), 0.875rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .zapier-page > .card {
@@ -293,13 +297,13 @@ body[data-vertical="generic"] main.generic-page-content
 
   body[data-vertical="generic"] main.generic-page-content .zapier-setup-step p,
   body[data-vertical="generic"] main.generic-page-content .zapier-page > .card > div:last-child {
-    font-size: clamp(0.66rem, calc(0.5rem + 0.35vw), 0.875rem) !important;
+    font-size: clamp(0.66rem, calc(0.6rem + 0.02vw), 0.875rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .zapier-page th,
   body[data-vertical="generic"] main.generic-page-content .zapier-page td {
     padding: clamp(0.45rem, 0.8vw, 1rem) clamp(0.35rem, 0.65vw, 1rem) !important;
-    font-size: clamp(0.64rem, calc(0.48rem + 0.32vw), 0.9rem) !important;
+    font-size: clamp(0.64rem, calc(0.58rem + 0.02vw), 0.9rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .zapier-table-scroll td:last-child button {
@@ -307,7 +311,7 @@ body[data-vertical="generic"] main.generic-page-content
     padding: clamp(0.22rem, 0.42vw, 0.4rem) clamp(0.4rem, 0.65vw, 0.75rem) !important;
     gap: clamp(0.2rem, 0.35vw, 0.4rem) !important;
     border-radius: clamp(4px, 0.5vw, 6px) !important;
-    font-size: clamp(0.58rem, calc(0.44rem + 0.28vw), 0.8rem) !important;
+    font-size: clamp(0.58rem, calc(0.54rem + 0.018vw), 0.8rem) !important;
     line-height: 1.15;
   }
 
@@ -345,13 +349,13 @@ body[data-vertical="generic"] main.generic-page-content
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-library-head h3 {
-    font-size: clamp(0.86rem, calc(0.66rem + 0.42vw), 1rem);
+    font-size: clamp(0.86rem, calc(0.76rem + 0.02vw), 1rem);
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-library-head p,
   body[data-vertical="generic"] main.generic-page-content .wf-library-card p,
   body[data-vertical="generic"] main.generic-page-content .wf-library-meta {
-    font-size: clamp(0.64rem, calc(0.48rem + 0.34vw), 0.82rem);
+    font-size: clamp(0.64rem, calc(0.58rem + 0.02vw), 0.82rem);
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-folder-toolbar {
@@ -363,19 +367,20 @@ body[data-vertical="generic"] main.generic-page-content
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-library-card {
-    min-height: clamp(13rem, 31vw, 19.125rem);
+    height: clamp(13.75rem, 24vw, 19.125rem) !important;
+    min-height: 0 !important;
     padding: clamp(0.6rem, 1.35vw, 1rem) !important;
     gap: clamp(0.55rem, 1.35vw, 1rem);
     border-radius: clamp(0.7rem, 1.25vw, 1rem);
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-library-card h4 {
-    font-size: clamp(0.72rem, calc(0.55rem + 0.38vw), 0.95rem);
+    font-size: clamp(0.72rem, calc(0.66rem + 0.02vw), 0.95rem);
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-status-pill {
     padding: clamp(0.18rem, 0.35vw, 0.24rem) clamp(0.38rem, 0.65vw, 0.55rem);
-    font-size: clamp(0.58rem, calc(0.44rem + 0.28vw), 0.72rem);
+    font-size: clamp(0.58rem, calc(0.54rem + 0.018vw), 0.72rem);
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-form-menu-trigger {
@@ -388,7 +393,7 @@ body[data-vertical="generic"] main.generic-page-content
   body[data-vertical="generic"] main.generic-page-content .wf-library-action-buttons > .btn-secondary {
     min-height: clamp(30px, 3.5vw, 40px);
     padding: clamp(0.34rem, 0.65vw, 0.55rem) clamp(0.35rem, 0.7vw, 0.6rem) !important;
-    font-size: clamp(0.62rem, calc(0.46rem + 0.34vw), 0.85rem) !important;
+    font-size: clamp(0.62rem, calc(0.56rem + 0.02vw), 0.85rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .wf-library-actions,
@@ -404,6 +409,7 @@ body[data-vertical="generic"] main.generic-page-content
 
 @media (max-width: 430px) {
   body[data-vertical="generic"] main.generic-page-content .wf-library-card {
+    height: auto !important;
     min-height: 0;
   }
 }
@@ -415,7 +421,7 @@ body[data-vertical="generic"] main.generic-page-content
  * and its controls remain unchanged. */
 @media (max-width: 1199px) {
   body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table {
-    font-size: clamp(0.66rem, calc(0.5rem + 0.36vw), 0.85rem) !important;
+    font-size: clamp(0.66rem, calc(0.6rem + 0.02vw), 0.85rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .reports-page__schedule .reports-page__table-shell {
@@ -434,7 +440,7 @@ body[data-vertical="generic"] main.generic-page-content
   }
 
   body[data-vertical="generic"] main.generic-page-content .reports-page__schedule > div:first-child h3 {
-    font-size: clamp(0.8rem, calc(0.62rem + 0.38vw), 1.1rem) !important;
+    font-size: clamp(0.8rem, calc(0.72rem + 0.025vw), 1.1rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table td:last-child > div {
@@ -442,7 +448,7 @@ body[data-vertical="generic"] main.generic-page-content
   }
 
   body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table td:last-child button {
-    font-size: clamp(0.62rem, calc(0.48rem + 0.28vw), 0.8rem) !important;
+    font-size: clamp(0.62rem, calc(0.58rem + 0.018vw), 0.8rem) !important;
   }
 
   body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table .report-schedule-status-badge {
@@ -463,12 +469,12 @@ body[data-vertical="generic"] main.generic-page-content
   body[data-vertical="generic"] main.generic-page-content .staff-team-table-scroll--generic .staff-generic-resizable-table td {
     padding-block: clamp(0.35rem, 0.6vw, 0.75rem) !important;
     padding-inline: clamp(0.25rem, 0.45vw, 0.5rem) !important;
-    font-size: clamp(0.64rem, calc(0.48rem + 0.32vw), 0.875rem) !important;
+    font-size: clamp(0.64rem, calc(0.58rem + 0.02vw), 0.875rem) !important;
     line-height: 1.25;
   }
 
   body[data-vertical="generic"] main.generic-page-content .staff-team-table-scroll--generic .staff-generic-resizable-table th {
-    font-size: clamp(0.58rem, calc(0.44rem + 0.26vw), 0.75rem) !important;
+    font-size: clamp(0.58rem, calc(0.54rem + 0.018vw), 0.75rem) !important;
   }
 }
 

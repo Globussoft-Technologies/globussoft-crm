@@ -503,31 +503,31 @@ export default function Trips() {
           style={{ color: "var(--text-secondary)" }}
         />
         <div
-          className="travel-trips-page__search"
+          className="travel-trips-page__search search-with-leading-icon"
           style={{
-            position: "relative",
-            display: "flex",
-            alignItems: "center",
+              position: "relative",
           }}
         >
           <Search
             size={14}
             aria-hidden
             style={{
-              position: "absolute",
-              left: 8,
+                position: "absolute",
+                left: 12,
+                top: "50%",
+                transform: "translateY(-50%)",
               color: "var(--text-secondary)",
               pointerEvents: "none",
             }}
           />
           <input
-            type="search"
+              type="text"
             className="crm-search-input"
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search trip code or destination…"
             aria-label="Search trips"
-            style={{ ...selectStyle, paddingLeft: 28, minWidth: 240 }}
+              style={{ ...selectStyle, padding: "6px 8px 6px 40px", minWidth: 0, width: "100%" }}
           />
         </div>
         <select

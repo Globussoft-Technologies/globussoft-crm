@@ -356,7 +356,7 @@ const Layout = () => {
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell${isTravel ? " travel-app-shell" : ""}`}
       style={{
         // Anchor the application to all four viewport edges instead of
         // relying on viewport units. Some desktop Chrome/display-scaling

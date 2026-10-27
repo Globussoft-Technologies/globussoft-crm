@@ -1263,11 +1263,9 @@ export default function Itineraries() {
           ))}
         </select>
         <div
-          className="itin-filter-search"
+          className="itin-filter-search search-with-leading-icon"
           style={{
             position: "relative",
-            display: "flex",
-            alignItems: "center",
           }}
         >
           <Search
@@ -1275,13 +1273,15 @@ export default function Itineraries() {
             aria-hidden
             style={{
               position: "absolute",
-              left: 8,
+              left: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
               color: "var(--text-secondary)",
               pointerEvents: "none",
             }}
           />
           <input
-            type="search"
+            type="text"
             className="crm-search-input"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
@@ -1289,7 +1289,7 @@ export default function Itineraries() {
             aria-label="Search itineraries by destination or contact name"
             style={{
               ...selectStyle,
-              paddingLeft: 28,
+              padding: "6px 8px 6px 40px",
               paddingRight: searchQuery ? 28 : 8,
               width: "100%",
               boxSizing: "border-box",

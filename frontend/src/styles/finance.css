@@ -8,8 +8,90 @@
   box-sizing: border-box;
   min-height: 100% !important;
   overflow-x: hidden;
+  container-type: inline-size;
   color: var(--text-primary);
   animation: fadeIn 0.4s ease-out;
+}
+
+/* Payments is a dense seven-column ledger. Keep it fluid inside the actual
+   content pane (which can be much narrower than the browser viewport), so a
+   sidebar or split layout does not create an artificial horizontal scrollbar. */
+.payment-ledger-table {
+  width: 100% !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  table-layout: fixed;
+}
+
+.payment-ledger-table :is(th, td) {
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.payment-ledger-table th:nth-child(1),
+.payment-ledger-table td:nth-child(1) { width: 14%; }
+.payment-ledger-table th:nth-child(2),
+.payment-ledger-table td:nth-child(2) { width: 20%; }
+.payment-ledger-table th:nth-child(3),
+.payment-ledger-table td:nth-child(3) { width: 13%; }
+.payment-ledger-table th:nth-child(4),
+.payment-ledger-table td:nth-child(4) { width: 12%; }
+.payment-ledger-table th:nth-child(5),
+.payment-ledger-table td:nth-child(5) { width: 12%; }
+.payment-ledger-table th:nth-child(6),
+.payment-ledger-table td:nth-child(6) { width: 13%; }
+.payment-ledger-table th:nth-child(7),
+.payment-ledger-table td:nth-child(7) { width: 16% !important; }
+
+.payment-ledger-table td:nth-child(2) {
+  white-space: nowrap;
+}
+
+.payment-ledger-table td:nth-child(7) {
+  white-space: normal;
+  overflow: hidden;
+}
+
+.payment-ledger-table td:nth-child(7) button {
+  min-width: 0 !important;
+  max-width: 100%;
+  margin-right: 0.15rem !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (max-width: 900px) {
+  .payment-ledger-table {
+    font-size: clamp(0.56rem, 1.55cqw, 0.85rem) !important;
+  }
+
+  .payment-ledger-table :is(th, td) {
+    padding: clamp(0.2rem, 1.15cqw, 0.75rem) clamp(0.15rem, 1.1cqw, 1rem) !important;
+    line-height: 1.25;
+  }
+
+  .payment-ledger-table th {
+    font-size: clamp(0.46rem, 1.3cqw, 0.75rem) !important;
+    letter-spacing: clamp(0.01em, 0.25cqw, 0.05em);
+  }
+
+  .payment-ledger-table td:nth-child(7) button {
+    padding: clamp(0.12rem, 0.55cqw, 0.3rem) clamp(0.12rem, 0.75cqw, 0.7rem) !important;
+    font-size: clamp(0.46rem, 1.25cqw, 0.75rem) !important;
+    line-height: 1.1;
+  }
+
+  .payment-ledger-table td:nth-child(4) span,
+  .payment-ledger-table td:nth-child(5) span {
+    padding: clamp(0.1rem, 0.5cqw, 0.25rem) clamp(0.15rem, 0.7cqw, 0.6rem) !important;
+    font-size: clamp(0.45rem, 1.15cqw, 0.72rem) !important;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* The Travel invoice ledger is a viewport inside the finance shell. Keep the

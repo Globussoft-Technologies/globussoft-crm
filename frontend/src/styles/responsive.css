@@ -2216,6 +2216,108 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   display: none;
 }
 
+/* The travel and wellness inboxes use the same toolbar as Generic CRM, but
+ * historically only the generic variant received the responsive rules. Keep
+ * every inbox surface shrinkable so the controls fit the actual content area
+ * left beside the sidebar, not the full browser viewport. */
+.inbox-page-shell,
+.inbox-list-card,
+.inbox-toolbar,
+.inbox-search,
+.inbox-date-filter,
+.inbox-folder-tabs,
+.inbox-toolbar-actions {
+  min-width: 0;
+}
+
+/* Travel pages already sit inside the shared content frame. The inbox's
+ * original outer padding created a second inset, making the card narrower
+ * than the previous layout. Keep the frame as the sole horizontal boundary. */
+.inbox-page-shell:not(.inbox-page-shell--generic) {
+  padding: 1rem 0 !important;
+}
+
+.inbox-page-shell:not(.inbox-page-shell--generic) .inbox-search {
+  height: 40px;
+  box-sizing: border-box;
+  padding-block: 0.35rem !important;
+}
+
+@media (max-width: 1100px) {
+  .inbox-page-shell:not(.inbox-page-shell--generic) {
+    padding: 1rem 0 !important;
+  }
+
+  .inbox-list-card:not(.inbox-list-card--generic) {
+    height: calc(100dvh - 175px);
+    max-height: none !important;
+    box-sizing: border-box;
+  }
+
+  .inbox-page-shell:not(.inbox-page-shell--generic) > header {
+    gap: clamp(0.55rem, 1.5vw, 1rem) !important;
+    margin-bottom: clamp(1rem, 2.5vw, 2.25rem) !important;
+  }
+
+  .inbox-page-shell:not(.inbox-page-shell--generic) > header h1 {
+    font-size: clamp(1.35rem, 2.7vw, 2rem) !important;
+  }
+
+  .inbox-toolbar {
+    display: grid !important;
+    grid-template-columns: minmax(105px, auto) minmax(0, 1fr) minmax(140px, 320px) minmax(205px, auto) auto;
+    grid-template-areas: "tabs . search dates actions";
+    align-items: center !important;
+    gap: clamp(0.35rem, 1.1vw, 1rem) !important;
+    width: 100%;
+  }
+
+  .inbox-folder-tabs { grid-area: tabs; }
+  .inbox-search {
+    grid-area: search;
+    width: 100%;
+    height: clamp(34px, 4vw, 40px);
+    box-sizing: border-box;
+    margin-left: 0 !important;
+    padding-block: 0.35rem !important;
+  }
+  .inbox-date-filter { grid-area: dates; width: 100%; }
+  .inbox-toolbar-actions { grid-area: actions; }
+
+  .inbox-search input {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .inbox-date-filter input {
+    width: clamp(4.5rem, 9vw, 7rem);
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .inbox-folder-tabs button {
+    padding-inline: clamp(0.45rem, 1vw, 1rem) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .inbox-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "tabs actions"
+      "search search"
+      "dates dates";
+  }
+
+  .inbox-date-filter {
+    justify-content: stretch;
+  }
+
+  .inbox-date-filter input {
+    min-width: 0;
+  }
+}
+
 .inbox-page-shell--generic {
   display: flex;
   flex-direction: column;
@@ -2231,7 +2333,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 .inbox-list-card--generic {
   display: flex;
   flex-direction: column;
-  min-height: 280px;
+  min-height: calc(100vh - 180px);
   max-height: none !important;
   overflow: hidden !important;
 }
@@ -2269,11 +2371,12 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 .inbox-email-row__preview {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  max-height: 3em;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  max-height: 1.5em;
   overflow: hidden;
-  white-space: normal;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .generic-template-modal__group-trigger,
@@ -2622,10 +2725,11 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   .inbox-email-row__preview {
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    max-height: 2.7em;
-    white-space: normal;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    max-height: 1.35em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     overflow-wrap: anywhere !important;
     font-size: 0.8rem !important;
     line-height: 1.35 !important;
@@ -3212,11 +3316,6 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     -webkit-overflow-scrolling: touch;
   }
 
-  .staff-team-table-scroll--generic {
-    max-height: none !important;
-    overflow: visible !important;
-  }
-
   .staff-team-table-scroll--generic .staff-generic-resizable-table,
   .staff-team-table-scroll--generic .staff-generic-resizable-table tbody,
   .staff-team-table-scroll--generic .staff-generic-resizable-table tr {
@@ -3357,6 +3456,96 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     width: 100%;
     padding: 0.4rem 0.5rem !important;
   }
+}
+
+/* Wellness Team Members is a five-column table. Keep the action buttons from
+ * becoming the table's intrinsic width as the viewport narrows. */
+@media (max-width: 900px) {
+  .staff-team-card {
+    min-width: 0;
+    padding: clamp(0.75rem, 2vw, 1.5rem) !important;
+  }
+
+  .staff-team-table-scroll {
+    min-width: 0;
+    overflow-x: hidden !important;
+  }
+
+  .staff-wellness-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+  }
+
+  .staff-wellness-table th,
+  .staff-wellness-table td {
+    min-width: 0 !important;
+    padding: clamp(0.3rem, 0.8vw, 0.65rem) clamp(0.2rem, 0.55vw, 0.5rem) !important;
+    font-size: clamp(0.58rem, 1.15vw, 0.82rem) !important;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .staff-wellness-table th:nth-child(1),
+  .staff-wellness-table td:nth-child(1) { width: 14%; }
+  .staff-wellness-table th:nth-child(2),
+  .staff-wellness-table td:nth-child(2) { width: 28%; }
+  .staff-wellness-table th:nth-child(3),
+  .staff-wellness-table td:nth-child(3) { width: 17%; }
+  .staff-wellness-table th:nth-child(4),
+  .staff-wellness-table td:nth-child(4) { width: 14%; }
+  .staff-wellness-table th:nth-child(5),
+  .staff-wellness-table td:nth-child(5) { width: 27%; }
+
+  .staff-wellness-table td:last-child {
+    white-space: normal;
+  }
+
+  .staff-wellness-table td:last-child > div {
+    max-width: 100%;
+    gap: clamp(0.15rem, 0.45vw, 0.3rem) !important;
+  }
+
+  .staff-wellness-table td:last-child button {
+    min-width: 0 !important;
+    max-width: 100%;
+    padding: clamp(0.2rem, 0.55vw, 0.45rem) clamp(0.25rem, 0.65vw, 0.6rem) !important;
+    font-size: inherit !important;
+    line-height: 1.15;
+  }
+
+  .staff-wellness-table td:last-child button svg {
+    width: clamp(10px, 1.35vw, 13px) !important;
+    height: clamp(10px, 1.35vw, 13px) !important;
+  }
+}
+
+/* KPI cards can shrink without letting long formatted totals push the grid wider. */
+.roles-admin-table th {
+  white-space: nowrap;
+}
+
+.roles-admin-table :is(th, td) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roles-admin-table td > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.roles-admin-table td:last-child > div {
+  width: 100%;
+  overflow: hidden;
+}
+
+.roles-admin-table td:last-child button {
+  width: 0;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* KPI cards can shrink without letting long formatted totals push the grid wider. */

@@ -1,0 +1,1085 @@
+/* Travel CRM-only fluid density contract. 1920px keeps the desktop baseline;
+   smaller viewports reduce dimensions continuously before layout changes. */
+.travel-app-shell {
+  --travel-ui-text: clamp(0.875rem, 0.833vw, 1rem);
+  --travel-ui-control: clamp(0.875rem, calc(0.34375rem + 0.39vw), 0.875rem);
+  --travel-ui-cell: clamp(0.8125rem, calc(0.34375rem + 0.39vw), 0.875rem);
+  --travel-ui-page-gap: clamp(0.75rem, calc(0.3rem + 1vw), 1.5rem);
+  --travel-ui-card-gap: clamp(0.5rem, calc(0.25rem + 0.46vw), 0.8125rem);
+  --travel-ui-card-padding: clamp(0.75rem, calc(0.3125rem + 0.95vw), 1.5rem);
+  --travel-ui-control-y: clamp(0.3rem, calc(0.16rem + 0.24vw), 0.5rem);
+  --travel-ui-control-x: clamp(0.5rem, calc(0.22rem + 0.55vw), 0.875rem);
+  --travel-ui-control-height: clamp(1.75rem, calc(1.32rem + 0.67vw), 2.125rem);
+  --travel-ui-control-icon: clamp(0.625rem, calc(0.47rem + 0.335vw), 0.875rem);
+  --travel-ui-filter-field: clamp(7rem, calc(3.625rem + 5.2vw), 9.875rem);
+  --travel-ui-filter-search: clamp(8.5rem, calc(3.75rem + 7.4vw), 13.5rem);
+  --travel-ui-radius: clamp(0.5rem, calc(0.3rem + 0.23vw), 0.75rem);
+  --travel-ui-icon: clamp(0.875rem, calc(0.5rem + 0.42vw), 1.125rem);
+  --travel-dashboard-gap: clamp(0.45rem, calc(0.2rem + 0.42vw), 0.75rem);
+  --travel-dashboard-tile-padding: clamp(0.625rem, calc(0.28125rem + 0.6vw), 1rem);
+  --travel-dashboard-value-size: clamp(1.125rem, 1.667vw, 2rem);
+  --travel-dashboard-label-size: clamp(0.75rem, 0.677vw, 0.8125rem);
+  --travel-dashboard-meta-size: clamp(0.75rem, 0.625vw, 0.75rem);
+  --travel-sidebar-brand-size: clamp(0.875rem, calc(0.7625rem + 0.18vw), 0.98rem);
+  --travel-sidebar-nav-size: clamp(0.875rem, calc(0.6125rem + 0.14vw), 0.875rem);
+  --travel-sidebar-subnav-size: clamp(0.8125rem, calc(0.4rem + 0.4vw), 0.875rem);
+  --travel-sidebar-meta-size: clamp(0.75rem, calc(0.5rem + 0.1vw), 0.75rem);
+  --travel-sidebar-icon-size: clamp(1rem, calc(0.75rem + 0.417vw), 1.25rem);
+  --travel-sidebar-icon-box: clamp(1.375rem, calc(1.125rem + 0.208vw), 1.625rem);
+  --travel-font-9: 0.75rem;
+  --travel-font-10: 0.75rem;
+  --travel-font-11: 0.75rem;
+  --travel-font-11-5: 0.75rem;
+  --travel-font-12: 0.75rem;
+  --travel-font-12-5: clamp(0.75rem, 0.651vw, 0.78125rem);
+  --travel-font-13: clamp(0.75rem, 0.677vw, 0.8125rem);
+  --travel-font-13-5: clamp(0.75rem, 0.703vw, 0.84375rem);
+  --travel-font-14: clamp(0.875rem, 0.729vw, 0.875rem);
+  --travel-font-15: clamp(0.875rem, 0.781vw, 0.9375rem);
+  --travel-font-16: clamp(0.875rem, 0.833vw, 1rem);
+  --travel-font-17: clamp(0.875rem, 0.885vw, 1.0625rem);
+  --travel-font-18: clamp(0.875rem, 0.938vw, 1.125rem);
+  --travel-font-19: clamp(0.8125rem, 0.99vw, 1.1875rem);
+  --travel-font-20: clamp(0.875rem, 1.042vw, 1.25rem);
+  --travel-font-22: clamp(0.9375rem, 1.146vw, 1.375rem);
+  --travel-font-24: clamp(1rem, 1.25vw, 1.5rem);
+  --travel-font-25: clamp(1.0625rem, 1.302vw, 1.5625rem);
+  --travel-font-26: clamp(1.125rem, 1.354vw, 1.625rem);
+  --travel-font-27: clamp(1.125rem, 1.406vw, 1.6875rem);
+  --travel-font-28: clamp(1.25rem, 1.458vw, 1.75rem);
+  --travel-font-29: clamp(1.25rem, 1.51vw, 1.8125rem);
+  --travel-font-30: clamp(1.25rem, 1.563vw, 1.875rem);
+  --travel-font-32: clamp(1.125rem, 1.667vw, 2rem);
+  --travel-font-34: clamp(1.375rem, 1.771vw, 2.125rem);
+  --travel-font-48: clamp(1.875rem, 2.5vw, 3rem);
+}
+
+.travel-app-shell .travel-content-frame { font-size: var(--travel-ui-text); }
+
+/* Keep form text readable at mobile widths and browser zoom, including
+   fields with legacy inline font sizes handled by the rules below. */
+.travel-app-shell .travel-content-frame :is(label, input, select, textarea),
+.travel-app-shell .travel-content-frame :is(label, input, select, textarea)[style] {
+  font-size: max(0.875rem, var(--travel-ui-control)) !important;
+}
+
+/* The two body-mounted-looking top-bar overlays need their own density
+   contract because their contents use legacy inline pixel/rem values. Keep
+   the panels readable while making every internal element follow the same
+   continuous viewport curve as the rest of Travel CRM. */
+.travel-app-shell .travel-search-results {
+  border-radius: var(--travel-ui-radius) !important;
+}
+
+.travel-app-shell .travel-search-results > div[style*="padding: 0.4rem"] {
+  padding: clamp(0.2rem, 0.32vw, 0.4rem) !important;
+}
+
+.travel-app-shell .travel-search-results h4 {
+  font-size: var(--travel-font-11) !important;
+  padding: clamp(0.3rem, 0.42vw, 0.5rem) clamp(0.45rem, 0.65vw, 0.75rem) clamp(0.15rem, 0.22vw, 0.25rem) !important;
+}
+
+.travel-app-shell .travel-search-option {
+  gap: clamp(0.4rem, 0.62vw, 0.75rem) !important;
+  padding: clamp(0.32rem, 0.42vw, 0.5rem) clamp(0.45rem, 0.65vw, 0.75rem) !important;
+  border-radius: var(--travel-ui-radius) !important;
+}
+
+.travel-app-shell .travel-search-option-icon {
+  padding: clamp(0.3rem, 0.36vw, 0.4375rem) !important;
+  border-radius: clamp(0.35rem, 0.42vw, 0.5rem) !important;
+}
+
+.travel-app-shell .travel-search-option-icon svg {
+  width: var(--travel-ui-icon) !important;
+  height: var(--travel-ui-icon) !important;
+}
+
+.travel-app-shell .travel-search-option-primary {
+  font-size: var(--travel-ui-control) !important;
+}
+
+.travel-app-shell .travel-search-option-secondary {
+  font-size: var(--travel-font-12) !important;
+  margin-top: clamp(1px, 0.1vw, 2px) !important;
+}
+
+.travel-app-shell .travel-search-option-badge {
+  font-size: var(--travel-font-10) !important;
+  padding: clamp(0.05rem, 0.08vw, 0.1rem) clamp(0.2rem, 0.3vw, 0.4rem) !important;
+  margin-left: clamp(0.25rem, 0.4vw, 0.5rem) !important;
+}
+
+.travel-app-shell .travel-search-results > div:last-child {
+  padding: clamp(0.3rem, 0.42vw, 0.5rem) clamp(0.55rem, 0.78vw, 0.9rem) !important;
+  font-size: var(--travel-font-11) !important;
+}
+
+.travel-app-shell .travel-search-results kbd {
+  padding: clamp(0.05rem, 0.08vw, 0.1rem) clamp(0.2rem, 0.3vw, 0.35rem) !important;
+  border-radius: clamp(0.2rem, 0.25vw, 0.25rem) !important;
+}
+
+@media (min-width: 900px) {
+  .travel-app-shell .travel-notification-panel {
+    width: clamp(260px, 26vw, 360px) !important;
+    max-height: clamp(360px, 33vw, 460px) !important;
+    border-radius: var(--travel-ui-radius) !important;
+  }
+}
+
+.travel-app-shell .travel-notification-panel > div:first-child {
+  padding: clamp(0.55rem, 0.73vw, 0.875rem) clamp(0.65rem, 0.83vw, 1rem) !important;
+}
+
+.travel-app-shell .travel-notification-panel > div:first-child > span {
+  font-size: var(--travel-font-15) !important;
+}
+
+.travel-app-shell .travel-notification-panel > div:first-child button {
+  gap: clamp(2px, 0.21vw, 4px) !important;
+  font-size: var(--travel-font-13) !important;
+}
+
+.travel-app-shell .travel-notification-panel > div:first-child button svg {
+  width: var(--travel-ui-icon) !important;
+  height: var(--travel-ui-icon) !important;
+}
+
+.travel-app-shell .travel-notification-row {
+  gap: clamp(0.45rem, 0.52vw, 0.625rem) !important;
+  padding: clamp(0.5rem, 0.625vw, 0.75rem) clamp(0.65rem, 0.83vw, 1rem) !important;
+}
+
+.travel-app-shell .travel-notification-row > div:first-child {
+  min-width: clamp(7px, 0.52vw, 10px) !important;
+}
+
+.travel-app-shell .travel-notification-row > div:first-child > div {
+  width: clamp(6px, 0.42vw, 8px) !important;
+  height: clamp(6px, 0.42vw, 8px) !important;
+}
+
+.travel-app-shell .travel-notification-row span[title] {
+  font-size: var(--travel-font-13) !important;
+  padding-left: clamp(0.3rem, 0.31vw, 0.375rem) !important;
+}
+
+.travel-app-shell .travel-notification-row span[style*="white-space: nowrap"] {
+  font-size: var(--travel-font-11) !important;
+  margin-left: clamp(0.3rem, 0.42vw, 0.5rem) !important;
+}
+
+.travel-app-shell .travel-notification-row p {
+  font-size: var(--travel-font-12) !important;
+}
+
+.travel-app-shell .travel-notification-row button {
+  padding: clamp(0.2rem, 0.21vw, 0.25rem) !important;
+}
+
+.travel-app-shell .travel-notification-row button svg {
+  width: var(--travel-font-14) !important;
+  height: var(--travel-font-14) !important;
+}
+
+.travel-app-shell .travel-content-frame .travel-file-input {
+  width: 100%;
+  min-width: 0;
+  font-size: clamp(0.75rem, 0.75vw, 0.875rem) !important;
+}
+
+.travel-app-shell .travel-content-frame .travel-file-input::file-selector-button {
+  margin-right: clamp(0.35rem, 0.55vw, 0.625rem);
+  padding: clamp(0.25rem, 0.45vw, 0.375rem) clamp(0.45rem, 0.75vw, 0.75rem);
+  font-size: inherit;
+}
+
+/* Travel sidebar typography is defined in legacy fixed rem values. Override
+   those values at the sidebar boundary so labels follow the viewport scale as
+   the sidebar width changes. */
+.travel-app-shell .app-sidebar .travel-sidebar-brand-name {
+  font-size: var(--travel-sidebar-brand-size) !important;
+}
+
+.travel-app-shell .app-sidebar :is(
+  .travel-nav-section-trigger,
+  .travel-dashboard-link,
+  .travel-settings-link
+) {
+  font-size: var(--travel-sidebar-nav-size) !important;
+}
+
+.travel-app-shell .app-sidebar .travel-nav-section-items .nav-link {
+  font-size: var(--travel-sidebar-subnav-size) !important;
+}
+
+.travel-app-shell .app-sidebar :is(
+  .travel-nav-label,
+  .travel-nav-section-label
+) {
+  font-size: inherit !important;
+  line-height: 1.2;
+}
+
+.travel-app-shell .app-sidebar :is(
+  .travel-sidebar-vertical-label,
+  .travel-sidebar-subbrand-row label
+) {
+  font-size: var(--travel-sidebar-meta-size) !important;
+}
+
+/* TMC Trips has several legacy inline font sizes. Keep its typography fluid
+   at the page boundary so the desktop layout does not retain the same large
+   text when the viewport becomes narrower. */
+.travel-app-shell .travel-content-frame .travel-trips-page h1 {
+  font-size: clamp(1.25rem, 1.8vw, 1.75rem) !important;
+  line-height: 1.2;
+}
+
+.travel-app-shell .travel-content-frame .travel-trips-page > .travel-trips-page__header p,
+.travel-app-shell .travel-content-frame .travel-trips-page :is(input, select, button) {
+  font-size: clamp(0.75rem, 0.75vw, 0.875rem) !important;
+}
+
+.travel-app-shell .travel-content-frame .travel-trips-page table th {
+  font-size: clamp(0.75rem, 0.68vw, 0.8125rem) !important;
+}
+
+.travel-app-shell .travel-content-frame .travel-trips-page table td {
+  font-size: clamp(0.75rem, 0.75vw, 0.875rem) !important;
+}
+
+.travel-app-shell .travel-content-frame > * {
+  min-width: 0;
+  box-sizing: border-box;
+  padding-inline: var(--travel-ui-page-gap) !important;
+}
+
+.travel-app-shell .travel-content-frame :where(p, li, label, small) {
+  font-size: var(--travel-ui-control) !important;
+}
+
+/* Legacy Travel pages contain numeric inline font sizes. Map the common
+   baselines to viewport tokens at the layout boundary instead of patching
+   every page. The maximum remains the original authored size at 1920px. */
+.travel-app-shell .travel-content-frame :is([style*="font-size: 9px"], [style*="font-size: 9.5px"]) { font-size: var(--travel-font-9) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 10px"], [style*="font-size: 10.5px"], [style*="font-size: 0.62rem"]) { font-size: var(--travel-font-10) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 11px"], [style*="font-size: 0.64rem"], [style*="font-size: 0.66rem"], [style*="font-size: 0.68rem"]) { font-size: var(--travel-font-11) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 11.5px"] { font-size: var(--travel-font-11-5) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 12px"], [style*="font-size: 0.7rem"], [style*="font-size: 0.72rem"], [style*="font-size: 0.74rem"], [style*="font-size: 0.75rem"], [style*="font-size: 0.76rem"]) { font-size: var(--travel-font-12) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 12.5px"] { font-size: var(--travel-font-12-5) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 13px"], [style*="font-size: 0.78rem"], [style*="font-size: 0.8rem"], [style*="font-size: 0.82rem"]) { font-size: var(--travel-font-13) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 13.5px"] { font-size: var(--travel-font-13-5) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 14px"], [style*="font-size: 0.84rem"], [style*="font-size: 0.85rem"], [style*="font-size: 0.86rem"], [style*="font-size: 0.88rem"]) { font-size: var(--travel-font-14) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 15px"], [style*="font-size: 0.9rem"], [style*="font-size: 0.95rem"]) { font-size: var(--travel-font-15) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 16px"], [style*="font-size: 0.98rem"], [style*="font-size: 1rem"]) { font-size: var(--travel-font-16) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 17px"], [style*="font-size: 1.05rem"], [style*="font-size: 1.1rem"]) { font-size: var(--travel-font-17) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 18px"] { font-size: var(--travel-font-18) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 19px"], [style*="font-size: 1.15rem"], [style*="font-size: 1.2rem"]) { font-size: var(--travel-font-19) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 20px"] { font-size: var(--travel-font-20) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 22px"], [style*="font-size: 1.3rem"], [style*="font-size: 1.4rem"]) { font-size: var(--travel-font-22) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 24px"], [style*="font-size: 1.5rem"]) { font-size: var(--travel-font-24) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 25px"] { font-size: var(--travel-font-25) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 26px"], [style*="font-size: 1.6rem"]) { font-size: var(--travel-font-26) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 27px"] { font-size: var(--travel-font-27) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 28px"], [style*="font-size: 1.75rem"]) { font-size: var(--travel-font-28) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 29px"] { font-size: var(--travel-font-29) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 1.9rem"] { font-size: var(--travel-font-30) !important; }
+.travel-app-shell .travel-content-frame :is([style*="font-size: 32px"], [style*="font-size: 2rem"]) { font-size: var(--travel-font-32) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 34px"] { font-size: var(--travel-font-34) !important; }
+.travel-app-shell .travel-content-frame [style*="font-size: 48px"] { font-size: var(--travel-font-48) !important; }
+
+.travel-app-shell .travel-content-frame :where(
+  a[style*="font-size"],
+  [role="button"][style*="font-size"],
+  .crm-count-badge,
+  [class*="-badge"],
+  [class*="-chip"]
+) {
+  font-size: var(--travel-ui-control) !important;
+}
+
+.travel-app-shell .travel-content-frame :where(h1, .page-title) {
+  font-size: clamp(1.25rem, 1.458vw, 1.75rem) !important;
+  line-height: 1.2;
+}
+
+.travel-app-shell .travel-content-frame :where(h2, .section-title) {
+  font-size: clamp(1rem, 1.083vw, 1.3rem) !important;
+  line-height: 1.25;
+}
+
+.travel-app-shell .travel-content-frame :where(h3, h4, .card-title, .widget-title) {
+  font-size: clamp(0.8125rem, 0.917vw, 1.1rem) !important;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
+  button:not(.calendar-summary-card),
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea,
+  .input-field,
+  .btn-primary,
+  .btn-secondary,
+  [class*="actions"] a,
+  [class*="actions"] label
+) {
+  min-height: var(--travel-ui-control-height) !important;
+  padding-block: var(--travel-ui-control-y) !important;
+  padding-inline: var(--travel-ui-control-x) !important;
+  border-radius: var(--travel-ui-radius);
+  box-sizing: border-box;
+  font-size: var(--travel-ui-control) !important;
+  line-height: 1.2;
+}
+
+/* Fixed component heights otherwise mask the fluid min-height (for example,
+   compact date pickers). Apply the token to single-line controls themselves;
+   textareas remain content-sized. */
+@media (min-width: 900px) {
+  body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
+    button:not(.calendar-summary-card),
+    input:not([type="checkbox"]):not([type="radio"]),
+    select,
+    .btn-primary,
+    .btn-secondary,
+    [class*="actions"] a,
+    [class*="actions"] label
+  ) {
+    height: var(--travel-ui-control-height) !important;
+    max-height: var(--travel-ui-control-height);
+  }
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
+  button,
+  [role="button"],
+  .btn-primary,
+  .btn-secondary
+) :where(span, strong, small) {
+  font-size: inherit !important;
+  line-height: inherit;
+}
+
+/* Lucide icons usually receive a fixed size prop. Keep icons inside Travel
+   controls on the same viewport curve as their label and padding. */
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
+  button,
+  [role="button"],
+  .btn-primary,
+  .btn-secondary,
+  [class*="actions"] a,
+  [class*="actions"] label
+) > svg {
+  width: var(--travel-ui-control-icon) !important;
+  height: var(--travel-ui-control-icon) !important;
+  min-width: var(--travel-ui-control-icon);
+  flex: 0 0 var(--travel-ui-control-icon);
+}
+
+.travel-app-shell .travel-content-frame :where(.card, .glass, .kpi-card, .widget-card, [class*="-card"], section, article, form, fieldset, [role="region"]) {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.travel-app-shell .travel-content-frame :where(.card, .glass, .kpi-card, .widget-card) {
+  padding: var(--travel-ui-card-padding) !important;
+}
+
+.travel-app-shell .travel-content-frame :where(
+  .page-header,
+  .section-header,
+  .toolbar,
+  .filter-bar,
+  .filters,
+  [class*="toolbar"],
+  [class*="__actions"],
+  [class*="__filters"],
+  [class*="filter-controls"]
+) {
+  gap: var(--travel-ui-card-gap) !important;
+  min-width: 0;
+}
+
+/* A few older filter bars carry inline minimum widths. On laptop screens,
+   let those authored desktop widths follow the Travel density curve before
+   the existing tablet grid breakpoint takes over. */
+@media (min-width: 900px) {
+  body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
+    [class*="actions"],
+    [class*="toolbar"]
+  ) :is(button, a, label, .btn-primary, .btn-secondary) {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: max-content;
+    flex: 0 1 auto !important;
+    white-space: nowrap;
+  }
+
+  /* Covers legacy filter rows that predate the shared filter class names.
+     Their fixed inline widths are capped by the same viewport token. */
+  body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+    div[style*="flex-wrap"]:has(> label > :is(input, select)) > label {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: var(--travel-ui-filter-field) !important;
+    flex: 0 1 auto !important;
+  }
+
+  body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+    div[style*="flex-wrap"]:has(> label > :is(input, select)) > label > :is(input, select),
+  body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+    div[style*="flex-wrap"]:has(> :is(input, select)) > :is(input, select) {
+    min-width: 0 !important;
+    max-width: var(--travel-ui-filter-field) !important;
+    flex-shrink: 1 !important;
+  }
+
+  body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+    div[style*="flex-wrap"]:has(> label > :is(input, select)) > button {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: max-content;
+    flex: 0 1 auto !important;
+    white-space: nowrap;
+  }
+
+  .travel-app-shell .travel-content-frame :where(
+    [class$="__filters"],
+    [class$="-filters"],
+    [class$="-filter-bar"],
+    [class$="-filter-controls"]
+  ) > :where(select, input:not([type="checkbox"]):not([type="radio"]), .input-field) {
+    width: var(--travel-ui-filter-field) !important;
+    min-width: 0 !important;
+    max-width: 100%;
+    flex: 0 1 var(--travel-ui-filter-field) !important;
+  }
+
+  .travel-app-shell .travel-content-frame :where(
+    [class$="__filters"],
+    [class$="-filters"],
+    [class$="-filter-bar"],
+    [class$="-filter-controls"]
+  ) > :where([class*="search"], label) {
+    min-width: 0 !important;
+    max-width: 100%;
+    flex-shrink: 1 !important;
+  }
+
+  .travel-app-shell .travel-content-frame :where(
+    [class$="__filters"],
+    [class$="-filters"],
+    [class$="-filter-bar"],
+    [class$="-filter-controls"]
+  ) > [class*="search"] {
+    width: var(--travel-ui-filter-search) !important;
+    flex-basis: var(--travel-ui-filter-search) !important;
+  }
+
+  .travel-app-shell .travel-content-frame :where(
+    [class$="__filters"],
+    [class$="-filters"],
+    [class$="-filter-bar"],
+    [class$="-filter-controls"]
+  ) > label > :where(select, input:not([type="checkbox"]):not([type="radio"])) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .travel-app-shell .diagnostics-page__filters,
+  .travel-app-shell .diagnostics-page__filter-controls {
+    flex-wrap: nowrap !important;
+  }
+
+  .travel-app-shell .diagnostics-page__filter-controls {
+    flex: 1 1 0 !important;
+  }
+
+  .travel-app-shell .diagnostics-page__filter-controls > select {
+    width: var(--travel-ui-filter-field) !important;
+    flex-basis: var(--travel-ui-filter-field) !important;
+  }
+
+  .travel-app-shell .diagnostics-page__filter-controls > div > button.input-field {
+    width: clamp(7rem, calc(4.4375rem + 4vw), 9.25rem) !important;
+    min-width: clamp(7rem, calc(4.4375rem + 4vw), 9.25rem) !important;
+    flex-basis: clamp(7rem, calc(4.4375rem + 4vw), 9.25rem) !important;
+  }
+
+  .travel-app-shell .diagnostics-page__selection-actions {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+.travel-app-shell .travel-content-frame :where(table, .data-table, .stable-table) {
+  font-size: var(--travel-ui-cell);
+}
+
+.travel-app-shell .travel-content-frame :where(th, td) {
+  padding-block: clamp(0.32rem, calc(0.16rem + 0.3vw), 0.68rem) !important;
+  padding-inline: clamp(0.34rem, calc(0.16rem + 0.4vw), 0.75rem) !important;
+  font-size: var(--travel-ui-cell) !important;
+  line-height: 1.3;
+}
+
+.travel-app-shell .travel-content-frame :where(.table-scroll, [class*="table-scroll"], .table-container, [class*="table-container"]) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto !important;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.travel-app-shell .travel-content-frame :where(.table-scroll, [class*="table-scroll"], .table-container, [class*="table-container"])::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.travel-app-shell .travel-content-frame :where(.table-scroll, [class*="table-scroll"], .table-container, [class*="table-container"])::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 65%, transparent);
+  background-clip: padding-box;
+}
+
+.travel-app-shell .travel-content-frame table :is(th, td) {
+  white-space: nowrap;
+}
+
+.travel-app-shell .travel-content-frame :where(canvas, .recharts-wrapper, .recharts-surface) { max-width: 100%; }
+
+.travel-app-shell .travel-content-frame :where(.recharts-cartesian-axis-tick-value, .recharts-legend-item-text) {
+  font-size: clamp(0.75rem, 0.65vw, 0.78rem) !important;
+}
+
+/* TMC Catalogue predates the shared button classes and implements two
+   actions as a link and a file-input label. Treat all three as one Travel
+   control group so their physical dimensions scale together. */
+.travel-app-shell .tmc-catalogue-library {
+  padding-block: var(--travel-ui-page-gap) !important;
+}
+
+.travel-app-shell .tmc-catalogue-library > div > header {
+  gap: var(--travel-ui-page-gap) !important;
+  margin-bottom: var(--travel-ui-page-gap) !important;
+}
+
+.travel-app-shell .tmc-catalogue-library > div > header > div:last-child {
+  gap: var(--travel-ui-card-gap) !important;
+}
+
+body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
+  > div > header > div:last-child > :is(a, label, button) {
+  width: auto !important;
+  min-width: 0 !important;
+  height: var(--travel-ui-control-height) !important;
+  min-height: var(--travel-ui-control-height) !important;
+  max-height: var(--travel-ui-control-height);
+  padding-block: var(--travel-ui-control-y) !important;
+  padding-inline: var(--travel-ui-control-x) !important;
+  gap: clamp(0.25rem, calc(0.1rem + 0.25vw), 0.5625rem) !important;
+  border-radius: var(--travel-ui-radius) !important;
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  font-size: var(--travel-ui-control) !important;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
+  > div > header > div:last-child > :is(a, label, button) > svg {
+  width: var(--travel-ui-control-icon) !important;
+  height: var(--travel-ui-control-icon) !important;
+  flex: 0 0 var(--travel-ui-control-icon);
+}
+
+.travel-app-shell .tmc-catalogue-library > div > section {
+  padding: var(--travel-ui-card-padding) !important;
+  margin-bottom: var(--travel-ui-page-gap) !important;
+}
+
+/* Dashboard components consume the same viewport-driven variables. */
+.travel-app-shell .travel-dashboard-page { padding: var(--travel-ui-page-gap) !important; }
+.travel-app-shell .travel-dashboard-header { gap: var(--travel-ui-card-gap) !important; }
+.travel-app-shell .travel-dashboard-title { gap: clamp(0.4rem, 0.5vw, 0.625rem) !important; }
+
+.travel-app-shell .travel-dashboard-title > svg {
+  width: clamp(1.25rem, calc(0.7rem + 0.55vw), 1.75rem);
+  height: clamp(1.25rem, calc(0.7rem + 0.55vw), 1.75rem);
+}
+
+.travel-app-shell .travel-dashboard-refresh { gap: clamp(0.25rem, 0.32vw, 0.375rem) !important; }
+
+.travel-app-shell .travel-dashboard-updated {
+  min-height: 1em !important;
+  font-size: var(--travel-dashboard-meta-size) !important;
+}
+
+.travel-app-shell .travel-dashboard-kpi-grid {
+  grid-auto-rows: minmax(0, auto) !important;
+  gap: var(--travel-dashboard-gap) !important;
+  margin-top: clamp(0.75rem, calc(0.3rem + 0.55vw), 1.25rem) !important;
+  margin-bottom: var(--travel-ui-page-gap) !important;
+}
+
+.travel-app-shell .travel-dashboard-kpi-card {
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--travel-dashboard-tile-padding) !important;
+  border-radius: var(--travel-ui-radius) !important;
+}
+
+.travel-app-shell .travel-dashboard-kpi-label {
+  min-width: 0;
+  gap: clamp(0.22rem, 0.35vw, 0.5rem) !important;
+  font-size: var(--travel-dashboard-label-size) !important;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.travel-app-shell .travel-dashboard-kpi-label > svg {
+  width: clamp(0.75rem, calc(0.4rem + 0.32vw), 1rem);
+  height: clamp(0.75rem, calc(0.4rem + 0.32vw), 1rem);
+  flex: 0 0 auto;
+}
+
+.travel-app-shell .travel-dashboard-kpi-value {
+  margin-top: clamp(0.2rem, 0.3vw, 0.375rem) !important;
+  font-size: var(--travel-dashboard-value-size) !important;
+  line-height: 1.1;
+}
+
+.travel-app-shell :is(.travel-dashboard-kpi-accent, .travel-dashboard-kpi-footer, .travel-dashboard-readiness-footer) {
+  font-size: var(--travel-dashboard-meta-size) !important;
+  line-height: 1.25 !important;
+}
+
+.travel-app-shell .travel-dashboard-kpi-footer-shell {
+  margin-top: clamp(0.3rem, 0.42vw, 0.5rem) !important;
+  padding-top: clamp(0.3rem, 0.42vw, 0.5rem) !important;
+}
+
+.travel-app-shell .travel-dashboard-kpi-status-footer { row-gap: clamp(0.15rem, 0.22vw, 0.25rem) !important; }
+
+.travel-app-shell .travel-dashboard-kpi-status-footer > a {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.travel-app-shell .travel-dashboard-kpi-status-item {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.travel-app-shell .travel-dashboard-kpi-status-item[style*="padding-left"] {
+  padding-left: clamp(0.25rem, 0.42vw, 0.625rem) !important;
+}
+
+/* Keep the leading search icon inside the input border. This final rule wins
+   over the older travel-wide input padding rules above. */
+.travel-app-shell .travel-content-frame .search-with-leading-icon {
+  position: relative;
+  display: block !important;
+  min-width: 0;
+}
+
+.travel-app-shell .travel-content-frame .search-with-leading-icon > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+}
+
+.travel-app-shell .travel-content-frame .search-with-leading-icon > input {
+  width: 100%;
+  min-width: 0;
+  padding-left: 40px !important;
+  text-indent: 20px !important;
+}
+
+.travel-app-shell .travel-dashboard-section {
+  padding: var(--travel-dashboard-tile-padding) !important;
+  margin-top: var(--travel-dashboard-gap) !important;
+  border-radius: var(--travel-ui-radius) !important;
+}
+
+.travel-app-shell .travel-dashboard-section > h2 {
+  margin-bottom: clamp(0.4rem, 0.55vw, 0.75rem) !important;
+  font-size: clamp(0.8125rem, 0.917vw, 1.1rem) !important;
+}
+
+.travel-app-shell .travel-dashboard-section > h2 svg {
+  width: var(--travel-ui-icon);
+  height: var(--travel-ui-icon);
+}
+
+.travel-app-shell .travel-dashboard-table :is(th, td) {
+  padding-block: clamp(0.25rem, calc(0.12rem + 0.22vw), 0.5rem) !important;
+  padding-inline: clamp(0.3rem, calc(0.14rem + 0.3vw), 0.625rem) !important;
+  font-size: var(--travel-dashboard-meta-size) !important;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.travel-app-shell .travel-dashboard-status-badge {
+  display: inline-flex !important;
+  align-items: center;
+  padding: clamp(0.08rem, 0.12vw, 0.125rem) clamp(0.3rem, 0.42vw, 0.5rem) !important;
+  font-size: 0.75rem !important;
+  line-height: 1.1 !important;
+  letter-spacing: clamp(0.01rem, 0.025vw, 0.03125rem) !important;
+  border-radius: clamp(0.18rem, 0.21vw, 0.25rem) !important;
+  white-space: nowrap;
+}
+
+@media (min-width: 900px) {
+  .travel-app-shell .app-sidebar {
+    width: clamp(13.75rem, calc(12.5rem + 2.083vw), 15rem) !important;
+    padding: clamp(0.68rem, calc(0.55rem + 0.2vw), 0.9rem) !important;
+  }
+
+  .travel-app-shell .app-sidebar.travel-sidebar-collapsed {
+    width: 4rem !important;
+  }
+
+  .travel-app-shell .app-sidebar .travel-sidebar-header {
+    gap: clamp(0.48rem, calc(0.4rem + 0.1vw), 0.6rem) !important;
+  }
+
+  .travel-app-shell .app-sidebar .travel-sidebar-brand-name {
+    font-size: var(--travel-sidebar-brand-size) !important;
+  }
+
+  .travel-app-shell .app-sidebar .travel-sidebar-logo {
+    width: clamp(2rem, calc(1.6rem + 0.646vw), 2.375rem) !important;
+    height: clamp(2rem, calc(1.6rem + 0.646vw), 2.375rem) !important;
+  }
+
+  .travel-app-shell .app-sidebar .travel-sidebar-collapse {
+    width: clamp(1.75rem, calc(1.48rem + 0.433vw), 2rem);
+    height: clamp(1.75rem, calc(1.48rem + 0.433vw), 2rem);
+  }
+
+  .travel-app-shell .app-sidebar .travel-sidebar-collapse svg,
+  .travel-app-shell .app-sidebar .travel-nav-section-icon svg,
+  .travel-app-shell .app-sidebar .travel-nav-section-trigger > svg:last-child,
+  .travel-app-shell .app-sidebar .travel-nav-section-items .nav-link > svg {
+    width: var(--travel-sidebar-icon-size);
+    height: var(--travel-sidebar-icon-size);
+  }
+
+  .travel-app-shell .app-sidebar :is(.travel-nav-section-trigger, .travel-dashboard-link, .travel-settings-link) {
+    min-height: clamp(2.25rem, calc(2rem + 0.417vw), 2.5rem);
+    gap: clamp(0.36rem, calc(0.3rem + 0.1vw), 0.45rem) !important;
+    font-size: var(--travel-sidebar-nav-size) !important;
+  }
+
+  .travel-app-shell .app-sidebar .travel-nav-section-icon {
+    width: var(--travel-sidebar-icon-box);
+    height: var(--travel-sidebar-icon-box);
+  }
+
+  .travel-app-shell .app-sidebar .travel-nav-section-items .nav-link {
+    min-height: clamp(1.75rem, calc(1.54rem + 0.167vw), 1.9375rem);
+    font-size: var(--travel-sidebar-subnav-size) !important;
+  }
+
+  .travel-app-shell .app-sidebar .travel-sidebar-vertical-label,
+  .travel-app-shell .app-sidebar .travel-sidebar-subbrand-row label,
+  .travel-app-shell .app-sidebar .travel-sidebar-subbrand-row > span:first-child {
+    font-size: var(--travel-sidebar-meta-size) !important;
+  }
+
+  .travel-app-shell .app-sidebar #travel-sub-brand-switcher {
+    min-height: clamp(1.95rem, calc(1.72rem + 0.208vw), 2.125rem);
+    font-size: var(--travel-sidebar-nav-size) !important;
+  }
+
+  .travel-app-shell .app-topbar {
+    min-height: clamp(2.75rem, calc(2.2rem + 0.55vw), 3rem) !important;
+    padding-block: var(--travel-ui-control-y) !important;
+    padding-inline: var(--travel-ui-page-gap) !important;
+    gap: var(--travel-ui-card-gap) !important;
+  }
+
+  .travel-app-shell .travel-dashboard-kpi-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 899px) {
+  .travel-app-shell .travel-content-frame > * {
+    max-width: 100% !important;
+    padding-block: var(--travel-ui-page-gap) !important;
+  }
+
+  /* Override the older mobile baseline with the same fluid type curve. */
+  .travel-app-shell .travel-content-frame h1 {
+    font-size: clamp(1.25rem, 1.458vw, 1.75rem) !important;
+  }
+
+  .travel-app-shell .travel-content-frame h2 {
+    font-size: clamp(1rem, 1.083vw, 1.3rem) !important;
+  }
+
+  .travel-app-shell .travel-content-frame .card,
+  .travel-app-shell .travel-content-frame .glass,
+  .travel-app-shell .travel-content-frame .kpi-card,
+  .travel-app-shell .travel-content-frame .widget-card {
+    padding: var(--travel-ui-card-padding) !important;
+  }
+
+  .travel-app-shell .travel-content-frame :where(table, .data-table, .stable-table) { min-width: max-content; }
+  .travel-app-shell .travel-dashboard-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+
+@media (max-width: 480px) {
+  .travel-app-shell .travel-dashboard-kpi-grid { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
+/* The sync queue owns a grid layout for its three filters. The generic
+   Travel density rule otherwise caps direct filter controls to the compact
+   field token, making this row collapse to three narrow controls. */
+.travel-app-shell .travel-content-frame .tally-sync-filters > input,
+.travel-app-shell .travel-content-frame .tally-sync-filters > select {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  flex: none !important;
+}
+
+/* The sync queue is a fluid table, so it must not inherit the generic
+   max-content rule used by older dense data tables. Keep every column in the
+   viewport and progressively reduce its typography and spacing. */
+.travel-app-shell .travel-content-frame .tally-sync-card table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed;
+}
+
+/* Payables also carried an inline 1100px minimum, which defeats the shared
+   fluid-density behavior and exposes a horizontal scrollbar on laptops. */
+.travel-app-shell .travel-content-frame .payables-table-scroll {
+  overflow-x: hidden !important;
+}
+
+.travel-app-shell .travel-content-frame .payables-table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+
+/* Tally export filters must shrink as a group. The old flex row combined
+   180px select minimums with no wrapping policy, so a narrow content pane
+   either wrapped the controls or created horizontal overflow. */
+.tally-export-trips-page {
+  container-type: inline-size;
+}
+
+.tally-export-trips-page .tally-export-filter-bar {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto minmax(120px, 180px) auto minmax(120px, 180px);
+  align-items: center;
+  justify-content: stretch !important;
+  gap: clamp(0.25rem, 1cqw, 0.625rem) !important;
+  min-width: 0;
+  width: 100%;
+}
+
+.tally-export-trips-page .tally-export-search-control,
+.tally-export-trips-page .tally-export-filter-select {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
+  padding: clamp(0.28rem, 1.2cqw, 0.5rem) clamp(0.35rem, 1.3cqw, 0.625rem) !important;
+  font-size: clamp(0.75rem, 1.35cqw, 0.8rem) !important;
+}
+
+.tally-export-trips-page .tally-export-search-control svg {
+  width: clamp(11px, 1.8cqw, 15px);
+  height: clamp(11px, 1.8cqw, 15px);
+  flex: 0 0 auto;
+}
+
+.tally-export-trips-page .tally-export-filter-label {
+  min-width: 0;
+  font-size: 0.75rem !important;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+/* The shared Travel filter-density rule caps search controls at a compact
+   token. This page intentionally keeps the search field as the flexible
+   leading column, matching the original wide-search layout. */
+.travel-app-shell .travel-content-frame .tally-export-trips-page .tally-export-search-control {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}
+
+.travel-app-shell .travel-content-frame .tally-export-trips-page .tally-export-filter-select {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  flex: 0 1 auto !important;
+}
+
+@container (max-width: 460px) {
+  .tally-export-trips-page .tally-export-filter-bar {
+    grid-template-columns: minmax(0, 1fr) auto clamp(100px, 22cqw, 150px) auto clamp(100px, 22cqw, 150px);
+  }
+}
+
+@media (max-width: 899px) {
+  .travel-app-shell .travel-content-frame .payables-table th,
+  .travel-app-shell .travel-content-frame .payables-table td {
+    padding: clamp(0.3rem, 1vw, 0.65rem) clamp(0.2rem, 0.7vw, 0.7rem) !important;
+    font-size: clamp(0.75rem, 1.2vw, 0.82rem) !important;
+  }
+
+  .travel-app-shell .travel-content-frame .payables-table th {
+    letter-spacing: 0.02em;
+  }
+
+  .travel-app-shell .travel-content-frame .payables-table th,
+  .travel-app-shell .travel-content-frame .payables-table td,
+  .travel-app-shell .travel-content-frame .payables-table td > * {
+    max-width: 100%;
+  }
+
+  .travel-app-shell .travel-content-frame .payables-table td {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .travel-app-shell .travel-content-frame .payables-table th button {
+    gap: 0.15rem;
+    padding-inline: 0.15rem;
+    font-size: inherit;
+  }
+}
+
+/* Ledger groups has an inline 900px table minimum from the legacy page.
+   Override it here so the table follows the same fluid-width contract. */
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table {
+  overflow-x: hidden;
+}
+
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(1),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(1) { width: 19% !important; }
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(2),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(2) { width: 24% !important; }
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(3),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(3) { width: 11% !important; }
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(4),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(4) { width: 11% !important; }
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(5),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(5) { width: 11% !important; }
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(6),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(6) { width: 14% !important; }
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table th:nth-child(7),
+.travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(7) { width: 10% !important; }
+
+@media (max-width: 899px) {
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-table th,
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-table td {
+    padding: clamp(0.3rem, 1vw, 0.75rem) clamp(0.2rem, 0.65vw, 0.7rem) !important;
+    font-size: clamp(0.75rem, 1.15vw, 0.8rem) !important;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-table td:nth-child(2) {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-pill,
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-source,
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-status,
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-sync {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 600px) {
+  .travel-app-shell .travel-content-frame .tally-ledger-groups-form {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 899px) {
+  .travel-app-shell .travel-content-frame .tally-sync-table-wrap {
+    overflow-x: hidden;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-sync-card th,
+  .travel-app-shell .travel-content-frame .tally-sync-card td {
+    padding: clamp(0.35rem, 1.1vw, 0.8rem) clamp(0.2rem, 0.75vw, 0.75rem);
+    font-size: clamp(0.75rem, 1.25vw, 0.86rem);
+  }
+
+  .travel-app-shell .travel-content-frame .tally-sync-card th {
+    letter-spacing: 0.025em;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-sync-card td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-sync-card td:nth-child(7) {
+    white-space: normal;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-sync-card .tally-type-pill,
+  .travel-app-shell .travel-content-frame .tally-sync-card .tally-status-pill {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .travel-app-shell .travel-content-frame .tally-row-actions {
+    gap: clamp(0.15rem, 0.5vw, 0.4rem);
+  }
+
+  .travel-app-shell .travel-content-frame .tally-row-actions .btn-secondary {
+    max-width: 100%;
+    overflow: hidden;
+    padding-inline: clamp(0.25rem, 0.7vw, 0.65rem);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+

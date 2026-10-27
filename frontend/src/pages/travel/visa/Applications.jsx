@@ -971,10 +971,11 @@ export default function VisaApplications() {
         }}
       >
         <div
+          className="search-with-leading-icon"
           style={{
-            position: 'relative',
             display: 'flex',
             alignItems: 'center',
+            gap: 8,
             flex: '1 1 360px',
             minWidth: 0,
             maxWidth: 420,
@@ -984,10 +985,9 @@ export default function VisaApplications() {
             size={16}
             aria-hidden
             style={{
-              position: 'absolute',
-              left: 10,
               color: 'var(--text-secondary)',
               pointerEvents: 'none',
+              flex: '0 0 auto',
             }}
           />
           <input
@@ -999,7 +999,7 @@ export default function VisaApplications() {
               ...selectStyle,
               width: '100%',
               minWidth: 0,
-              paddingLeft: 32,
+              paddingLeft: 8,
               paddingRight: search ? 30 : 10,
               boxSizing: 'border-box',
             }}

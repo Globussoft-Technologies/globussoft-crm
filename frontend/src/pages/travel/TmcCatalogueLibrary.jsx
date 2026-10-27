@@ -195,7 +195,7 @@ export default function TmcCatalogueLibrary() {
   const lastJob = status?.lastJob;
 
   return (
-    <main style={{ minHeight: "100vh", padding: "32px clamp(18px, 4vw, 56px)", color: "var(--text-primary)", background: "var(--bg-color, #faf6ee)" }}>
+    <main className="tmc-catalogue-library" style={{ minHeight: "100vh", padding: "32px clamp(18px, 4vw, 56px)", color: "var(--text-primary)", background: "var(--bg-color, #faf6ee)" }}>
       <div style={{ maxWidth: 1440, margin: "0 auto" }}>
         <header style={{ display: "flex", justifyContent: "space-between", gap: 24, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 28 }}>
           <div>

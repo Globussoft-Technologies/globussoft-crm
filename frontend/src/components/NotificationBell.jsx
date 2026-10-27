@@ -314,6 +314,7 @@ const NotificationBell = () => {
 
       {open && (
         <div
+          className="travel-notification-panel"
           onScroll={handlePanelScroll}
           aria-label="Notification list"
           style={{
@@ -395,6 +396,7 @@ const NotificationBell = () => {
           ) : (
             notifications.map((n) => (
               <div
+                className="travel-notification-row"
                 key={n.id}
                 title={`${n.title}\n${n.message}`}
                 onClick={() => {

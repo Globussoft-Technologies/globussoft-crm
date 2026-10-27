@@ -340,7 +340,7 @@ describe('<Staff /> — list rendering + stats bar', () => {
     expect(screen.getByText('aman@enhancedwellness.in')).toBeInTheDocument();
   });
 
-  it('scrolls the wellness staff list to reveal later rows', async () => {
+  it.each(['wellness', 'generic', 'travel'])('scrolls the %s staff list to reveal later rows', async (vertical) => {
     const rows = Array.from({ length: 20 }, (_, index) => ({
       id: index + 1,
       name: `Staff ${index + 1}`,
@@ -350,13 +350,14 @@ describe('<Staff /> — list rendering + stats bar', () => {
       createdAt: '2026-01-01T00:00:00Z',
       deactivatedAt: null,
     }));
-    renderStaff('ADMIN', {}, 'wellness', '/staff', rows);
+    renderStaff('ADMIN', {}, vertical, '/staff', rows);
 
     await waitFor(() => expect(screen.getByText('Staff 12')).toBeInTheDocument());
     expect(screen.queryByText('Staff 13')).not.toBeInTheDocument();
 
     const scrollContainer = screen.getByRole('table').parentElement;
     expect(scrollContainer).toHaveStyle({ overflowY: 'auto' });
+    expect(scrollContainer).toHaveStyle({ maxHeight: 'min(60dvh, 560px)' });
     Object.defineProperties(scrollContainer, {
       scrollTop: { configurable: true, value: 300 },
       scrollHeight: { configurable: true, value: 600 },

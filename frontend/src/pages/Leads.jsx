@@ -9226,15 +9226,12 @@ const Leads = () => {
               flex: "1 1 520px",
             }}
           >
-            <div style={{ position: "relative", width: "min(100%, 300px)" }}>
+            <div className="search-with-leading-icon" style={{ width: "min(100%, 300px)" }}>
               <Search
                 size={18}
                 style={{
-                  position: "absolute",
-                  left: "1rem",
-                  top: "50%",
-                  transform: "translateY(-50%)",
                   color: "var(--text-secondary)",
+                  flex: "0 0 auto",
                 }}
               />
               <input
@@ -9247,7 +9244,6 @@ const Leads = () => {
                   setSearchTerm(e.target.value);
                 }}
                 style={{
-                  paddingLeft: "2.5rem",
                   backgroundColor: "var(--surface-hover)",
                   height: 38,
                   fontSize: "0.85rem",

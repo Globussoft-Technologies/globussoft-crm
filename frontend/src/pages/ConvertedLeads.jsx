@@ -565,7 +565,7 @@ const ConvertedLeads = () => {
         <div
           className="converted-leads__controls-row"
         >
-          <div className="converted-leads__search-wrap">
+          <div className="converted-leads__search-wrap search-with-leading-icon">
             <Search
               size={18}
               className="converted-leads__search-icon"
@@ -576,7 +576,7 @@ const ConvertedLeads = () => {
               placeholder="Search leads..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
+              style={{ backgroundColor: 'var(--surface-hover)' }}
             />
           </div>
 

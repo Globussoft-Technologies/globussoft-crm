@@ -8,10 +8,10 @@ import './styles/crm-responsive-density.css'
 import './styles/generic-laptop-density.css'
 import './styles/wellness-laptop-density.css'
 import './styles/shared-laptop-typography.css'
-// Travel's scoped laptop density rules must be last so shared typography
-// cannot re-expand its dashboard cards or override their compact values.
-import './styles/travel-laptop-density.css'
 import './styles/viewport-density.css'
+// Travel has one scoped density contract. Keeping it last lets it normalize
+// legacy page-level dimensions without affecting Generic or Wellness CRM.
+import './styles/travel-global-scaling.css'
 import './styles/print.css'
 import App from './App.jsx'
 

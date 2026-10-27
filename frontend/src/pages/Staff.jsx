@@ -1814,7 +1814,7 @@ export default function Staff() {
       <div
         className={isTravel ? "card travel-staff-card" : "card staff-team-card"}
         style={{
-          padding: "2rem",
+          padding: "clamp(0.75rem, 2vw, 2rem)",
           minWidth: isTravel ? 0 : undefined,
           overflow: isTravel ? "hidden" : undefined,
         }}
@@ -2128,9 +2128,11 @@ export default function Staff() {
             style={isTravel || isWellness ? {
               width: "100%",
               minWidth: 0,
-              maxHeight: "calc(100vh - 28rem)",
-              overflowY: "auto",
-              overflowX: isTravel ? "hidden" : "auto",
+              maxHeight: filteredStaff.length > STAFF_PAGE_SIZE ? "min(60dvh, 560px)" : "none",
+              // The row window advances when this container scrolls, so it
+              // must have a bounded height whenever more rows are available.
+              overflowY: isTravel || isWellness ? "auto" : "visible",
+              overflowX: "hidden",
             } : {
               width: "100%",
               minWidth: 0,
@@ -2142,11 +2144,11 @@ export default function Staff() {
           >
             {!isTravel && !isWellness && <style>{genericStaffTableStyles}</style>}
             <table
-              className={!isTravel && !isWellness ? "staff-generic-resizable-table" : undefined}
+              className={isWellness ? "staff-wellness-table" : !isTravel ? "staff-generic-resizable-table" : undefined}
               style={{
                 width: "100%",
                 minWidth: !isTravel && !isWellness ? 1000 : undefined,
-                tableLayout: !isTravel && !isWellness ? "fixed" : undefined,
+                tableLayout: isWellness || (!isTravel && !isWellness) ? "fixed" : undefined,
                 borderCollapse: "collapse",
                 fontSize: "0.875rem",
               }}

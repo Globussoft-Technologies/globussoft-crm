@@ -1558,9 +1558,21 @@ button {
 
 .tally-sync-card table {
   width: 100%;
-  min-width: 850px;
+  min-width: 0;
+  table-layout: fixed;
   border-collapse: collapse;
 }
+
+/* Keep the header and body on the same grid even when party/reference values
+   or the optional Mapping/Retry actions are longer than usual. */
+.tally-sync-card .tally-col-reference { width: 12%; }
+.tally-sync-card .tally-col-date { width: 10%; }
+.tally-sync-card .tally-col-type { width: 11%; }
+.tally-sync-card .tally-col-trip { width: 9%; }
+.tally-sync-card .tally-col-party { width: 16%; }
+.tally-sync-card .tally-col-amount { width: 14%; }
+.tally-sync-card .tally-col-status { width: 14%; }
+.tally-sync-card .tally-col-actions { width: 14%; }
 
 .tally-sync-card th {
   padding: 0.8rem 1rem;
@@ -1579,6 +1591,11 @@ button {
   color: var(--text-primary);
   font-size: 0.86rem;
   vertical-align: middle;
+}
+
+.tally-sync-card th,
+.tally-sync-card td {
+  overflow: hidden;
 }
 
 .tally-sync-card tbody tr {
@@ -1624,7 +1641,18 @@ button {
 .tally-row-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
   gap: 0.4rem;
+}
+
+.tally-sync-card th:last-child,
+.tally-sync-card td:last-child {
+  text-align: center;
+}
+
+.tally-sync-card td:last-child {
+  vertical-align: middle;
 }
 
 .tally-row-actions .btn-secondary {
@@ -1810,6 +1838,7 @@ button {
   .tally-history-modal {
     padding: 1rem;
   }
+
 }
 
 /* Glassmorphism Classes */
@@ -3188,6 +3217,35 @@ table.stable-table td {
     width: 760px !important;
     min-width: 760px !important;
     max-width: none !important;
+  }
+}
+
+/* Staff Directory responsive fit mode.
+ *
+ * The directory has a dense, action-heavy table. At smaller widths its old
+ * fixed table minimum and bounded table viewport made the browser show a
+ * second scrollbar instead of allowing the whole directory to scale with the
+ * available space. Keep the desktop density unchanged, then progressively
+ * reduce the complete directory (type, controls, buttons, icons and spacing)
+ * and let the page own vertical scrolling on narrow screens.
+ */
+@media (max-width: 900px) {
+  .staff-directory-page,
+  .travel-staff-page,
+  .wellness-staff-page {
+    zoom: clamp(0.76, calc(100vw / 1120), 1);
+    width: calc(100% / clamp(0.76, calc(100vw / 1120), 1));
+    padding: clamp(0.75rem, 3vw, 2rem) !important;
+  }
+
+  /* Generic CRM columns previously forced a 1000px table. At this size the
+   * scaled cells are allowed to share the available width instead. */
+  .staff-directory-page .staff-generic-resizable-table {
+    min-width: 0 !important;
+  }
+
+  .staff-directory-page .staff-generic-resizable-table th {
+    width: auto !important;
   }
 }
 
@@ -5647,16 +5705,49 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   min-width: 0;
 }
 
+.search-with-leading-icon {
+  position: relative;
+  display: block !important;
+  min-width: 0;
+}
+
+.search-with-leading-icon > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  z-index: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-secondary);
+}
+
+.search-with-leading-icon > input {
+  width: 100%;
+  min-width: 0;
+  padding-left: 40px !important;
+  text-indent: 20px !important;
+}
+
+.search-with-leading-icon > input[type="search"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-with-leading-icon > input[type="search"]::-webkit-search-decoration,
+.search-with-leading-icon > input[type="search"]::-webkit-search-cancel-button,
+.search-with-leading-icon > input[type="search"]::-webkit-search-results-button,
+.search-with-leading-icon > input[type="search"]::-webkit-search-results-decoration {
+  display: none;
+  -webkit-appearance: none;
+}
+
 .converted-leads__search-wrap > .input-field {
-  padding-left: 2.5rem !important;
+  padding-left: 3.25rem !important;
 }
 
 .converted-leads__search-icon {
-  position: absolute;
-  left: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
   color: var(--text-secondary);
+  flex: 0 0 auto;
 }
 
 .converted-leads__controls-actions {

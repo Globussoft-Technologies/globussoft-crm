@@ -576,15 +576,15 @@ export default function SchoolTermCalendar() {
             <option value="">All types</option>
             {KINDS.map((kind) => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
           </select>
-          <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
-            <Search size={15} aria-hidden style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)" }} />
+          <div className="search-with-leading-icon" style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
+            <Search size={15} aria-hidden style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)", pointerEvents: "none" }} />
             <input
               type="search"
               value={labelSearch}
               onChange={(e) => setLabelSearch(e.target.value)}
               placeholder="Search by label"
               aria-label="Search school terms by label"
-              style={{ ...inp, paddingLeft: 30 }}
+              style={{ ...inp }}
             />
           </div>
         </div>

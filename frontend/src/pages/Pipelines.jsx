@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, ExternalLink, Star, X } from 'lucide-react';
+import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, Star, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -323,20 +323,6 @@ const Pipelines = () => {
               </div>
 
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '0.875rem' }}>
-                <a
-                  href={`/pipeline?pipelineId=${p.id}`}
-                  className="btn-primary"
-                  style={{
-                    padding: '0.4rem 0.75rem',
-                    fontSize: '0.8rem',
-                    textDecoration: 'none',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.3rem',
-                  }}
-                >
-                  <ExternalLink size={13} /> View Pipeline
-                </a>
                 <button
                   onClick={() => openEdit(p)}
                   title="Edit"

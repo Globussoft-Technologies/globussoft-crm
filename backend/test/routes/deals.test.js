@@ -126,6 +126,7 @@ prisma.fieldPermission = {
 prisma.pipelineStage = {
   findMany: vi.fn().mockResolvedValue([]),
 };
+prisma.tenantSetting = { findUnique: vi.fn() };
 
 import express from 'express';
 import request from 'supertest';
@@ -157,6 +158,7 @@ beforeEach(() => {
   prisma.fieldPermission.findMany.mockReset();
   prisma.fieldPermission.findMany.mockResolvedValue([]);
   prisma.pipelineStage.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.pipelineStage.findMany.mockResolvedValue([]);
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
@@ -174,6 +176,28 @@ beforeEach(() => {
 // ─── GET / — list with tenant + soft-delete + USER-role scoping ─────
 
 describe('GET /api/deals — list with tenant + soft-delete + role scoping', () => {
+  test.each(['/api/deals?dealType=Sales', '/api/deals/stats?dealType=Sales'])('includes untyped deals for the renamed New Business type in %s', async (url) => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales', isDefault: false, stages: [{ name: 'Review' }] },
+      { id: 'renew', name: 'Renew', isDefault: true, stages: [{ name: 'Review' }] },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get(url);
+    expect(res.status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+      tenantId: 1, AND: [{ OR: [{ dealType: 'Sales' }, { dealType: null }] }],
+    }));
+  });
+
+  test('does not assign untyped deals to a different selected type', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales' }, { id: 'renew', name: 'Renew', isDefault: true },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/deals?dealType=Renew');
+    expect(res.status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].where.dealType).toBe('Renew');
+  });
   test('happy path: list returns rows scoped to tenant, soft-deletes excluded by default', async () => {
     prisma.deal.findMany.mockResolvedValue([
       { id: 1, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1, contact: null, owner: null },
@@ -346,6 +370,12 @@ describe('GET /api/deals/:id/activities — paginated activity feed', () => {
 // ─── POST / — create deal (validation contract) ─────────────────────
 
 describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
+  test('accepts default deal type stages before the setting is saved', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.deal.create.mockResolvedValue({ id: 11, title: 'Deal', stage: 'new-lead', tenantId: 1 });
+    const res = await request(makeApp()).post('/api/deals').send({ title: 'Deal', dealType: 'New Business', stage: 'new-lead' });
+    expect(res.status).toBe(201);
+  });
   test('happy path: defaults currency from tenant, stage→lead, probability→50', async () => {
     prisma.deal.create.mockResolvedValue({
       id: 11, title: 'New Deal', amount: 250, probability: 50,
@@ -478,6 +508,32 @@ describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
 // ─── PUT /:id — update + terminal-stage guard (#173) ─────────────────
 
 describe('PUT /api/deals/:id — terminal-stage guard (#173)', () => {
+  test('validates a stage-only update using the stored deal type', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ name: 'Renew', stages: [{ name: 'Review' }, { name: 'Approved' }] }]) });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: 'Renew', stage: 'review' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, dealType: 'Renew', stage: 'approved' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'approved' });
+    expect(res.status).toBe(200);
+    const invalid = await request(makeApp()).put('/api/deals/7').send({ stage: 'proposal' });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('INVALID_STAGE');
+  });
+  test('legacy untyped deals use the default New Business stages on update', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, stage: 'contracted' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'contracted' });
+    expect(res.status).toBe(200);
+  });
+  test('legacy untyped deals validate using the renamed type stages', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ id: 'new-business', name: 'Sales', stages: [{ name: 'Review' }] }]) });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, stage: 'review' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'review' });
+    expect(res.status).toBe(200);
+  });
   test('happy path: updates non-stage fields', async () => {
     prisma.deal.findFirst.mockResolvedValue({
       id: 7, title: 'Old', stage: 'lead', amount: 100, tenantId: 1,

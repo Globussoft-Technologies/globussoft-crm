@@ -12,6 +12,7 @@ const { formatMoney } = require("../utils/formatMoney");
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 const { canonicaliseChannel, CHANNEL_ALIASES } = require("../lib/intakePayloadValidators");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { DEFAULTS, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
@@ -76,18 +77,42 @@ async function audit(action, entityId, userId, tenantId, details) {
   return writeAudit("Deal", action, entityId, userId, tenantId, details);
 }
 
+async function legacyDealTypeName(tenantId) {
+  const setting = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key: KEYS.GENERIC_DEAL_TYPES } },
+    select: { value: true },
+  });
+  let types;
+  try { types = JSON.parse(setting?.value || DEFAULTS[KEYS.GENERIC_DEAL_TYPES]); }
+  catch (_error) { types = JSON.parse(DEFAULTS[KEYS.GENERIC_DEAL_TYPES]); }
+  const list = Array.isArray(types) ? types : [];
+  return (list.find((type) => type.id === 'new-business') || list.find((type) => type.isDefault) || list[0])?.name || 'New Business';
+}
+
+async function addDealTypeFilter(where, tenantId, dealType) {
+  const selected = String(dealType);
+  if (selected === await legacyDealTypeName(tenantId)) {
+    where.AND = [...(where.AND || []), { OR: [{ dealType: selected }, { dealType: null }] }];
+  } else {
+    where.dealType = selected;
+  }
+}
+
 // ─── GET / — list deals with filters ─────────────────────────────────
 // #167: soft-deleted deals are hidden by default. Pass ?includeDeleted=true
 // for admin/audit views. The /stats endpoint and aggregations are NOT yet
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, contactId, subBrand, from, to, channel, search } = req.query;
+    const { stage, ownerId, pipelineId, dealType, contactId, subBrand, from, to, channel, search } = req.query;
     let where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
     if (ownerId) where.ownerId = parseInt(ownerId);
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
+    if (dealType) {
+      await addDealTypeFilter(where, req.user.tenantId, dealType);
+    }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
     // missing column on legacy tenants — Prisma matches by exact value.
@@ -251,6 +276,9 @@ router.get("/stats", async (req, res) => {
     let where = { tenantId: tid, deletedAt: null };
     if (req.query.stage) where.stage = String(req.query.stage);
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
+    if (req.query.dealType) {
+      await addDealTypeFilter(where, tid, req.query.dealType);
+    }
     if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
     if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
     if (req.query.from || req.query.to) {
@@ -451,7 +479,31 @@ const slugifyStageName = (name) =>
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "");
 
-async function getAllowedStagesForTenant(tenantId) {
+async function getAllowedStagesForTenant(tenantId, dealType) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { vertical: true },
+  });
+  if (tenant?.vertical === "generic" && dealType) {
+    const setting = await prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId, key: "generic.dealTypes" } },
+      select: { value: true },
+    });
+    try {
+      const types = JSON.parse(String(setting?.value || DEFAULTS[KEYS.GENERIC_DEAL_TYPES]));
+      const selected = Array.isArray(types)
+        ? types.find((type) => String(type?.name || "") === String(dealType))
+        : null;
+      const configured = new Set(
+        (Array.isArray(selected?.stages) ? selected.stages : [])
+          .map((stage) => slugifyStageName(stage?.name))
+          .filter(Boolean),
+      );
+      if (configured.size) return configured;
+    } catch (_error) {
+      // Fall through to the tenant pipeline stages for legacy records.
+    }
+  }
   const rows = await prisma.pipelineStage.findMany({
     where: { tenantId },
     select: { name: true },
@@ -475,7 +527,7 @@ async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false }
     if (e) return e;
   }
   if (body.stage !== undefined && body.stage !== null && body.stage !== "") {
-    const allowed = await getAllowedStagesForTenant(tenantId);
+    const allowed = await getAllowedStagesForTenant(tenantId, body.dealType);
     const e = ensureEnum(body.stage, allowed, { field: "stage", code: "INVALID_STAGE" });
     if (e) return e;
   }
@@ -488,7 +540,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: false });
@@ -499,6 +551,7 @@ router.post("/", async (req, res) => {
       amount: parseFloat(amount) || 0,
       probability: parseInt(probability) || 50,
       stage: stage || "lead",
+      dealType: dealType || null,
       ownerId: req.user.userId,
       tenantId: req.user.tenantId,
     };
@@ -561,10 +614,15 @@ router.put("/:id", async (req, res) => {
 
     // #464: strip write-restricted fields per the caller's role.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.
-    const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: true });
+    const validationBody = {
+      ...req.body,
+      dealType: dealType === undefined ? (existing.dealType || (stage !== undefined ? await legacyDealTypeName(req.user.tenantId) : null)) : dealType,
+      ...(dealType !== undefined && stage === undefined ? { stage: existing.stage } : {}),
+    };
+    const inputErr = await validateDealInput(validationBody, { tenantId: req.user.tenantId, isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     // #173: terminal-stage state machine. Once a deal is `won` or
@@ -589,6 +647,7 @@ router.put("/:id", async (req, res) => {
     if (amount !== undefined) data.amount = parseFloat(amount);
     if (probability !== undefined) data.probability = parseInt(probability);
     if (stage !== undefined) data.stage = stage;
+    if (dealType !== undefined) data.dealType = dealType ? String(dealType) : null;
     if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
     if (pipelineId !== undefined) data.pipelineId = pipelineId ? parseInt(pipelineId) : null;
     if (expectedClose !== undefined) data.expectedClose = expectedClose ? new Date(expectedClose) : null;

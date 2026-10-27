@@ -159,6 +159,7 @@ const KEYS = {
   TRAVEL_RECAPTCHA_SITE_KEY:             "travel.webForm.recaptcha.siteKey",
   TRAVEL_RECAPTCHA_SECRET_KEY:           "travel.webForm.recaptcha.secretKey",
   GENERIC_CONTACT_LIFECYCLE_STAGES:      "generic.contactLifecycleStages",
+  GENERIC_DEAL_TYPES:                    "generic.dealTypes",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -173,6 +174,9 @@ const DEFAULTS = {
     { id: "interested-unqualified", title: "Interested / Unqualified", options: [{ id: "interested", label: "Interested", status: "Prospect", negative: false }, { id: "unqualified", label: "Unqualified", status: "Junk", negative: true }] },
     { id: "qualified-lost", title: "Qualified / Lost", options: [{ id: "qualified", label: "Qualified", status: "Customer", negative: false }, { id: "lost", label: "Lost", status: "Churned", negative: true }] },
     { id: "won-churned", title: "Won / Churned", options: [{ id: "won", label: "Won", status: "Customer", negative: false }, { id: "churned", label: "Churned", status: "Churned", negative: true }] },
+  ]),
+  [KEYS.GENERIC_DEAL_TYPES]: JSON.stringify([
+    { id: "new-business", name: "New Business", description: "", isDefault: true, stages: [{ id: "new-lead", name: "New Lead", color: "#3b82f6" }, { id: "contracted", name: "Contracted", color: "#0891b2" }, { id: "negotiation", name: "Negotiation", color: "#7c3aed" }, { id: "won", name: "Won", color: "#10b981" }, { id: "lost", name: "Lost", color: "#ef4444" }] },
   ]),
   [KEYS.GENERIC_RECAPTCHA_SITE_KEY]: process.env.RECAPTCHA_SITE_KEY || "",
   [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: process.env.RECAPTCHA_SECRET_KEY || "",

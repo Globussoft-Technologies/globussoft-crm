@@ -39,6 +39,7 @@ prisma.tenantSetting = {
 };
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.deal = { updateMany: vi.fn() };
 prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
@@ -77,6 +78,7 @@ beforeEach(() => {
   prisma.tenantSetting.findMany.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
   prisma.tenantSetting.upsert.mockReset();
+  prisma.deal.updateMany.mockReset().mockResolvedValue({ count: 2 });
   prisma.tenantSetting.delete.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.$transaction.mockClear();
@@ -239,6 +241,27 @@ describe('GET /api/tenant-settings/:key', () => {
 });
 
 describe('PUT /api/tenant-settings/:key', () => {
+  test('renaming a deal type atomically moves only this tenant’s existing deals', async () => {
+    const oldTypes = [{ id: 'new-business', name: 'New Business', stages: [{ id: 'lead', name: 'Lead' }] }];
+    const types = [{ id: 'new-business', name: 'Sales', stages: [{ id: 'lead', name: 'Lead' }] }];
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify(oldTypes) });
+    prisma.tenantSetting.upsert.mockResolvedValue({ id: 1, key: KEYS.GENERIC_DEAL_TYPES, value: JSON.stringify(types), category: 'deals' });
+    const res = await request(makeApp()).put(`/api/tenant-settings/${KEYS.GENERIC_DEAL_TYPES}`)
+      .set('Authorization', `Bearer ${tokenFor()}`).send({ value: JSON.stringify(types), category: 'deals' });
+    expect(res.status).toBe(200);
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.deal.updateMany).toHaveBeenCalledWith({ where: { tenantId: 1, OR: [{ dealType: 'New Business' }, { dealType: null }] }, data: { dealType: 'Sales' } });
+  });
+  test('rejects duplicate deal type names without changing existing deals', async () => {
+    const types = [
+      { id: 'a', name: 'Sales', stages: [{ id: 's', name: 'Lead' }] },
+      { id: 'b', name: 'sales', stages: [{ id: 's', name: 'Lead' }] },
+    ];
+    const res = await request(makeApp()).put(`/api/tenant-settings/${KEYS.GENERIC_DEAL_TYPES}`)
+      .set('Authorization', `Bearer ${tokenFor()}`).send({ value: JSON.stringify(types) });
+    expect(res.status).toBe(400);
+    expect(prisma.deal.updateMany).not.toHaveBeenCalled();
+  });
   test('masks a reCAPTCHA secret in the response and audit details', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'old-secret' });
     prisma.tenantSetting.upsert.mockResolvedValue({

@@ -2,8 +2,9 @@
 /**
  * Lead Reports cluster — API coverage (backend/routes/lead_reports.js).
  *
- * The seven generic-vertical reporting surfaces behind /api/lead-reports:
+ * The Generic CRM reporting surfaces behind /api/lead-reports:
  *
+ *   GET  /api/lead-reports/overview              overview graph + breakdowns
  *   GET  /api/lead-reports/productivity          daily / weekly / monthly
  *   GET  /api/lead-reports/lead-quality          score bands + qualification
  *   GET  /api/lead-reports/follow-up-tracking    overdue / SLA / stale leads
@@ -93,6 +94,7 @@ const post = (request, token, path, body) =>
   retryOn5xx(() => request.post(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT }));
 
 const REPORT_PATHS = [
+  '/api/lead-reports/overview',
   '/api/lead-reports/productivity',
   '/api/lead-reports/lead-quality',
   '/api/lead-reports/follow-up-tracking',
@@ -127,6 +129,44 @@ test.afterAll(async ({ request }) => {
     await retryOn5xx(() =>
       request.delete(`${BASE_URL}/api/tasks/${id}`, { headers: headers(adminToken), timeout: REQUEST_TIMEOUT }));
   }
+});
+
+test.describe('Lead Reports — overview', () => {
+  test('returns graph-ready lead, lifecycle, meeting, and channel metrics', async ({ request }) => {
+    const r = await get(request, adminToken, '/api/lead-reports/overview?range=last_7_days');
+    expect(r.status()).toBe(200);
+    const j = await r.json();
+    expect(j.preset).toBe('last_7_days');
+    expect(Array.isArray(j.series)).toBe(true);
+    expect(Array.isArray(j.bySource)).toBe(true);
+    expect(Array.isArray(j.byLifecycleStage)).toBe(true);
+    expect(j.byLifecycleStage.every((row) => row.key && row.label && Number.isFinite(row.value))).toBe(true);
+    expect(j.byLifecycleStage.some((row) => row.label === 'Not set')).toBe(false);
+    for (const key of ['leadsCreated', 'leadSources', 'lifecycleStages', 'meetings', 'sms', 'emails', 'whatsapp']) {
+      expect(j.totals).toHaveProperty(key);
+    }
+    if (j.series.length) {
+      expect(j.series[0]).toEqual(expect.objectContaining({
+        leadsCreated: expect.any(Number),
+        meetings: expect.any(Number),
+        sms: expect.any(Number),
+        emails: expect.any(Number),
+        whatsapp: expect.any(Number),
+      }));
+    }
+  });
+
+  test('all-time email total matches the unified inbox total', async ({ request }) => {
+    const [overviewResponse, inboxResponse] = await Promise.all([
+      get(request, adminToken, '/api/lead-reports/overview?range=all_time'),
+      get(request, adminToken, '/api/communications/inbox?page=1&limit=1'),
+    ]);
+    expect(overviewResponse.status()).toBe(200);
+    expect(inboxResponse.status()).toBe(200);
+    const overview = await overviewResponse.json();
+    const inbox = await inboxResponse.json();
+    expect(overview.totals.emails).toBe(inbox.pagination.total);
+  });
 });
 
 test.describe('Lead Reports — auth + RBAC', () => {

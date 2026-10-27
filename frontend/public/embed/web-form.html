@@ -38,6 +38,19 @@
         padding: 20px;
       }
 
+      html.landing-embed,
+      html.landing-embed body {
+        background: transparent;
+      }
+
+      html.landing-embed body {
+        padding: 0;
+      }
+
+      html.landing-embed .wrap {
+        max-width: none;
+      }
+
       html.standalone-form body {
         min-height: 100vh;
         min-height: 100dvh;
@@ -1514,7 +1527,11 @@
 
         var params = new URLSearchParams(location.search);
 
-        var slug = params.get("id") || params.get("slug") || "";
+        var initialForm = window.__GBS_INITIAL_FORM__ || null;
+        var slug =
+          params.get("id") ||
+          params.get("slug") ||
+          String(window.__GBS_INITIAL_FORM_ID__ || "");
 
         var scope = params.get("scope") || "generic";
         var advanced = scope === "generic" || scope === "travel";
@@ -5142,6 +5159,14 @@
 
               return;
             }
+          }
+
+          if (initialForm) {
+            var bootstrappedForm = initialForm;
+            initialForm = null;
+            window.__GBS_INITIAL_FORM__ = null;
+            renderForm(bootstrappedForm);
+            return;
           }
 
           if (!slug) {

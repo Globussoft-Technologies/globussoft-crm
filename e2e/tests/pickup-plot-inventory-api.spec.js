@@ -201,8 +201,8 @@ test('only an admin can update a plot commission', async ({ request }) => {
   expect(rateResponse.status()).toBe(403);
 });
 
-test('multi-plot customer assignment is admin-only and validates the selection', async ({ request }) => {
-  const [userResponse, invalidAdminResponse] = await Promise.all([
+test('multi-plot assignment and deselection are admin-only and validate the selection', async ({ request }) => {
+  const [userResponse, invalidAdminResponse, userDeleteResponse, invalidDeleteResponse] = await Promise.all([
     request.post(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots`, {
       headers: headers(userToken),
       data: { plotSiteIds: [1, 2] },
@@ -211,10 +211,19 @@ test('multi-plot customer assignment is admin-only and validates the selection',
       headers: headers(adminToken),
       data: { plotSiteIds: [] },
     }),
+    request.delete(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/1/plots/1`, {
+      headers: headers(userToken),
+    }),
+    request.delete(`${BASE_URL}/api/pickup-plot-inventory/customer-pickups/not-an-id/plots/1`, {
+      headers: headers(adminToken),
+    }),
   ]);
   expect(userResponse.status()).toBe(403);
+  expect(userDeleteResponse.status()).toBe(403);
   expect(invalidAdminResponse.status()).toBe(400);
   expect((await invalidAdminResponse.json()).code).toBe('INVALID_PLOT_IDS');
+  expect(invalidDeleteResponse.status()).toBe(400);
+  expect((await invalidDeleteResponse.json()).code).toBe('INVALID_ID');
 });
 
 test('generic lead users can read only the scoped pickup workflow projection', async ({ request }) => {

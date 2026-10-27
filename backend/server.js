@@ -1104,7 +1104,10 @@ app.use("/api", (req, res, next) => {
   // Public marketing landing page resolves its hero web form anonymously.
   // Exact-path + GET-only: /access and PUT stay behind the global
   // verifyToken guard + the route's own allowlist check.
-  if (req.method === "GET" && req.path === "/landing-form-config")
+  if (
+    req.method === "GET" &&
+    ["/landing-form-config", "/landing-form-config/embed"].includes(req.path)
+  )
     return next();
   // Billing/self-serve subscription endpoints must stay reachable even when
   // the current subscription is expired, otherwise the admin cannot renew.

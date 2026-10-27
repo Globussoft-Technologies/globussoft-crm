@@ -911,6 +911,17 @@ function GenericOrWellnessOnly({ children }) {
   return children;
 }
 
+// Lead Routing is intentionally disabled for Generic CRM only. The component,
+// backend routes, and non-generic behavior remain intact so this does not alter
+// Callified's independent "Assigning Staff" configuration.
+function NonGenericLeadRoutingOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (!tenant?.vertical || tenant.vertical === "generic") {
+    return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  return children;
+}
+
 // #207/#214: doctor/telecaller landing on /wellness directly (e.g. clicking
 // the sidebar logo, typing the URL, or refreshing) would still see the Owner
 // Dashboard with org-wide P&L. Gate the Owner Dashboard route to ADMIN/MANAGER
@@ -3147,7 +3158,12 @@ export default function App() {
                           </GenericAccessGuard>
                         }
                       />
-                      <Route path="lead-routing" element={<LeadRouting />} />
+                      {/* Generic CRM Lead Routing page intentionally disabled;
+                          retain its route for other verticals. */}
+                      <Route
+                        path="lead-routing"
+                        element={<NonGenericLeadRoutingOnly><LeadRouting /></NonGenericLeadRoutingOnly>}
+                      />
                       <Route path="territories" element={<Territories />} />
                       <Route
                         path="pickup-plot-inventory"

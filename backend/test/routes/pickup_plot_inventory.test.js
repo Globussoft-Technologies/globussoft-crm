@@ -3439,6 +3439,48 @@ describe('customer pickup status', () => {
     expect(prisma.plotBooking.create).not.toHaveBeenCalled();
   });
 
+  test('deselects an unpaid plot assignment before its workflow starts', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.transportPerson.findMany.mockResolvedValue([]);
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, status: 'PLOT_ASSIGNED', paymentStatus: 'UNPAID', amountPaid: 0, invoiceId: null,
+    });
+
+    const response = await request(makeApp())
+      .delete('/api/pickup-plot-inventory/customer-pickups/61/plots/30');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toEqual({ contactId: 61, plotSiteId: 30, unassigned: true });
+    expect(prisma.plotBooking.update).toHaveBeenCalledWith({
+      where: { id: 501 }, data: { status: 'CANCELLED' },
+    });
+    expect(prisma.plotSite.updateMany).toHaveBeenCalledWith({
+      where: { id: 30, tenantId: 7, availability: 'RESERVED' },
+      data: { availability: 'AVAILABLE' },
+    });
+    expect(prisma.plotWorkflowEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: 7, contactId: 61, plotSiteId: 30,
+        eventType: 'CANCELLED', fromStatus: 'PLOT_ASSIGNED', toStatus: 'CANCELLED',
+      }),
+    });
+  });
+
+  test('prevents deselecting a plot after its booking or payment workflow starts', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.transportPerson.findMany.mockResolvedValue([]);
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, status: 'PLOT_RESERVED', paymentStatus: 'PARTIALLY_PAID', amountPaid: 1000, invoiceId: 701,
+    });
+
+    const response = await request(makeApp())
+      .delete('/api/pickup-plot-inventory/customer-pickups/61/plots/30');
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PLOT_UNASSIGNMENT_LOCKED');
+    expect(prisma.plotBooking.update).not.toHaveBeenCalled();
+  });
+
   test('replaces only the selected reserved plot and preserves the other assigned plot', async () => {
     prisma.contact.findFirst.mockResolvedValue({ id: 61 });
     prisma.customerPickup.findUnique.mockResolvedValue({ id: 91 });
@@ -4026,6 +4068,10 @@ describe('customer pickup status', () => {
   });
 
   test('keeps an admin-assigned plot available until the customer selects it', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([{
+      id: 4, name: 'Main Gate', address: '42 Lake View Road, Bengaluru',
+      googleMapsLink: 'https://maps.google.com/?q=42+Lake+View+Road',
+    }]);
     prisma.customerPickup.findMany.mockResolvedValue([{
       id: 91, tenantId: 7, contactId: 61, pickupAddress: '42 Lake View Road, Bengaluru',
       contact: { id: 61, name: 'Priya Shah' },
@@ -4055,6 +4101,14 @@ describe('customer pickup status', () => {
     expect(response.body.plots).toEqual([
       expect.objectContaining({ id: 31, availability: 'AVAILABLE' }),
     ]);
+    expect(response.body.pickupLocations).toEqual([
+      expect.objectContaining({ id: 4, name: 'Main Gate', address: '42 Lake View Road, Bengaluru' }),
+    ]);
+    expect(prisma.pickupLocation.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, isActive: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, address: true, googleMapsLink: true },
+    });
   });
 
   test('returns effective installment statuses, active links, overdue rows, and paid receipts', async () => {

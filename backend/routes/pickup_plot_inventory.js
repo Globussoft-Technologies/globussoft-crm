@@ -3571,6 +3571,69 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
   }
 });
 
+router.delete("/customer-pickups/:contactId/plots/:plotSiteId", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    const plotSiteId = Number(req.params.plotSiteId);
+    if (![contactId, plotSiteId].every((id) => Number.isInteger(id) && id > 0)) {
+      return res.status(400).json({ error: "Invalid customer or plot id", code: "INVALID_ID" });
+    }
+    const [contact, booking, transportPeople] = await Promise.all([
+      prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null }, select: { id: true } }),
+      prisma.plotBooking.findFirst({
+        where: { tenantId, contactId, plotSiteId, status: { not: "CANCELLED" } },
+        select: { id: true, status: true, paymentStatus: true, amountPaid: true, invoiceId: true },
+      }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      }),
+    ]);
+    if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
+    if (!booking) return res.status(404).json({ error: "Assigned plot not found", code: "ASSIGNED_PLOT_NOT_FOUND" });
+    if (customerTransportStarted(transportPeople, contactId)) {
+      return res.status(409).json({
+        error: "Plot assignments cannot be changed after transport has started.",
+        code: "TRANSPORT_WORKFLOW_LOCKED",
+      });
+    }
+    if (
+      String(booking.status || "").trim().toUpperCase() !== "PLOT_ASSIGNED"
+      || Number(booking.amountPaid || 0) > 0
+      || booking.invoiceId
+      || !["", "UNPAID"].includes(String(booking.paymentStatus || "").trim().toUpperCase())
+    ) {
+      return res.status(409).json({
+        error: "This plot can no longer be deselected because its booking or payment workflow has started.",
+        code: "PLOT_UNASSIGNMENT_LOCKED",
+      });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.plotBooking.update({ where: { id: booking.id }, data: { status: "CANCELLED" } });
+      await tx.plotSite.updateMany({
+        where: { id: plotSiteId, tenantId, availability: "RESERVED" },
+        data: { availability: "AVAILABLE" },
+      });
+      await appendWorkflowEvent(tx, req, {
+        bookingId: booking.id,
+        contactId,
+        plotSiteId,
+        stage: "PLOT",
+        eventType: "PLOT_UNASSIGNED",
+        label: "Plot unassigned",
+        fromStatus: "PLOT_ASSIGNED",
+        toStatus: "CANCELLED",
+        metadata: { unassignedByAdmin: true },
+      });
+    });
+    return res.json({ contactId, plotSiteId, unassigned: true });
+  } catch (error) {
+    console.error("pickup-plot-inventory DELETE /customer-pickups/:contactId/plots/:plotSiteId error:", error);
+    return res.status(500).json({ error: "Failed to unassign plot", code: "PLOT_UNASSIGNMENT_FAILED" });
+  }
+});
+
 router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -4090,7 +4153,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
     const pairWhere = pairs.map((pair) => ({ contactId: pair.customerId, plotSiteId: pair.plotSiteId }));
     const customerScope = adminOverview ? {} : { contactId: { in: contactIds } };
     const assignmentScope = adminOverview ? {} : { OR: pairWhere.length ? pairWhere : [{ id: -1 }] };
-    const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments] = await Promise.all([
+    const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments, pickupLocations] = await Promise.all([
       prisma.customerPickup.findMany({
         where: { tenantId, ...customerScope, contact: { deletedAt: null } },
         orderBy: { updatedAt: "desc" },
@@ -4143,6 +4206,11 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
           amount: true, currency: true, gateway: true, gatewayId: true,
           status: true, paidAt: true, createdAt: true, metadata: true,
         },
+      }),
+      prisma.pickupLocation.findMany({
+        where: { tenantId, isActive: true },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, address: true, googleMapsLink: true },
       }),
     ]);
     // Legacy person records contain tenant-wide assignment JSON. Trim it
@@ -4345,6 +4413,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
     return res.json({
       customers,
       plotAssignments,
+      pickupLocations,
       allPlots: plots.filter((plot) => plot.isActive),
       plots: plots.filter((plot) => (
         plot.isActive && String(plot.availability || "").trim().toUpperCase() === "AVAILABLE"

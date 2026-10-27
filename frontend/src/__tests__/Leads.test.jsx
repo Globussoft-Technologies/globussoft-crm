@@ -49,6 +49,7 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifyInfo = vi.fn();
 const notifySuccess = vi.fn();
+const notifyConfirm = vi.fn();
 const notifyPrompt = vi.fn();
 const navigateMock = vi.fn();
 vi.mock('../utils/notify', () => ({
@@ -56,7 +57,7 @@ vi.mock('../utils/notify', () => ({
     error: notifyError,
     info: notifyInfo,
     success: notifySuccess,
-    confirm: () => Promise.resolve(true),
+    confirm: notifyConfirm,
     prompt: notifyPrompt,
   }),
 }));
@@ -71,6 +72,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('external lookup disabled in unit tests')));
   notifyPrompt.mockReset().mockResolvedValue('');
+  notifyConfirm.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -770,7 +772,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(within(dialog).getByText('No available plot numbers')).toBeInTheDocument();
   });
 
-  it('changes one assigned plot number without replacing the other assignments', async () => {
+  it('uses one site-filtered list to add and deselect plots for an existing lead assignment', async () => {
     const originalFetch = fetchApiMock.getMockImplementation();
     fetchApiMock.mockImplementation((url, options) => {
       if (typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')) {
@@ -783,27 +785,98 @@ describe('Leads Freshsales-style list UI affordances', () => {
     await screen.findByText('Alice Lead');
     fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
     const assignedPlotsDialog = screen.getByRole('dialog', { name: 'Assigned plots' });
-    fireEvent.click(within(assignedPlotsDialog).getByRole('button', { name: 'Change plot 24 for Alice Lead' }));
+    fireEvent.click(within(assignedPlotsDialog).getByRole('button', { name: 'Edit assigned plots for Alice Lead' }));
 
-    const dialog = screen.getByRole('dialog', { name: 'Change plot number' });
-    expect(within(dialog).getByRole('radio', { name: /Plot 24/ })).toBeDisabled();
-    expect(within(dialog).getByRole('radio', { name: /Plot 25/ })).toBeEnabled();
-    expect(within(dialog).getByRole('radio', { name: /Plot 107/ })).toBeEnabled();
-    expect(within(dialog).getByRole('radio', { name: /Plot 108/ })).toBeDisabled();
-    expect(within(dialog).queryByRole('radio', { name: /Plot 9/ })).not.toBeInTheDocument();
-    expect(within(dialog).getByText('Current plot')).toBeInTheDocument();
-    expect(within(dialog).getByText('SOLD')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Edit assigned plots' });
+    expect(within(dialog).getByRole('combobox', { name: 'Edit plot or site name' })).toHaveValue('North Avenue');
+    const plotList = within(dialog).getByRole('group', { name: 'Assigned and available plots' });
+    expect(within(plotList).getByRole('checkbox', { name: /Plot 24/ })).toBeChecked();
+    fireEvent.click(within(plotList).getByRole('checkbox', { name: /Plot 24/ }));
+    const plot25 = within(plotList).getByRole('checkbox', { name: /Plot 25/ });
+    const plot107 = within(plotList).getByRole('checkbox', { name: /Plot 107/ });
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 108/ })).toBeNull();
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 9/ })).toBeNull();
 
-    fireEvent.click(within(dialog).getByRole('radio', { name: /Plot 25/ }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Change plot number' }));
+    fireEvent.click(plot25);
+    fireEvent.click(plot107);
+    expect(plot25).toBeChecked();
+    expect(plot107).toBeChecked();
+    const saveChanges = within(dialog).getByRole('button', { name: 'Save changes' });
+    expect(saveChanges).toBeEnabled();
+    fireEvent.click(saveChanges);
 
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith({
+      title: 'Confirm plot assignments',
+      message: "Are you sure you want to update Alice Lead's North Avenue plots? Assign Plot 25, Plot 107. Deselect Plot 24.",
+      confirmText: 'Save changes',
+      cancelText: 'Edit',
+    }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots/30',
+      { method: 'DELETE' },
+    ));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/customer-pickups/101/plots',
       {
         method: 'POST',
-        body: JSON.stringify({ plotSiteIds: [31], replacePlotSiteId: 30 }),
+        body: JSON.stringify({ plotSiteIds: [31, 32] }),
       },
     ));
+  });
+
+  it('removes the old Plot or Site assignment when a lead changes plot type', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')) {
+        return Promise.resolve({ pickupLocations: [], customers: [] });
+      }
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [
+            { id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE' },
+            { id: 34, name: 'South Avenue', plotNumber: '9', availability: 'AVAILABLE' },
+          ],
+          allPlots: [
+            { id: 30, name: 'North Avenue', plotNumber: '24', availability: 'RESERVED' },
+            { id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE' },
+            { id: 34, name: 'South Avenue', plotNumber: '9', availability: 'AVAILABLE' },
+          ],
+          customers: [{
+            contact: { id: 101, name: 'Alice Lead' },
+            assignedPlots: [{ id: 30, name: 'North Avenue', plotNumber: '24', availability: 'RESERVED' }],
+            customerAssignedPlotIds: [30],
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Assigned plots' })).getByRole('button', { name: 'Edit assigned plots for Alice Lead' }));
+
+    const editor = screen.getByRole('dialog', { name: 'Edit assigned plots' });
+    fireEvent.change(within(editor).getByRole('combobox', { name: 'Edit plot or site name' }), { target: { value: 'South Avenue' } });
+    const plotList = within(editor).getByRole('group', { name: 'Assigned and available plots' });
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 24/ })).toBeNull();
+    fireEvent.click(within(plotList).getByRole('checkbox', { name: /Plot 9/ }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith({
+      title: 'Confirm plot assignments',
+      message: "Are you sure you want to update Alice Lead's South Avenue plots? Assign Plot 9. Deselect Plot 24.",
+      confirmText: 'Save changes',
+      cancelText: 'Edit',
+    }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots/30',
+      { method: 'DELETE' },
+    ));
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [34] }) },
+    );
   });
 
   it('hides all three deselected pickup and plot workflow columns', async () => {
@@ -2585,7 +2658,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       right: 'auto',
     });
     await waitFor(() => {
-      expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
+      expect(within(menu).getByText(/3 selected/i)).toBeInTheDocument();
     });
     const checkboxes = screen.getAllByRole('checkbox');
     expect(checkboxes).toHaveLength(4);
@@ -2595,7 +2668,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     const rubixCheckbox = screen.getAllByRole('checkbox')[2];
     fireEvent.click(rubixCheckbox);
     await waitFor(() => {
-      expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+      expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
     });
 
     fireEvent.click(bulkActionsButton);
@@ -2980,12 +3053,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
     expect(screen.getByText('High')).toBeInTheDocument();
   });
-  it('row checkbox selection reveals the bulk-assign bar; Clear hides it (#334)', async () => {
+  it('keeps generic lead selection actions inside the Bulk actions menu (#334)', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    // Bulk bar is not yet rendered (nothing selected).
-    expect(screen.queryByText(/lead.*selected/i)).toBeNull();
 
     // Tick the first row's checkbox (the first checkbox is the header
     // select-all; pick a body row checkbox).
@@ -2993,14 +3063,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(checkboxes.length).toBe(4); // 1 header + 3 rows
     fireEvent.click(checkboxes[1]); // Alice
 
-    await waitFor(() => {
-      expect(screen.getByText(/1 lead selected/i)).toBeInTheDocument();
-    });
+    expect(screen.queryByRole('button', { name: /^Assign$/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    expect(within(menu).getByText(/1 selected/i)).toBeInTheDocument();
 
-    // Clear button drops selection + hides the bar.
-    fireEvent.click(screen.getByRole('button', { name: /^Clear$/i }));
+    fireEvent.click(within(menu).getByRole('button', { name: /Clear selection/i }));
     await waitFor(() => {
-      expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
     });
   });
 
@@ -3014,22 +3084,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(checkboxes[1]); // Alice (id=11)
     fireEvent.click(checkboxes[2]); // Bob (id=12)
 
-    await waitFor(() => {
-      expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
 
-    // The bulk-assign bar has its own dropdown. Find it by its "Unassign"
-    // first option (the per-row dropdowns start with "Unassigned"  note
-    // the trailing 'ed'; the bulk dropdown reads "Unassign" without it).
-    const allSelects = screen.getAllByRole('combobox');
-    const bulkSelect = allSelects.find(el =>
-      Array.from(el.querySelectorAll('option')).some(o => o.textContent === 'Unassign'),
-    );
-    expect(bulkSelect).toBeDefined();
+    const bulkSelect = within(menu).getByLabelText(/Bulk assign staff/i);
     fireEvent.change(bulkSelect, { target: { value: '8' } });
 
-    // Click the bulk-bar Assign button (distinguish from per-row Convert).
-    const assignBtn = screen.getByRole('button', { name: /^Assign$/i });
+    const assignBtn = within(menu).getByRole('button', { name: /Assign to staff/i });
     fireEvent.click(assignBtn);
 
     await waitFor(() => {
@@ -3042,9 +3104,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       expect(body.assignedToId).toBe('8');
     });
 
-    // After bulk-assign, selection is cleared and the bar collapses.
+    // After bulk-assign, selection is cleared and the menu closes.
     await waitFor(() => {
-      expect(screen.queryByText(/leads? selected/i)).toBeNull();
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
     });
   });
 
@@ -3060,15 +3122,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     fireEvent.click(headerCheckbox);
     await waitFor(() => {
-      // The "3 leads selected" bar should appear
-      expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Bulk actions/i })).toHaveTextContent('3');
     });
 
     // Click again ?? ? deselect all
     const refreshed = screen.getAllByRole('checkbox');
     fireEvent.click(refreshed[0]);
     await waitFor(() => {
-      expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+      expect(screen.getByRole('button', { name: /Bulk actions/i })).not.toHaveTextContent('3');
     });
   });
 
@@ -3105,7 +3166,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(pageTwoHeaderCheckbox);
     expect(pageTwoHeaderCheckbox).toBeChecked();
     expect(pageTwoRowCheckbox).toBeChecked();
-    expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bulk actions/i })).toHaveTextContent('2');
   });
 
   it('Escape key closes the Create Lead drawer (#892)', async () => {
@@ -3654,17 +3715,30 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     });
   });
 
-  it('opens the selected-leads campaign menu to the right in Generic CRM', async () => {
-    const { container } = renderLeads(ADMIN_AUTH);
+  it('assigns a selected campaign from the Generic CRM Bulk actions menu', async () => {
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select Alice Smith' })[0]);
-    fireEvent.click(screen.getByRole('button', { name: /Assign Campaign \(1\)/i }));
+    expect(screen.queryByRole('button', { name: /Assign Campaign \(1\)/i })).toBeNull();
 
-    const campaignMenu = container.querySelector('.leads-bulk-campaign-menu');
-    expect(campaignMenu).toBeInTheDocument();
-    expect(campaignMenu).toHaveStyle({ left: '0px', right: 'auto' });
-    expect(within(campaignMenu).getByText(/Globussoft outbound/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    const campaignSelect = within(menu).getByLabelText(/Bulk assign campaign/i);
+    expect(campaignSelect).toHaveTextContent('Globussoft outbound');
+    fireEvent.change(campaignSelect, { target: { value: '102' } });
+    fireEvent.click(within(menu).getByRole('button', { name: /Assign campaign/i }));
+
+    await waitFor(() => {
+      const assignCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/bulk-assign-campaign' && opts?.method === 'PUT',
+      );
+      expect(assignCall).toBeDefined();
+      expect(JSON.parse(assignCall[1].body)).toEqual({
+        contactIds: [11],
+        callifiedCampaignId: 102,
+      });
+    });
   });
 
   it('persists selected dial campaigns until the final campaign is removed', async () => {

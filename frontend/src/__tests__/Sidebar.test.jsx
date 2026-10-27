@@ -1680,13 +1680,13 @@ describe('Sidebar — load-bearing render surface', () => {
   // ── Third-extension cases (10+ new) ────────────────────────────────
   // Cover the still-uncovered surface in the 1553-LOC SUT — Reports cluster
   // sub-items, Tickets visibility for non-admin support staff, sequences /
-  // marketing / lead routing manager-gated cluster, marketplace integration
+  // marketing manager-gated cluster, marketplace integration
   // links, settings sub-items per role, counter-polling setInterval contract,
   // socket event-handler registration, and sub-brand active-pill state.
   //
   // Adapted from the prompt: Workflows is NOT in the Sidebar SUT (only in
-  // App.jsx routes), so we substitute Sequences + Marketing + Lead Routing
-  // for cases 4-5 which are the equivalent "automation cluster" navs.
+  // App.jsx routes), so we substitute Sequences + Marketing for cases 4-5
+  // which are the equivalent "automation cluster" navs.
 
   describe('Generic Reports cluster sub-items', () => {
     it('renders remaining Reports cluster items for MANAGER while custom shortcuts stay hidden', () => {
@@ -1725,24 +1725,24 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 
-  describe('Generic Sequences + Marketing + Lead Routing manager cluster', () => {
-    it('renders Marketing / Lead Routing for MANAGER while Sequences stays hidden under generic', () => {
+  describe('Generic Sequences + Marketing manager cluster', () => {
+    it('renders Marketing for MANAGER while Sequences and Lead Routing stay hidden under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       expect(screen.queryByText('Sequences')).toBeNull();
       const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
       expect(marketingCampaignLink).toBeTruthy();
       expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');
       expect(screen.queryByText('Marketing')).toBeNull();
-      expect(screen.getByText('Lead Routing')).toBeTruthy();
+      expect(screen.queryByText('Lead Routing')).toBeNull();
       // Territories is the sibling routing nav.
       expect(screen.getByText('Territories')).toBeTruthy();
     });
 
-    it('uses the configured permission for Lead Routing while hiding ungranted automation pages', () => {
+    it('keeps Lead Routing hidden even when the user has its former leads permission', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
       expect(screen.queryByText('Sequences')).toBeNull();
       expect(screen.queryByText('Marketing Campaign')).toBeNull();
-      expect(screen.getByText('Lead Routing')).toBeTruthy();
+      expect(screen.queryByText('Lead Routing')).toBeNull();
       expect(screen.queryByText('Territories')).toBeNull();
     });
   });

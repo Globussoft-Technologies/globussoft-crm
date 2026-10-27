@@ -389,9 +389,18 @@ export default function PickupPlotInventory() {
       notify.error('Add at least 3 GPS points to close the plot boundary, or clear it.');
       return;
     }
+    const editing = Boolean(plotDialog?.id);
+    const confirmed = await notify.confirm({
+      title: editing ? 'Confirm plot changes' : 'Confirm new plot',
+      message: editing
+        ? `Are you sure you want to save changes to Plot ${plotForm.plotNumber} in ${plotForm.name}?`
+        : `Are you sure you want to add Plot ${plotForm.plotNumber} to ${plotForm.name}?`,
+      confirmText: editing ? 'Save changes' : 'Add plot',
+      cancelText: 'Cancel',
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
-      const editing = Boolean(plotDialog?.id);
       await fetchApi(`/api/pickup-plot-inventory/plots${editing ? `/${plotDialog.id}` : ''}`, {
         method: editing ? 'PUT' : 'POST',
         body: JSON.stringify(plotForm),

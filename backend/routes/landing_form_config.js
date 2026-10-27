@@ -13,13 +13,17 @@
 // PUBLIC_LEAD_TENANT_SLUG.
 
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const landingFormConfig = require("../lib/landingFormConfig");
+const { buildPublicFormPayload } = require("./web_forms");
 
 const router = express.Router();
+const embedDocumentPath = path.join(__dirname, "..", "..", "frontend", "public", "embed", "web-form.html");
 
-async function loadPublicForm() {
+async function loadPublicForm(includePayload = false) {
   const config = await landingFormConfig.readPublicConfig(prisma);
   const tenantSlug = landingFormConfig.resolvePublicLeadTenantSlug();
   if (!config && !tenantSlug) {
@@ -42,12 +46,12 @@ async function loadPublicForm() {
   }
   const form = await prisma.webForm.findFirst({
     where: { id: webFormId, tenantId, scope: "generic", isActive: true },
-    select: { id: true, name: true },
+    ...(includePayload ? {} : { select: { id: true, name: true } }),
   });
   if (!form) {
     throw Object.assign(new Error("The configured landing-page form is unavailable"), { statusCode: 503, code: "LANDING_FORM_UNAVAILABLE" });
   }
-  return { tenantId, webFormId, webFormName: form.name };
+  return { tenantId, webFormId, webFormName: form.name, form };
 }
 
 // Resolve the caller's email from the DB and check the allowlist.
@@ -59,7 +63,37 @@ async function callerCanManage(userId) {
   return landingFormConfig.isPublicConfigAdmin(prisma, user && user.email);
 }
 
-router.get("/", async (req, res) => {
+router.get("/embed", async (req, res) => {
+  try {
+    const { webFormId, form } = await loadPublicForm(true);
+    const origin = `${req.protocol}://${req.get("host")}`;
+    const publicForm = await buildPublicFormPayload(form, origin);
+    const bootstrap = JSON.stringify(publicForm)
+      .replace(/</g, "\\u003c")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+    const document = await fs.promises.readFile(embedDocumentPath, "utf8");
+    const html = document.replace(
+      "</head>",
+      `<script>document.documentElement.classList.add("landing-embed");window.__GBS_INITIAL_FORM__=${bootstrap};window.__GBS_INITIAL_FORM_ID__=${webFormId};</script></head>`,
+    );
+    // Helmet denies framing globally. This document is intentionally framed
+    // only by the same-origin landing page; keep cross-origin framing blocked.
+    res.removeHeader("Content-Security-Policy");
+    res.set("Content-Security-Policy", "frame-ancestors 'self'");
+    res.set("X-Frame-Options", "SAMEORIGIN");
+    res.set("Cache-Control", "no-store");
+    res.type("html").send(html);
+  } catch (err) {
+    console.error("[landing-form-config] embed resolve failed:", err && err.message);
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to render landing-page form",
+      code: err.code || "LANDING_FORM_RESOLVE_FAILED",
+    });
+  }
+});
+
+router.get("/", async (_req, res) => {
   try {
     const { webFormId, webFormName } = await loadPublicForm();
     res.json({ webFormId, webFormName });

@@ -186,6 +186,7 @@ function makeApp({
 
 beforeEach(() => {
   prisma.plotCommission = { findFirst: vi.fn().mockResolvedValue(null) };
+  prisma.plotBroker = { findMany: vi.fn().mockResolvedValue([]) };
   prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.invoice.findMany.mockReset();
   prisma.invoice.findFirst.mockReset();
@@ -418,6 +419,9 @@ describe("POST /api/billing/public/confirm-payment - payment-link statuses", () 
       balanceDue: 199999,
       currency: "INR",
     });
+    expect(prisma.plotBroker.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, isActive: true },
+    }));
     expect(prisma.plotBooking.update).toHaveBeenCalledWith({
       where: { id: 501 },
       data: {

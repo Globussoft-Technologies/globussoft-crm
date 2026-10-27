@@ -107,6 +107,17 @@ describe('<PickupCustomers />', () => {
     expect(ledger).toHaveTextContent('Sanjeev');
     const rateInput = within(ledger).getByRole('spinbutton', { name: 'Commission percentage for Sanjeev' });
     expect(rateInput).toHaveValue(10);
+    expect(within(ledger).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Commission history' })).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
+    expect(within(ledger).queryByRole('button', { name: 'Commission history' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Commission history' }));
+    const commissionDialog = screen.getByRole('dialog', { name: 'Commission history' });
+    expect(commissionDialog.parentElement?.parentElement).toBe(document.body);
+    expect(within(commissionDialog).getByRole('table', { name: 'Commission history' })).toHaveTextContent('₹4,50,000.00');
+    expect(within(commissionDialog).queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
+    fireEvent.click(within(commissionDialog).getByRole('button', { name: 'Close commission history' }));
+    expect(screen.queryByRole('dialog', { name: 'Commission history' })).toBeNull();
     fireEvent.change(rateInput, { target: { value: '5' } });
     expect(ledger).toHaveTextContent('₹2,25,000.00');
     expect(ledger).toHaveTextContent('₹45,00,000.00 × 5%');
@@ -121,6 +132,32 @@ describe('<PickupCustomers />', () => {
       '/api/pickup-plot-inventory/commissions/801/status',
       { method: 'PATCH', body: JSON.stringify({ status: 'APPROVED' }) },
     ));
+  });
+
+  it('does not offer commission or installment history before a successful payment', async () => {
+    fetchApi.mockResolvedValue({
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        payments: [{ id: 700, amount: 100000, status: 'PENDING', gateway: 'razorpay' }],
+        commissions: [{
+          id: 801, brokerName: 'Sanjeev', eligibleAmount: 4500000,
+          commissionPercent: 10, currency: 'INR', status: 'EARNED', allocations: [],
+        }],
+      }, payload.customers[1]],
+    });
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' } }}>
+        <NotifyProvider><PickupCustomers /></NotifyProvider>
+      </AuthContext.Provider>,
+    );
+
+    const ledger = await screen.findByRole('table', { name: 'Plot commission ledger' });
+    expect(within(ledger).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Commission history' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Payment history' })).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Commission history' })).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
   });
 
   it('shows a customer table on the left and the selected customer details on the right', async () => {
@@ -142,7 +179,7 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByRole('link', { name: 'Open pickup location for Priya Shah in Google Maps' })).toHaveAttribute('target', '_blank');
   });
 
-  it('shows the selected plot details and converts completed payments to tables', async () => {
+  it('shows the selected plot details and summarizes completed payments until history is opened', async () => {
     render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
     await screen.findByRole('button', { name: 'Priya Shah' });
 
@@ -153,7 +190,37 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('UTR-ONE');
     expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('₹10,00,000');
     expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('10/7/2026');
-    expect(screen.getByRole('table', { name: 'Future installment payments' })).toHaveTextContent('UTR-TWO');
+    expect(screen.queryByText('1 installment payment recorded')).toBeNull();
+    expect(screen.queryByText('Use Payment history above to review payment details.')).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Payment history' }));
+    const paymentDialog = screen.getByRole('dialog', { name: 'Future installment payment history' });
+    expect(paymentDialog.parentElement?.parentElement).toBe(document.body);
+    expect(within(paymentDialog).getByRole('table', { name: 'Future installment payment history' })).toHaveTextContent('UTR-TWO');
+    expect(within(paymentDialog).queryByRole('table', { name: 'Commission history' })).toBeNull();
+    fireEvent.click(within(paymentDialog).getByRole('button', { name: 'Close payment history' }));
+    expect(screen.queryByRole('dialog', { name: 'Future installment payment history' })).toBeNull();
+  });
+
+  it('shows a dash instead of a reference for cash payments', async () => {
+    fetchApi.mockResolvedValue({
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        payments: [
+          payload.customers[0].payments[0],
+          { ...payload.customers[0].payments[1], gateway: 'cash', gatewayId: 'LEGACY-CASH-REF', transactionRef: null },
+        ],
+      }, payload.customers[1]],
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Payment history' }));
+    const history = screen.getByRole('table', { name: 'Future installment payment history' });
+    expect(history).toHaveTextContent('cash');
+    expect(history).toHaveTextContent('-');
+    expect(history).not.toHaveTextContent('LEGACY-CASH-REF');
   });
 
   it('does not show transport-assigned plots as selected before the customer chooses one', async () => {
@@ -215,7 +282,7 @@ describe('<PickupCustomers />', () => {
     expect(screen.queryByRole('dialog', { name: 'Assigned plots' })).toBeNull();
   });
 
-  it('records an initial UPI payment with amount, date, and transaction reference', async () => {
+  it('offers only online link and cash, and records cash without asking for a reference', async () => {
     const unpaidPayload = {
       ...payload,
       customers: [{
@@ -233,22 +300,32 @@ describe('<PickupCustomers />', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate payment' }));
     fireEvent.change(screen.getByLabelText('Initial payment amount'), { target: { value: '250000' } });
-    fireEvent.change(screen.getByLabelText('Initial payment option'), { target: { value: 'upi' } });
-    fireEvent.change(screen.getByLabelText('Initial payment date'), { target: { value: '2026-10-15' } });
-    fireEvent.change(screen.getByLabelText('Initial payment reference'), { target: { value: 'UTR-NEW-15' } });
+    const paymentOptions = within(screen.getByRole('dialog', { name: 'Generate initial payment' })).getAllByRole('option');
+    expect(paymentOptions.map((option) => option.textContent)).toEqual([
+      'Online payment link (UPI / Card / Net banking)',
+      'Record cash payment',
+    ]);
+    fireEvent.change(screen.getByLabelText('Initial payment option'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Initial payment date and time'), { target: { value: '2026-10-15T14:35:27' } });
+    expect(screen.queryByLabelText('Initial payment reference')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Record payment' }));
 
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/customer-pickups/61/initial-payment',
       expect.objectContaining({
         method: 'POST',
-        body: expect.stringContaining('UTR-NEW-15'),
       }),
     ));
     const paymentRequest = fetchApi.mock.calls.find(([url, options]) => (
       url.endsWith('/initial-payment') && options?.method === 'POST'
     ));
-    expect(JSON.parse(paymentRequest[1].body)).toMatchObject({ plotBookingId: 501 });
+    const paymentBody = JSON.parse(paymentRequest[1].body);
+    expect(paymentBody).toMatchObject({
+      plotBookingId: 501,
+      method: 'cash',
+      paidAt: new Date('2026-10-15T14:35:27').toISOString(),
+    });
+    expect(paymentBody).not.toHaveProperty('transactionRef');
   });
 
   it('generates an online link that supports UPI, card, and net banking', async () => {
@@ -273,6 +350,49 @@ describe('<PickupCustomers />', () => {
 
     expect(await screen.findByDisplayValue('https://pay.example.test/plot-501')).toBeInTheDocument();
     expect(screen.getByText('Customer can pay using UPI, card, or net banking.')).toBeInTheDocument();
+  });
+
+  it('shows an active payment link action in the initial deposit table', async () => {
+    fetchApi.mockResolvedValue({
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        booking: { ...payload.customers[0].booking, amountPaid: 0, balance: 4500000 },
+        payments: [{
+          id: 700, amount: 450000, currency: 'INR', gateway: 'razorpay', gatewayId: 'plink_initial',
+          status: 'PENDING', createdAt: '2026-10-27T05:30:00.000Z', paymentLinkUrl: 'https://pay.example/initial',
+        }],
+      }, payload.customers[1]],
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    const initialPayment = screen.getByRole('table', { name: 'Initial deposit payment' });
+    expect(within(initialPayment).getByRole('columnheader', { name: 'Action' })).toBeInTheDocument();
+    expect(within(initialPayment).getByRole('link', { name: 'Open payment link' })).toHaveAttribute('href', 'https://pay.example/initial');
+  });
+
+  it('does not report an online payment as recorded when Razorpay returns no link', async () => {
+    const unpaidPayload = {
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        booking: { ...payload.customers[0].booking, amountPaid: 0, balance: 4500000 },
+        payments: [],
+      }, payload.customers[1]],
+    };
+    fetchApi.mockImplementation(async (_url, options = {}) => (
+      options.method === 'POST' ? { mode: 'payment_link', gateway: 'razorpay' } : unpaidPayload
+    ));
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate payment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate link' }));
+
+    expect(await screen.findByText(/Razorpay did not return a payment link/i)).toBeInTheDocument();
+    expect(screen.queryByText('Initial payment recorded.')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Generate initial payment' })).toBeInTheDocument();
   });
 
   it('lets an admin choose a percentage, direct amount, or full initial payment', async () => {
@@ -348,25 +468,34 @@ describe('<PickupCustomers />', () => {
     expect(installments).toHaveTextContent('remains on this booking.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add installment' }));
-    const addDialog = screen.getByRole('dialog', { name: 'Create installment schedule' });
+    const addDialog = screen.getByRole('dialog', { name: 'Create installment plan' });
     fireEvent.change(within(addDialog).getByLabelText('Installment frequency'), { target: { value: 'MONTHLY' } });
-    fireEvent.change(within(addDialog).getByLabelText('Number of installment payments'), { target: { value: '2' } });
-    fireEvent.change(within(addDialog).getByLabelText('Installment month'), { target: { value: '12' } });
-    fireEvent.change(within(addDialog).getByLabelText('Installment year'), { target: { value: '2027' } });
-    fireEvent.change(within(addDialog).getByLabelText('New installment amount'), { target: { value: '150000' } });
+    expect(within(addDialog).getByRole('option', { name: 'Quarterly' })).toBeInTheDocument();
+    expect(within(addDialog).getByRole('option', { name: 'Half-Yearly' })).toBeInTheDocument();
+    fireEvent.change(within(addDialog).getByLabelText('Number of installments'), { target: { value: '2' } });
+    expect(within(addDialog).getByLabelText('Amount per installment')).toHaveValue(2249999.5);
+    fireEvent.change(within(addDialog).getByLabelText('First payment date'), { target: { value: '2027-12-15' } });
+    fireEvent.change(within(addDialog).getByLabelText('Amount per installment'), { target: { value: '150000' } });
     fireEvent.click(within(addDialog).getByRole('button', { name: 'Create schedule' }));
 
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/customer-pickups/61/installments',
       {
         method: 'POST',
-        body: JSON.stringify({ plotBookingId: 501, frequency: 'MONTHLY', paymentCount: 2, firstMonth: 12, firstYear: 2027, amount: 150000 }),
+        body: JSON.stringify({ plotBookingId: 501, frequency: 'MONTHLY', paymentCount: 2, firstPaymentDate: '2027-12-15', amount: 150000 }),
       },
     ));
 
     const planned = await screen.findByRole('table', { name: 'Planned installments' });
-    expect(planned).toHaveTextContent('December');
-    expect(planned).toHaveTextContent('January');
+    expect(screen.queryByRole('button', { name: 'Add installment' })).toBeNull();
+    expect(within(planned).getByRole('columnheader', { name: 'Installment' })).toBeInTheDocument();
+    expect(within(planned).getByRole('columnheader', { name: 'Due Date' })).toBeInTheDocument();
+    expect(within(planned).getByRole('columnheader', { name: 'Amount' })).toBeInTheDocument();
+    expect(within(planned).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
+    expect(within(planned).getByRole('columnheader', { name: 'Action' })).toBeInTheDocument();
+    expect(planned.parentElement).toHaveClass('pickup-installment-table-wrap');
+    expect(planned).toHaveTextContent('Dec');
+    expect(planned).toHaveTextContent('Jan');
     expect(planned).toHaveTextContent('2028');
     expect(planned).toHaveTextContent('1,50,000');
     fireEvent.click(within(planned).getAllByRole('button', { name: 'Initiate payment' })[0]);
@@ -376,13 +505,46 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByText('Remaining installment balance')).toBeInTheDocument();
   });
 
-  it('shows the remaining balance beside recorded installments', async () => {
+  it('shows the remaining balance without a recorded-installments summary card', async () => {
     render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
     await screen.findByRole('button', { name: 'Priya Shah' });
 
     const installments = screen.getByRole('heading', { name: 'Future installments' }).closest('section');
     expect(installments).toHaveTextContent('Remaining installment balance');
     expect(installments).toHaveTextContent('30,00,000');
+    expect(screen.queryByText('1 installment payment recorded')).toBeNull();
+    expect(screen.queryByText('Use Payment history above to review payment details.')).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
+  });
+
+  it('shows installment lifecycle actions for initiated, processing, failed, overdue, and paid rows', async () => {
+    fetchApi.mockResolvedValue({
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        installments: [
+          { id: 901, sequenceNumber: 1, dueDate: '2026-11-15T12:00:00.000Z', amount: 50000, status: 'PLANNED' },
+          { id: 902, sequenceNumber: 2, dueDate: '2026-12-15T12:00:00.000Z', amount: 50000, status: 'PAYMENT_INITIATED', paymentLinkUrl: 'https://pay.example/902' },
+          { id: 903, sequenceNumber: 3, dueDate: '2027-01-15T12:00:00.000Z', amount: 50000, status: 'PROCESSING', paymentLinkUrl: 'https://pay.example/903' },
+          { id: 904, sequenceNumber: 4, dueDate: '2027-02-15T12:00:00.000Z', amount: 50000, status: 'FAILED' },
+          { id: 905, sequenceNumber: 5, dueDate: '2026-09-15T12:00:00.000Z', amount: 50000, status: 'OVERDUE' },
+          { id: 906, sequenceNumber: 6, dueDate: '2026-08-15T12:00:00.000Z', amount: 50000, status: 'PAID', receiptUrl: '/api/billing/public/receipt?plinkId=plink_paid' },
+        ],
+      }, payload.customers[1]],
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    const table = screen.getByRole('table', { name: 'Planned installments' });
+    expect(table).toHaveTextContent('Payment Initiated');
+    expect(table).toHaveTextContent('Processing');
+    expect(table).toHaveTextContent('Failed');
+    expect(table).toHaveTextContent('Overdue');
+    expect(table).toHaveTextContent('Paid');
+    expect(within(table).getAllByRole('button', { name: 'Initiate payment' })).toHaveLength(2);
+    expect(within(table).getByRole('button', { name: 'Retry payment' })).toBeInTheDocument();
+    expect(within(table).getAllByRole('link', { name: 'Open payment link' })).toHaveLength(2);
+    expect(within(table).getByRole('link', { name: 'View receipt' })).toHaveAttribute('href', '/api/billing/public/receipt?plinkId=plink_paid');
   });
 
   it('shows Add installment when a pending link is listed before successful payments', async () => {
@@ -402,7 +564,8 @@ describe('<PickupCustomers />', () => {
     expect(screen.queryByRole('button', { name: 'Generate payment' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Add installment' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('UTR-ONE');
-    expect(screen.getByRole('table', { name: 'Future installment payments' })).toHaveTextContent('plink pending');
+    expect(screen.queryByText('2 installment payments recorded')).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
   });
 
   it('changes the right-side detail when another customer is clicked', async () => {
@@ -588,6 +751,9 @@ describe('<PickupCustomers />', () => {
     expect(responsiveCss).toMatch(/\.pickup-master-detail\s*\{[^}]*grid-template-columns:minmax\(300px, 37%\) minmax\(0, 1fr\)/s);
     expect(responsiveCss).toContain('@media (max-width:760px)');
     expect(responsiveCss).not.toContain('@media (max-width:1000px)');
+    expect(responsiveCss).toMatch(/\.pickup-installment-table-wrap\s*\{[^}]*max-height:330px[^}]*overflow:auto/s);
+    expect(responsiveCss).toMatch(/\.pickup-installment-table th\s*\{[^}]*position:sticky[^}]*top:0/s);
+    expect(responsiveCss).toMatch(/\.pickup-payment-history-wrap\s*\{[^}]*max-height:260px[^}]*overflow:auto/s);
   });
 
   it('prevents avoidable search overlap and customer-name wrapping', () => {

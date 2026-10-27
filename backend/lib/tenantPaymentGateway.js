@@ -61,6 +61,25 @@ async function getTenantRazorpayClient(tenantId) {
       key_id: creds.keyId,
       key_secret: creds.keySecret,
     });
+    // Razorpay SDK 2.x assumes every Axios failure has an HTTP response and
+    // reads `err.response.status`. DNS, firewall and connection failures do
+    // not have `response`, so the SDK otherwise replaces the useful gateway
+    // failure with "Cannot read properties of undefined (reading 'status')".
+    // Supply a safe synthetic response before the SDK normalises the error.
+    client.api?.rq?.interceptors?.response?.use?.(undefined, (err) => {
+      if (err && !err.response) {
+        err.response = {
+          status: 503,
+          data: {
+            error: {
+              code: "GATEWAY_UNAVAILABLE",
+              description: "Razorpay is temporarily unavailable.",
+            },
+          },
+        };
+      }
+      return Promise.reject(err);
+    });
     return { client, ...creds };
   } catch (err) {
     console.error(
@@ -130,6 +149,15 @@ function parseRazorpayError(err) {
       status: 409,
       code: "PAYMENT_NOT_CAPTURED",
       message: "This payment isn't eligible for a refund right now. Razorpay doesn't show it as fully captured — please refresh the page and check the payment's current status before retrying.",
+    };
+  }
+
+  const looksLikeAmountLimit = /amount exceeds (?:the )?maximum amount allowed/i.test(description);
+  if (looksLikeAmountLimit) {
+    return {
+      status: 400,
+      code: "PAYMENT_AMOUNT_LIMIT_EXCEEDED",
+      message: "This amount is above the connected Razorpay account's per-transaction limit. Enter a smaller payment amount or ask the administrator to raise the transaction limit in Razorpay.",
     };
   }
 

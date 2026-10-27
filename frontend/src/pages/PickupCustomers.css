@@ -81,6 +81,9 @@
 .pickup-section-heading h3 { font-size:clamp(.8rem, .7rem + .25vw, .95rem); }
 .pickup-section-heading p { font-size:clamp(.65rem, .58rem + .16vw, .75rem); }
 .pickup-section-heading-with-action>div:nth-child(2) { min-width:0; }
+.pickup-section-actions { display:flex; align-items:center; justify-content:flex-end; gap:.5rem; margin-left:auto; flex:0 0 auto; flex-wrap:wrap; }
+.pickup-section-actions button,.pickup-section-heading-with-action>button { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+.pickup-section-heading-with-action>button { margin-left:auto; flex:0 0 auto; }
 .pickup-generate-payment { margin-left:auto; flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; min-height:clamp(32px, 3vw, 38px); padding:clamp(.4rem, .6vw, .6rem) clamp(.65rem, .9vw, 1rem); font-size:clamp(.68rem, .6rem + .16vw, .78rem); }
 .pickup-detail-actions { flex:0 0 auto; max-width:none; flex-wrap:nowrap; justify-content:flex-end; gap:clamp(3px, .35vw, 6px); }
 .pickup-detail-actions button { display:inline-flex; align-items:center; gap:clamp(2px, .2vw, 3px); min-width:0; padding:clamp(.25rem, .38vw, .5rem) clamp(.3rem, .48vw, .7rem); font-size:clamp(.52rem, .47rem + .11vw, .68rem); white-space:nowrap; }
@@ -97,23 +100,25 @@
 .pickup-detail-table th { width:34%; color:var(--text-secondary); background:var(--subtle-bg, rgba(148,163,184,.07)); }
 .pickup-detail-table td { font-weight:700; }
 .pickup-detail-pane { width:100%; max-width:100%; overflow-x:hidden; }
-.pickup-installment-table { display:block; width:100%; margin-top:.7rem; }
-.pickup-installment-table thead { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0, 0, 0, 0); white-space:nowrap; border:0; }
-.pickup-installment-table tbody { display:grid; gap:10px; }
-.pickup-installment-table tbody tr { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); border:1px solid var(--border-color); border-radius:10px; overflow:hidden; }
-.pickup-installment-table tbody td { display:block; min-width:0; padding:.65rem .75rem; border:0; overflow-wrap:normal; word-break:normal; }
-.pickup-installment-table tbody td::before { display:block; margin-bottom:4px; color:var(--text-secondary); font-size:.68rem; font-weight:600; text-transform:uppercase; }
-.pickup-installment-table tbody td:nth-child(1)::before { content:'No.'; }
-.pickup-installment-table tbody td:nth-child(2)::before { content:'Due'; }
-.pickup-installment-table tbody td:nth-child(3)::before { content:'Frequency'; }
-.pickup-installment-table tbody td:nth-child(4)::before { content:'Amount'; }
-.pickup-installment-table tbody td:nth-child(5)::before { content:'Status'; }
-.pickup-installment-table tbody td:nth-child(6) { grid-column:1 / -1; }
-.pickup-installment-table tbody td:nth-child(6)::before { content:'Action'; }
-.pickup-installment-table tbody td:nth-child(6) button { max-width:100%; white-space:normal; }
+.pickup-installment-table-wrap { max-height:330px; margin-top:.7rem; overflow:auto; border:1px solid var(--border-color); border-radius:10px; }
+.pickup-installment-table { width:100%; min-width:650px; border-collapse:collapse; }
+.pickup-installment-table th,.pickup-installment-table td { padding:.65rem .75rem; border-bottom:1px solid var(--border-color); text-align:left; font-size:.78rem; white-space:nowrap; }
+.pickup-installment-table th { position:sticky; top:0; z-index:1; color:var(--text-secondary); background:#f3f4f6; font-size:.7rem; }
+.pickup-installment-table tbody tr:last-child td { border-bottom:0; }
+.pickup-installment-table td:nth-child(1),.pickup-installment-table td:nth-child(3) { font-weight:700; }
+.pickup-installment-table td:last-child { width:1%; }
+.pickup-installment-table td:last-child button,.pickup-installment-table td:last-child a { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
 .pickup-payment-table { min-width:650px; }
 .pickup-payment-table th { color:var(--text-secondary); background:#f3f4f6; font-size:.7rem; }
+.pickup-payment-action { width:1%; white-space:nowrap; }
+.pickup-payment-action a { display:inline-flex; align-items:center; gap:5px; text-decoration:none; }
+.pickup-payment-history-wrap { max-height:260px; overflow:auto; }
+.pickup-payment-history-wrap .pickup-payment-table th { position:sticky; top:0; z-index:1; }
+.pickup-commission-rate-control { display:inline-flex; align-items:center; gap:6px; min-width:180px; white-space:nowrap; }
+.pickup-commission-rate-control input { width:75px; min-width:75px; padding:.45rem .55rem; }
 .pickup-payment-status { display:inline-flex; padding:.18rem .4rem; border-radius:999px; color:#047857; background:rgba(16,185,129,.13); font-size:.68rem; font-weight:800; text-transform:capitalize; }
+.pickup-payment-status[data-status="PAYMENT_INITIATED"],.pickup-payment-status[data-status="LINK_CREATED"],.pickup-payment-status[data-status="PROCESSING"] { color:#1d4ed8; background:rgba(59,130,246,.13); }
+.pickup-payment-status[data-status="FAILED"],.pickup-payment-status[data-status="OVERDUE"] { color:#b91c1c; background:rgba(239,68,68,.13); }
 .pickup-payment-empty { display:grid; gap:4px; margin-top:.7rem; padding:.85rem 1rem; border:1px dashed var(--border-color); border-radius:10px; background:var(--subtle-bg, rgba(148,163,184,.06)); }
 .pickup-payment-empty strong { font-size:.82rem; }
 .pickup-payment-empty span,.pickup-muted { color:var(--text-secondary); font-size:.76rem; }
@@ -122,6 +127,7 @@
 .pickup-detail-placeholder { display:grid; place-items:center; align-content:center; gap:8px; min-height:300px; color:var(--text-secondary); }
 .pickup-modal-backdrop { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:16px; background:rgba(15,23,42,.48); }
 .pickup-edit-dialog { width:min(520px, 100%); padding:1.25rem; opacity:1; background:var(--popover-bg, #fff); backdrop-filter:none; }
+.pickup-history-dialog { width:min(920px, 100%); max-height:calc(100vh - 32px); overflow:auto; }
 .pickup-dialog-header,.pickup-dialog-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .pickup-dialog-header h2 { font-size:1.2rem; }
 .pickup-edit-label { display:grid; gap:6px; font-weight:700; }
@@ -166,4 +172,4 @@
   .pickup-action-label { display:none; }
 }
 @media (max-width:760px) { .pickup-master-detail { grid-template-columns:1fr; overflow-y:auto; } .pickup-customer-directory { min-height:280px; max-height:44vh; } .pickup-detail-pane { overflow:visible; } }
-@media (max-width:640px) { .pickup-customers-page { height:auto; min-height:100%; overflow-y:auto; } .pickup-page-header,.pickup-detail-header { align-items:stretch; flex-direction:column; } .pickup-refresh { align-self:flex-start; } .pickup-directory-toolbar { grid-template-columns:1fr; } .pickup-customer-table th:nth-child(2),.pickup-customer-table td:nth-child(2) { display:none; } .pickup-customer-table th:nth-child(1) { width:52%; } .pickup-customer-table th:nth-child(3) { width:48%; } .pickup-detail-actions { justify-content:flex-start; } .pickup-section-heading-with-action { align-items:flex-start; flex-wrap:wrap; } .pickup-generate-payment { margin-left:44px; } .pickup-payment-manual-fields,.pickup-payment-choice,.pickup-initial-payment-fields { grid-template-columns:1fr; } }
+@media (max-width:640px) { .pickup-customers-page { height:auto; min-height:100%; overflow-y:auto; } .pickup-page-header,.pickup-detail-header { align-items:stretch; flex-direction:column; } .pickup-refresh { align-self:flex-start; } .pickup-directory-toolbar { grid-template-columns:1fr; } .pickup-customer-table th:nth-child(2),.pickup-customer-table td:nth-child(2) { display:none; } .pickup-customer-table th:nth-child(1) { width:52%; } .pickup-customer-table th:nth-child(3) { width:48%; } .pickup-detail-actions { justify-content:flex-start; } .pickup-section-heading-with-action { align-items:flex-start; flex-wrap:wrap; } .pickup-section-actions,.pickup-section-heading-with-action>button { margin-left:44px; } .pickup-payment-manual-fields,.pickup-payment-choice,.pickup-initial-payment-fields { grid-template-columns:1fr; } }

@@ -22,7 +22,6 @@ const response = {
       plot: { id: 30, name: 'Plot 24', plotNumber: 'A-24', address: 'North Avenue' },
       plotOptions: [
         { id: 30, name: 'Plot 24', plotNumber: 'A-24', availability: 'AVAILABLE' },
-        { id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'AVAILABLE' },
       ],
       tripCompleted: true, tripMessage: 'Trip completed', tripCompletedAt: '2026-10-06T10:00:00.000Z',
       pickupAt: '2026-10-06T09:15:00.000Z', dropOffAt: '2026-10-06T10:00:00.000Z',
@@ -210,7 +209,7 @@ describe('<BrokerCustomerWorkspace />', () => {
     );
   });
 
-  it('requires a plot selection and sends the selected plot number to billing', async () => {
+  it('shows only the customer-assigned plot and sends it to billing', async () => {
     const plotShownResponse = {
       ...response,
       customers: response.customers.map((customer) => customer.id === 61
@@ -223,19 +222,19 @@ describe('<BrokerCustomerWorkspace />', () => {
         customerId: 61,
         status: 'PLOT_SELECTED',
         handedToBilling: true,
-        plot: { id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'RESERVED' },
+        plot: { id: 30, name: 'Plot 24', plotNumber: 'A-24', availability: 'RESERVED' },
       });
 
     render(<BrokerCustomerWorkspace />);
     const plotSelect = await screen.findByLabelText('Selected plot for Li Wei');
     expect(screen.getByRole('option', { name: 'Plot 24 — Plot No. A-24' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Plot 25 — Plot No. B-25' })).toBeInTheDocument();
-    fireEvent.change(plotSelect, { target: { value: '31' } });
+    expect(screen.queryByRole('option', { name: 'Plot 25 — Plot No. B-25' })).toBeNull();
+    expect(plotSelect).toHaveValue('30');
     fireEvent.click(screen.getByRole('button', { name: /Mark plot selected/i }));
 
     await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
       '/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow',
-      { method: 'PATCH', body: JSON.stringify({ status: 'PLOT_SELECTED', plotId: 31 }) },
+      { method: 'PATCH', body: JSON.stringify({ status: 'PLOT_SELECTED', plotId: 30 }) },
     ));
   });
 

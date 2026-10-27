@@ -1449,6 +1449,30 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
+  it.each([
+    ['Pickup location', 'pickupLocation', 270],
+    ['Callified Campaign', 'campaign', 190],
+  ])('resizes the visible %s column instead of a different reordered column', async (label, key, initialWidth) => {
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const header = screen.getByRole('columnheader', { name: `${label} column` });
+    const columns = container.querySelectorAll('.leads-table--scrollable colgroup col');
+    expect(columns[header.cellIndex].style.width).toBe(`${initialWidth}px`);
+
+    fireEvent.mouseDown(screen.getByRole('separator', { name: `Resize ${label} column` }), {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: 280 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
+      expect(saved.widths[key]).toBe(initialWidth + 80);
+      expect(columns[header.cellIndex].style.width).toBe(`${initialWidth + 80}px`);
+    });
+  });
+
   it('keeps the table width from shrinking when a column is resized narrower', async () => {
     const { container } = renderLeads(authValue);
 

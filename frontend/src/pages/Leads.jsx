@@ -5994,12 +5994,31 @@ const Leads = () => {
       </button>
     );
   };
-  const tableColumnDefs = [
-    { key: "name", label: "Name" },
-    ...leadUserColumnDefs,
-    ...leadFixedExtraColumnDefs,
-    { key: "actions", label: "Actions", locked: true },
-  ];
+  const genericWorkflowColumnDefs = leadFixedExtraColumnDefs.filter(
+    (column) => !CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  const genericCallifiedColumnDefs = leadFixedExtraColumnDefs.filter((column) =>
+    CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  // Keep this definition order identical to the Generic header/body render
+  // order below. The fixed-layout table applies <col> widths by position, so
+  // using the unsplit leadUserColumnDefs order here makes every column after
+  // Email resize a different column when Callified fields are interleaved.
+  const tableColumnDefs = isGeneric
+    ? [
+        { key: "name", label: "Name" },
+        ...leadUserColumnsBeforeCallified,
+        ...genericWorkflowColumnDefs,
+        ...genericCallifiedColumnDefs,
+        ...leadUserColumnsAfterCallified,
+        { key: "actions", label: "Actions", locked: true },
+      ]
+    : [
+        { key: "name", label: "Name" },
+        ...leadUserColumnDefs,
+        ...leadFixedExtraColumnDefs,
+        { key: "actions", label: "Actions", locked: true },
+      ];
   // Generic CRM keeps the complete lead name visible while the remaining
   // columns move horizontally. Other verticals retain their existing table.
   const leadsFrozenColumnDefs = isGeneric

@@ -687,19 +687,39 @@ router.post(
           }
         }
 
-        if (orderId) {
-          let payment = await prisma.payment.findFirst({
+        if (orderId || (notes && notes.kind === "plot-booking-payment" && notes.installmentId)) {
+          let payment = orderId ? await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
-          });
-          if (!payment) {
+          }) : null;
+          if (!payment && orderId) {
             payment = await prisma.payment.findFirst({
               where: {
                 gateway: "razorpay",
-                metadata: { contains: `\"orderId\":\"${orderId}\"` },
+                metadata: { contains: `"orderId":"${orderId}"` },
               },
             });
           }
+          if (!payment && notes && notes.kind === "plot-booking-payment" && notes.installmentId) {
+            payment = await prisma.payment.findFirst({
+              where: {
+                tenantId: Number(notes.tenantId),
+                gateway: "razorpay",
+                status: { in: ["PENDING", "PROCESSING"] },
+                metadata: { contains: `"installmentId":${Number(notes.installmentId)}` },
+              },
+              orderBy: { createdAt: "desc" },
+            });
+          }
           if (payment) {
+            const plotPaymentMeta = safeJsonParse(payment.metadata, {});
+            if (eventName === "payment.authorized" && plotPaymentMeta.kind === "plot-booking-payment") {
+              const processing = await prisma.payment.update({
+                where: { id: payment.id },
+                data: { status: "PROCESSING" },
+              });
+              await reconcilePlotBookingPayment(processing);
+              return res.json({ ok: true });
+            }
             const capturedAt = ent && ent.captured_at
               ? new Date(ent.captured_at * 1000)
               : new Date();
@@ -757,15 +777,28 @@ router.post(
         }
       } else if (eventName === "payment.failed") {
         const orderId = ent && ent.order_id;
-        if (orderId) {
-          const payment = await prisma.payment.findFirst({
+        const notes = ent && ent.notes;
+        if (orderId || (notes && notes.kind === "plot-booking-payment" && notes.installmentId)) {
+          let payment = orderId ? await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
-          });
+          }) : null;
+          if (!payment && notes && notes.kind === "plot-booking-payment" && notes.installmentId) {
+            payment = await prisma.payment.findFirst({
+              where: {
+                tenantId: Number(notes.tenantId),
+                gateway: "razorpay",
+                status: { in: ["PENDING", "PROCESSING"] },
+                metadata: { contains: `"installmentId":${Number(notes.installmentId)}` },
+              },
+              orderBy: { createdAt: "desc" },
+            });
+          }
           if (payment) {
-            await prisma.payment.update({
+            const failed = await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "FAILED" },
             });
+            await reconcilePlotBookingPayment(failed);
           }
         }
       } else if (eventName === "payment_link.paid") {

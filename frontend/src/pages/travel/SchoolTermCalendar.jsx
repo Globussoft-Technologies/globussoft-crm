@@ -579,7 +579,7 @@ export default function SchoolTermCalendar() {
           <div className="search-with-leading-icon" style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
             <Search size={15} aria-hidden style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)", pointerEvents: "none" }} />
             <input
-              type="text"
+              type="search"
               value={labelSearch}
               onChange={(e) => setLabelSearch(e.target.value)}
               placeholder="Search by label"

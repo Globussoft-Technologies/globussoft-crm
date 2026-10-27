@@ -521,7 +521,7 @@ export default function Trips() {
             }}
           />
           <input
-              type="text"
+              type="search"
             className="crm-search-input"
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}

@@ -2128,10 +2128,9 @@ export default function Staff() {
             style={isTravel || isWellness ? {
               width: "100%",
               minWidth: 0,
-              maxHeight: isTravel ? "calc(100vh - 28rem)" : "none",
-              // Wellness renders a long directory inside the card as well;
-              // keep that table scrollable so the lazy row window can reveal
-              // later staff members on scroll.
+              maxHeight: filteredStaff.length > STAFF_PAGE_SIZE ? "min(60dvh, 560px)" : "none",
+              // The row window advances when this container scrolls, so it
+              // must have a bounded height whenever more rows are available.
               overflowY: isTravel || isWellness ? "auto" : "visible",
               overflowX: "hidden",
             } : {

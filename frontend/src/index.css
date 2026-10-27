@@ -3238,13 +3238,6 @@ table.stable-table td {
     padding: clamp(0.75rem, 3vw, 2rem) !important;
   }
 
-  .staff-directory-page .staff-team-table-scroll,
-  .travel-staff-page .travel-staff-table-scroll,
-  .wellness-staff-page .staff-team-table-scroll {
-    max-height: none !important;
-    overflow-y: visible !important;
-  }
-
   /* Generic CRM columns previously forced a 1000px table. At this size the
    * scaled cells are allowed to share the available width instead. */
   .staff-directory-page .staff-generic-resizable-table {

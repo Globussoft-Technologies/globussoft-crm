@@ -3316,11 +3316,6 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     -webkit-overflow-scrolling: touch;
   }
 
-  .staff-team-table-scroll--generic {
-    max-height: none !important;
-    overflow: visible !important;
-  }
-
   .staff-team-table-scroll--generic .staff-generic-resizable-table,
   .staff-team-table-scroll--generic .staff-generic-resizable-table tbody,
   .staff-team-table-scroll--generic .staff-generic-resizable-table tr {

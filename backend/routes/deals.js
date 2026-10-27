@@ -517,7 +517,7 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
 
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
-async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false } = {}) {
+async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false, allowLegacyStages = false } = {}) {
   if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
     const e = ensureNumberInRange(body.amount, { min: 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
     if (e) return e;
@@ -528,6 +528,7 @@ async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false }
   }
   if (body.stage !== undefined && body.stage !== null && body.stage !== "") {
     const allowed = await getAllowedStagesForTenant(tenantId, body.dealType);
+    if (allowLegacyStages) for (const stage of LEGACY_DEAL_STAGES) allowed.add(stage);
     const e = ensureEnum(body.stage, allowed, { field: "stage", code: "INVALID_STAGE" });
     if (e) return e;
   }
@@ -622,7 +623,13 @@ router.put("/:id", async (req, res) => {
       dealType: dealType === undefined ? (existing.dealType || (stage !== undefined ? await legacyDealTypeName(req.user.tenantId) : null)) : dealType,
       ...(dealType !== undefined && stage === undefined ? { stage: existing.stage } : {}),
     };
-    const inputErr = await validateDealInput(validationBody, { tenantId: req.user.tenantId, isUpdate: true });
+    const inputErr = await validateDealInput(validationBody, {
+      tenantId: req.user.tenantId,
+      isUpdate: true,
+      // Untyped deals predate deal-type configuration and retain their
+      // historical stage contract unless explicitly assigned a type.
+      allowLegacyStages: !existing.dealType && dealType === undefined,
+    });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     // #173: terminal-stage state machine. Once a deal is `won` or

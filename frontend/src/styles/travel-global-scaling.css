@@ -1,9 +1,9 @@
 /* Travel CRM-only fluid density contract. 1920px keeps the desktop baseline;
    smaller viewports reduce dimensions continuously before layout changes. */
 .travel-app-shell {
-  --travel-ui-text: clamp(0.875rem, 0.833vw, 1rem);
-  --travel-ui-control: clamp(0.875rem, calc(0.34375rem + 0.39vw), 0.875rem);
-  --travel-ui-cell: clamp(0.8125rem, calc(0.34375rem + 0.39vw), 0.875rem);
+  --travel-ui-text: clamp(0.6875rem, 0.833vw, 1rem);
+  --travel-ui-control: clamp(0.59375rem, calc(0.34375rem + 0.39vw), 0.8125rem);
+  --travel-ui-cell: clamp(0.59375rem, calc(0.34375rem + 0.39vw), 0.8125rem);
   --travel-ui-page-gap: clamp(0.75rem, calc(0.3rem + 1vw), 1.5rem);
   --travel-ui-card-gap: clamp(0.5rem, calc(0.25rem + 0.46vw), 0.8125rem);
   --travel-ui-card-padding: clamp(0.75rem, calc(0.3125rem + 0.95vw), 1.5rem);
@@ -18,27 +18,27 @@
   --travel-dashboard-gap: clamp(0.45rem, calc(0.2rem + 0.42vw), 0.75rem);
   --travel-dashboard-tile-padding: clamp(0.625rem, calc(0.28125rem + 0.6vw), 1rem);
   --travel-dashboard-value-size: clamp(1.125rem, 1.667vw, 2rem);
-  --travel-dashboard-label-size: clamp(0.75rem, 0.677vw, 0.8125rem);
-  --travel-dashboard-meta-size: clamp(0.75rem, 0.625vw, 0.75rem);
+  --travel-dashboard-label-size: clamp(0.5rem, 0.677vw, 0.8125rem);
+  --travel-dashboard-meta-size: clamp(0.5rem, 0.625vw, 0.75rem);
   --travel-sidebar-brand-size: clamp(0.875rem, calc(0.7625rem + 0.18vw), 0.98rem);
-  --travel-sidebar-nav-size: clamp(0.875rem, calc(0.6125rem + 0.14vw), 0.875rem);
-  --travel-sidebar-subnav-size: clamp(0.8125rem, calc(0.4rem + 0.4vw), 0.875rem);
-  --travel-sidebar-meta-size: clamp(0.75rem, calc(0.5rem + 0.1vw), 0.75rem);
+  --travel-sidebar-nav-size: clamp(0.703125rem, calc(0.6125rem + 0.14vw), 0.78rem);
+  --travel-sidebar-subnav-size: clamp(0.66rem, calc(0.4rem + 0.4vw), 0.875rem);
+  --travel-sidebar-meta-size: clamp(0.5625rem, calc(0.5rem + 0.1vw), 0.62rem);
   --travel-sidebar-icon-size: clamp(1rem, calc(0.75rem + 0.417vw), 1.25rem);
   --travel-sidebar-icon-box: clamp(1.375rem, calc(1.125rem + 0.208vw), 1.625rem);
-  --travel-font-9: 0.75rem;
-  --travel-font-10: 0.75rem;
-  --travel-font-11: 0.75rem;
-  --travel-font-11-5: 0.75rem;
-  --travel-font-12: 0.75rem;
-  --travel-font-12-5: clamp(0.75rem, 0.651vw, 0.78125rem);
-  --travel-font-13: clamp(0.75rem, 0.677vw, 0.8125rem);
-  --travel-font-13-5: clamp(0.75rem, 0.703vw, 0.84375rem);
-  --travel-font-14: clamp(0.875rem, 0.729vw, 0.875rem);
-  --travel-font-15: clamp(0.875rem, 0.781vw, 0.9375rem);
-  --travel-font-16: clamp(0.875rem, 0.833vw, 1rem);
-  --travel-font-17: clamp(0.875rem, 0.885vw, 1.0625rem);
-  --travel-font-18: clamp(0.875rem, 0.938vw, 1.125rem);
+  --travel-font-9: clamp(0.4375rem, 0.469vw, 0.5625rem);
+  --travel-font-10: clamp(0.4375rem, 0.521vw, 0.625rem);
+  --travel-font-11: clamp(0.46875rem, 0.573vw, 0.6875rem);
+  --travel-font-11-5: clamp(0.5rem, 0.599vw, 0.71875rem);
+  --travel-font-12: clamp(0.5rem, 0.625vw, 0.75rem);
+  --travel-font-12-5: clamp(0.515625rem, 0.651vw, 0.78125rem);
+  --travel-font-13: clamp(0.53125rem, 0.677vw, 0.8125rem);
+  --travel-font-13-5: clamp(0.546875rem, 0.703vw, 0.84375rem);
+  --travel-font-14: clamp(0.5625rem, 0.729vw, 0.875rem);
+  --travel-font-15: clamp(0.625rem, 0.781vw, 0.9375rem);
+  --travel-font-16: clamp(0.6875rem, 0.833vw, 1rem);
+  --travel-font-17: clamp(0.71875rem, 0.885vw, 1.0625rem);
+  --travel-font-18: clamp(0.75rem, 0.938vw, 1.125rem);
   --travel-font-19: clamp(0.8125rem, 0.99vw, 1.1875rem);
   --travel-font-20: clamp(0.875rem, 1.042vw, 1.25rem);
   --travel-font-22: clamp(0.9375rem, 1.146vw, 1.375rem);
@@ -55,13 +55,6 @@
 }
 
 .travel-app-shell .travel-content-frame { font-size: var(--travel-ui-text); }
-
-/* Keep form text readable at mobile widths and browser zoom, including
-   fields with legacy inline font sizes handled by the rules below. */
-.travel-app-shell .travel-content-frame :is(label, input, select, textarea),
-.travel-app-shell .travel-content-frame :is(label, input, select, textarea)[style] {
-  font-size: max(0.875rem, var(--travel-ui-control)) !important;
-}
 
 /* The two body-mounted-looking top-bar overlays need their own density
    contract because their contents use legacy inline pixel/rem values. Keep
@@ -187,7 +180,7 @@
 .travel-app-shell .travel-content-frame .travel-file-input {
   width: 100%;
   min-width: 0;
-  font-size: clamp(0.75rem, 0.75vw, 0.875rem) !important;
+  font-size: clamp(0.6875rem, 0.75vw, 0.875rem) !important;
 }
 
 .travel-app-shell .travel-content-frame .travel-file-input::file-selector-button {
@@ -240,15 +233,15 @@
 
 .travel-app-shell .travel-content-frame .travel-trips-page > .travel-trips-page__header p,
 .travel-app-shell .travel-content-frame .travel-trips-page :is(input, select, button) {
-  font-size: clamp(0.75rem, 0.75vw, 0.875rem) !important;
+  font-size: clamp(0.6875rem, 0.75vw, 0.875rem) !important;
 }
 
 .travel-app-shell .travel-content-frame .travel-trips-page table th {
-  font-size: clamp(0.75rem, 0.68vw, 0.8125rem) !important;
+  font-size: clamp(0.625rem, 0.68vw, 0.8125rem) !important;
 }
 
 .travel-app-shell .travel-content-frame .travel-trips-page table td {
-  font-size: clamp(0.75rem, 0.75vw, 0.875rem) !important;
+  font-size: clamp(0.6875rem, 0.75vw, 0.875rem) !important;
 }
 
 .travel-app-shell .travel-content-frame > * {
@@ -558,7 +551,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
 .travel-app-shell .travel-content-frame :where(canvas, .recharts-wrapper, .recharts-surface) { max-width: 100%; }
 
 .travel-app-shell .travel-content-frame :where(.recharts-cartesian-axis-tick-value, .recharts-legend-item-text) {
-  font-size: clamp(0.75rem, 0.65vw, 0.78rem) !important;
+  font-size: clamp(0.5rem, 0.65vw, 0.78rem) !important;
 }
 
 /* TMC Catalogue predates the shared button classes and implements two
@@ -739,7 +732,7 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
   display: inline-flex !important;
   align-items: center;
   padding: clamp(0.08rem, 0.12vw, 0.125rem) clamp(0.3rem, 0.42vw, 0.5rem) !important;
-  font-size: 0.75rem !important;
+  font-size: clamp(0.5rem, 0.573vw, 0.6875rem) !important;
   line-height: 1.1 !important;
   letter-spacing: clamp(0.01rem, 0.025vw, 0.03125rem) !important;
   border-radius: clamp(0.18rem, 0.21vw, 0.25rem) !important;
@@ -906,7 +899,7 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
   min-width: 0 !important;
   box-sizing: border-box;
   padding: clamp(0.28rem, 1.2cqw, 0.5rem) clamp(0.35rem, 1.3cqw, 0.625rem) !important;
-  font-size: clamp(0.75rem, 1.35cqw, 0.8rem) !important;
+  font-size: clamp(0.52rem, 1.35cqw, 0.8rem) !important;
 }
 
 .tally-export-trips-page .tally-export-search-control svg {
@@ -917,7 +910,7 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
 
 .tally-export-trips-page .tally-export-filter-label {
   min-width: 0;
-  font-size: 0.75rem !important;
+  font-size: clamp(0.45rem, 1.15cqw, 0.75rem) !important;
   line-height: 1.15;
   overflow-wrap: anywhere;
 }
@@ -949,7 +942,7 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
   .travel-app-shell .travel-content-frame .payables-table th,
   .travel-app-shell .travel-content-frame .payables-table td {
     padding: clamp(0.3rem, 1vw, 0.65rem) clamp(0.2rem, 0.7vw, 0.7rem) !important;
-    font-size: clamp(0.75rem, 1.2vw, 0.82rem) !important;
+    font-size: clamp(0.55rem, 1.2vw, 0.82rem) !important;
   }
 
   .travel-app-shell .travel-content-frame .payables-table th {
@@ -1009,7 +1002,7 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
   .travel-app-shell .travel-content-frame .tally-ledger-groups-table th,
   .travel-app-shell .travel-content-frame .tally-ledger-groups-table td {
     padding: clamp(0.3rem, 1vw, 0.75rem) clamp(0.2rem, 0.65vw, 0.7rem) !important;
-    font-size: clamp(0.75rem, 1.15vw, 0.8rem) !important;
+    font-size: clamp(0.55rem, 1.15vw, 0.8rem) !important;
   }
 
   .travel-app-shell .travel-content-frame .tally-ledger-groups-table td {
@@ -1046,7 +1039,7 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
   .travel-app-shell .travel-content-frame .tally-sync-card th,
   .travel-app-shell .travel-content-frame .tally-sync-card td {
     padding: clamp(0.35rem, 1.1vw, 0.8rem) clamp(0.2rem, 0.75vw, 0.75rem);
-    font-size: clamp(0.75rem, 1.25vw, 0.86rem);
+    font-size: clamp(0.58rem, 1.25vw, 0.86rem);
   }
 
   .travel-app-shell .travel-content-frame .tally-sync-card th {

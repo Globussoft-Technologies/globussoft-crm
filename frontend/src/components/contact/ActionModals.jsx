@@ -1408,7 +1408,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
           </footer>
         </form>
       </aside>
-      {isGeneric && dealTypeManagerOpen && <GenericDealTypeManager types={dealTypes} startNew={!dealTypeManagerEdit} editType={dealTypeManagerEdit} onChange={(next) => { setDealTypes(next); const selected = dealTypeManagerEdit ? next.find((type) => type.name === dealTypeManagerEdit.name) : (next.find((type) => type.isDefault) || next[0]); setDealType(selected?.name || ''); setStage(''); setDealTypeManagerEdit(null); }} onClose={() => { setDealTypeManagerEdit(null); setDealTypeManagerOpen(false); }} />}
+      {isGeneric && dealTypeManagerOpen && <GenericDealTypeManager types={dealTypes} startNew={!dealTypeManagerEdit} editType={dealTypeManagerEdit} onChange={(next) => { setDealTypes(next); const selected = dealTypeManagerEdit ? next.find((type) => type.id === dealTypeManagerEdit.id) : (next.find((type) => type.isDefault) || next[0]); setDealType(selected?.name || ''); setStage(''); setDealTypeManagerEdit(null); }} onClose={() => { setDealTypeManagerEdit(null); setDealTypeManagerOpen(false); }} />}
     </div>
   );
 }

@@ -77,6 +77,27 @@ async function audit(action, entityId, userId, tenantId, details) {
   return writeAudit("Deal", action, entityId, userId, tenantId, details);
 }
 
+async function legacyDealTypeName(tenantId) {
+  const setting = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key: KEYS.GENERIC_DEAL_TYPES } },
+    select: { value: true },
+  });
+  let types;
+  try { types = JSON.parse(setting?.value || DEFAULTS[KEYS.GENERIC_DEAL_TYPES]); }
+  catch (_error) { types = JSON.parse(DEFAULTS[KEYS.GENERIC_DEAL_TYPES]); }
+  const list = Array.isArray(types) ? types : [];
+  return (list.find((type) => type.id === 'new-business') || list.find((type) => type.isDefault) || list[0])?.name || 'New Business';
+}
+
+async function addDealTypeFilter(where, tenantId, dealType) {
+  const selected = String(dealType);
+  if (selected === await legacyDealTypeName(tenantId)) {
+    where.AND = [...(where.AND || []), { OR: [{ dealType: selected }, { dealType: null }] }];
+  } else {
+    where.dealType = selected;
+  }
+}
+
 // ─── GET / — list deals with filters ─────────────────────────────────
 // #167: soft-deleted deals are hidden by default. Pass ?includeDeleted=true
 // for admin/audit views. The /stats endpoint and aggregations are NOT yet
@@ -90,12 +111,7 @@ router.get("/", async (req, res) => {
     if (ownerId) where.ownerId = parseInt(ownerId);
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (dealType) {
-      const selectedDealType = String(dealType);
-      if (selectedDealType === "New Business") {
-        where.AND = [...(where.AND || []), { OR: [{ dealType: selectedDealType }, { dealType: null }] }];
-      } else {
-        where.dealType = selectedDealType;
-      }
+      await addDealTypeFilter(where, req.user.tenantId, dealType);
     }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
@@ -261,12 +277,7 @@ router.get("/stats", async (req, res) => {
     if (req.query.stage) where.stage = String(req.query.stage);
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
     if (req.query.dealType) {
-      const selectedDealType = String(req.query.dealType);
-      if (selectedDealType === "New Business") {
-        where.AND = [...(where.AND || []), { OR: [{ dealType: selectedDealType }, { dealType: null }] }];
-      } else {
-        where.dealType = selectedDealType;
-      }
+      await addDealTypeFilter(where, tid, req.query.dealType);
     }
     if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
     if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
@@ -608,7 +619,7 @@ router.put("/:id", async (req, res) => {
     // amount / out-of-range probability / unknown stage.
     const validationBody = {
       ...req.body,
-      dealType: dealType === undefined ? (existing.dealType || 'New Business') : dealType,
+      dealType: dealType === undefined ? (existing.dealType || (stage !== undefined ? await legacyDealTypeName(req.user.tenantId) : null)) : dealType,
       ...(dealType !== undefined && stage === undefined ? { stage: existing.stage } : {}),
     };
     const inputErr = await validateDealInput(validationBody, { tenantId: req.user.tenantId, isUpdate: true });

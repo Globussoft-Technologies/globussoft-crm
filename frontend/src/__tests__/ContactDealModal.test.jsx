@@ -81,6 +81,20 @@ beforeEach(() => {
 });
 
 describe('DealModal — add deal drawer', () => {
+  it('keeps the edited type selected by ID after it is renamed', async () => {
+    mockLists();
+    const user = userEvent.setup();
+    renderModal();
+    const stage = await screen.findByLabelText('Deal stage');
+    await user.selectOptions(stage, '__new_stage__');
+    const dialog = await screen.findByRole('dialog', { name: 'Deal type configuration' });
+    const name = within(dialog).getByLabelText(/deal type name/i);
+    await user.clear(name);
+    await user.type(name, 'Sales');
+    await user.click(within(dialog).getByRole('button', { name: 'Save deal type' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Deal type configuration' })).toBeNull());
+    expect(screen.getByLabelText('Deal type').value).toBe('Sales');
+  });
   it('prefills an internal title, hides generic-only fields, and loads dynamic stages', async () => {
     mockLists();
     renderModal();

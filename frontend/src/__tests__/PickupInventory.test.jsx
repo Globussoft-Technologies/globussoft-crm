@@ -297,7 +297,7 @@ describe('<PickupInventory />', () => {
     expect(screen.getByRole('dialog', { name: 'Import pickup locations' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CSV template' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Excel template' })).toBeInTheDocument();
-    const csv = 'Location name,Address,Google Maps link,Maximum assignments,Notes,Active\nSouth Gate,"18 Residency Road, Bengaluru",,12,Evening pickup,TRUE\n';
+    const csv = 'Location name,Address,Google Maps link,Maximum assignments\nSouth Gate,"18 Residency Road, Bengaluru",,12\n';
     fireEvent.change(screen.getByLabelText('CSV or Excel file'), {
       target: { files: [new File([csv], 'pickup-locations.csv', { type: 'text/csv' })] },
     });
@@ -309,9 +309,46 @@ describe('<PickupInventory />', () => {
     ));
     const importCall = fetchApi.mock.calls.find(([url]) => url.endsWith('/locations/import'));
     expect(JSON.parse(importCall[1].body).rows[0]).toMatchObject({
-      name: 'South Gate', address: '18 Residency Road, Bengaluru', maxAssignments: '12', isActive: 'TRUE',
+      name: 'South Gate', address: '18 Residency Road, Bengaluru', maxAssignments: '12',
     });
+    expect(JSON.parse(importCall[1].body).rows[0]).not.toHaveProperty('notes');
+    expect(JSON.parse(importCall[1].body).rows[0]).not.toHaveProperty('isActive');
     await waitFor(() => expect(notify.success).toHaveBeenCalledWith('Import complete: 1 created, 0 updated.'));
     expect(screen.queryByRole('dialog', { name: 'Import pickup locations' })).not.toBeInTheDocument();
+  });
+
+  it('downloads the pickup template without Notes, Active, or TRUE/FALSE columns', async () => {
+    fetchApi.mockResolvedValueOnce(payload);
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:pickup-template');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    try {
+      render(<PickupInventory />);
+      await screen.findByText('North Gate');
+      fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
+      fireEvent.click(screen.getByRole('button', { name: 'CSV template' }));
+
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      const csv = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(createObjectURL.mock.calls[0][0]);
+      });
+      const [headers, example] = String(csv).trim().split(/\r?\n/);
+      expect(headers).toBe('Location name,Address,Google Maps link,Maximum assignments');
+      expect(headers).not.toMatch(/Notes|Active/);
+      expect(example).not.toMatch(/TRUE|FALSE/);
+    } finally {
+      anchorClick.mockRestore();
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      else delete URL.createObjectURL;
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+      else delete URL.revokeObjectURL;
+    }
   });
 });

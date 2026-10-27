@@ -18,11 +18,17 @@ function parseSavedOrder(value) {
   }
 }
 
-function applySavedOrder(rows, orderedIds) {
+function applySavedOrder(rows, orderedIds, { unrankedFirst = false } = {}) {
   const rank = new Map(orderedIds.map((id, index) => [Number(id), index]));
   return [...rows].sort((left, right) => {
-    const leftRank = rank.has(left.id) ? rank.get(left.id) : Number.MAX_SAFE_INTEGER;
-    const rightRank = rank.has(right.id) ? rank.get(right.id) : Number.MAX_SAFE_INTEGER;
+    const leftIsRanked = rank.has(left.id);
+    const rightIsRanked = rank.has(right.id);
+    if (leftIsRanked !== rightIsRanked) {
+      if (unrankedFirst) return leftIsRanked ? 1 : -1;
+      return leftIsRanked ? -1 : 1;
+    }
+    const leftRank = leftIsRanked ? rank.get(left.id) : Number.MAX_SAFE_INTEGER;
+    const rightRank = rightIsRanked ? rank.get(right.id) : Number.MAX_SAFE_INTEGER;
     return leftRank - rightRank;
   });
 }
@@ -329,7 +335,11 @@ router.get("/", async (req, res) => {
         select: { value: true },
       }),
     ]);
-    const templates = applySavedOrder(allTemplates, parseSavedOrder(orderSetting?.value)).slice((page - 1) * limit, page * limit);
+    const templates = applySavedOrder(
+      allTemplates,
+      parseSavedOrder(orderSetting?.value),
+      { unrankedFirst: channel === "EMAIL" },
+    ).slice((page - 1) * limit, page * limit);
     return res.json({
       items: templates,
       pagination: { page, pageSize: limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
@@ -368,7 +378,11 @@ router.put("/reorder", async (req, res) => {
       where: { tenantId_key: { tenantId: req.user.tenantId, key: settingKey } },
       select: { value: true },
     })]);
-    const rowIds = applySavedOrder(rows, parseSavedOrder(currentSetting?.value)).map(row => row.id);
+    const rowIds = applySavedOrder(
+      rows,
+      parseSavedOrder(currentSetting?.value),
+      { unrankedFirst: requestedChannel === "EMAIL" },
+    ).map(row => row.id);
     if (orderedIds.some(id => !rowIds.includes(id))) {
       return res.status(409).json({ error: "Template order is out of date. Refresh and try again.", code: "ORDER_STALE" });
     }

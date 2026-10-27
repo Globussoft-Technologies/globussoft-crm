@@ -109,8 +109,6 @@ const PLOT_IMPORT_COLUMNS = [
   { key: 'roadWidth', header: 'Road width' },
   { key: 'facing', header: 'Facing' },
   { key: 'propertyType', header: 'Property type' },
-  { key: 'notes', header: 'Notes' },
-  { key: 'isActive', header: 'Active' },
 ];
 
 const PLOT_IMPORT_EXAMPLE = {
@@ -126,8 +124,6 @@ const PLOT_IMPORT_EXAMPLE = {
   roadWidth: '30 ft',
   facing: 'EAST',
   propertyType: 'RESIDENTIAL',
-  notes: '',
-  isActive: 'TRUE',
 };
 
 const fieldStyle = { width: '100%', marginTop: 5, boxSizing: 'border-box' };

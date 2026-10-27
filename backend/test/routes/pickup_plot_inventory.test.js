@@ -2955,6 +2955,23 @@ describe('pickup location mutations', () => {
     });
   });
 
+  test('defaults pickup imports without Notes or Active to empty notes and active inventory', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([]);
+    prisma.pickupLocation.create.mockResolvedValue({ id: 21, name: 'South Gate' });
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/locations/import').send({
+      rows: [{
+        name: 'South Gate', address: '18 Residency Road, Bengaluru',
+        googleMapsLink: '', maxAssignments: '12',
+      }],
+    });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.pickupLocation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ notes: null, isActive: true, tenantId: 7 }),
+    });
+  });
+
   test('rejects the complete pickup import when any row is invalid', async () => {
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/locations/import').send({
       rows: [{ name: 'Bad Gate', address: 'x', isActive: 'sometimes' }],
@@ -3055,6 +3072,26 @@ describe('plot/site mutations', () => {
     });
     expect(prisma.plotSite.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ plotNumber: 'A-2', pickupLocationId: 4, tenantId: 7, isActive: false }),
+    });
+  });
+
+  test('defaults template imports without Notes or Active to blank notes and active inventory', async () => {
+    prisma.pickupLocation.findMany.mockResolvedValue([{ id: 4, name: 'North Gate' }]);
+    prisma.plotSite.findMany.mockResolvedValue([]);
+    prisma.plotSite.create.mockResolvedValue({ id: 31, name: 'Plot A-1', plotNumber: 'A-1' });
+
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/plots/import').send({
+      rows: [{
+        name: 'Plot A-1', plotNumber: 'A-1', block: 'A', address: '25 Lake Road',
+        pickupLocationNames: 'North Gate', area: '1200', areaUnit: 'SQ_FT',
+        price: '250000', availability: 'AVAILABLE', roadWidth: '30 ft',
+        facing: 'EAST', propertyType: 'RESIDENTIAL',
+      }],
+    });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.plotSite.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ notes: null, isActive: true, tenantId: 7 }),
     });
   });
 

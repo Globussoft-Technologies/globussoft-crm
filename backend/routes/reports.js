@@ -7,6 +7,7 @@ const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { formatMoney } = require("../utils/formatMoney");
+const { reportDealTypeWhere } = require('../lib/reportDealType');
 
 // All queries are scoped to req.user.tenantId
 
@@ -36,6 +37,34 @@ function buildWhere(req, startDate, endDate, extra = {}, field = "createdAt") {
   return where;
 }
 
+async function aggregateMoneyByCurrency(rows, groupBy, tenantId, requestedCurrency) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { defaultCurrency: true } });
+  const baseCurrency = String(tenant?.defaultCurrency || 'USD').toUpperCase();
+  const target = String(requestedCurrency || baseCurrency).toUpperCase();
+  const currencies = new Set(rows.map((row) => String(row.currency || baseCurrency).toUpperCase()));
+  const rates = new Map();
+  if ([...currencies].some((code) => code !== target)) {
+    const configured = await prisma.currency.findMany({ where: { tenantId }, select: { code: true, exchangeRate: true } });
+    for (const currency of configured) rates.set(String(currency.code).toUpperCase(), Number(currency.exchangeRate));
+    if (!Number.isFinite(rates.get(target)) || rates.get(target) <= 0 || [...currencies].some((code) => !Number.isFinite(rates.get(code)) || rates.get(code) <= 0)) {
+      const error = new Error('An exchange rate is missing for this report.');
+      error.status = 422; error.code = 'MISSING_EXCHANGE_RATE'; throw error;
+    }
+  }
+  const groups = new Map();
+  for (const row of rows) {
+    const code = String(row.currency || baseCurrency).toUpperCase();
+    const name = String(row[groupBy] || 'Unknown').toUpperCase();
+    const amount = Number(row._sum.amount || 0);
+    const converted = code === target ? amount : amount / rates.get(code) * rates.get(target);
+    const item = groups.get(name) || { name, value: 0, count: 0 };
+    item.value += converted;
+    item.count += Number(row._count?.id || 0);
+    groups.set(name, item);
+  }
+  return [...groups.values()];
+}
+
 // ─── Dynamic BI Query Endpoint ───
 router.get("/query", async (req, res) => {
   try {
@@ -43,18 +72,16 @@ router.get("/query", async (req, res) => {
     const _tenantId = req.user.tenantId;
     const dateErr = validateDateRange(startDate, endDate);
     if (dateErr) return res.status(dateErr.status).json(dateErr);
-    const dealTypeWhere = dealType ? { dealType: String(dealType) } : {};
+    const dealTypeWhere = await reportDealTypeWhere(prisma, req.user.tenantId, dealType);
 
     if (metric === "revenue") {
       const data = await prisma.deal.groupBy({
-        by: [groupBy],
+        by: [...new Set([groupBy, 'currency'])],
         where: buildWhere(req, startDate, endDate, dealTypeWhere),
         _sum: { amount: true }
       });
-      const formatted = data.map(d => ({
-        name: String(d[groupBy] || 'Unknown').toUpperCase(),
-        value: d._sum.amount || 0
-      })).filter(d => d.value > 0);
+      const formatted = (await aggregateMoneyByCurrency(data, groupBy, req.user.tenantId, req.query.currency))
+        .filter((row) => row.value > 0).map(({ name, value }) => ({ name, value }));
       return res.json(formatted);
     }
 
@@ -119,12 +146,12 @@ router.get("/query", async (req, res) => {
       // containing deal-stage labels so the Invoice Status chart cannot mix
       // pipeline/deal values into financial reporting.
       const data = await prisma.invoice.groupBy({
-        by: ['status'],
+        by: ['status', 'currency'],
         where: buildWhere(req, startDate, endDate, { status: { in: ['UNPAID', 'PAID', 'OVERDUE', 'VOIDED'] } }, 'issuedDate'),
         _sum: { amount: true },
         _count: { id: true }
       });
-      const formatted = data.map(d => ({ name: d.status, value: d._sum.amount || 0, count: d._count.id }));
+      const formatted = await aggregateMoneyByCurrency(data, 'status', req.user.tenantId, req.query.currency);
       return res.json(formatted);
     }
 
@@ -142,7 +169,7 @@ router.get("/query", async (req, res) => {
     res.status(400).json({ error: "Unsupported metric requested by BI Engine." });
   } catch (err) {
     console.error("[BI Engine Error]:", err);
-    res.status(500).json({ error: "Failed to generate dynamic report payload." });
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to generate dynamic report payload.", ...(err.code ? { code: err.code } : {}) });
   }
 });
 

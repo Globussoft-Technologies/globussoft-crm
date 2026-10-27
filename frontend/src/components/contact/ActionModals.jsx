@@ -1358,10 +1358,10 @@ export function DealModal({ contact, deal, onClose, onDone }) {
               </label>
             )}
             <label className="cp-deal-field">
-              <span>Deal type {isGeneric && <b>*</b>}</span>
+              <span>Deal type {isGeneric && <b aria-hidden="true">*</b>}</span>
               {isGeneric ? <>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <select className="cp-input" value={dealType} onChange={(e) => { if (e.target.value === '__new_deal_type__') { setDealTypeManagerOpen(true); return; } setDealType(e.target.value); setStage(''); }}>
+                  <select aria-label="Deal type" className="cp-input" value={dealType} onChange={(e) => { if (e.target.value === '__new_deal_type__') { setDealTypeManagerOpen(true); return; } setDealType(e.target.value); setStage(''); }}>
                     <option value="__new_deal_type__">+ New deal type</option>
                     {dealTypes.map((t) => <option key={t.id || t.name} value={t.name}>{t.name}</option>)}
                   </select>
@@ -1472,8 +1472,8 @@ export function DealModal({ contact, deal, onClose, onDone }) {
               </label>
             )}
             <label className="cp-deal-field">
-              <span>Deal stage {isGeneric && <b>*</b>}</span>
-              <select className="cp-input" value={stage} onChange={(e) => { if (isGeneric && e.target.value === '__new_stage__') { setDealTypeManagerEdit(dealTypes.find((type) => type.name === dealType) || null); setDealTypeManagerOpen(true); return; } setStage(e.target.value); }}>
+              <span>Deal stage {isGeneric && <b aria-hidden="true">*</b>}</span>
+              <select aria-label="Deal stage" className="cp-input" value={stage} onChange={(e) => { if (isGeneric && e.target.value === '__new_stage__') { setDealTypeManagerEdit(dealTypes.find((type) => type.name === dealType) || null); setDealTypeManagerOpen(true); return; } setStage(e.target.value); }}>
                 {isGeneric && <option value="__new_stage__">+ Add new stage</option>}
                 {!isGeneric && <option value="">Click to select</option>}
                 {stageOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}

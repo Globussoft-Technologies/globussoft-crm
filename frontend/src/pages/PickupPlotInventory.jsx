@@ -334,12 +334,12 @@ export default function PickupPlotInventory() {
         pickupLocations: Array.isArray(response?.pickupLocations) ? response.pickupLocations : [],
         summary: response?.summary || {},
       });
+      loadedRef.current = true;
     } catch (error) {
       const message = error.message || 'The inventory service could not be reached.';
       setLoadError(message);
       notify.error(`Could not load pickup and plot inventory. ${message}`);
     } finally {
-      loadedRef.current = true;
       setLoading(false);
       setRefreshing(false);
     }
@@ -511,11 +511,11 @@ export default function PickupPlotInventory() {
         >
           {loading && !loadedRef.current && <div className="pickup-module-refresh-status" role="status">Loading inventory…</div>}
           {loadError && <div role="alert" className="pickup-module-refresh-status" style={{ pointerEvents: 'auto' }}>
-            {loadError}
+            Inventory could not be loaded. {loadError}
             <button type="button" className="btn-primary" onClick={loadInventory} style={{ marginLeft: 8, padding: '0.25rem 0.5rem' }}>Retry</button>
           </div>}
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
-          <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
+          {(!loadError || loadedRef.current) && <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
           <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={PLOT_INVENTORY_COLUMNS[index].label} style={{ width }} />)}
@@ -583,7 +583,7 @@ export default function PickupPlotInventory() {
               {!loading && data.plots.length > 0 && filteredPlots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites match the selected filters.</td></tr>}
             </tbody>
           </table>
-          </div>
+          </div>}
         </div>
 
       {plotDialog && <Modal title={plotDialog.id ? 'Edit Plot / Site' : 'Add Plot / Site'} onClose={() => setPlotDialog(null)} onSave={savePlot} saving={saving} saveDisabled={duplicatePlotNumber} wide>

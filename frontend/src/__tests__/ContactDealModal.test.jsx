@@ -43,7 +43,7 @@ function mockLists(overrides = {}) {
     }
     if (url.includes('/api/tenant-settings/generic.dealTypes')) {
       return Promise.resolve(overrides.dealTypesSetting ?? {
-        value: JSON.stringify([{ id: 'new-business', name: 'New Business', isDefault: true, stages: [{ id: 'new', name: 'New' }, { id: 'qualified', name: 'Sales Qualified' }] }]),
+        value: JSON.stringify([{ id: 'new-business', name: 'New Business', isDefault: true, stages: [{ id: 'new', name: 'New' }, { id: 'qualified', name: 'Sales Qualified' }, { id: 'won', name: 'Won' }, { id: 'lost', name: 'Lost' }] }]),
       });
     }
     if (url.includes('/api/tenant-settings/generic.contactLifecycleStages')) {

@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { reportDealTypeWhere } = require('../lib/reportDealType');
 
 const router = express.Router();
 
@@ -67,7 +68,7 @@ router.get("/stages", async (req, res) => {
 
     const where = { tenantId };
     if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
-    if (dealType) where.dealType = String(dealType);
+    if (dealType) Object.assign(where, await reportDealTypeWhere(prisma, tenantId, dealType));
     const dateFilter = buildDateFilter(from, to);
     if (dateFilter) where.createdAt = dateFilter;
 
@@ -185,7 +186,7 @@ router.get("/conversion-by-source", async (req, res) => {
     if (pipelineId) {
       where.deals = { some: { pipelineId: parseInt(pipelineId, 10) } };
     } else if (dealType) {
-      where.deals = { some: { dealType: String(dealType) } };
+      where.deals = { some: await reportDealTypeWhere(prisma, tenantId, dealType) };
     }
     const dateFilter = buildDateFilter(from, to);
     if (dateFilter) where.createdAt = dateFilter;
@@ -229,7 +230,7 @@ router.get("/by-rep", async (req, res) => {
 
     const where = { tenantId };
     if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
-    if (dealType) where.dealType = String(dealType);
+    if (dealType) Object.assign(where, await reportDealTypeWhere(prisma, tenantId, dealType));
     const dateFilter = buildDateFilter(from, to);
     if (dateFilter) where.createdAt = dateFilter;
 
@@ -295,7 +296,7 @@ router.get("/velocity", async (req, res) => {
     const stageOrder = await loadStageOrder(tenantId);
     const where = { tenantId };
     if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
-    if (dealType) where.dealType = String(dealType);
+    if (dealType) Object.assign(where, await reportDealTypeWhere(prisma, tenantId, dealType));
     const deals = await prisma.deal.findMany({ where });
 
     const buckets = new Map(stageOrder.map((s) => [s.name, []]));
@@ -338,7 +339,7 @@ router.get("/trend", async (req, res) => {
 
     const where = { tenantId, createdAt: { gte: start } };
     if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
-    if (dealType) where.dealType = String(dealType);
+    if (dealType) Object.assign(where, await reportDealTypeWhere(prisma, tenantId, dealType));
     const deals = await prisma.deal.findMany({ where });
 
     // Build month buckets

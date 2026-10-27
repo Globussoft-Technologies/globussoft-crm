@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Label, LineChart, Line } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, formatMoneyCompact, currencySymbol, tenantCurrency, tenantLocale } from '../utils/money';
-import { convertCurrency } from '../utils/currency';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
 import { useSearchParams } from "react-router-dom";
@@ -229,10 +228,13 @@ export default function Reports() {
   };
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     const dealTypeParam = needsGroupBy && dealType ? `&dealType=${encodeURIComponent(dealType)}` : '';
-    fetchApi(`/api/reports/query?metric=${metric}&groupBy=${groupBy}${dealTypeParam}${dateParams()}`)
+    const currencyParam = metric === 'revenue' || metric === 'invoices' ? `&currency=${encodeURIComponent(displayCurrency)}` : '';
+    fetchApi(`/api/reports/query?metric=${metric}&groupBy=${groupBy}${dealTypeParam}${currencyParam}${dateParams()}`)
       .then(res => {
+        if (cancelled) return;
         // Pre-fix the empty-response branch injected a fake
         // [Lead, Contacted, Proposal, Won] dataset so the chart looked
         // alive on a new tenant. That fabricated stages the tenant doesn't
@@ -276,12 +278,15 @@ export default function Reports() {
         setLoading(false);
       })
       .catch(err => {
+        if (cancelled) return;
         console.error(err);
+        notify.error(err.message || 'Could not load the report.');
         setData([]);
         setLoading(false);
       });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
-  }, [metric, groupBy, dealType, dealTypes, startDate, endDate]);
+  }, [metric, groupBy, dealType, dealTypes, startDate, endDate, displayCurrency]);
 
   useEffect(() => {
     if (viewMode === 'table') {
@@ -375,9 +380,7 @@ export default function Reports() {
   const isMoneyMetric = metric === 'revenue' || metric === 'invoices';
   const sourceCurrency = tenantCurrency();
   const conversionCurrencies = currencies.length ? currencies : [{ code: sourceCurrency, exchangeRate: 1 }];
-  const convertedTotalValue = isMoneyMetric
-    ? convertCurrency(totalValue, sourceCurrency, displayCurrency, conversionCurrencies)
-    : totalValue;
+  const convertedTotalValue = totalValue;
   const formattedTotalValue = isMoneyMetric
     ? formatMoney(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
     : totalValue;
@@ -596,7 +599,7 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val, { currency: displayCurrency }) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
@@ -607,7 +610,7 @@ export default function Reports() {
                   ) : chartType === 'horizontal_bar' ? (
                     <BarChart layout="vertical" data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" horizontal={false} />
-                      <XAxis type="number" stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val) : val} />
+                      <XAxis type="number" stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val, { currency: displayCurrency }) : val} />
                       <YAxis type="category" dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={120} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[0, 4, 4, 0]}>
@@ -664,7 +667,7 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val, { currency: displayCurrency }) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                       <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} />
                     </LineChart>

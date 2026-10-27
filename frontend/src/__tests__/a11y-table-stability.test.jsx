@@ -67,7 +67,7 @@ const ICON_BUTTON_SITES = [
   },
   {
     file: ["pages", "Pipeline.jsx"],
-    substr: "aria-label={`Delete deal ${deal.title}`}",
+    substr: "aria-label={`Delete deal ${displayName}`}",
   },
   {
     file: ["pages", "Pipeline.jsx"],

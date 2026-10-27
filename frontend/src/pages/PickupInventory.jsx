@@ -77,10 +77,10 @@ export default function PickupInventory() {
       const rows = Array.isArray(response?.pickupLocations) ? response.pickupLocations : [];
       setLocations(rows);
       setLimits(Object.fromEntries(rows.map((row) => [row.id, row.maxAssignments ?? ''])));
+      loadedRef.current = true;
     } catch (loadError) {
       setError(loadError?.message || 'Could not load pickup inventory.');
     } finally {
-      loadedRef.current = true;
       setLoading(false);
       setRefreshing(false);
     }
@@ -274,7 +274,7 @@ export default function PickupInventory() {
       </header>
 
       {error && <div role="alert" className="card" style={{ padding: '1rem', color: 'var(--danger-color, #dc2626)' }}>{error}</div>}
-      <div
+      {(!error || loadedRef.current) && <div
           className="card pickup-plot-table-scroll"
           data-testid="pickup-inventory-table-scroll"
           style={{
@@ -284,7 +284,7 @@ export default function PickupInventory() {
           }}
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
-          <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
+          {(!error || loadedRef.current) && <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
           <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
@@ -365,8 +365,8 @@ export default function PickupInventory() {
               {!loading && filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
             </tbody>
           </table>
-          </div>
-        </div>
+          </div>}
+        </div>}
 
       {addingLocation && (
         <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>

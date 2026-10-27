@@ -130,6 +130,8 @@ prisma.emailMessage.findMany = vi.fn();
 prisma.emailMessage.count = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.currency.findMany = vi.fn();
+prisma.tenantSetting.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -172,6 +174,8 @@ beforeEach(() => {
   prisma.emailMessage.findMany.mockReset();
   prisma.emailMessage.count.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.currency.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
 
   // Sensible defaults for endpoints that fan out
   prisma.deal.count.mockResolvedValue(0);
@@ -188,6 +192,43 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /query — dynamic BI metrics', () => {
+  test('converts mixed deal currencies before aggregating into the selected currency', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate: 83 }]);
+    prisma.deal.groupBy.mockResolvedValue([
+      { stage: 'won', currency: 'USD', _sum: { amount: 100 } },
+      { stage: 'won', currency: 'INR', _sum: { amount: 8300 } },
+    ]);
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/reports/query?metric=revenue&groupBy=stage&currency=INR');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ name: 'WON', value: 16600 }]);
+    expect(prisma.currency.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42 } }));
+  });
+
+  test('rejects mixed currencies when an exchange rate is missing', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }]);
+    prisma.deal.groupBy.mockResolvedValue([{ stage: 'won', currency: 'INR', _sum: { amount: 100 } }]);
+    const res = await request(makeApp()).get('/api/reports/query?metric=revenue&groupBy=stage&currency=USD');
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('MISSING_EXCHANGE_RATE');
+  });
+
+  test('combines invoice statuses after currency conversion', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate: 83 }]);
+    prisma.invoice.groupBy.mockResolvedValue([
+      { status: 'PAID', currency: 'USD', _sum: { amount: 100 }, _count: { id: 1 } },
+      { status: 'PAID', currency: 'INR', _sum: { amount: 8300 }, _count: { id: 2 } },
+    ]);
+    const res = await request(makeApp()).get('/api/reports/query?metric=invoices&currency=USD');
+    expect(res.body).toEqual([{ name: 'PAID', value: 200, count: 3 }]);
+  });
+
+  test('includes legacy untyped deals when filtering by a renamed original deal type', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ id: 'new-business', name: 'Sales' }]) });
+    prisma.deal.groupBy.mockResolvedValue([]);
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/reports/query?metric=count&groupBy=stage&dealType=Sales');
+    expect(res.status).toBe(200);
+    expect(prisma.deal.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, OR: [{ dealType: 'Sales' }, { dealType: null }] } }));
+  });
   test('metric=revenue groupBy=stage returns _sum.amount per stage and drops 0-value buckets', async () => {
     prisma.deal.groupBy.mockResolvedValue([
       { stage: 'lead', _sum: { amount: 1000 } },
@@ -205,7 +246,7 @@ describe('GET /query — dynamic BI metrics', () => {
       { name: 'UNKNOWN', value: 250 },
     ]);
     expect(prisma.deal.groupBy).toHaveBeenCalledWith(expect.objectContaining({
-      by: ['stage'],
+      by: ['stage', 'currency'],
       where: { tenantId: 1 },
       _sum: { amount: true },
     }));

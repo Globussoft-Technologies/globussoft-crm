@@ -1334,6 +1334,27 @@ describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', ()
     expect(res.status).toBe(200);
     const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
     expect(findArgs.where.subBrand).toBeNull();
+    expect(findArgs.where.OR).toEqual(expect.arrayContaining([
+      { templateType: null },
+      { templateType: '' },
+      expect.objectContaining({ AND: expect.any(Array) }),
+    ]));
+    const travelFilter = findArgs.where.OR.find((clause) => clause.AND);
+    expect(travelFilter.AND).toContainEqual({
+      NOT: [
+        { templateType: { startsWith: 'generic-' } },
+        { templateType: { startsWith: 'wellness-site-' } },
+      ],
+    });
+  });
+
+  test('explicit generic and wellness pages cannot be returned by the travel resolver', async () => {
+    for (const templateType of ['generic-site-retail-v1', 'wellness-site-clinic-v1']) {
+      prisma.landingPage.findFirst.mockResolvedValueOnce({ id: 50, templateType, subBrand: null });
+      const res = await request(makeApp()).get('/api/landing-pages/public/featured?subBrand=none');
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('VERTICAL_ROUTE_MISMATCH');
+    }
   });
 });
 // ─── GET /:id/analytics ──────────────────────────────────────────────

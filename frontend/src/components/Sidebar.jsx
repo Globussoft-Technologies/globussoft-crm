@@ -2755,11 +2755,11 @@ function renderGenericNav({
       {renderGroup("Sales", <>
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
         <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
         <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
+        {/* <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} /> */}
         <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
         <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
       </>)}
@@ -2822,8 +2822,7 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Analytics & Reports", <>
-        <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
-        <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly requiredPermission={{ module: "pipeline", action: "read" }} />
+        {/* Generic CRM: Win/Loss and Funnel are temporarily hidden. */}
         <Link to="/reports" icon={BarChart3} label="Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
         <Link to="/agent-reports" icon={Trophy} label="Agent Reports" managerOnly />
         <Link to="/dashboards" icon={LayoutDashboard} label="Dashboards" managerOnly />

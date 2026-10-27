@@ -171,6 +171,7 @@ export default function BrokerCustomerWorkspace() {
 
       {error && <div className="transport-error" role="alert">{error}</div>}
       {loading && !data && <div className="transport-loading" role="status">Loading your assigned customers…</div>}
+      {loading && data && <div className="transport-loading" role="status">Refreshing data…</div>}
       {!loading && !error && visibleCustomers.length === 0 && (
         <section className="transport-empty">
           <span><Users size={28} /></span>

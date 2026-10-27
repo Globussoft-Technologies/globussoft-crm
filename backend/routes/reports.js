@@ -39,15 +39,16 @@ function buildWhere(req, startDate, endDate, extra = {}, field = "createdAt") {
 // ─── Dynamic BI Query Endpoint ───
 router.get("/query", async (req, res) => {
   try {
-    const { metric = "revenue", groupBy = "stage", startDate, endDate } = req.query;
+    const { metric = "revenue", groupBy = "stage", startDate, endDate, dealType } = req.query;
     const _tenantId = req.user.tenantId;
     const dateErr = validateDateRange(startDate, endDate);
     if (dateErr) return res.status(dateErr.status).json(dateErr);
+    const dealTypeWhere = dealType ? { dealType: String(dealType) } : {};
 
     if (metric === "revenue") {
       const data = await prisma.deal.groupBy({
         by: [groupBy],
-        where: buildWhere(req, startDate, endDate),
+        where: buildWhere(req, startDate, endDate, dealTypeWhere),
         _sum: { amount: true }
       });
       const formatted = data.map(d => ({
@@ -60,7 +61,7 @@ router.get("/query", async (req, res) => {
     if (metric === "count") {
       const data = await prisma.deal.groupBy({
         by: [groupBy],
-        where: buildWhere(req, startDate, endDate),
+        where: buildWhere(req, startDate, endDate, dealTypeWhere),
         _count: { id: true }
       });
       const formatted = data.map(d => ({
@@ -71,7 +72,7 @@ router.get("/query", async (req, res) => {
     }
 
     if (metric === "win_rate") {
-      const baseWhere = buildWhere(req, startDate, endDate);
+      const baseWhere = buildWhere(req, startDate, endDate, dealTypeWhere);
       const total = await prisma.deal.count({ where: baseWhere });
       const won = await prisma.deal.count({ where: { ...baseWhere, stage: 'won' } });
       const lost = await prisma.deal.count({ where: { ...baseWhere, stage: 'lost' } });
@@ -114,9 +115,12 @@ router.get("/query", async (req, res) => {
 
     if (metric === "invoices") {
       // #117: invoice dates live in issuedDate (no createdAt on the model).
+      // Invoice status is a constrained business state. Exclude legacy rows
+      // containing deal-stage labels so the Invoice Status chart cannot mix
+      // pipeline/deal values into financial reporting.
       const data = await prisma.invoice.groupBy({
         by: ['status'],
-        where: buildWhere(req, startDate, endDate, {}, 'issuedDate'),
+        where: buildWhere(req, startDate, endDate, { status: { in: ['UNPAID', 'PAID', 'OVERDUE', 'VOIDED'] } }, 'issuedDate'),
         _sum: { amount: true },
         _count: { id: true }
       });

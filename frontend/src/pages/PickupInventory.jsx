@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapPin, Pencil, Plus, Power, PowerOff, RefreshCw, Save, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -52,6 +52,8 @@ export default function PickupInventory() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState(null);
   const [addingLocation, setAddingLocation] = useState(false);
@@ -66,7 +68,9 @@ export default function PickupInventory() {
   );
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     setError('');
     try {
       const response = await fetchApi('/api/pickup-plot-inventory');
@@ -76,7 +80,9 @@ export default function PickupInventory() {
     } catch (loadError) {
       setError(loadError?.message || 'Could not load pickup inventory.');
     } finally {
+      loadedRef.current = true;
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -226,7 +232,7 @@ export default function PickupInventory() {
   };
 
   return (
-    <div className="pickup-inventory-page" data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
+    <div className="pickup-inventory-page" data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><MapPin size={28} /> Pickup Inventory</h1>
@@ -268,8 +274,7 @@ export default function PickupInventory() {
       </header>
 
       {error && <div role="alert" className="card" style={{ padding: '1rem', color: 'var(--danger-color, #dc2626)' }}>{error}</div>}
-      {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</div> : !error && (
-        <div
+      <div
           className="card pickup-plot-table-scroll"
           data-testid="pickup-inventory-table-scroll"
           style={{
@@ -278,6 +283,7 @@ export default function PickupInventory() {
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
+          {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
           <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
@@ -355,12 +361,12 @@ export default function PickupInventory() {
                   </td>
                 </tr>;
               })}
-              {filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
+              {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</td></tr>}
+              {!loading && filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
             </tbody>
           </table>
           </div>
         </div>
-      )}
 
       {addingLocation && (
         <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>

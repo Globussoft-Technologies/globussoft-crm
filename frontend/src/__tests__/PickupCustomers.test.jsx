@@ -183,7 +183,26 @@ describe('<PickupCustomers />', () => {
     expect(screen.getByRole('link', { name: 'Open pickup location for Priya Shah in Google Maps' })).toHaveAttribute('target', '_blank');
   });
 
-  it('shows the selected plot details and summarizes completed payments until history is opened', async () => {
+  it('keeps billing tables mounted during a background refresh', async () => {
+    let resolveRefresh;
+    fetchApi
+      .mockResolvedValueOnce(payload)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(screen.getByTestId('selected-customer-details')).toBeInTheDocument();
+    expect(screen.queryByText('Loading customer details…')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Refreshing customer billing data' })).toBeInTheDocument());
+
+    resolveRefresh(payload);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled());
+  });
+
+  it('shows the selected plot details and converts completed payments to tables', async () => {
     render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
     await screen.findByRole('button', { name: 'Priya Shah' });
 
@@ -193,7 +212,7 @@ describe('<PickupCustomers />', () => {
     expect(plotTable).toHaveTextContent('RESIDENTIAL');
     expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('UTR-ONE');
     expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('₹10,00,000');
-    expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent('10/7/2026');
+    expect(screen.getByRole('table', { name: 'Initial deposit payment' })).toHaveTextContent(/7\/10\/2026/);
     expect(screen.queryByText('1 installment payment recorded')).toBeNull();
     expect(screen.queryByText('Use Payment history above to review payment details.')).toBeNull();
     expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();

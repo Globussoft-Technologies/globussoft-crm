@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, Info, PackagePlus, Plus, X } from 'lucide-react';
+import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, ChevronUp, Info, ListChecks, PackagePlus, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import './ContactProfile.css';
 import { useNotify } from '../../utils/notify';
@@ -831,11 +831,11 @@ export function ActivityModal({ contact, presetType, onClose, onDone }) {
 const DEAL_TYPES = ['New Business'];
 const GENERIC_DEAL_TYPES_SETTING_KEY = 'generic.dealTypes';
 const DEFAULT_DEAL_TYPE_STAGES = [
-  { id: 'new-lead', name: 'New Lead', color: '#3b82f6' },
-  { id: 'contracted', name: 'Contracted', color: '#0891b2' },
-  { id: 'negotiation', name: 'Negotiation', color: '#7c3aed' },
-  { id: 'won', name: 'Won', color: '#10b981' },
-  { id: 'lost', name: 'Lost', color: '#ef4444' },
+  { id: 'new-lead', name: 'New Lead', color: '#3b82f6', condition: 'positive' },
+  { id: 'contracted', name: 'Contracted', color: '#0891b2', condition: 'positive' },
+  { id: 'negotiation', name: 'Negotiation', color: '#7c3aed', condition: 'positive' },
+  { id: 'won', name: 'Won', color: '#10b981', condition: 'positive' },
+  { id: 'lost', name: 'Lost', color: '#ef4444', condition: 'negative' },
 ];
 const DEFAULT_GENERIC_DEAL_TYPES = DEAL_TYPES.map((name, index) => ({
   id: String(name).toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''), name, description: '', isDefault: index === 0,
@@ -849,6 +849,33 @@ const slugifyStage = (name) => String(name || '')
   .trim()
   .replace(/\s+/g, '-')
   .replace(/[^a-z0-9-]/g, '');
+
+const stageCondition = (stage) => {
+  if (stage?.condition === 'negative' || stage?.negative === true) return 'negative';
+  return /(^|\s)(lost|closed[- ]lost)(\s|$)/i.test(String(stage?.name || '')) ? 'negative' : 'positive';
+};
+
+const hasValidTerminalDealStages = (stages) => {
+  const names = (Array.isArray(stages) ? stages : []).map((stage) => slugifyStage(stage?.name));
+  const last = names[names.length - 1];
+  return names.includes('won') && names.includes('lost') && (last === 'won' || last === 'lost');
+};
+
+const CRM_STAGE_STATUSES = ['Lead', 'Prospect', 'Customer', 'Junk', 'Churned'];
+const normalizeDealStageConditions = (stage) => {
+  const source = Array.isArray(stage?.conditions) && stage.conditions.length
+    ? stage.conditions
+    : [{ type: stageCondition(stage), status: stage?.crmStatus || (stageCondition(stage) === 'negative' ? 'Junk' : 'Lead') }];
+  return source
+    .map((condition, index) => ({
+      type: index === 1 ? 'negative' : 'positive',
+      label: String(condition?.label || '').trim(),
+      reason: String(condition?.reason || '').trim(),
+      status: CRM_STAGE_STATUSES.includes(condition?.status) ? condition.status : (index === 1 ? 'Junk' : 'Lead'),
+    }))
+    .filter((condition, index, all) => all.findIndex((item) => item.type === condition.type) === index)
+    .slice(0, 2);
+};
 
 const asList = (d) => {
   if (Array.isArray(d)) return d;
@@ -868,7 +895,7 @@ const normalizeDealTypes = (raw) => {
       description: String(type?.description || ''),
       isDefault: Boolean(type?.isDefault),
       stages: (Array.isArray(type?.stages) ? type.stages : []).map((stage) => ({
-        id: String(stage?.id || '').trim(), name: String(stage?.name || '').trim(), color: stage?.color || '#3b82f6',
+        id: String(stage?.id || '').trim(), name: String(stage?.name || '').trim(), color: stage?.color || '#3b82f6', condition: stageCondition(stage),
       })).filter((stage) => stage.id && stage.name),
     })).filter((type) => type.id && type.name && type.stages.length);
     return normalized.length ? normalized : DEFAULT_GENERIC_DEAL_TYPES;
@@ -886,7 +913,7 @@ function GenericDealTypeManager({ types, onChange, onClose, startNew = false, ed
   useEffect(() => {
     const dialog = document.querySelector('[role="dialog"][aria-label="Deal type configuration"]');
     if (!dialog) return undefined;
-    const rows = Array.from(dialog.querySelectorAll('input[placeholder="Stage name"]'))
+    const rows = Array.from(dialog.querySelectorAll('input[placeholder="__legacy-stage-drag__"]'))
       .map((input) => input.parentElement)
       .filter(Boolean);
     rows.forEach((row, sourceIndex) => {
@@ -931,10 +958,33 @@ function GenericDealTypeManager({ types, onChange, onClose, startNew = false, ed
     if (!draft) onClose();
   }, [draft, onClose]);
   const openEditor = (type = null) => setDraft(type ? { ...type, stages: type.stages.map((stage) => ({ ...stage })) } : { id: '', name: '', description: '', isDefault: false, stages: [{ id: `stage-${Date.now()}`, name: '', color: '#3b82f6' }] });
+  const moveStage = (index, direction) => setDraft((current) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= current.stages.length) return current;
+    const stages = [...current.stages];
+    [stages[index], stages[nextIndex]] = [stages[nextIndex], stages[index]];
+    return { ...current, stages };
+  });
   const save = async () => {
     const name = draft.name.trim();
-    const stages = draft.stages.map((stage) => ({ ...stage, name: stage.name.trim() })).filter((stage) => stage.name);
+    let stages = draft.stages.map((stage) => {
+      const conditions = normalizeDealStageConditions(stage);
+      return { ...stage, name: stage.name.trim(), condition: stageCondition(stage), conditions };
+    }).filter((stage) => stage.name);
     if (!name || !stages.length) { notify.error('Enter a deal type name and at least one stage.'); return; }
+    const terminalDefaults = [
+      { id: `stage-won-${Date.now()}`, name: 'Won', color: '#10b981', condition: 'positive', conditions: [{ type: 'positive', label: '', reason: '', status: 'Customer' }] },
+      { id: `stage-lost-${Date.now() + 1}`, name: 'Lost', color: '#ef4444', condition: 'negative', conditions: [{ type: 'negative', label: '', reason: '', status: 'Churned' }] },
+    ];
+    const terminalNames = new Set(stages.map((stage) => slugifyStage(stage.name)));
+    const missingTerminalStages = terminalDefaults.filter((stage) => !terminalNames.has(slugifyStage(stage.name)));
+    const existingTerminalStages = stages.filter((stage) => ['won', 'lost'].includes(slugifyStage(stage.name)));
+    const nonTerminalStages = stages.filter((stage) => !['won', 'lost'].includes(slugifyStage(stage.name)));
+    const needsTerminalReorder = existingTerminalStages.length > 0 && stages[stages.length - 1] && !['won', 'lost'].includes(slugifyStage(stages[stages.length - 1].name));
+    if (missingTerminalStages.length || needsTerminalReorder) {
+      stages = [...nonTerminalStages, ...existingTerminalStages, ...missingTerminalStages];
+      notify.info('Mandatory final Won/Lost condition stages were added to the end of this deal type.');
+    }
     const stageNames = new Set();
     if (stages.some((stage) => {
       const key = stage.name.toLowerCase();
@@ -971,7 +1021,29 @@ function GenericDealTypeManager({ types, onChange, onClose, startNew = false, ed
       onChange(next);
     } catch (error) { notify.error(error.message || 'Failed to set default deal type.'); }
   };
-  if (draft) return <div className="cp-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Deal type configuration"><div className="cp-modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 620, width: 'calc(100% - 32px)' }}><header className="cp-modal-head"><div><strong>{editing ? 'Edit deal type' : 'New deal type'}</strong><p>Configure this deal type and its stages.</p></div><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close deal type configuration"><X size={16} /></button></header><div className="cp-modal-body"><label className="cp-deal-field"><span>Deal type name <b>*</b></span><input className="cp-input" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label className="cp-deal-field"><span><input type="checkbox" checked={Boolean(draft.isDefault)} onChange={(event) => setDraft({ ...draft, isDefault: event.target.checked })} /> Set as default deal type</span></label><div className="cp-deal-field"><span>Stages <b>*</b></span><div style={{ display: 'flex', gap: 8, marginBottom: 8 }}><select className="cp-input" value={existingStage} onChange={(event) => { const value = event.target.value; setExistingStage(''); if (!value) return; const source = types.flatMap((type) => type.stages || []).find((stage) => stage.id === value); if (!source) return; if (draft.stages.some((stage) => stage.name.trim().toLowerCase() === source.name.trim().toLowerCase())) { notify.error('A stage with this name already exists.'); return; } setDraft({ ...draft, stages: [...draft.stages, { ...source, id: `${source.id}-${Date.now()}` }] }); }}><option value="">Select Existing Stage</option>{types.flatMap((type) => type.stages || []).filter((stage, index, all) => all.findIndex((item) => item.name.trim().toLowerCase() === stage.name.trim().toLowerCase()) === index).map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></div>{draft.stages.map((stage, index) => <div key={stage.id} style={{ display: 'flex', gap: 8, marginBottom: 8 }}><input className="cp-input" value={stage.name} placeholder="Stage name" onChange={(event) => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) })} /><button type="button" className="cp-action-btn" onClick={() => setDraft({ ...draft, stages: draft.stages.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}<button type="button" className="cp-action-btn" onClick={() => setDraft({ ...draft, stages: [...draft.stages, { id: `stage-${Date.now()}-${draft.stages.length}`, name: '', color: '#3b82f6' }] })}>+ Add stage</button></div><footer className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={onClose}>Cancel</button><button type="button" className="cp-action-btn cp-action-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save deal type'}</button></footer></div></div></div>;
+  if (draft) return (
+    <div className="cp-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Deal type configuration">
+      <div className="cp-modal cp-stage-manager" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 685, width: 'calc(100% - 32px)' }}>
+        <header className="cp-stage-manager-head">
+          <div className="cp-stage-manager-title"><span className="cp-stage-manager-title-icon" aria-hidden="true"><ListChecks size={18} /></span><div><strong>{editing ? 'Manage deal stages' : 'New deal type stages'}</strong><p>Add stages or change their sequence for this deal type.</p></div></div>
+          <div className="cp-stage-manager-actions"><button type="button" className="cp-action-btn" onClick={() => setDraft({ ...draft, stages: DEFAULT_DEAL_TYPE_STAGES.map((stage) => ({ ...stage })) })}>Default stages</button><button type="button" className="cp-action-btn" onClick={() => setDraft({ ...draft, stages: [...draft.stages, { id: `stage-${Date.now()}-${draft.stages.length}`, name: '', color: '#3b82f6', condition: 'positive' }] })}><Plus size={13} /> Add stage</button><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close deal type configuration"><X size={16} /></button></div>
+        </header>
+        <div className="cp-modal-body">
+          <label className="cp-deal-field"><span>Deal type name <b>*</b></span><input className="cp-input" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+          <label className="cp-deal-field"><span><input type="checkbox" checked={Boolean(draft.isDefault)} onChange={(event) => setDraft({ ...draft, isDefault: event.target.checked })} /> Set as default deal type</span></label>
+          <label className="cp-deal-field"><span>Add existing stage</span><select className="cp-input" value={existingStage} onChange={(event) => { const value = event.target.value; setExistingStage(''); if (!value) return; const source = types.flatMap((type) => type.stages || []).find((stage) => stage.id === value); if (!source) return; if (draft.stages.some((stage) => stage.name.trim().toLowerCase() === source.name.trim().toLowerCase())) { notify.error('A stage with this name already exists.'); return; } setDraft({ ...draft, stages: [...draft.stages, { ...source, id: `${source.id}-${Date.now()}` }] }); }}><option value="">Select Existing Stage</option>{types.flatMap((type) => type.stages || []).filter((stage, index, all) => all.findIndex((item) => item.name.trim().toLowerCase() === stage.name.trim().toLowerCase()) === index).map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></label>
+          <div className="cp-stage-manager-list">
+            {draft.stages.map((stage, index) => { const conditions = normalizeDealStageConditions(stage); return <div className="cp-stage-manager-row" key={stage.id}>
+              <div className="cp-stage-manager-order"><span className="cp-stage-manager-number">{index + 1}</span><div className="cp-stage-manager-move"><button type="button" className="cp-icon-btn" aria-label={`Move ${stage.name || 'stage'} up`} disabled={index === 0} onClick={() => moveStage(index, -1)}><ChevronUp size={14} /></button><button type="button" className="cp-icon-btn" aria-label={`Move ${stage.name || 'stage'} down`} disabled={index === draft.stages.length - 1} onClick={() => moveStage(index, 1)}><ChevronDown size={14} /></button></div></div>
+              <div className="cp-stage-manager-fields">{conditions.length === 1 ? <><label className="cp-stage-manager-field"><span>Stage name</span><input className="cp-input" value={stage.name} placeholder="Stage name" onChange={(event) => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) })} /></label><label className="cp-stage-manager-field"><span>CRM status</span><select className="cp-input" aria-label={`${stage.name || 'Stage'} CRM status`} value={conditions[0].status} onChange={(event) => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, conditions: [{ ...normalizeDealStageConditions(item)[0], status: event.target.value }] } : item) })}>{CRM_STAGE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><button type="button" className="cp-stage-manager-add-condition" onClick={() => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, conditions: [...normalizeDealStageConditions(item), { type: 'negative', label: '', reason: '', status: 'Junk' }] } : item) })}><Plus size={13} /> Add condition</button></> : conditions.map((condition, conditionIndex) => <div className="cp-stage-manager-outcome" key={`${stage.id}-${conditionIndex}`}><label className="cp-stage-manager-field"><span>Condition {conditionIndex + 1}</span><input className="cp-input" aria-label={`${stage.name || 'Stage'} condition ${conditionIndex + 1}`} value={condition.label} placeholder="Condition name" onChange={(event) => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, conditions: normalizeDealStageConditions(item).map((value, valueIndex) => valueIndex === conditionIndex ? { ...value, label: event.target.value } : value) } : item) })} /></label><label className="cp-stage-manager-field"><span>CRM status</span><select className="cp-input" aria-label={`${stage.name || 'Stage'} condition ${conditionIndex + 1} CRM status`} value={condition.status} onChange={(event) => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, conditions: normalizeDealStageConditions(item).map((value, valueIndex) => valueIndex === conditionIndex ? { ...value, status: event.target.value } : value) } : item) })}>{CRM_STAGE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><button type="button" className="cp-icon-btn cp-stage-manager-remove-condition" aria-label={`Remove condition ${conditionIndex + 1}`} onClick={() => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, conditions: normalizeDealStageConditions(item).filter((_, valueIndex) => valueIndex !== conditionIndex) } : item) })}><X size={14} /></button></div>)}</div>
+              <button type="button" className="cp-icon-btn cp-stage-manager-delete" title="Delete stage" aria-label={`Delete ${stage.name || 'stage'}`} disabled={draft.stages.length === 1} onClick={() => setDraft({ ...draft, stages: draft.stages.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={15} /></button>
+            </div>; })}
+          </div>
+          <footer className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={onClose}>Cancel</button><button type="button" className="cp-action-btn cp-action-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save deal type'}</button></footer>
+        </div>
+      </div>
+    </div>
+  );
   return <div className="cp-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Deal type configuration"><div className="cp-modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 620, width: 'calc(100% - 32px)' }}><header className="cp-modal-head"><div><strong>Deal types</strong><p>Add and configure deal types and their stages.</p></div><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close deal type configuration"><X size={16} /></button></header>{draft ? <div className="cp-modal-body"><label className="cp-deal-field"><span>Deal type name <b>*</b></span><input className="cp-input" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label className="cp-deal-field"><span>Description</span><textarea className="cp-textarea" value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label><label className="cp-deal-field"><span><input type="checkbox" checked={draft.isDefault} onChange={(event) => setDraft({ ...draft, isDefault: event.target.checked })} /> Set as default deal type</span></label><div className="cp-deal-field"><span>Stages <b>*</b></span>{draft.stages.map((stage, index) => <div key={stage.id} style={{ display: 'flex', gap: 8, marginBottom: 8 }}><input className="cp-input" value={stage.name} placeholder="Stage name" onChange={(event) => setDraft({ ...draft, stages: draft.stages.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) })} /><button type="button" className="cp-action-btn" onClick={() => setDraft({ ...draft, stages: draft.stages.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}<button type="button" className="cp-action-btn" onClick={() => setDraft({ ...draft, stages: [...draft.stages, { id: `stage-${Date.now()}-${draft.stages.length}`, name: '', color: '#3b82f6' }] })}>+ Add stage</button></div><footer className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={() => { setDraft(null); setEditing(null); }}>Cancel</button><button type="button" className="cp-action-btn cp-action-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save deal type'}</button></footer></div> : <div className="cp-modal-body"><button type="button" className="cp-action-btn cp-action-primary" onClick={() => { setEditing(null); openEditor(); }}>+ New deal type</button>{types.map((type) => <div key={type.id} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: 12, marginTop: 10 }}><strong>{type.name}</strong>{type.isDefault && <span style={{ marginLeft: 8, color: '#10b981' }}>Default</span>}<p style={{ color: 'var(--text-secondary)', margin: '6px 0' }}>{type.description || 'No description'}</p><span>{type.stages.length} {type.stages.length === 1 ? 'stage' : 'stages'}</span><div className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={() => { setEditing(type); openEditor(type); }}>Edit</button>{!type.isDefault && <button type="button" className="cp-action-btn" onClick={() => setDefault(type)}>Set Default</button>}{!type.isDefault && <button type="button" className="cp-action-btn" onClick={() => remove(type)}>Delete</button>}</div></div>)}</div>}</div></div>;
 }
 
@@ -1159,6 +1231,18 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const submit = async (e) => {
     e.preventDefault();
     const name = title.trim();
+    if (isGeneric && !contactId) {
+      notify.error('Select a related contact.');
+      return;
+    }
+    if (isGeneric && !dealType) {
+      notify.error('Select a deal type.');
+      return;
+    }
+    if (isGeneric && (!stage || stage === '__new_stage__')) {
+      notify.error('Select a deal stage.');
+      return;
+    }
     if (!name) {
       notify.error('Enter a deal name.');
       return;
@@ -1166,6 +1250,25 @@ export function DealModal({ contact, deal, onClose, onDone }) {
     if (amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) {
       notify.error('Enter a deal value of 0 or more.');
       return;
+    }
+    if (isGeneric && !editing && !hasValidTerminalDealStages(selectedDealType?.stages)) {
+      notify.error('This deal type must include Won and Lost terminal stages before creating a deal.');
+      return;
+    }
+    const selectedStageConfig = selectedDealType?.stages?.find((item) => slugifyStage(item.name) === stage);
+    const targetIsNegative = stage === 'lost' || selectedStageConfig?.condition === 'negative' || selectedStageConfig?.negative === true || selectedStageConfig?.conditions?.some((condition, index) => index === 1 || condition?.type === 'negative');
+    const previousStageConfig = deal ? selectedDealType?.stages?.find((item) => slugifyStage(item.name) === deal.stage) : null;
+    const previousWasNegative = deal?.stage === 'lost' || previousStageConfig?.condition === 'negative' || previousStageConfig?.negative === true || previousStageConfig?.conditions?.some((condition, index) => index === 1 || condition?.type === 'negative');
+    const currentStageKey = slugifyStage(deal?.stage);
+    const targetStageKey = slugifyStage(stage);
+    if (isGeneric && editing && ((currentStageKey === 'won' && targetStageKey === 'lost') || (currentStageKey === 'lost' && targetStageKey === 'won'))) {
+      notify.error('A Won deal cannot be moved to Lost, and a Lost deal cannot be moved to Won.');
+      return;
+    }
+    let negativeReason = '';
+    if (editing && targetIsNegative && !previousWasNegative && stage !== deal.stage) {
+      negativeReason = await notify.prompt({ title: 'Negative deal stage', message: 'Reason for moving this deal to a negative stage:', confirmText: 'Save reason' });
+      if (!negativeReason) return;
     }
     setSaving(true);
     try {
@@ -1180,6 +1283,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       if (contactId) payload.contactId = contactId;
       if (pipelineId) payload.pipelineId = Number(pipelineId);
       if (expectedClose) payload.expectedClose = expectedClose;
+      if (negativeReason) payload.lostReason = negativeReason;
       if (editing) {
         await updateDeal(deal.id, payload);
         notify.success('Deal updated.');
@@ -1208,7 +1312,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
         <form onSubmit={submit}>
           <div className="cp-deal-body">
             <div className="cp-deal-field">
-              <span>Related contact</span>
+              <span>Related contact {isGeneric && <b>*</b>}</span>
               {contactId ? (
                 <span className="cp-deal-chip">
                   <span className="cp-deal-avatar">{(contactName || '?').charAt(0).toUpperCase()}</span>
@@ -1254,7 +1358,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
               </label>
             )}
             <label className="cp-deal-field">
-              <span>Deal type</span>
+              <span>Deal type {isGeneric && <b>*</b>}</span>
               {isGeneric ? <>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <select className="cp-input" value={dealType} onChange={(e) => { if (e.target.value === '__new_deal_type__') { setDealTypeManagerOpen(true); return; } setDealType(e.target.value); setStage(''); }}>
@@ -1368,7 +1472,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
               </label>
             )}
             <label className="cp-deal-field">
-              <span>Deal stage</span>
+              <span>Deal stage {isGeneric && <b>*</b>}</span>
               <select className="cp-input" value={stage} onChange={(e) => { if (isGeneric && e.target.value === '__new_stage__') { setDealTypeManagerEdit(dealTypes.find((type) => type.name === dealType) || null); setDealTypeManagerOpen(true); return; } setStage(e.target.value); }}>
                 {isGeneric && <option value="__new_stage__">+ Add new stage</option>}
                 {!isGeneric && <option value="">Click to select</option>}

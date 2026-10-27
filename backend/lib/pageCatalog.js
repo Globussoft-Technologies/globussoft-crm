@@ -419,9 +419,10 @@ const PAGE_CATALOG = [
   },
   {
     path: '/pipeline',
-    label: 'Pipeline',
-    description: 'Deal pipeline by stage',
+    label: 'Deals',
+    description: 'Manage deals by deal type and stage',
     category: 'Sales',
+    searchPath: false,
     requiredPermissions: [{ module: 'pipeline', action: 'read' }],
   },
 
@@ -1123,20 +1124,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'forecasting', action: 'read' }],
   },
   {
-    path: '/funnel',
-    label: 'Funnel',
-    description: 'Sales conversion funnel analytics',
-    category: 'Sales',
-    requiredPermissions: [{ module: 'pipeline', action: 'read' }],
-  },
-  {
-    path: '/pipelines',
-    label: 'Manage Pipelines',
-    description: 'Create and configure sales pipelines',
-    category: 'Sales',
-    requiredPermissions: [{ module: 'pipeline', action: 'write' }],
-  },
-  {
     path: '/playbooks',
     label: 'Playbooks',
     description: 'Sales process workflows',
@@ -1163,13 +1150,6 @@ const PAGE_CATALOG = [
     description: 'Sales territory mapping',
     category: 'Sales',
     requiredPermissions: [{ module: 'territories', action: 'read' }],
-  },
-  {
-    path: '/win-loss',
-    label: 'Win/Loss Analysis',
-    description: 'Sales outcome analysis + coaching',
-    category: 'Sales',
-    requiredPermissions: [{ module: 'analytics', action: 'read' }],
   },
 
   //  Contracts & Agreements 

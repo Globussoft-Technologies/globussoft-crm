@@ -199,6 +199,7 @@ export default function TransportDriverWorkspace() {
 
       {error && <div className="transport-error" role="alert">{error}</div>}
       {loading && !data && <div className="transport-loading" role="status">Loading your assigned trips…</div>}
+      {loading && data && <div className="transport-loading" role="status">Refreshing data…</div>}
       {!loading && !error && visibleAssignments.length === 0 && (
         <section className="transport-empty">
           <span><CheckCircle2 size={28} /></span>

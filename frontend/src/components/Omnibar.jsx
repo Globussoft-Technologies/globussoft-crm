@@ -503,8 +503,7 @@ function scorePageMatch(page, q, allowFuzzy = false) {
       page.description,
       page.parent,
       page.category,
-      page.path,
-      page.route,
+      ...(page.searchPath === false ? [] : [page.path, page.route]),
       ...(Array.isArray(page.aliases) ? page.aliases : [page.aliases]),
     ];
     let best = null;
@@ -536,8 +535,10 @@ function scorePageMatch(page, q, allowFuzzy = false) {
     ...((Array.isArray(page.aliases) ? page.aliases : [page.aliases])
       .map((value) => ({ value, weight: 400, fieldRank: 3 }))),
     { value: page.category, weight: 500, fieldRank: 4 },
-    { value: page.path, weight: 550, fieldRank: 5 },
-    { value: page.route, weight: 550, fieldRank: 5 },
+    ...(page.searchPath === false ? [] : [
+      { value: page.path, weight: 550, fieldRank: 5 },
+      { value: page.route, weight: 550, fieldRank: 5 },
+    ]),
   ];
   let best = null;
   for (const { value, weight, fieldRank } of fields) {

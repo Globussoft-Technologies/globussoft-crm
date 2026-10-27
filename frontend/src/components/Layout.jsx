@@ -170,6 +170,17 @@ const Layout = () => {
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
+  const isPickupPlotModule = !isWellness && !isTravel && (
+    location.pathname === "/pickup-customers"
+    || location.pathname.startsWith("/pickup-")
+    || location.pathname === "/transport-persons"
+    || location.pathname === "/plot-brokers"
+    || location.pathname === "/billing-persons"
+    || location.pathname === "/transport-workspace"
+    || location.pathname === "/sales-workspace"
+    || location.pathname === "/invoices"
+    || location.pathname === "/billing"
+  );
   const isGenericLeadsPage =
     !isWellness && !isTravel && location.pathname === "/leads";
   // The built-in Softphone FAB is intentionally disabled for Generic CRM.
@@ -619,7 +630,7 @@ const Layout = () => {
         </header>
         <main
           data-tour="page-content"
-          className={`page-fade-in${isWellness || isTravel ? "" : " generic-page-content"}`}
+          className={`${isPickupPlotModule ? "" : "page-fade-in"}${isWellness || isTravel ? "" : " generic-page-content"}`}
           style={{
             flex: 1,
             minWidth: 0,

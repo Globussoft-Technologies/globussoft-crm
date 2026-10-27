@@ -13,6 +13,20 @@ function normalizeStageName(name) {
   return String(name || "").trim().toLowerCase();
 }
 
+function normalizeFunnelStage(name) {
+  const key = normalizeStageName(name).replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  const aliases = {
+    "new lead": "lead",
+    "closed won": "won",
+    "closed-won": "won",
+    sold: "won",
+    "closed lost": "lost",
+    "closed-lost": "lost",
+    "proposal sent": "proposal",
+  };
+  return aliases[key] || key;
+}
+
 async function loadStageOrder(tenantId) {
   const stages = await prisma.pipelineStage.findMany({
     where: { tenantId },
@@ -46,17 +60,52 @@ function dayDiff(a, b) {
 router.get("/stages", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { pipelineId, from, to } = req.query;
+    const { pipelineId, dealType, from, to } = req.query;
 
     const stageOrder = await loadStageOrder(tenantId);
     const stageIndex = new Map(stageOrder.map((s, i) => [s.name, i]));
 
     const where = { tenantId };
     if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
+    if (dealType) where.dealType = String(dealType);
     const dateFilter = buildDateFilter(from, to);
     if (dateFilter) where.createdAt = dateFilter;
 
     const deals = await prisma.deal.findMany({ where });
+
+    // The analytics page requests a current-state funnel. Grouping normalized
+    // stage names keeps all pipelines comparable and makes the funnel total
+    // equal the number of deals returned by the same filter.
+    if (req.query.consistent === "1" || req.get("x-funnel-mode") === "consistent") {
+      const buckets = new Map();
+      for (const deal of deals) {
+        const name = normalizeFunnelStage(deal.stage) || "unknown";
+        const bucket = buckets.get(name) || { name, current: 0, totalValue: 0 };
+        bucket.current += 1;
+        bucket.totalValue += Number(deal.amount) || 0;
+        buckets.set(name, bucket);
+      }
+      const preferredOrder = ["lead", "contacted", "proposal", "negotiation", "won", "lost"];
+      const orderedBuckets = Array.from(buckets.values()).sort((a, b) => {
+        const aIndex = preferredOrder.indexOf(a.name);
+        const bIndex = preferredOrder.indexOf(b.name);
+        if (aIndex === -1 && bIndex === -1) return a.name.localeCompare(b.name);
+        if (aIndex === -1) return 1;
+        if (bIndex === -1) return -1;
+        return aIndex - bIndex;
+      });
+      const result = orderedBuckets.map((bucket, index, rows) => ({
+        name: bucket.name,
+        current: bucket.current,
+        totalEntered: bucket.current,
+        conversionToNext: rows[index + 1]
+          ? Math.round((rows[index + 1].current / bucket.current) * 1000) / 10
+          : null,
+        avgDays: 0,
+        totalValue: Math.round(bucket.totalValue * 100) / 100,
+      }));
+      return res.json({ stages: result, totalDeals: deals.length });
+    }
 
     // Bucket per stage: current count, totalEntered, totalValue, avgDays
     const buckets = stageOrder.map(({ name }) => ({
@@ -131,8 +180,13 @@ router.get("/stages", async (req, res) => {
 router.get("/conversion-by-source", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { from, to } = req.query;
+    const { from, to, pipelineId, dealType } = req.query;
     const where = { tenantId };
+    if (pipelineId) {
+      where.deals = { some: { pipelineId: parseInt(pipelineId, 10) } };
+    } else if (dealType) {
+      where.deals = { some: { dealType: String(dealType) } };
+    }
     const dateFilter = buildDateFilter(from, to);
     if (dateFilter) where.createdAt = dateFilter;
 
@@ -168,12 +222,14 @@ router.get("/conversion-by-source", async (req, res) => {
 router.get("/by-rep", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { from, to } = req.query;
+    const { from, to, pipelineId, dealType } = req.query;
 
     const stageOrder = await loadStageOrder(tenantId);
     const stageIndex = new Map(stageOrder.map((s, i) => [s.name, i]));
 
     const where = { tenantId };
+    if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
+    if (dealType) where.dealType = String(dealType);
     const dateFilter = buildDateFilter(from, to);
     if (dateFilter) where.createdAt = dateFilter;
 
@@ -200,7 +256,7 @@ router.get("/by-rep", async (req, res) => {
       }
       const r = byRep.get(ownerId);
       r.total += 1;
-      const stage = normalizeStageName(d.stage);
+      const stage = normalizeFunnelStage(d.stage);
       if (stage === "won") {
         r.won += 1;
         r.revenue += Number(d.amount) || 0;
@@ -235,8 +291,12 @@ router.get("/by-rep", async (req, res) => {
 router.get("/velocity", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const { pipelineId, dealType } = req.query;
     const stageOrder = await loadStageOrder(tenantId);
-    const deals = await prisma.deal.findMany({ where: { tenantId } });
+    const where = { tenantId };
+    if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
+    if (dealType) where.dealType = String(dealType);
+    const deals = await prisma.deal.findMany({ where });
 
     const buckets = new Map(stageOrder.map((s) => [s.name, []]));
     const now = Date.now();
@@ -268,6 +328,7 @@ router.get("/trend", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const months = Math.max(1, Math.min(36, parseInt(req.query.months, 10) || 6));
+    const { pipelineId, dealType } = req.query;
 
     const now = new Date();
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
@@ -275,9 +336,10 @@ router.get("/trend", async (req, res) => {
     const stageOrder = await loadStageOrder(tenantId);
     const stageIndex = new Map(stageOrder.map((s, i) => [s.name, i]));
 
-    const deals = await prisma.deal.findMany({
-      where: { tenantId, createdAt: { gte: start } },
-    });
+    const where = { tenantId, createdAt: { gte: start } };
+    if (pipelineId) where.pipelineId = parseInt(pipelineId, 10);
+    if (dealType) where.dealType = String(dealType);
+    const deals = await prisma.deal.findMany({ where });
 
     // Build month buckets
     const monthKeys = [];

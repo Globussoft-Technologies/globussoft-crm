@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BadgeIndianRupee, Building2, Copy, ExternalLink, Eye, Link2, MapPin, Pencil, Plus, RefreshCw, Search, UserRound, WalletCards, X } from "lucide-react";
 import { AuthContext } from "../appContexts";
@@ -341,6 +341,10 @@ export default function PickupCustomers() {
   const [plots, setPlots] = useState([]);
   const [pickupLocations, setPickupLocations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNoticeVisible, setRefreshNoticeVisible] = useState(false);
+  const loadedRef = useRef(false);
+  const refreshNoticeTimerRef = useRef(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
@@ -377,7 +381,14 @@ export default function PickupCustomers() {
   const [installmentForm, setInstallmentForm] = useState({ frequency: "MONTHLY", paymentCount: "1", firstPaymentDate: "", amount: "" });
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else {
+      setRefreshing(true);
+      setRefreshNoticeVisible(false);
+      if (refreshNoticeTimerRef.current) clearTimeout(refreshNoticeTimerRef.current);
+      refreshNoticeTimerRef.current = setTimeout(() => setRefreshNoticeVisible(true), 350);
+    }
     try {
       const response = await fetchApi("/api/pickup-plot-inventory/customer-pickups");
       const rows = Array.isArray(response?.customers) ? response.customers : [];
@@ -387,10 +398,22 @@ export default function PickupCustomers() {
       setSelectedCustomerId((current) => rows.some((row) => row.id === current) ? current : rows[0]?.id ?? null);
     } catch (error) {
       notify.error(error.message || "Could not load customer pickup status.");
-    } finally { setLoading(false); }
+    } finally {
+      loadedRef.current = true;
+      setLoading(false);
+      setRefreshing(false);
+      setRefreshNoticeVisible(false);
+      if (refreshNoticeTimerRef.current) {
+        clearTimeout(refreshNoticeTimerRef.current);
+        refreshNoticeTimerRef.current = null;
+      }
+    }
   }, [notify]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => () => {
+    if (refreshNoticeTimerRef.current) clearTimeout(refreshNoticeTimerRef.current);
+  }, []);
 
   const updateCommissionStatus = async (commissionId, nextStatus) => {
     setCommissionUpdatingId(commissionId);
@@ -797,7 +820,7 @@ export default function PickupCustomers() {
 
   return (
     <main className="pickup-customers-page" data-testid="pickup-customers-page">
-      <header className="pickup-page-header"><div><h1><MapPin size={28} /> Customer Status</h1><p>Select a customer to review their plot, deposit, and installment details.</p></div><button type="button" className="btn-secondary pickup-refresh" onClick={load} disabled={loading}><RefreshCw size={15} /> Refresh</button></header>
+      <header className="pickup-page-header"><div><h1><MapPin size={28} /> Customer Status</h1><p>Select a customer to review their plot, deposit, and installment details.</p></div><button type="button" className="btn-secondary pickup-refresh" onClick={load} disabled={loading || refreshing}><RefreshCw size={15} /> Refresh</button></header>
       <div className="pickup-master-detail">
         <aside className="card pickup-plot-table-scroll pickup-customer-directory" aria-label="Customer directory">
           <div className="pickup-directory-toolbar">
@@ -819,6 +842,7 @@ export default function PickupCustomers() {
         </aside>
         <section className="card pickup-plot-table-scroll pickup-detail-pane" aria-live="polite">
           {loading ? <div className="pickup-detail-placeholder">Loading customer details…</div> : selectedCustomer ? <CustomerDetails key={selectedCustomer.id} customer={selectedCustomer} isAdmin={isAdmin} commissionUpdatingId={commissionUpdatingId} onUpdateCommission={updateCommissionStatus} onUpdateCommissionRate={updateCommissionRate} onEdit={() => openEdit(selectedCustomer)} onAssignPlots={() => openPlotAssignment(selectedCustomer)} onViewAssignedPlots={() => setViewingAssignedPlots(selectedCustomer)} onViewStatus={() => setViewingCustomer(selectedCustomer)} onGeneratePayment={() => openPayment(selectedCustomer)} onAddInstallment={() => openInstallment(selectedCustomer)} onInitiateInstallment={(installment) => openPayment(selectedCustomer, installment)} /> : <div className="pickup-detail-placeholder"><UserRound size={34} /><strong>Select a customer</strong><span>Their details will appear here.</span></div>}
+          {refreshNoticeVisible && <span className="pickup-refresh-status" role="status" aria-label="Refreshing customer billing data">Refreshing billing data…</span>}
         </section>
       </div>
       {editingCustomer && <div role="presentation" className="pickup-modal-backdrop"><form role="dialog" aria-modal="true" aria-labelledby="edit-pickup-title" className="card pickup-edit-dialog" onSubmit={savePickupLocation}><div className="pickup-dialog-header"><h2 id="edit-pickup-title">{editingCustomer.pickupAddress ? "Edit pickup location" : "Assign pickup location"}</h2><button type="button" className="btn-secondary" aria-label="Close pickup location dialog" onClick={() => setEditingCustomer(null)}><X size={17} /></button></div><p className="pickup-muted">{editingCustomer.contact?.name || "Customer"}</p><label className="pickup-edit-label">Pickup location<PickupLocationSelect value={selectedPickupLocationId} onChange={selectPickupLocation} options={pickupLocations} disabled={saving} ariaLabel="Pickup location" /></label>{pickupLocations.length === 0 && <p className="pickup-muted">No active pickup locations are available. Add one in Pickup Inventory first.</p>}<div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={() => setEditingCustomer(null)}>Cancel</button><button type="submit" className="btn-primary" disabled={saving || !selectedPickupLocationId}>{saving ? "Saving…" : editingCustomer.pickupAddress ? "Save changes" : "Assign pickup"}</button></div></form></div>}

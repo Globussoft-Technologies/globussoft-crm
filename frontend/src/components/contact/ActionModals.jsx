@@ -829,7 +829,6 @@ export function ActivityModal({ contact, presetType, onClose, onDone }) {
 }
 
 const DEAL_TYPES = ['New Business'];
-const REMOVED_GENERIC_DEAL_TYPES = new Set(['Existing Business', 'Renewal', 'Upsell', 'Cross-sell']);
 const GENERIC_DEAL_TYPES_SETTING_KEY = 'generic.dealTypes';
 const DEFAULT_DEAL_TYPE_STAGES = [
   { id: 'new-lead', name: 'New Lead', color: '#3b82f6' },
@@ -871,7 +870,7 @@ const normalizeDealTypes = (raw) => {
       stages: (Array.isArray(type?.stages) ? type.stages : []).map((stage) => ({
         id: String(stage?.id || '').trim(), name: String(stage?.name || '').trim(), color: stage?.color || '#3b82f6',
       })).filter((stage) => stage.id && stage.name),
-    })).filter((type) => type.id && type.name && type.stages.length && !REMOVED_GENERIC_DEAL_TYPES.has(type.name));
+    })).filter((type) => type.id && type.name && type.stages.length);
     return normalized.length ? normalized : DEFAULT_GENERIC_DEAL_TYPES;
   } catch (_error) {
     return DEFAULT_GENERIC_DEAL_TYPES;

@@ -12,6 +12,7 @@ const { formatMoney } = require("../utils/formatMoney");
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 const { canonicaliseChannel, CHANNEL_ALIASES } = require("../lib/intakePayloadValidators");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { DEFAULTS, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
@@ -478,7 +479,7 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
       select: { value: true },
     });
     try {
-      const types = JSON.parse(String(setting?.value || "[]"));
+      const types = JSON.parse(String(setting?.value || DEFAULTS[KEYS.GENERIC_DEAL_TYPES]));
       const selected = Array.isArray(types)
         ? types.find((type) => String(type?.name || "") === String(dealType))
         : null;
@@ -605,7 +606,12 @@ router.put("/:id", async (req, res) => {
     const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.
-    const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: true });
+    const validationBody = {
+      ...req.body,
+      dealType: dealType === undefined ? (existing.dealType || 'New Business') : dealType,
+      ...(dealType !== undefined && stage === undefined ? { stage: existing.stage } : {}),
+    };
+    const inputErr = await validateDealInput(validationBody, { tenantId: req.user.tenantId, isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     // #173: terminal-stage state machine. Once a deal is `won` or

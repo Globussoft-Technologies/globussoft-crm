@@ -102,6 +102,16 @@ beforeEach(() => {
 });
 
 describe('Deals and Pipelines page', () => {
+  it('shows deals in legacy stages even when the configured stages do not include them', async () => {
+    mockApi({ deals: [{ ...DEALS[0], title: 'Legacy proposal deal', stage: 'proposal' }] });
+    render(
+      <AuthContext.Provider value={{ user: { tenantId: 1 }, tenant: { id: 1, vertical: 'generic' } }}>
+        <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    expect(await screen.findByText('Legacy proposal deal')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'proposal' })).toBeInTheDocument();
+  });
   it('defaults directly to Last 7 days for deals and totals', async () => {
     renderPipeline();
     const range = expectedRange(7);

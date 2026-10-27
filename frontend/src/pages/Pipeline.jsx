@@ -16,7 +16,6 @@ export const VIRTUALIZATION_THRESHOLD = 100;
 export const KANBAN_COLUMN_MIN_WIDTH = 220;
 export const slugifyStageName = (name) => String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 const GENERIC_DEAL_TYPES_SETTING_KEY = 'generic.dealTypes';
-const REMOVED_GENERIC_DEAL_TYPES = new Set(['Existing Business', 'Renewal', 'Upsell', 'Cross-sell']);
 const DEFAULT_GENERIC_DEAL_TYPE = { name: 'New Business', isDefault: true, stages: [{ name: 'New Lead' }, { name: 'Contracted' }, { name: 'Negotiation' }, { name: 'Won' }, { name: 'Lost' }] };
 
 function parseGenericDealTypes(setting) {
@@ -25,7 +24,7 @@ function parseGenericDealTypes(setting) {
     try { parsed = JSON.parse(parsed); } catch { parsed = []; }
   }
   return Array.isArray(parsed)
-    ? parsed.filter((type) => type?.name && Array.isArray(type.stages) && type.stages.length && !REMOVED_GENERIC_DEAL_TYPES.has(type.name))
+    ? parsed.filter((type) => type?.name && Array.isArray(type.stages) && type.stages.length)
     : [];
 }
 
@@ -84,9 +83,9 @@ function stageIdForDeal(deal, stages) {
   if (stages.some((stage) => stage.id === raw)) return raw;
   const aliases = {
     lead: ['new-lead', 'new'],
-    contacted: ['contracted', 'contacted'],
+    contacted: ['contacted'],
     proposal: ['proposal-sent', 'proposal'],
-    'proposal-sent': ['negotiation', 'proposal-sent', 'proposal'],
+    'proposal-sent': ['proposal-sent', 'proposal'],
     won: ['closed-won', 'won'],
     lost: ['closed-lost', 'lost'],
   };
@@ -310,9 +309,19 @@ export default function Pipeline() {
 
   const ownerOptions = useMemo(() => staff.map((member) => [String(member.id), member.name || member.email || `User ${member.id}`]), [staff]);
   const visibleDeals = deals;
-  const stageRows = useMemo(() => stages.map((stage) => {
+  const stageRows = useMemo(() => {
+    const allStages = [...stages];
+    const known = new Set(stages.map((stage) => stage.id));
+    for (const item of isGeneric ? [...visibleDeals, ...(stats?.byStage || [])] : []) {
+      const id = stageIdForDeal(item, stages);
+      if (id && !known.has(id)) {
+        known.add(id);
+        allStages.push({ id, title: item.stage || id, color: '#64748b' });
+      }
+    }
+    return allStages.map((stage) => {
     const rows = visibleDeals.filter((deal) => stageIdForDeal(deal, stages) === stage.id);
-    const aggregate = stats?.byStage?.find((item) => slugifyStageName(item.stage) === stage.id);
+    const aggregate = stats?.byStage?.find((item) => stageIdForDeal(item, stages) === stage.id);
     return {
       ...stage,
       rows,
@@ -320,7 +329,8 @@ export default function Pipeline() {
       value: aggregate ? aggregate.value : (stats ? 0 : null),
       expectedValue: aggregate ? aggregate.expectedValue : (stats ? 0 : null),
     };
-  }), [stages, visibleDeals, stats]);
+    });
+  }, [stages, visibleDeals, stats, isGeneric]);
   const reportingCurrency = stats?.currency || tenant?.defaultCurrency || 'USD';
   const stageMoney = (amount) => amount == null ? '—' : formatMoney(amount, { currency: reportingCurrency, maximumFractionDigits: 0 });
   const fxWarning = stats?.fx?.missingRateCount

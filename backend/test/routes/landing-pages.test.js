@@ -353,6 +353,14 @@ describe('Authentication gate (verifyToken)', () => {
 // ─── GET / (list) ─────────────────────────────────────────────────────
 
 describe('GET /api/landing-pages (list)', () => {
+  test('generic tenants retain legacy templates in their tenant-scoped list', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.landingPage.findMany.mockResolvedValue([{ id: 8, templateType: 'lead_capture' }]);
+    const res = await request(makeApp()).get('/api/landing-pages').set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body[0].id).toBe(8);
+    expect(prisma.landingPage.findMany.mock.calls[0][0].where).toEqual({ tenantId: 1 });
+  });
   test('happy path: returns summary rows scoped to tenant', async () => {
     prisma.landingPage.findMany.mockResolvedValue([
       { id: 1, title: 'Spring Sale', slug: 'spring-sale-abc', status: 'PUBLISHED', visits: 12, submissions: 3, templateType: 'lead_capture', createdAt: new Date(), updatedAt: new Date() },
@@ -477,6 +485,13 @@ describe('POST /api/landing-pages/generate-from-destination', () => {
 });
 
 describe('GET /api/landing-pages/:id', () => {
+  test('generic tenants can still fetch an owned travel template', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.landingPage.findFirst.mockResolvedValue({ id: 5, tenantId: 1, templateType: 'wanderlux-v1', content: '[]' });
+    const res = await request(makeApp()).get('/api/landing-pages/5').set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(prisma.landingPage.findFirst).toHaveBeenCalledWith({ where: { id: 5, tenantId: 1 } });
+  });
   test('happy path: tenant-scoped fetch returns the row', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 5, title: 'Brand Launch', slug: 'brand-launch-foo', tenantId: 1, content: '[]',
@@ -507,6 +522,16 @@ describe('GET /api/landing-pages/:id', () => {
 // ─── POST / (create) ──────────────────────────────────────────────────
 
 describe('POST /api/landing-pages (create)', () => {
+  test('generic tenants can create legacy travel templates', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.landingPage.findMany.mockResolvedValue([]);
+    prisma.landingPage.create.mockImplementation(async ({ data }) => ({ id: 100, ...data }));
+    const res = await request(makeApp()).post('/api/landing-pages')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ title: 'Legacy travel', templateType: 'wanderlux-v1', content: '[]' });
+    expect(res.status).toBe(201);
+    expect(res.body.templateType).toBe('wanderlux-v1');
+  });
   test('happy path: 201 with auto-generated slug + persists tenantId from req.user', async () => {
     // No existing DRAFT for this title.
     prisma.landingPage.findMany.mockResolvedValue([]);

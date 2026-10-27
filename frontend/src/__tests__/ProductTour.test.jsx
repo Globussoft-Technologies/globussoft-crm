@@ -108,8 +108,9 @@ describe("generic product tours", () => {
   });
 
   it("registers every generic sidebar destination, including hard-coded omissions", () => {
-    expect(GENERIC_FEATURE_TOURS).toHaveLength(100);
-    expect(GENERIC_FEATURE_TOURS.map((tour) => tour.id)).toEqual(
+    expect(GENERIC_FEATURE_TOURS).toHaveLength(99);
+    const tourIds = GENERIC_FEATURE_TOURS.map((tour) => tour.id);
+    expect(tourIds).toEqual(
       expect.arrayContaining([
         "adsgpt", "callified", "whatsapp", "lead-reports", "workflows",
         "pickup-plot-inventory", "transport-persons", "plot-brokers",
@@ -117,6 +118,7 @@ describe("generic product tours", () => {
         "transport-workspace", "sales-workspace", "pickup-work-assignments",
       ]),
     );
+    expect(tourIds).not.toContain("lead-routing");
   });
 
   it("has a detailed capability profile for every module beyond the four hand-authored tours", () => {

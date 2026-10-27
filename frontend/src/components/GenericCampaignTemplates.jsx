@@ -187,6 +187,15 @@ function toWhatsAppEditorHtml(value, fields, mapping) {
   return html;
 }
 
+function whatsappBodyToStandardHtml(value, mapping) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\{\{\s*(\d+)\s*\}\}/g, (match, index) => mapping?.[index] ? `{{${mapping[index]}}}` : match)
+    .replace(/\r?\n/g, '<br>');
+}
+
 function missingRequiredFieldsMessage(fields) {
   if (fields.length === 1) return `${fields[0]} is required`;
   if (fields.length === 2) return `${fields[0]} and ${fields[1]} are required`;
@@ -278,6 +287,53 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
 
   const openNewTemplate = (template) => {
     setEditor(readTemplateDraft(template, tenantId, userId));
+  };
+
+  const changeTemplateChannel = (nextChannel) => {
+    if (!editor) return;
+    removeTemplateDraft(editor);
+
+    // Existing records stay in their current persistence model. A Meta
+    // WhatsApp row and a sequence EmailTemplate row have unrelated IDs, so
+    // silently converting either one while editing could overwrite or
+    // duplicate the wrong record. New drafts can safely switch both ways.
+    if (editor.id) {
+      setEditor(current => ({ ...current, channel: nextChannel }));
+      return;
+    }
+
+    const currentBody = editorRef.current
+      ? (editor.whatsappBusinessTemplate ? fromEditorText(editorRef.current) : fromEditorHtml(editorRef.current))
+      : String(editor.body || '');
+    editorIdentityRef.current = null;
+
+    if (nextChannel === 'WHATSAPP') {
+      const converted = normalizeWhatsAppAiDraft(currentBody, fields);
+      const category = ['UTILITY', 'MARKETING', 'AUTHENTICATION'].includes(String(editor.category || '').toUpperCase())
+        ? String(editor.category).toUpperCase()
+        : 'UTILITY';
+      setEditor(current => ({
+        ...current,
+        channel: 'WHATSAPP',
+        whatsappBusinessTemplate: true,
+        category,
+        language: current.language || 'en_US',
+        footer: current.footer || '',
+        body: converted.body,
+        whatsappVariableMapping: converted.variableMapping,
+      }));
+      return;
+    }
+
+    const mapping = parseWhatsAppVariableMapping(editor.whatsappVariableMapping);
+    setEditor(current => ({
+      ...current,
+      channel: nextChannel,
+      whatsappBusinessTemplate: false,
+      body: editor.whatsappBusinessTemplate
+        ? whatsappBodyToStandardHtml(currentBody, mapping)
+        : currentBody,
+    }));
   };
 
   useEffect(() => {
@@ -827,8 +883,7 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
                 <label style={fieldLabelStyle}><span>Template Name <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><input aria-label="Template Name" className="input-field" value={editor.name} onChange={e => setEditor({ ...editor, name: e.target.value })} placeholder="Template name" />{editor.whatsappBusinessTemplate && <small role="status" style={{ color: metaNameNeedsSuggestion ? '#d97706' : 'var(--text-secondary)', lineHeight: 1.35 }}>{metaNameNeedsSuggestion ? <>Meta names use lowercase letters, numbers, and underscores. Suggested: <button type="button" onClick={() => setEditor(current => ({ ...current, name: metaNameSuggestion }))} style={inlineSuggestionButtonStyle}>Use {metaNameSuggestion}</button></> : editor.name ? 'Meta-compatible template name.' : 'Use lowercase letters, numbers, and underscores, for example pickup_plot_selection.'}</small>}</label>
                 {editor.whatsappBusinessTemplate ? <label style={fieldLabelStyle}>Category<select className="input-field" value={editor.category || 'UTILITY'} onChange={e => setEditor({ ...editor, category: e.target.value })}><option value="UTILITY">Utility</option><option value="MARKETING">Marketing</option><option value="AUTHENTICATION">Authentication</option></select></label> : <label style={fieldLabelStyle}>Category<input className="input-field" value={editor.category} readOnly={String(editor.category || '').startsWith('System: Generic CRM:')} onChange={e => setEditor({ ...editor, category: e.target.value })} placeholder="Category" />{String(editor.category || '').startsWith('System: Generic CRM:') && <small style={{ color: 'var(--text-secondary)' }}>This category keeps the default message connected to its lead event. You can edit the subject and message text.</small>}</label>}
               </div>
-              {editor.whatsappBusinessTemplate && <label style={fieldLabelStyle}><span>Template Type <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><select aria-label="Template Type" className="input-field" value="WHATSAPP" disabled><option value="WHATSAPP">WhatsApp</option></select></label>}
-              {!editor.whatsappBusinessTemplate && <label style={fieldLabelStyle}><span>Template Type <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><select aria-label="Template Type" className="input-field" value={editor.channel || 'EMAIL'} onChange={e => { removeTemplateDraft(editor); setEditor({ ...editor, channel: e.target.value }); }}>{TEMPLATE_CHANNELS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>}
+              <label style={fieldLabelStyle}><span>Template Type <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><select aria-label="Template Type" className="input-field" value={editor.channel || 'EMAIL'} disabled={Boolean(editor.id && editor.whatsappBusinessTemplate)} onChange={e => changeTemplateChannel(e.target.value)}>{TEMPLATE_CHANNELS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               {!editor.whatsappBusinessTemplate && <label style={fieldLabelStyle}><span>Subject <span aria-hidden="true" style={requiredMarkStyle}>*</span></span><input aria-label="Subject" className="input-field" value={editor.subject} onFocus={() => setPersonalizationTarget('subject')} onChange={e => setEditor({ ...editor, subject: e.target.value })} placeholder="Subject" /></label>}
               {editor.whatsappBusinessTemplate && <div style={{ display: 'grid', gap: '0.45rem' }}><p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0 }}>Meta approval is required before sending. Use the personalization fields to insert lead values.{editor.whatsappIncludesSelectionLink && <> The pickup/plot link is included in this default template as <code>{'{{7}}'}</code>.</>}</p><div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.55rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--subtle-bg-2)' }}><span style={{ color: pickupPlotLinkNeedsFix ? '#d97706' : 'var(--text-secondary)', fontSize: '0.78rem' }}>{pickupPlotLinkNeedsFix ? 'The pickup/plot link is duplicated or is the last part of the message.' : pickupPlotLinkIndex ? `Pickup / Plot Selection Link is included as {{${pickupPlotLinkIndex}}}.` : 'Building a plot-selection sequence?'}</span><button type="button" className="btn-secondary" disabled={Boolean(pickupPlotLinkIndex && !pickupPlotLinkNeedsFix)} onClick={addPickupPlotLink} style={{ fontSize: '0.76rem', padding: '0.35rem 0.55rem' }}>{pickupPlotLinkNeedsFix ? 'Fix pickup/plot link' : pickupPlotLinkIndex ? 'Pickup/plot link added' : 'Add Pickup / Plot Selection Link'}</button></div></div>}
               {aiDraftError && <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.7rem', padding: '0.9rem 1rem', border: '1px solid #f2b547', borderRadius: 8, background: 'rgba(251, 191, 36, 0.12)', color: 'var(--text-primary)' }}><span aria-hidden="true" style={{ color: '#d97706', fontSize: '1.2rem', lineHeight: 1 }}>×</span><div><strong style={{ display: 'block', marginBottom: '0.25rem' }}>AI access is not configured yet</strong><span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{aiDraftError}</span></div></div>}

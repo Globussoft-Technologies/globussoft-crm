@@ -1,6 +1,32 @@
 "use strict";
+const DEFAULT_COMMISSION_PERCENT = 10;
 function roundMoney(value) { return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100; }
 function parseMetadata(value) { try { return typeof value === "string" ? JSON.parse(value) : (value || {}); } catch (_error) { return {}; } }
+function parseStoredArray(value) { try { const parsed = typeof value === "string" ? JSON.parse(value) : value; return Array.isArray(parsed) ? parsed : []; } catch (_error) { return []; } }
+function brokerAssignmentPairs(broker) {
+  const storedPairs = parseStoredArray(broker?.assignmentPairsJson)
+    .map((row) => ({ contactId: Number(row?.customerId), plotSiteId: Number(row?.plotSiteId) }))
+    .filter((row) => Number.isInteger(row.contactId) && Number.isInteger(row.plotSiteId));
+  if (storedPairs.length) return storedPairs;
+  const contactIds = parseStoredArray(broker?.customerIdsJson).map(Number).filter(Number.isInteger);
+  const plotSiteIds = parseStoredArray(broker?.plotSiteIdsJson).map(Number).filter(Number.isInteger);
+  if (!plotSiteIds.length && Number.isInteger(Number(broker?.plotSiteId))) plotSiteIds.push(Number(broker.plotSiteId));
+  return contactIds.map((contactId, index) => ({ contactId, plotSiteId: plotSiteIds[index] || plotSiteIds[0] || null }));
+}
+async function resolvePlotBroker(db, tenantId, booking) {
+  const storedBrokerId = Number(booking?.plotBrokerId);
+  if (Number.isInteger(storedBrokerId) && storedBrokerId > 0) {
+    return db.plotBroker.findFirst({ where: { id: storedBrokerId, tenantId, isActive: true }, select: { id: true, commissionPercent: true } });
+  }
+  const contactId = Number(booking?.contactId);
+  const plotSiteId = Number(booking?.plotSiteId);
+  if (!Number.isInteger(contactId) || !Number.isInteger(plotSiteId) || !db.plotBroker?.findMany) return null;
+  const brokers = await db.plotBroker.findMany({
+    where: { tenantId, isActive: true },
+    select: { id: true, commissionPercent: true, plotSiteId: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+  });
+  return brokers.find((broker) => brokerAssignmentPairs(broker).some((pair) => pair.contactId === contactId && pair.plotSiteId === plotSiteId)) || null;
+}
 async function syncPlotCommission(db, payment, booking) {
   if (!db?.plotCommission) return null;
   const metadata = parseMetadata(payment.metadata); const plotBookingId = Number(booking?.id || metadata.plotBookingId); const tenantId = Number(payment.tenantId || booking?.tenantId);
@@ -20,9 +46,11 @@ async function syncPlotCommission(db, payment, booking) {
     return existing;
   }
   if (String(payment?.status || '').toUpperCase() !== 'SUCCESS') return null;
-  const plotBrokerId = Number(booking?.plotBrokerId); if (!Number.isInteger(plotBrokerId) || plotBrokerId <= 0) return null;
-  const broker = await db.plotBroker.findFirst({ where: { id: plotBrokerId, tenantId, isActive: true }, select: { id: true, commissionPercent: true } });
-  const commissionPercent = Number(broker?.commissionPercent || 0); const eligibleAmount = roundMoney(booking?.totalAmount);
+  const broker = await resolvePlotBroker(db, tenantId, booking);
+  const commissionPercent = broker?.commissionPercent == null
+    ? DEFAULT_COMMISSION_PERCENT
+    : Number(broker.commissionPercent);
+  const eligibleAmount = roundMoney(booking?.totalAmount);
   if (!broker || !Number.isFinite(commissionPercent) || commissionPercent <= 0 || eligibleAmount <= 0) return null;
   return db.plotCommission.create({ data: { tenantId, plotBookingId, paymentId: payment.id, plotBrokerId: broker.id, contactId: booking.contactId, currency: payment.currency || "INR", commissionPercent: roundMoney(commissionPercent), eligibleAmount, commissionAmount: roundMoney(eligibleAmount * commissionPercent / 100), status: "EARNED" } });
 }

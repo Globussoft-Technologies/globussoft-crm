@@ -85,5 +85,18 @@ describe('plot booking payment reconciliation', () => {
 
 test('a failed older payment cannot reopen an installment paid by another attempt', async () => {
   await reconcilePlotBookingPayment({ id: 501, status: 'FAILED', tenantId: 7, metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 12, installmentId: 10 }) });
-  expect(prisma.plotInstallment.updateMany).toHaveBeenCalledWith({ where: { id: 10, tenantId: 7, plotBookingId: 12, paymentId: 501 }, data: { status: 'PLANNED', paymentId: null } });
+  expect(prisma.plotInstallment.updateMany).toHaveBeenCalledWith({ where: { id: 10, tenantId: 7, plotBookingId: 12, paymentId: 501, status: { not: 'PAID' } }, data: { status: 'FAILED', paymentId: 501 } });
+});
+
+test.each([
+  ['PENDING', 'PAYMENT_INITIATED'],
+  ['PROCESSING', 'PROCESSING'],
+  ['SUCCESS', 'PAID'],
+  ['REFUNDED', 'PLANNED'],
+])('maps a %s payment to the installment lifecycle status %s', async (paymentStatus, installmentStatus) => {
+  await reconcilePlotBookingPayment({ id: 501, status: paymentStatus, tenantId: 7, metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 12, installmentId: 10 }) });
+  expect(prisma.plotInstallment.updateMany).toHaveBeenCalledWith({
+    where: { id: 10, tenantId: 7, plotBookingId: 12, ...(paymentStatus === 'SUCCESS' ? {} : { paymentId: 501 }), ...(['PENDING', 'PROCESSING'].includes(paymentStatus) ? { status: { not: 'PAID' } } : {}) },
+    data: { status: installmentStatus, paymentId: paymentStatus === 'REFUNDED' ? null : 501 },
+  });
 });

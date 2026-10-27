@@ -123,6 +123,16 @@ function text(value, maxLength = 500) {
   return normalized ? normalized.slice(0, maxLength) : null;
 }
 
+function addUtcMonthsClamped(date, months) {
+  const result = new Date(date);
+  const desiredDay = result.getUTCDate();
+  result.setUTCDate(1);
+  result.setUTCMonth(result.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(result.getUTCFullYear(), result.getUTCMonth() + 1, 0)).getUTCDate();
+  result.setUTCDate(Math.min(desiredDay, lastDay));
+  return result;
+}
+
 function parseBoolean(value, fallback = true) {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -2190,10 +2200,7 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         where: {
           tenantId,
           isActive: true,
-          OR: [
-            { availability: "AVAILABLE" },
-            ...(plotSiteIds.length ? [{ id: { in: plotSiteIds } }] : []),
-          ],
+          id: { in: plotSiteIds },
         },
         select: { id: true, name: true, plotNumber: true, address: true, referenceCode: true, availability: true },
         orderBy: [{ plotNumber: "asc" }, { name: "asc" }],
@@ -2201,7 +2208,6 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
     ]);
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotMap = new Map(plots.map((row) => [row.id, row]));
-    const plotOptions = plots.filter((row) => row.availability === "AVAILABLE");
     const rows = brokers.flatMap((broker) => {
       const brokerStatuses = parseStoredObject(broker.workflowStatusJson);
       return assignmentPairs(broker).map(({ customerId, plotSiteId }) => {
@@ -2222,7 +2228,7 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
           assignmentKey: key,
           assignedStaff: assignedStaff(broker),
           plot,
-          plotOptions,
+          plotOptions: [plot],
           tripCompleted,
           tripCompletedAt: tripCompleted ? completedTrips.get(key)?.updatedAt || null : null,
           pickupAt: trip.pickupAt || null,
@@ -2433,6 +2439,12 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
         return res.status(409).json({
           error: "Assign a plot to this customer before marking it selected.",
           code: "PLOT_REQUIRED_FOR_BOOKING",
+        });
+      }
+      if (plotId !== Number(pair.plotSiteId)) {
+        return res.status(409).json({
+          error: "Choose the plot assigned to this customer.",
+          code: "PLOT_NOT_ASSIGNED_TO_CUSTOMER",
         });
       }
       const plot = await prisma.plotSite.findFirst({ where: { id: plotId, tenantId, isActive: true } });
@@ -3567,13 +3579,15 @@ router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, 
     const frequency = String(req.body?.frequency || "").trim().toUpperCase();
     const paymentCount = Number(req.body?.paymentCount);
     const amount = Math.round((Number(req.body?.amount) + Number.EPSILON) * 100) / 100;
+    const firstPaymentDate = text(req.body?.firstPaymentDate, 10);
     const firstMonth = Number(req.body?.firstMonth);
     const firstYear = Number(req.body?.firstYear);
     if (!Number.isInteger(contactId) || contactId <= 0 || !Number.isInteger(plotBookingId) || plotBookingId <= 0) {
       return res.status(400).json({ error: "Choose a valid customer and plot booking.", code: "INVALID_INSTALLMENT_BOOKING" });
     }
-    if (!new Set(["MONTHLY", "YEARLY"]).has(frequency)) {
-      return res.status(400).json({ error: "Choose Monthly or Yearly payment frequency.", code: "INVALID_INSTALLMENT_FREQUENCY" });
+    const frequencyMonths = { MONTHLY: 1, QUARTERLY: 3, HALF_YEARLY: 6, YEARLY: 12 };
+    if (!frequencyMonths[frequency]) {
+      return res.status(400).json({ error: "Choose Monthly, Quarterly, Half-Yearly, or Yearly payment frequency.", code: "INVALID_INSTALLMENT_FREQUENCY" });
     }
     if (!Number.isInteger(paymentCount) || paymentCount < 1 || paymentCount > 120) {
       return res.status(400).json({ error: "Number of payments must be between 1 and 120.", code: "INVALID_INSTALLMENT_COUNT" });
@@ -3581,8 +3595,17 @@ router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, 
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Enter a valid amount for each installment.", code: "INVALID_INSTALLMENT_AMOUNT" });
     }
-    if (!Number.isInteger(firstMonth) || firstMonth < 1 || firstMonth > 12 || !Number.isInteger(firstYear) || firstYear < new Date().getFullYear()) {
-      return res.status(400).json({ error: "Choose a valid first due month and year.", code: "INVALID_INSTALLMENT_START" });
+    const firstDueDate = firstPaymentDate
+      ? new Date(`${firstPaymentDate}T12:00:00.000Z`)
+      : new Date(Date.UTC(firstYear, firstMonth - 1, 1, 12));
+    const validLegacyDate = Number.isInteger(firstMonth) && firstMonth >= 1 && firstMonth <= 12
+      && Number.isInteger(firstYear) && firstYear >= new Date().getFullYear();
+    if (Number.isNaN(firstDueDate.getTime()) || (!firstPaymentDate && !validLegacyDate)) {
+      return res.status(400).json({ error: "Choose a valid first payment date.", code: "INVALID_INSTALLMENT_START" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Installment plans are available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
     }
     const booking = await prisma.plotBooking.findFirst({
       where: { id: plotBookingId, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
@@ -3593,7 +3616,7 @@ router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, 
       orderBy: { sequenceNumber: "asc" },
     });
     const reservedAmount = existing
-      .filter((row) => ["PLANNED", "LINK_CREATED"].includes(String(row.status || "").toUpperCase()))
+      .filter((row) => !["PAID", "CANCELLED"].includes(String(row.status || "").toUpperCase()))
       .reduce((sum, row) => sum + Number(row.amount || 0), 0);
     const requestedTotal = amount * paymentCount;
     const availableBalance = Math.max(0, Number(booking.balance || 0) - reservedAmount);
@@ -3603,12 +3626,9 @@ router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, 
         code: "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE",
       });
     }
-    const firstDueDate = new Date(Date.UTC(firstYear, firstMonth - 1, 1, 12));
     const nextSequence = existing.reduce((max, row) => Math.max(max, Number(row.sequenceNumber || 0)), 0) + 1;
     const installments = await prisma.$transaction(Array.from({ length: paymentCount }, (_, index) => {
-      const dueDate = new Date(firstDueDate);
-      if (frequency === "MONTHLY") dueDate.setUTCMonth(dueDate.getUTCMonth() + index);
-      else dueDate.setUTCFullYear(dueDate.getUTCFullYear() + index);
+      const dueDate = addUtcMonthsClamped(firstDueDate, frequencyMonths[frequency] * index);
       return prisma.plotInstallment.create({
         data: {
           tenantId,
@@ -3691,7 +3711,7 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
     const installment = installmentId === null ? null : await prisma.plotInstallment.findFirst({
       where: { id: installmentId, tenantId, plotBookingId: booking.id, contactId },
     });
-    if (installmentId !== null && (!installment || !["PLANNED", "LINK_CREATED"].includes(String(installment.status || "").toUpperCase()))) {
+    if (installmentId !== null && (!installment || !["PLANNED", "FAILED"].includes(String(installment.status || "").toUpperCase()) || installment.paymentId)) {
       return res.status(409).json({ error: "This installment is no longer available for payment.", code: "INSTALLMENT_NOT_PAYABLE" });
     }
     if (installment && Math.abs(Number(installment.amount || 0) - amount) > 0.001) {
@@ -3699,8 +3719,20 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
     }
 
     if (method === "payment_link") {
+      if (installment) {
+        // Claim before contacting the gateway: concurrent requests and manual
+        // payments must not issue multiple independently payable links.
+        const claim = await prisma.plotInstallment.updateMany({
+          where: { id: installment.id, tenantId, plotBookingId: booking.id, paymentId: null, status: { in: ['PLANNED', 'FAILED'] } },
+          data: { status: 'LINK_CREATING' },
+        });
+        if (!claim.count) return res.status(409).json({ error: 'This installment already has a payment in progress.', code: 'INSTALLMENT_NOT_PAYABLE' });
+      }
       const { createInvoicePaymentLink } = require("../lib/paymentLink");
       const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+      const paymentDescription = installment
+        ? `Installment ${installment.sequenceNumber} for plot booking ${booking.bookingNumber}`
+        : `Initial payment for plot booking ${booking.bookingNumber}`;
       const result = await createInvoicePaymentLink({
         tenantId,
         invoice: { id: booking.id, invoiceNum: booking.bookingNumber, amount },
@@ -3711,15 +3743,23 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         tenantName: tenant?.name || undefined,
         baseUrl: getFrontendUrlFromRequest(req),
         travelContext: { kind: "plot-booking-payment", plotBookingId: booking.id, ...(installment ? { installmentId: installment.id } : {}) },
-        description: `Initial payment for plot booking ${booking.bookingNumber}`,
+        description: paymentDescription,
       });
       if (result.error) {
-        return res.status(502).json({ error: result.error, code: result.code || "PAYMENT_LINK_FAILED" });
+        const gatewayStatus = Number(result.status);
+        const responseStatus = gatewayStatus >= 400 && gatewayStatus < 600 ? gatewayStatus : 502;
+        return res.status(responseStatus).json({ error: result.error, code: result.code || "PAYMENT_LINK_FAILED" });
+      }
+      if (!result.url) {
+        return res.status(502).json({
+          error: "Razorpay did not return a hosted payment link. Please verify the payment gateway configuration.",
+          code: "PAYMENT_LINK_URL_MISSING",
+        });
       }
       if (installment) {
         await prisma.plotInstallment.update({
           where: { id: installment.id },
-          data: { status: "LINK_CREATED", paymentId: result.paymentId },
+          data: { status: "PAYMENT_INITIATED", paymentId: result.paymentId },
         });
       }
       return res.json({
@@ -3730,18 +3770,18 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       });
     }
 
-    const transactionRef = text(req.body?.transactionRef, 128);
-    if (!transactionRef) {
+    const transactionRef = method === "cash" ? null : text(req.body?.transactionRef, 128);
+    if (method !== "cash" && !transactionRef) {
       return res.status(400).json({ error: "Transaction reference is required.", code: "PAYMENT_REFERENCE_REQUIRED" });
     }
     const paidAt = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
     if (Number.isNaN(paidAt.getTime())) {
       return res.status(400).json({ error: "Choose a valid payment date.", code: "INVALID_PAYMENT_DATE" });
     }
-    const duplicatePayment = await prisma.payment.findFirst({
+    const duplicatePayment = transactionRef ? await prisma.payment.findFirst({
       where: { tenantId, plotPaymentReference: transactionRef },
       select: { id: true },
-    });
+    }) : null;
     if (duplicatePayment) {
       return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
     }
@@ -3771,8 +3811,8 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         throw error;
       }
       if (installment) {
-        const payable = await tx.plotInstallment.findFirst({ where: { id: installment.id, tenantId, plotBookingId: booking.id, status: { in: ["PLANNED", "LINK_CREATED"] } } });
-        if (!payable) {
+        const claim = await tx.plotInstallment.updateMany({ where: { id: installment.id, tenantId, plotBookingId: booking.id, paymentId: null, status: { in: ['PLANNED', 'FAILED'] } }, data: { status: 'PAID' } });
+        if (!claim.count) {
           const error = new Error("This installment has already been paid.");
           error.code = "INSTALLMENT_NOT_PAYABLE";
           throw error;
@@ -4160,9 +4200,30 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
       commissionsByBooking.set(Number(commission.plotBookingId), rows);
     }
     const installmentsByBooking = new Map();
+    const plotPaymentById = new Map(plotPayments.map((payment) => [Number(payment.id), payment]));
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
     for (const installment of plotInstallments) {
       const rows = installmentsByBooking.get(Number(installment.plotBookingId)) || [];
-      rows.push({ ...installment, amount: Number(installment.amount || 0) });
+      const payment = plotPaymentById.get(Number(installment.paymentId));
+      let paymentMetadata = {};
+      try { paymentMetadata = JSON.parse(payment?.metadata || "{}"); } catch (_error) {}
+      const storedStatus = String(installment.status || "PLANNED").toUpperCase();
+      const paymentStatus = String(payment?.status || "").toUpperCase();
+      let effectiveStatus = storedStatus === "LINK_CREATED" ? "PAYMENT_INITIATED" : storedStatus;
+      if (paymentStatus === "SUCCESS" || storedStatus === "PAID") effectiveStatus = "PAID";
+      else if (paymentStatus === "FAILED") effectiveStatus = "FAILED";
+      else if (paymentStatus === "PROCESSING") effectiveStatus = "PROCESSING";
+      else if (effectiveStatus === "PLANNED" && new Date(installment.dueDate) < todayStart) effectiveStatus = "OVERDUE";
+      rows.push({
+        ...installment,
+        amount: Number(installment.amount || 0),
+        status: effectiveStatus,
+        paymentLinkUrl: ["PAYMENT_INITIATED", "PROCESSING"].includes(effectiveStatus) ? paymentMetadata.url || null : null,
+        receiptUrl: effectiveStatus === "PAID" && paymentMetadata.plinkId
+          ? `/api/billing/public/receipt?plinkId=${encodeURIComponent(paymentMetadata.plinkId)}`
+          : null,
+      });
       installmentsByBooking.set(Number(installment.plotBookingId), rows);
     }
     const historyByCustomer = new Map();
@@ -4220,7 +4281,18 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         const matchesBooking = booking && Number(metadata.plotBookingId) === Number(booking.id);
         const matchesInvoice = booking?.invoiceId && Number(payment.invoiceId) === Number(booking.invoiceId);
         return Number(payment.contactId) === Number(pickup.contactId) && (matchesBooking || matchesInvoice);
-      }).map(({ metadata: _metadata, ...payment }) => payment);
+      }).map(({ metadata, ...payment }) => {
+        let paymentMetadata = {};
+        try { paymentMetadata = JSON.parse(metadata || "{}"); } catch (_error) {}
+        const paymentStatus = String(payment.status || "").toUpperCase();
+        const paymentLinkUrl = ["PENDING", "PAYMENT_INITIATED", "LINK_CREATED", "PROCESSING"].includes(paymentStatus)
+          ? paymentMetadata.url || paymentMetadata.sessionUrl || null
+          : null;
+        const receiptUrl = paymentStatus === "SUCCESS" && paymentMetadata.plinkId
+          ? `/api/billing/public/receipt?plinkId=${encodeURIComponent(paymentMetadata.plinkId)}`
+          : null;
+        return { ...payment, paymentLinkUrl, receiptUrl };
+      });
       const commissions = booking ? commissionsByBooking.get(Number(booking.id)) || [] : [];
       const commissionRows = commissions.map((commission) => {
         return {

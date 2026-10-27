@@ -237,6 +237,53 @@ describe('Generic CRM template personalization', () => {
     window.history.pushState({}, '', '/marketing');
   });
 
+  it.each(['EMAIL', 'SMS'])('switches a new %s draft to the Meta WhatsApp creation path', async (startingChannel) => {
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+
+    const typeSelect = screen.getByRole('combobox', { name: 'Template Type' });
+    if (startingChannel === 'SMS') fireEvent.change(typeSelect, { target: { value: 'SMS' } });
+    fireEvent.change(typeSelect, { target: { value: 'WHATSAPP' } });
+    expect(screen.getByRole('combobox', { name: 'Template Type' })).toHaveValue('WHATSAPP');
+    expect(screen.getByRole('textbox', { name: 'WhatsApp message' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Subject')).not.toBeInTheDocument();
+    expect(screen.getByText(/Meta approval is required before sending/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: `${startingChannel.toLowerCase()}_switched_to_whatsapp` } });
+    const body = screen.getByRole('textbox', { name: 'WhatsApp message' });
+    body.textContent = 'Hello customer, your account update is ready.';
+    fireEvent.input(body);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Template' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/templates', expect.objectContaining({ method: 'POST' })));
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/email-templates', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('switches a new WhatsApp draft to the standard Email creation path', async () => {
+    window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=WHATSAPP');
+    render(<GenericCampaignTemplates />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+
+    const typeSelect = screen.getByRole('combobox', { name: 'Template Type' });
+    expect(typeSelect).not.toBeDisabled();
+    fireEvent.change(typeSelect, { target: { value: 'EMAIL' } });
+    expect(typeSelect).toHaveValue('EMAIL');
+    expect(screen.getByLabelText('Subject')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Email body' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: 'WhatsApp switched to email' } });
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Account update' } });
+    const body = screen.getByRole('textbox', { name: 'Email body' });
+    body.textContent = 'Your account update is ready.';
+    fireEvent.input(body);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Template' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/email-templates', expect.objectContaining({ method: 'POST' })));
+    const request = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/email-templates' && options?.method === 'POST');
+    expect(JSON.parse(request[1].body)).toMatchObject({ channel: 'EMAIL', subject: 'Account update' });
+    window.history.pushState({}, '', '/marketing');
+  });
+
   it('shows the 150-character range and message count for Generic CRM SMS templates', async () => {
     window.history.pushState({}, '', '/marketing?tab=templates&templateChannel=SMS');
     render(<GenericCampaignTemplates />);

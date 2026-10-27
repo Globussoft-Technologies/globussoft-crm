@@ -100,6 +100,17 @@ describe('parseRazorpayError', () => {
     expect(out.message).not.toMatch(/captured for action to be taken/i);
   });
 
+  test('payment amount above the merchant limit returns an actionable validation error', () => {
+    const err = new Error('rejected');
+    err.statusCode = 400;
+    err.error = { code: 'BAD_REQUEST_ERROR', description: 'amount exceeds maximum amount allowed.' };
+    const out = parseRazorpayError(err);
+    expect(out.status).toBe(400);
+    expect(out.code).toBe('PAYMENT_AMOUNT_LIMIT_EXCEEDED');
+    expect(out.message).toMatch(/smaller payment amount/i);
+    expect(out.message).toMatch(/raise the transaction limit/i);
+  });
+
   test('generic 4xx with a structured description → surfaces the specific reason, scrubbed', () => {
     const err = new Error('rejected');
     err.statusCode = 400;
@@ -211,5 +222,27 @@ describe('getTenantRazorpayClient', () => {
     // The SDK client is constructed (no network call at construction time).
     expect(out.client).toBeTruthy();
     expect(out.client.orders).toBeDefined();
+  });
+
+  test('normalises connection failures before the Razorpay SDK reads response.status', async () => {
+    prisma.paymentGatewayConfig.findFirst.mockResolvedValueOnce({
+      keyId: 'rzp_test_abc',
+      keySecret: 'secret123',
+      isActive: true,
+    });
+    const out = await getTenantRazorpayClient(5);
+    const rejected = out.client.api.rq.interceptors.response.handlers.find((handler) => handler?.rejected)?.rejected;
+    const networkError = Object.assign(new Error('connect EACCES'), { code: 'EACCES' });
+
+    await expect(rejected(networkError)).rejects.toBe(networkError);
+    expect(networkError.response).toEqual({
+      status: 503,
+      data: {
+        error: {
+          code: 'GATEWAY_UNAVAILABLE',
+          description: 'Razorpay is temporarily unavailable.',
+        },
+      },
+    });
   });
 });

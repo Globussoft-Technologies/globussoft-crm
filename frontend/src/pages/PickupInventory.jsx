@@ -25,8 +25,6 @@ const PICKUP_IMPORT_COLUMNS = [
   { key: 'address', header: 'Address' },
   { key: 'googleMapsLink', header: 'Google Maps link' },
   { key: 'maxAssignments', header: 'Maximum assignments' },
-  { key: 'notes', header: 'Notes' },
-  { key: 'isActive', header: 'Active' },
 ];
 
 const PICKUP_IMPORT_EXAMPLE = {
@@ -34,8 +32,6 @@ const PICKUP_IMPORT_EXAMPLE = {
   address: '10 Market Road, Bengaluru',
   googleMapsLink: 'https://maps.google.com/?q=12.9716,77.5946',
   maxAssignments: '25',
-  notes: 'Primary pickup point',
-  isActive: 'TRUE',
 };
 
 function mapsUrl(location) {

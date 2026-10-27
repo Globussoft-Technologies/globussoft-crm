@@ -87,6 +87,7 @@ function makeApp({ user = { userId: 7, tenantId: 1, role: 'ADMIN' } } = {}) {
 
 beforeEach(() => {
   prisma.emailTemplate.findMany.mockReset();
+  prisma.emailTemplate.count.mockReset();
   prisma.emailTemplate.findFirst.mockReset();
   prisma.emailTemplate.create.mockReset();
   prisma.emailTemplate.update.mockReset();
@@ -110,6 +111,21 @@ describe('GET /api/email_templates — list', () => {
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     }));
     expect(prisma.emailTemplate.count).toHaveBeenCalledWith({ where: { tenantId: 1, channel: 'EMAIL' } });
+  });
+
+  test('places a newly created Generic CRM Email template before an existing saved card order', async () => {
+    prisma.emailTemplate.findMany.mockResolvedValue([
+      { id: 14, name: 'Newest email', channel: 'EMAIL' },
+      { id: 13, name: 'Older email', channel: 'EMAIL' },
+      { id: 12, name: 'Oldest email', channel: 'EMAIL' },
+    ]);
+    prisma.emailTemplate.count.mockResolvedValue(3);
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([12, 13]) });
+
+    const response = await request(makeApp()).get('/api/email_templates?paginate=1&page=1&limit=10&channel=EMAIL');
+
+    expect(response.status).toBe(200);
+    expect(response.body.items.map(template => template.id)).toEqual([14, 12, 13]);
   });
 
   test('preview uses the send renderer for organization aliases, fallbacks and HTML escaping', async () => {

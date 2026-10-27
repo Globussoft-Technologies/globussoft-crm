@@ -101,6 +101,28 @@ function safeJsonParse(value, fallback = {}) {
   }
 }
 
+async function findPlotInstallmentPayment(notes) {
+  const tenantId = Number(notes?.tenantId);
+  const installmentId = Number(notes?.installmentId);
+  const bookingId = Number(notes?.plotBookingId);
+  const paymentLinkId = String(notes?.paymentLinkId || '').trim();
+  if (![tenantId, installmentId, bookingId].every((id) => Number.isInteger(id) && id > 0)) return null;
+  // An installment can have historical attempts. Without the provider's
+  // unique link ID, notes alone cannot identify which attempt produced an
+  // event. payment_link.paid has the link ID and reconciles independently.
+  if (!paymentLinkId) return null;
+  const installment = await prisma.plotInstallment.findFirst({
+    where: { id: installmentId, tenantId, plotBookingId: bookingId },
+    select: { paymentId: true },
+  });
+  if (!installment?.paymentId) return null;
+  const payment = await prisma.payment.findFirst({
+    where: { id: installment.paymentId, tenantId, gateway: 'razorpay', status: { in: ['PENDING', 'PROCESSING'] } },
+  });
+  const metadata = safeJsonParse(payment?.metadata, {});
+  return metadata.kind === 'plot-booking-payment' && Number(metadata.installmentId) === installmentId && Number(metadata.plotBookingId) === bookingId && metadata.plinkId === paymentLinkId ? payment : null;
+}
+
 function serialize(payment) {
   if (!payment) return payment;
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
@@ -687,19 +709,31 @@ router.post(
           }
         }
 
-        if (orderId) {
-          let payment = await prisma.payment.findFirst({
+        if (orderId || (notes && notes.kind === "plot-booking-payment" && notes.installmentId)) {
+          let payment = orderId ? await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
-          });
-          if (!payment) {
+          }) : null;
+          if (!payment && orderId) {
             payment = await prisma.payment.findFirst({
               where: {
                 gateway: "razorpay",
-                metadata: { contains: `\"orderId\":\"${orderId}\"` },
+                metadata: { contains: `"orderId":"${orderId}"` },
               },
             });
           }
+          if (!payment && notes && notes.kind === "plot-booking-payment" && notes.installmentId) {
+            payment = await findPlotInstallmentPayment(notes);
+          }
           if (payment) {
+            const plotPaymentMeta = safeJsonParse(payment.metadata, {});
+            if (eventName === "payment.authorized" && plotPaymentMeta.kind === "plot-booking-payment") {
+              const updated = await prisma.payment.updateMany({
+                where: { id: payment.id, status: { in: ['PENDING', 'PROCESSING'] } },
+                data: { status: "PROCESSING" },
+              });
+              if (updated.count) await reconcilePlotBookingPayment({ ...payment, status: 'PROCESSING' });
+              return res.json({ ok: true });
+            }
             const capturedAt = ent && ent.captured_at
               ? new Date(ent.captured_at * 1000)
               : new Date();
@@ -757,15 +791,28 @@ router.post(
         }
       } else if (eventName === "payment.failed") {
         const orderId = ent && ent.order_id;
-        if (orderId) {
-          const payment = await prisma.payment.findFirst({
+        const notes = ent && ent.notes;
+        if (orderId || (notes && notes.kind === "plot-booking-payment" && notes.installmentId)) {
+          let payment = orderId ? await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
-          });
+          }) : null;
+          if (!payment && notes && notes.kind === "plot-booking-payment" && notes.installmentId) {
+            payment = await findPlotInstallmentPayment(notes);
+          }
           if (payment) {
-            await prisma.payment.update({
+            if (safeJsonParse(payment.metadata, {}).kind === 'plot-booking-payment') {
+              const transition = await prisma.payment.updateMany({
+                where: { id: payment.id, status: { in: ['PENDING', 'PROCESSING'] } },
+                data: { status: 'FAILED' },
+              });
+              if (transition.count) await reconcilePlotBookingPayment({ ...payment, status: 'FAILED' });
+              return res.json({ ok: true });
+            }
+            const failed = await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "FAILED" },
             });
+            await reconcilePlotBookingPayment(failed);
           }
         }
       } else if (eventName === "payment_link.paid") {

@@ -426,7 +426,7 @@ describe('<PickupPlotInventory />', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
     expect(screen.getByRole('dialog', { name: 'Import plots and sites' })).toBeInTheDocument();
-    const csv = 'Plot / Site name,Plot number,Block,Address,Pickup location names,Area,Area unit,Price,Availability,Road width,Facing,Property type,Notes,Active\nPlot A-9,A-9,A,25 Lake Road,North Gate,1200,SQ_FT,250000,AVAILABLE,30 ft,EAST,RESIDENTIAL,,TRUE\n';
+    const csv = 'Plot / Site name,Plot number,Block,Address,Pickup location names,Area,Area unit,Price,Availability,Road width,Facing,Property type\nPlot A-9,A-9,A,25 Lake Road,North Gate,1200,SQ_FT,250000,AVAILABLE,30 ft,EAST,RESIDENTIAL\n';
     fireEvent.change(screen.getByLabelText('CSV or Excel file'), {
       target: { files: [new File([csv], 'plots.csv', { type: 'text/csv' })] },
     });
@@ -440,6 +440,42 @@ describe('<PickupPlotInventory />', () => {
     expect(JSON.parse(importCall[1].body).rows[0]).toMatchObject({
       name: 'Plot A-9', plotNumber: 'A-9', pickupLocationNames: 'North Gate', areaUnit: 'SQ_FT',
     });
+    expect(JSON.parse(importCall[1].body).rows[0]).not.toHaveProperty('notes');
+    expect(JSON.parse(importCall[1].body).rows[0]).not.toHaveProperty('isActive');
     await waitFor(() => expect(notify.success).toHaveBeenCalledWith('Import complete: 0 created, 1 updated.'));
+  });
+
+  it('downloads the plot/site template without Notes, Active, or TRUE/FALSE columns', async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:plot-template');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    try {
+      renderPage();
+      await screen.findByText('Plot A-9');
+      fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
+      fireEvent.click(screen.getByRole('button', { name: 'CSV template' }));
+
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      const csv = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(createObjectURL.mock.calls[0][0]);
+      });
+      const [headers, example] = String(csv).trim().split(/\r?\n/);
+      expect(headers).toBe('Plot / Site name,Plot number,Block,Address,Pickup location names,Area,Area unit,Price,Availability,Road width,Facing,Property type');
+      expect(headers).not.toMatch(/Notes|Active/);
+      expect(example).not.toMatch(/TRUE|FALSE/);
+    } finally {
+      anchorClick.mockRestore();
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      else delete URL.createObjectURL;
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+      else delete URL.revokeObjectURL;
+    }
   });
 });

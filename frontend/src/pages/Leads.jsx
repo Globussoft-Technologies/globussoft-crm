@@ -5994,12 +5994,31 @@ const Leads = () => {
       </button>
     );
   };
-  const tableColumnDefs = [
-    { key: "name", label: "Name" },
-    ...leadUserColumnDefs,
-    ...leadFixedExtraColumnDefs,
-    { key: "actions", label: "Actions", locked: true },
-  ];
+  const genericWorkflowColumnDefs = leadFixedExtraColumnDefs.filter(
+    (column) => !CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  const genericCallifiedColumnDefs = leadFixedExtraColumnDefs.filter((column) =>
+    CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  // Keep this definition order identical to the Generic header/body render
+  // order below. The fixed-layout table applies <col> widths by position, so
+  // using the unsplit leadUserColumnDefs order here makes every column after
+  // Email resize a different column when Callified fields are interleaved.
+  const tableColumnDefs = isGeneric
+    ? [
+        { key: "name", label: "Name" },
+        ...leadUserColumnsBeforeCallified,
+        ...genericWorkflowColumnDefs,
+        ...genericCallifiedColumnDefs,
+        ...leadUserColumnsAfterCallified,
+        { key: "actions", label: "Actions", locked: true },
+      ]
+    : [
+        { key: "name", label: "Name" },
+        ...leadUserColumnDefs,
+        ...leadFixedExtraColumnDefs,
+        { key: "actions", label: "Actions", locked: true },
+      ];
   // Generic CRM keeps the complete lead name visible while the remaining
   // columns move horizontally. Other verticals retain their existing table.
   const leadsFrozenColumnDefs = isGeneric
@@ -10257,13 +10276,14 @@ const Leads = () => {
             const scrollbar = grid.querySelector(".top-scroll-sync__sticky-bottom");
             if (!scrollbar || scrollbar.scrollWidth <= scrollbar.clientWidth) return;
 
-            const verticalRoom = grid.scrollHeight - grid.clientHeight;
-            const canScrollVertically = verticalRoom > 1 &&
-              (event.deltaY < 0 ? grid.scrollTop > 0 : grid.scrollTop < verticalRoom - 1);
-            // Trackpads can send horizontal deltas directly. With a mouse,
-            // use the wheel for columns when there are no more rows to scroll.
-            const horizontalDelta = event.deltaX ||
-              (event.shiftKey || !canScrollVertically ? event.deltaY : 0);
+            // Keep vertical wheel/touchpad gestures vertical, including when
+            // the grid is already at its top or bottom. Only an intentional
+            // horizontal gesture (or Shift+wheel) should move across columns.
+            const horizontalDelta = event.shiftKey
+              ? event.deltaY
+              : Math.abs(event.deltaX) > Math.abs(event.deltaY)
+                ? event.deltaX
+                : 0;
             if (!horizontalDelta) return;
             const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? grid.clientWidth : 1;
             scrollbar.scrollLeft += horizontalDelta * multiplier;

@@ -1404,7 +1404,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('lets the wheel move across columns when the short Generic grid has no rows to scroll', async () => {
+  it('keeps vertical wheel and touchpad gestures from becoming horizontal at grid boundaries', async () => {
     const { container } = renderLeads(authValue);
     await screen.findByText('Alice Lead');
 
@@ -1420,15 +1420,27 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
 
     fireEvent.wheel(grid, { deltaY: 80 });
-    expect(scrollbar.scrollLeft).toBe(80);
-    fireEvent.scroll(scrollbar);
-    expect(grid.querySelector('.top-scroll-sync__bottom').firstElementChild.style.left).toBe('-80px');
+    expect(scrollbar.scrollLeft).toBe(0);
 
     Object.defineProperty(grid, 'scrollHeight', { configurable: true, value: 900 });
+    Object.defineProperty(grid, 'scrollTop', { configurable: true, value: 300, writable: true });
     fireEvent.wheel(grid, { deltaY: 80 });
-    expect(scrollbar.scrollLeft).toBe(80);
+    expect(scrollbar.scrollLeft).toBe(0);
 
-    fireEvent.wheel(grid, { deltaX: 40, deltaY: 80 });
+    grid.scrollTop = 0;
+    fireEvent.wheel(grid, { deltaY: -80 });
+    expect(scrollbar.scrollLeft).toBe(0);
+
+    grid.scrollTop = 300;
+    fireEvent.wheel(grid, { deltaX: 20, deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(0);
+
+    fireEvent.wheel(grid, { deltaX: 40, deltaY: 10 });
+    expect(scrollbar.scrollLeft).toBe(40);
+    fireEvent.scroll(scrollbar);
+    expect(grid.querySelector('.top-scroll-sync__bottom').firstElementChild.style.left).toBe('-40px');
+
+    fireEvent.wheel(grid, { deltaY: 80, shiftKey: true });
     expect(scrollbar.scrollLeft).toBe(120);
   });
 
@@ -1446,6 +1458,30 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
       expect(saved.widths.email).toBe(300);
       expect(saved.collapsed.email).toBe(false);
+    });
+  });
+
+  it.each([
+    ['Pickup location', 'pickupLocation', 270],
+    ['Callified Campaign', 'campaign', 190],
+  ])('resizes the visible %s column instead of a different reordered column', async (label, key, initialWidth) => {
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const header = screen.getByRole('columnheader', { name: `${label} column` });
+    const columns = container.querySelectorAll('.leads-table--scrollable colgroup col');
+    expect(columns[header.cellIndex].style.width).toBe(`${initialWidth}px`);
+
+    fireEvent.mouseDown(screen.getByRole('separator', { name: `Resize ${label} column` }), {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: 280 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
+      expect(saved.widths[key]).toBe(initialWidth + 80);
+      expect(columns[header.cellIndex].style.width).toBe(`${initialWidth + 80}px`);
     });
   });
 

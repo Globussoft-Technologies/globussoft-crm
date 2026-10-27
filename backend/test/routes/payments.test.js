@@ -93,6 +93,11 @@ prisma.payment.findMany = vi.fn();
 prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
+prisma.payment.updateMany = vi.fn();
+prisma.plotInstallment = prisma.plotInstallment || {};
+prisma.plotInstallment.findFirst = vi.fn();
+prisma.plotBroker = prisma.plotBroker || {};
+prisma.plotBroker.findMany = vi.fn();
 prisma.payment.aggregate = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
@@ -200,6 +205,9 @@ beforeEach(() => {
   prisma.payment.findFirst.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
+  prisma.payment.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.plotInstallment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotBroker.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.aggregate.mockReset().mockResolvedValue({ _sum: { amount: 0 } });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.$queryRaw.mockReset().mockResolvedValue([]);
@@ -868,6 +876,26 @@ describe('customer payments require tenant Razorpay config (no env fallback)', (
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST /webhook/razorpay — signature verification + event dispatch', () => {
+  test('fallback resolves only the exact tenant, booking and installment payment', async () => {
+    prisma.plotInstallment.findFirst.mockResolvedValue({ paymentId: 55 });
+    prisma.payment.findFirst.mockResolvedValue({ id: 55, tenantId: 1, metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 7, installmentId: 10 }) });
+    const body = JSON.stringify({ event: 'payment.failed', payload: { payment: { entity: { notes: { kind: 'plot-booking-payment', tenantId: '1', plotBookingId: '7', installmentId: '1', paymentLinkId: 'plink_1' } } } } });
+    const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(body).digest('hex');
+    const res = await request(makeApp()).post('/api/payments/webhook/razorpay').set('content-type', 'application/json').set('x-razorpay-signature', signature).send(body);
+    expect(res.status).toBe(200);
+    expect(prisma.plotInstallment.findFirst).toHaveBeenCalledWith({ where: { id: 1, tenantId: 1, plotBookingId: 7 }, select: { paymentId: true } });
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  test('late authorization cannot downgrade a successful plot payment', async () => {
+    prisma.payment.findFirst.mockResolvedValue({ id: 55, tenantId: 1, status: 'SUCCESS', metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 7 }) });
+    const body = JSON.stringify({ event: 'payment.authorized', payload: { payment: { entity: { id: 'pay_1', order_id: 'order_1' } } } });
+    const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(body).digest('hex');
+    const res = await request(makeApp()).post('/api/payments/webhook/razorpay').set('content-type', 'application/json').set('x-razorpay-signature', signature).send(body);
+    expect(res.status).toBe(200);
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({ where: { id: 55, status: { in: ['PENDING', 'PROCESSING'] } }, data: { status: 'PROCESSING' } });
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
   test('400 + Invalid signature when x-razorpay-signature does not match', async () => {
     const eventBody = JSON.stringify({
       event: 'payment.captured',

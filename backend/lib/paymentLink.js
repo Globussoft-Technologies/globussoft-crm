@@ -13,7 +13,7 @@
 // is configured / the gateway rejects. Never throws for config issues.
 
 const prisma = require("./prisma");
-const { getTenantRazorpayClient } = require("./tenantPaymentGateway");
+const { getTenantRazorpayClient, parseRazorpayError } = require("./tenantPaymentGateway");
 
 // ── Lazy Stripe loader (platform key — Stripe is not BYOK yet) ──────
 let _stripe = null;
@@ -55,12 +55,10 @@ function resolveGateway(pref, currency) {
  * @param {string} [opts.gatewayPref] - auto | razorpay | stripe
  * @param {string} [opts.tenantName]  - org display name shown on the payment page
  * @param {string} [opts.baseUrl]  - frontend base URL for callbacks (defaults to FRONTEND_URL env var)
- * @param {Object} [opts.travelContext] - { scheduleId, travelInvoiceId }. When
- *   present this is a TRAVEL-vertical link: the Payment row is tagged
- *   kind='travel-milestone' (in notes + metadata) and its invoiceId is left
- *   NULL so the generic markInvoicePaid() can't mis-reconcile against a
- *   same-numbered generic Invoice. The Razorpay webhook's travel-milestone
- *   branch reconciles it back to the TravelPaymentSchedule + TravelInvoice.
+ * @param {Object} [opts.travelContext] - Domain reconciliation context such as
+ *   { scheduleId, travelInvoiceId } or { plotBookingId, installmentId }. When
+ *   present, the Payment row is tagged in notes + metadata and its invoiceId
+ *   is left NULL so the domain-specific webhook reconciler owns the payment.
  * @returns {Promise<{url, gateway, paymentId}|{error, code}>}
  */
 async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId, currency, gatewayPref, tenantName, baseUrl, travelContext, description }) {
@@ -123,6 +121,9 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
               ...(travelContext.plotBookingId != null
                 ? { plotBookingId: String(travelContext.plotBookingId) }
                 : {}),
+              ...(travelContext.installmentId != null
+                ? { installmentId: String(travelContext.installmentId) }
+                : {}),
             }
           : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
         callback_url: callbackUrl,
@@ -166,6 +167,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
                   ...(travelContext.participantId != null ? { participantId: travelContext.participantId } : {}),
                   ...(travelContext.tripId != null ? { tripId: travelContext.tripId } : {}),
                   ...(travelContext.plotBookingId != null ? { plotBookingId: travelContext.plotBookingId } : {}),
+                  ...(travelContext.installmentId != null ? { installmentId: travelContext.installmentId } : {}),
                 }
               : { mode: "payment_link", url: link.short_url, plinkId: link.id },
           ),
@@ -197,6 +199,9 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
             ...(travelContext.plotBookingId != null
               ? { plotBookingId: String(travelContext.plotBookingId) }
               : {}),
+            ...(travelContext.installmentId != null
+              ? { installmentId: String(travelContext.installmentId) }
+              : {}),
           }
         : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
     });
@@ -218,6 +223,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
               ? {
                   kind: travelContext.kind || "travel-milestone",
                   ...(travelContext.plotBookingId != null ? { plotBookingId: travelContext.plotBookingId } : {}),
+                  ...(travelContext.installmentId != null ? { installmentId: travelContext.installmentId } : {}),
                 }
               : {}),
           }),
@@ -225,9 +231,18 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
     });
     return { url: session.url, gateway: "stripe", paymentId: payment.id };
   } catch (err) {
-    console.error(`[paymentLink] ${gateway} link creation failed:`, err.message);
-    console.error(`[paymentLink] Error details:`, { code: err.code, statusCode: err.statusCode, body: err.body });
-    return { error: err.message, code: "GATEWAY_ERROR", gateway };
+    const parsed = gateway === "razorpay" ? parseRazorpayError(err) : null;
+    console.error(`[paymentLink] ${gateway} link creation failed:`, parsed?.message || err.message);
+    console.error(`[paymentLink] Error details:`, {
+      code: parsed?.code || err.code,
+      statusCode: parsed?.status || err.statusCode,
+    });
+    return {
+      error: parsed?.message || "The payment gateway is temporarily unavailable. Please try again in a moment.",
+      code: parsed?.code || "GATEWAY_ERROR",
+      status: parsed?.status || 502,
+      gateway,
+    };
   }
 }
 

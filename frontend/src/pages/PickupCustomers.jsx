@@ -1,4 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { BadgeIndianRupee, Building2, Copy, ExternalLink, Eye, Link2, MapPin, Pencil, Plus, RefreshCw, Search, UserRound, WalletCards, X } from "lucide-react";
 import { AuthContext } from "../appContexts";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
@@ -21,11 +22,23 @@ const PLOT_FIELDS = [
 
 const DEFAULT_INITIAL_PAYMENT_PERCENT = 10;
 
+const localDateTimeInputValue = (date = new Date()) => {
+  const localTime = new Date(date.getTime() - (date.getTimezoneOffset() * 60_000));
+  return localTime.toISOString().slice(0, 19);
+};
+
 const paymentAmountFromPercent = (balance, percent) => {
   const numericBalance = Number(balance);
   const numericPercent = Number(percent);
   if (!Number.isFinite(numericBalance) || !Number.isFinite(numericPercent)) return "";
   return String(Math.round((numericBalance * numericPercent / 100) * 100) / 100);
+};
+
+const suggestedInstallmentAmount = (balance, count) => {
+  const numericBalance = Number(balance);
+  const numericCount = Number(count);
+  if (!Number.isFinite(numericBalance) || !Number.isInteger(numericCount) || numericCount < 1) return "";
+  return String(Math.floor((numericBalance * 100) / numericCount) / 100);
 };
 
 const formatMoney = (amount, currency = "INR") => {
@@ -41,6 +54,18 @@ const displayValue = (value) => {
   if (value === null || value === undefined || value === "") return "Not available";
   return String(value).replaceAll("_", " ");
 };
+
+const INSTALLMENT_STATUS_LABELS = {
+  PLANNED: "Planned",
+  PAYMENT_INITIATED: "Payment Initiated",
+  LINK_CREATED: "Payment Initiated",
+  PROCESSING: "Processing",
+  PAID: "Paid",
+  FAILED: "Failed",
+  OVERDUE: "Overdue",
+};
+
+const installmentStatusLabel = (status) => INSTALLMENT_STATUS_LABELS[String(status || "PLANNED").toUpperCase()] || displayValue(status);
 
 const customerJourneyStatus = (customer) => customer.currentStatus || customer.status || "PENDING";
 
@@ -96,18 +121,30 @@ function DetailTable({ label, rows }) {
   );
 }
 
-function PaymentTable({ label, payments }) {
+function PaymentAction({ payment }) {
+  const status = String(payment.status || "").toUpperCase();
+  if (["PENDING", "PAYMENT_INITIATED", "LINK_CREATED", "PROCESSING"].includes(status) && payment.paymentLinkUrl) {
+    return <a className="btn-secondary" href={payment.paymentLinkUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open payment link</a>;
+  }
+  if (status === "SUCCESS" && payment.receiptUrl) {
+    return <a className="btn-secondary" href={payment.receiptUrl} target="_blank" rel="noreferrer"><Eye size={14} /> View receipt</a>;
+  }
+  return <span className="pickup-muted">No action</span>;
+}
+
+function PaymentTable({ label, payments, scrollable = false, showActions = false }) {
   return (
-    <div className="pickup-payment-table-wrap">
+    <div className={`pickup-payment-table-wrap${scrollable ? " pickup-payment-history-wrap" : ""}`}>
       <table className="pickup-payment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label={label}>
-        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th>{showActions && <th>Action</th>}</tr></thead>
         <tbody>{payments.map((payment) => (
           <tr key={payment.id}>
             <td>{formatPickupStatusDate(payment.paidAt || payment.createdAt)}</td>
             <td>{formatMoney(payment.amount, payment.currency)}</td>
             <td>{displayValue(payment.gateway)}</td>
-            <td>{displayValue(payment.gatewayId || payment.transactionRef)}</td>
+            <td>{String(payment.gateway || "").toLowerCase() === "cash" ? "-" : (payment.gatewayId || payment.transactionRef ? displayValue(payment.gatewayId || payment.transactionRef) : "-")}</td>
             <td><span className="pickup-payment-status">{displayValue(payment.status)}</span></td>
+            {showActions && <td className="pickup-payment-action"><PaymentAction payment={payment} /></td>}
           </tr>
         ))}</tbody>
       </table>
@@ -115,9 +152,31 @@ function PaymentTable({ label, payments }) {
   );
 }
 
+function InstallmentAction({ installment, onInitiate }) {
+  const status = String(installment.status || "PLANNED").toUpperCase();
+  if (["PLANNED", "OVERDUE"].includes(status)) {
+    return <button type="button" className="btn-primary" onClick={() => onInitiate(installment)}><Link2 size={14} /> Initiate payment</button>;
+  }
+  if (status === "FAILED") {
+    return <button type="button" className="btn-primary" onClick={() => onInitiate(installment)}><RefreshCw size={14} /> Retry payment</button>;
+  }
+  if (["PAYMENT_INITIATED", "LINK_CREATED", "PROCESSING"].includes(status) && installment.paymentLinkUrl) {
+    return <a className="btn-secondary" href={installment.paymentLinkUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open payment link</a>;
+  }
+  if (status === "PAID" && installment.receiptUrl) {
+    return <a className="btn-secondary" href={installment.receiptUrl} target="_blank" rel="noreferrer"><Eye size={14} /> View receipt</a>;
+  }
+  return <span className="pickup-muted">{status === "PAID" ? "Paid" : "No action"}</span>;
+}
+
 function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate }) {
   const commissions = Array.isArray(customer.commissions) ? customer.commissions : [];
   const [rates, setRates] = useState({});
+  const [commissionHistoryOpen, setCommissionHistoryOpen] = useState(false);
+  const successfulPayments = (Array.isArray(customer.payments) ? customer.payments : []).filter(
+    (payment) => String(payment.status || "").toUpperCase() === "SUCCESS",
+  );
+  const hasSuccessfulPayment = successfulPayments.length > 0;
   const configuredRate = customer.workflow?.broker?.assignee?.commissionPercent;
   const commissionRate = Number(configuredRate == null ? 10 : configuredRate);
   const displayedCommissions = commissions.map((commission) => {
@@ -147,9 +206,12 @@ function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate 
     deducted: result.deducted + Number(row.commissionDeducted || 0),
     outstanding: result.outstanding + Number(row.commissionOutstanding || 0),
   }), { commission: 0, deducted: 0, outstanding: 0 });
+  const commissionHistory = displayedCommissions.flatMap((commission) => (
+    (commission.allocations || []).map((allocation) => ({ commission, allocation }))
+  ));
   return (
     <section className="pickup-detail-section" aria-labelledby="commission-tracking-heading">
-      <div className="pickup-section-heading"><span className="pickup-section-icon"><BadgeIndianRupee size={17} /></span><div><h3 id="commission-tracking-heading">Commission tracking</h3><p>Admin-only commission on the total deal amount, deducted across successful payments in sequence.</p></div></div>
+      <div className="pickup-section-heading pickup-section-heading-with-action"><span className="pickup-section-icon"><BadgeIndianRupee size={17} /></span><div><h3 id="commission-tracking-heading">Commission tracking</h3><p>Admin-only commission on the total deal amount, deducted across successful payments in sequence.</p></div>{hasSuccessfulPayment && commissions.length > 0 && <button type="button" className="btn-secondary" onClick={() => setCommissionHistoryOpen(true)}><Eye size={14} /> Commission history</button>}</div>
       {commissions.length ? <>
         <div className="pickup-payment-balance"><span>Total commission: <strong>{formatMoney(totals.commission)}</strong></span><span>Deducted: <strong>{formatMoney(totals.deducted)}</strong></span><span>Remaining to deduct: <strong>{formatMoney(totals.outstanding)}</strong></span></div>
         <div className="pickup-payment-table-wrap"><table className="pickup-payment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Plot commission ledger" style={{ minWidth: 1080 }}>
@@ -157,7 +219,7 @@ function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate 
           <tbody>{displayedCommissions.map((commission) => { const status = String(commission.status || "EARNED").toUpperCase(); return <tr key={commission.id}>
             <td>{commission.brokerName || customer.workflow?.broker?.assignee?.name || "Sales Executive"}</td>
             <td style={{ whiteSpace: "nowrap" }}><strong>{formatMoney(commission.eligibleAmount, commission.currency)}</strong><small className="pickup-muted" style={{ display: "block" }}>Full deal amount</small></td>
-            <td>{status === "EARNED" ? <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 165 }}><input className="input-field" type="number" min="0" max="100" step="0.01" aria-label={`Commission percentage for ${commission.brokerName || "Sales Executive"}`} value={rates[commission.id] ?? commission.commissionPercent} onChange={(event) => setRates((current) => ({ ...current, [commission.id]: event.target.value }))} style={{ width: 75, minWidth: 75, padding: ".45rem .55rem" }} /><span aria-hidden="true">%</span><button type="button" className="btn-secondary" disabled={updatingId === commission.id || !Number.isFinite(commission.displayedRate) || commission.displayedRate < 0 || commission.displayedRate > 100} onClick={() => onUpdateRate(commission.id, commission.displayedRate)}>Save</button></div> : `${Number(commission.commissionPercent || 0)}%`}</td>
+            <td>{status === "EARNED" ? <div className="pickup-commission-rate-control"><input className="input-field" type="number" min="0" max="100" step="0.01" aria-label={`Commission percentage for ${commission.brokerName || "Sales Executive"}`} value={rates[commission.id] ?? commission.commissionPercent} onChange={(event) => setRates((current) => ({ ...current, [commission.id]: event.target.value }))} /><span aria-hidden="true">%</span><button type="button" className="btn-secondary" disabled={updatingId === commission.id || !Number.isFinite(commission.displayedRate) || commission.displayedRate < 0 || commission.displayedRate > 100} onClick={() => onUpdateRate(commission.id, commission.displayedRate)}>Save</button></div> : `${Number(commission.commissionPercent || 0)}%`}</td>
             <td style={{ whiteSpace: "nowrap" }}><strong>{formatMoney(commission.commissionAmount, commission.currency)}</strong><small className="pickup-muted" style={{ display: "block", minWidth: 210 }}>{formatMoney(commission.eligibleAmount, commission.currency)} × {Number.isFinite(commission.displayedRate) ? commission.displayedRate : 0}%</small></td>
             <td style={{ whiteSpace: "nowrap" }}>{formatMoney(commission.commissionDeducted, commission.currency)}</td>
             <td style={{ whiteSpace: "nowrap" }}>{formatMoney(commission.commissionOutstanding, commission.currency)}</td>
@@ -165,13 +227,14 @@ function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate 
             <td>{status === "EARNED" ? <button type="button" className="btn-secondary" disabled={updatingId === commission.id || Number(commission.commissionOutstanding || 0) > 0} title={Number(commission.commissionOutstanding || 0) > 0 ? "Commission must be fully deducted before approval" : undefined} onClick={() => onUpdateStatus(commission.id, "APPROVED")}>Approve</button> : status === "APPROVED" ? <button type="button" className="btn-primary" disabled={updatingId === commission.id} onClick={() => onUpdateStatus(commission.id, "PAID")}>Mark paid</button> : <span className="pickup-muted">No action</span>}</td>
           </tr>; })}</tbody>
         </table></div>
-        {displayedCommissions.flatMap((commission) => commission.allocations || []).length > 0 && <div className="pickup-payment-table-wrap"><table className="pickup-payment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Commission payment deductions"><thead><tr><th>Payment date</th><th>Gross payment</th><th>Commission deducted</th><th>Net after commission</th></tr></thead><tbody>{displayedCommissions.flatMap((commission) => (commission.allocations || []).map((allocation) => <tr key={`${commission.id}-${allocation.paymentId}`}><td>{formatPickupStatusDate(allocation.paidAt)}</td><td>{formatMoney(allocation.grossAmount, commission.currency)}</td><td>{formatMoney(allocation.commissionDeduction, commission.currency)}</td><td>{formatMoney(allocation.netPaymentAmount, commission.currency)}</td></tr>))}</tbody></table></div>}
       </> : <div className="pickup-payment-empty"><strong>No commission earned yet</strong><span>{commissionRate > 0 ? `${commissionRate}% will accrue automatically when a payment succeeds.` : "Set a commission percentage for the assigned Sales Executive to start tracking."}</span></div>}
+      {commissionHistoryOpen && createPortal(<div role="presentation" className="pickup-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCommissionHistoryOpen(false); }}><div role="dialog" aria-modal="true" aria-labelledby="commission-history-dialog-title" className="card pickup-edit-dialog pickup-history-dialog"><div className="pickup-dialog-header"><div><h2 id="commission-history-dialog-title">Commission history</h2><p className="pickup-muted">Commission deductions from each successful payment.</p></div><button type="button" className="btn-secondary" aria-label="Close commission history" onClick={() => setCommissionHistoryOpen(false)}><X size={17} /></button></div><div className="pickup-payment-table-wrap"><table className="pickup-payment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Commission history"><thead><tr><th>Payment date</th><th>Gross payment</th><th>Commission deducted</th><th>Net after commission</th></tr></thead><tbody>{commissionHistory.length ? commissionHistory.map(({ commission, allocation }) => <tr key={`${commission.id}-${allocation.paymentId}`}><td>{formatPickupStatusDate(allocation.paidAt)}</td><td>{formatMoney(allocation.grossAmount, commission.currency)}</td><td>{formatMoney(allocation.commissionDeduction, commission.currency)}</td><td>{formatMoney(allocation.netPaymentAmount, commission.currency)}</td></tr>) : <tr><td colSpan="4" className="pickup-empty-cell">No commission deductions recorded yet.</td></tr>}</tbody></table></div></div></div>, document.body)}
     </section>
   );
 }
 
 function PaymentSection({ customer, selectedPlot, isAdmin, commissionUpdatingId, onUpdateCommission, onUpdateCommissionRate, onGeneratePayment, onAddInstallment, onInitiateInstallment }) {
+  const [paymentHistoryOpen, setPaymentHistoryOpen] = useState(false);
   const payments = Array.isArray(customer.payments) ? customer.payments : [];
   const firstSuccessfulPayment = payments.find(
     (payment) => String(payment.status || "").toUpperCase() === "SUCCESS",
@@ -191,17 +254,18 @@ function PaymentSection({ customer, selectedPlot, isAdmin, commissionUpdatingId,
     <div className="pickup-payment-sections">
       <section className="pickup-detail-section" aria-labelledby="initial-deposit-heading">
         <div className="pickup-section-heading pickup-section-heading-with-action"><span className="pickup-section-icon"><WalletCards size={17} /></span><div><h3 id="initial-deposit-heading">Initial deposit</h3><p>The first payment recorded for this plot booking.</p></div>{canGeneratePayment && !initialPaymentCompleted && <button type="button" className="btn-primary pickup-generate-payment" onClick={onGeneratePayment}><Link2 size={15} /> Generate payment</button>}</div>
-        {initialPayment.length ? <PaymentTable label="Initial deposit payment" payments={initialPayment} /> : (
+        {initialPayment.length ? <PaymentTable label="Initial deposit payment" payments={initialPayment} showActions /> : (
           <div className="pickup-payment-empty"><strong>Initial deposit not recorded</strong><span>{booking ? `${formatMoney(booking.balance ?? booking.totalAmount)} currently outstanding.` : "Payment details will appear after a plot booking is created."}</span></div>
         )}
       </section>
       <section className="pickup-detail-section" aria-labelledby="future-installments-heading">
-        <div className="pickup-section-heading pickup-section-heading-with-action"><span className="pickup-section-icon"><WalletCards size={17} /></span><div><h3 id="future-installments-heading">Future installments</h3><p>Every payment after the initial deposit is listed here.</p></div>{canGeneratePayment && initialPaymentCompleted && <button type="button" className="btn-primary pickup-generate-payment" onClick={onAddInstallment}><Plus size={15} /> Add installment</button>}</div>
-        {plannedInstallments.length > 0 && <table className="pickup-detail-table pickup-installment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Planned installments"><thead><tr><th>No.</th><th>Due</th><th>Frequency</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>{plannedInstallments.map((installment) => <tr key={installment.id}><td>{installment.sequenceNumber}</td><td>{new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(installment.dueDate))}</td><td>{displayValue(installment.frequency)}</td><td>{formatMoney(installment.amount)}</td><td><span className="pickup-payment-status">{displayValue(installment.status)}</span></td><td>{String(installment.status || "").toUpperCase() === "PLANNED" ? <button type="button" className="btn-primary" onClick={() => onInitiateInstallment(installment)}><Link2 size={14} /> Initiate payment</button> : <span className="pickup-muted">{String(installment.status || "").toUpperCase() === "LINK_CREATED" ? "Payment link created" : "Completed"}</span>}</td></tr>)}</tbody></table>}
-        {installments.length ? <><div className="pickup-payment-balance"><span>Remaining installment balance</span><strong>{formatMoney(balance)}</strong></div><PaymentTable label="Future installment payments" payments={installments} /></> : (
+        <div className="pickup-section-heading pickup-section-heading-with-action"><span className="pickup-section-icon"><WalletCards size={17} /></span><div><h3 id="future-installments-heading">Future installments</h3><p>Every payment after the initial deposit is listed here.</p></div><div className="pickup-section-actions">{initialPaymentCompleted && <button type="button" className="btn-secondary" onClick={() => setPaymentHistoryOpen(true)}><Eye size={14} /> Payment history</button>}{canGeneratePayment && initialPaymentCompleted && plannedInstallments.length === 0 && <button type="button" className="btn-primary pickup-generate-payment" onClick={onAddInstallment}><Plus size={15} /> Add installment</button>}</div></div>
+        {plannedInstallments.length > 0 && <div className="pickup-installment-table-wrap"><table className="pickup-installment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Planned installments"><thead><tr><th>Installment</th><th>Due Date</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>{plannedInstallments.map((installment) => { const installmentStatus = String(installment.status || "PLANNED").toUpperCase(); return <tr key={installment.id}><td>#{installment.sequenceNumber}</td><td>{new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(installment.dueDate))}</td><td>{formatMoney(installment.amount)}</td><td><span className="pickup-payment-status" data-status={installmentStatus}>{installmentStatusLabel(installmentStatus)}</span></td><td><InstallmentAction installment={installment} onInitiate={onInitiateInstallment} /></td></tr>; })}</tbody></table></div>}
+        {installments.length ? <div className="pickup-payment-balance"><span>Remaining installment balance</span><strong>{formatMoney(balance)}</strong></div> : (
           <div className="pickup-payment-empty"><strong>{balance > 0 ? "No installment has been recorded yet" : "No future installments due"}</strong><span>{balance > 0 ? `${formatMoney(balance)} remains on this booking.` : "Any later installment will appear here as a table row."}</span></div>
         )}
       </section>
+      {paymentHistoryOpen && createPortal(<div role="presentation" className="pickup-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaymentHistoryOpen(false); }}><div role="dialog" aria-modal="true" aria-labelledby="payment-history-dialog-title" className="card pickup-edit-dialog pickup-history-dialog"><div className="pickup-dialog-header"><div><h2 id="payment-history-dialog-title">Future installment payment history</h2><p className="pickup-muted">Payments recorded after the initial deposit.</p></div><button type="button" className="btn-secondary" aria-label="Close payment history" onClick={() => setPaymentHistoryOpen(false)}><X size={17} /></button></div><PaymentTable label="Future installment payment history" payments={installments} scrollable />{!installments.length && <p className="pickup-muted">No future installment payment has been recorded yet.</p>}</div></div>, document.body)}
       {isAdmin && customer.booking && <CommissionSection customer={customer} updatingId={commissionUpdatingId} onUpdateStatus={onUpdateCommission} onUpdateRate={onUpdateCommissionRate} />}
     </div>
   );
@@ -299,10 +363,10 @@ export default function PickupCustomers() {
     percentage: String(DEFAULT_INITIAL_PAYMENT_PERCENT),
     installmentId: null,
     method: "payment_link",
-    paidAt: new Date().toISOString().slice(0, 10),
+    paidAt: localDateTimeInputValue(),
     transactionRef: "",
   });
-  const [installmentForm, setInstallmentForm] = useState({ frequency: "MONTHLY", paymentCount: "1", month: "", year: "", amount: "" });
+  const [installmentForm, setInstallmentForm] = useState({ frequency: "MONTHLY", paymentCount: "1", firstPaymentDate: "", amount: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -427,21 +491,29 @@ export default function PickupCustomers() {
       percentage: String(DEFAULT_INITIAL_PAYMENT_PERCENT),
       installmentId: installment?.id ?? null,
       method: "payment_link",
-      paidAt: new Date().toISOString().slice(0, 10),
+      paidAt: localDateTimeInputValue(),
       transactionRef: "",
     });
   };
   const openInstallment = (row) => {
     const nextMonth = new Date();
     nextMonth.setMonth(nextMonth.getMonth() + 1);
+    const balance = remainingBookingBalance(row);
     setInstallmentCustomer(row);
     setInstallmentForm({
       frequency: "MONTHLY",
       paymentCount: "1",
-      month: String(nextMonth.getMonth() + 1),
-      year: String(nextMonth.getFullYear()),
-      amount: "",
+      firstPaymentDate: nextMonth.toISOString().slice(0, 10),
+      amount: suggestedInstallmentAmount(balance, 1),
     });
+  };
+  const updateInstallmentCount = (value) => {
+    const paymentCount = Number(value);
+    setInstallmentForm((current) => ({
+      ...current,
+      paymentCount: value,
+      amount: suggestedInstallmentAmount(remainingBookingBalance(installmentCustomer), paymentCount),
+    }));
   };
   const addInstallment = async (event) => {
     event.preventDefault();
@@ -461,8 +533,7 @@ export default function PickupCustomers() {
           plotBookingId: installmentCustomer.booking.id,
           frequency: installmentForm.frequency,
           paymentCount,
-          firstMonth: Number(installmentForm.month),
-          firstYear: Number(installmentForm.year),
+          firstPaymentDate: installmentForm.firstPaymentDate,
           amount,
         }),
       });
@@ -486,23 +557,28 @@ export default function PickupCustomers() {
         plotBookingId: paymentCustomer.booking?.id,
         ...(paymentForm.installmentId ? { installmentId: paymentForm.installmentId } : {}),
         ...(paymentForm.method === "payment_link" ? {} : {
-          paidAt: new Date(`${paymentForm.paidAt}T12:00:00`).toISOString(),
-          transactionRef: paymentForm.transactionRef,
+          paidAt: new Date(paymentForm.paidAt).toISOString(),
+          ...(paymentForm.transactionRef.trim() ? { transactionRef: paymentForm.transactionRef.trim() } : {}),
         }),
       };
       const result = await fetchApi(`/api/pickup-plot-inventory/customer-pickups/${paymentCustomer.contact.id}/initial-payment`, {
         method: "POST",
         body: JSON.stringify(body),
       });
-      if (result?.url) {
-        setGeneratedPaymentLink(result.url);
+      const paymentLinkUrl = result?.url || result?.paymentLinkUrl || result?.shortUrl;
+      if (paymentForm.method === "payment_link" && paymentLinkUrl) {
+        setGeneratedPaymentLink(paymentLinkUrl);
         notify.success("Payment link generated. Share it with the customer.");
-      } else {
+      } else if (paymentForm.method === "payment_link") {
+        notify.error("Razorpay did not return a payment link. Please check the payment gateway configuration and try again.");
+      } else if (result?.mode === "recorded" || result?.payment?.status === "SUCCESS") {
         const hasSuccessfulPayment = paymentCustomer.payments?.some(
           (payment) => String(payment.status || "").toUpperCase() === "SUCCESS",
         );
         notify.success(hasSuccessfulPayment ? "Installment payment recorded." : "Initial payment recorded.");
         setPaymentCustomer(null);
+      } else {
+        notify.error("The payment could not be recorded. Please try again.");
       }
       await load();
     } catch (error) {
@@ -637,8 +713,8 @@ export default function PickupCustomers() {
                 <div className="pickup-payment-balance"><span>{isInstallmentPayment ? "Remaining installment balance" : "Outstanding balance"}</span><strong>{formatMoney(paymentBalance)}</strong></div>
                 {!isInstallmentPayment && <fieldset className="pickup-payment-choice"><legend>Initial payment amount</legend><label><input type="radio" name="initial-payment-mode" value="minimum" checked={paymentForm.amountMode === "minimum"} onChange={() => updateInitialPaymentMode("minimum")} /><span><strong>Minimum payment</strong><small>Choose a percentage or enter the amount directly.</small></span></label><label><input type="radio" name="initial-payment-mode" value="full" checked={paymentForm.amountMode === "full"} onChange={() => updateInitialPaymentMode("full")} /><span><strong>Full payment</strong><small>Pay the complete outstanding balance.</small></span></label></fieldset>}
                 {!isInstallmentPayment && paymentForm.amountMode === "minimum" ? <div className="pickup-initial-payment-fields"><label className="pickup-edit-label">Minimum percentage<div className="pickup-percentage-input"><input className="input-field" aria-label="Initial payment percentage" type="number" min="0.01" max="100" step="0.01" required value={paymentForm.percentage} onChange={(event) => updateInitialPaymentPercentage(event.target.value)} /><span aria-hidden="true">%</span></div></label><label className="pickup-edit-label">Payment amount<input className="input-field" aria-label="Initial payment amount" type="number" min="0.01" step="0.01" max={paymentBalance} required value={paymentForm.amount} onChange={(event) => updateInitialPaymentAmount(event.target.value)} /></label></div> : <label className="pickup-edit-label">{isInstallmentPayment ? "Installment amount" : "Payment amount"}<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment amount" : "Initial payment amount"} type="number" min="0.01" step="0.01" max={paymentBalance} required readOnly={Boolean(paymentForm.installmentId) || (!isInstallmentPayment && paymentForm.amountMode === "full")} value={paymentForm.amount} onChange={(event) => isInstallmentPayment ? setPaymentForm((current) => ({ ...current, amount: event.target.value })) : updateInitialPaymentAmount(event.target.value)} /></label>}
-                <label className="pickup-edit-label">Payment option<select className="input-field" aria-label={isInstallmentPayment ? "Installment payment option" : "Initial payment option"} value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="payment_link">Online payment link (UPI / Card / Net banking)</option><option value="upi">Record UPI payment</option><option value="cash">Record cash payment</option><option value="card">Record card payment</option><option value="bank_transfer">Record bank transfer</option><option value="cheque">Record cheque payment</option></select></label>
-                {paymentForm.method !== "payment_link" && <div className="pickup-payment-manual-fields"><label className="pickup-edit-label">Payment date<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment date" : "Initial payment date"} type="date" required value={paymentForm.paidAt} onChange={(event) => setPaymentForm((current) => ({ ...current, paidAt: event.target.value }))} /></label><label className="pickup-edit-label">Transaction reference<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment reference" : "Initial payment reference"} required placeholder="UTR, receipt, or cheque number" value={paymentForm.transactionRef} onChange={(event) => setPaymentForm((current) => ({ ...current, transactionRef: event.target.value }))} /></label></div>}
+                <label className="pickup-edit-label">Payment option<select className="input-field" aria-label={isInstallmentPayment ? "Installment payment option" : "Initial payment option"} value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value, transactionRef: "" }))}><option value="payment_link">Online payment link (UPI / Card / Net banking)</option><option value="cash">Record cash payment</option></select></label>
+                {paymentForm.method === "cash" && <label className="pickup-edit-label">Payment date and time<input className="input-field" aria-label={isInstallmentPayment ? "Installment payment date and time" : "Initial payment date and time"} type="datetime-local" step="1" required value={paymentForm.paidAt} onChange={(event) => setPaymentForm((current) => ({ ...current, paidAt: event.target.value }))} /></label>}
                 <div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={() => setPaymentCustomer(null)}>Cancel</button><button type="submit" className="btn-primary" disabled={paymentSaving}>{paymentSaving ? "Generating…" : paymentForm.method === "payment_link" ? "Generate link" : "Record payment"}</button></div>
               </>
             )}
@@ -648,15 +724,14 @@ export default function PickupCustomers() {
       {installmentCustomer && (
         <div role="presentation" className="pickup-modal-backdrop">
           <form role="dialog" aria-modal="true" aria-labelledby="add-installment-title" className="card pickup-edit-dialog pickup-payment-dialog" onSubmit={addInstallment}>
-            <div className="pickup-dialog-header"><div><h2 id="add-installment-title">Create installment schedule</h2><p className="pickup-muted">Choose how often the customer pays, how many times, and the amount for each payment.</p></div><button type="button" className="btn-secondary" aria-label="Close add installment" onClick={() => setInstallmentCustomer(null)}><X size={17} /></button></div>
+            <div className="pickup-dialog-header"><div><h2 id="add-installment-title">Create installment plan</h2><p className="pickup-muted">Choose the frequency and date. The suggested amount is calculated from the remaining balance.</p></div><button type="button" className="btn-secondary" aria-label="Close add installment" onClick={() => setInstallmentCustomer(null)}><X size={17} /></button></div>
             <div className="pickup-payment-balance"><span>Remaining balance</span><strong>{formatMoney(remainingBookingBalance(installmentCustomer))}</strong></div>
             <div className="pickup-payment-manual-fields">
-              <label className="pickup-edit-label">Payment frequency<select className="input-field" aria-label="Installment frequency" value={installmentForm.frequency} onChange={(event) => setInstallmentForm((current) => ({ ...current, frequency: event.target.value }))}><option value="MONTHLY">Monthly</option><option value="YEARLY">Yearly</option></select></label>
-              <label className="pickup-edit-label">Number of payments<input className="input-field" aria-label="Number of installment payments" type="number" min="1" max="120" step="1" required value={installmentForm.paymentCount} onChange={(event) => setInstallmentForm((current) => ({ ...current, paymentCount: event.target.value }))} /></label>
-              <label className="pickup-edit-label">First payment month<select className="input-field" aria-label="Installment month" value={installmentForm.month} onChange={(event) => setInstallmentForm((current) => ({ ...current, month: event.target.value }))}>{Array.from({ length: 12 }, (_, index) => index + 1).map((month) => <option key={month} value={month}>{new Intl.DateTimeFormat("en-IN", { month: "long" }).format(new Date(2026, month - 1, 1))}</option>)}</select></label>
-              <label className="pickup-edit-label">First payment year<select className="input-field" aria-label="Installment year" value={installmentForm.year} onChange={(event) => setInstallmentForm((current) => ({ ...current, year: event.target.value }))}>{Array.from({ length: 11 }, (_, index) => new Date().getFullYear() + index).map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+              <label className="pickup-edit-label">Payment frequency<select className="input-field" aria-label="Installment frequency" value={installmentForm.frequency} onChange={(event) => setInstallmentForm((current) => ({ ...current, frequency: event.target.value }))}><option value="MONTHLY">Monthly</option><option value="QUARTERLY">Quarterly</option><option value="HALF_YEARLY">Half-Yearly</option><option value="YEARLY">Yearly</option></select></label>
+              <label className="pickup-edit-label">Number of installments<input className="input-field" aria-label="Number of installments" type="number" min="1" max="120" step="1" required value={installmentForm.paymentCount} onChange={(event) => updateInstallmentCount(event.target.value)} /></label>
+              <label className="pickup-edit-label">First payment date<input className="input-field" aria-label="First payment date" type="date" required value={installmentForm.firstPaymentDate} onChange={(event) => setInstallmentForm((current) => ({ ...current, firstPaymentDate: event.target.value }))} /></label>
             </div>
-            <label className="pickup-edit-label">Amount for each payment<input className="input-field" aria-label="New installment amount" type="number" min="0.01" step="0.01" max={remainingBookingBalance(installmentCustomer)} required value={installmentForm.amount} onChange={(event) => setInstallmentForm((current) => ({ ...current, amount: event.target.value }))} /></label>
+            <label className="pickup-edit-label">Amount per installment<input className="input-field" aria-label="Amount per installment" type="number" min="0.01" step="0.01" max={remainingBookingBalance(installmentCustomer)} required value={installmentForm.amount} onChange={(event) => setInstallmentForm((current) => ({ ...current, amount: event.target.value }))} /><small className="pickup-muted">Suggested: remaining balance ÷ number of installments. You can change this amount.</small></label>
             <div className="pickup-payment-balance"><span>Schedule total</span><strong>{formatMoney(Number(installmentForm.amount || 0) * Number(installmentForm.paymentCount || 0))}</strong></div>
             <div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={() => setInstallmentCustomer(null)}>Cancel</button><button type="submit" className="btn-primary" disabled={installmentSaving}>{installmentSaving ? "Creating…" : "Create schedule"}</button></div>
           </form>

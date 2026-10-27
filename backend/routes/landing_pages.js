@@ -14,8 +14,6 @@ const { renderPage } = require("../services/landingPageRenderer");
 const { hydrateWellnessLandingImages } = require("../services/wellnessLandingImages");
 const { hydrateGenericLandingImages } = require("../services/genericLandingImages");
 const {
-  isGenericLandingPage,
-  isPageAllowedForVertical,
   normalizeVertical,
   verticalWhere,
 } = require("../lib/landingPageVertical");
@@ -86,10 +84,10 @@ async function getTenantVertical(tenantId) {
 }
 
 async function getOwnedLandingPageForVertical(id, req) {
-  const page = await prisma.landingPage.findFirst({ where: { id, tenantId: req.user.tenantId } });
-  if (!page) return null;
-  const vertical = await getTenantVertical(req.user.tenantId);
-  return !vertical || isPageAllowedForVertical(page, vertical) ? page : null;
+  // The legacy editor supports custom and travel templates in any tenant.
+  // Its security boundary is ownership; the dedicated landing-sites router
+  // applies the stricter vertical-specific catalogue and public URL rules.
+  return prisma.landingPage.findFirst({ where: { id, tenantId: req.user.tenantId } });
 }
 
 async function purgeLegacyContactTombstone(email, tenantId) {
@@ -601,8 +599,7 @@ router.get("/", verifyToken, async (req, res) => {
 
     // @@index([tenantId, subBrand, status]) carries this lookup.
 
-    const vertical = await getTenantVertical(req.user.tenantId);
-    const where = { tenantId: req.user.tenantId, ...(vertical ? verticalWhere(vertical) : {}) };
+    const where = { tenantId: req.user.tenantId };
 
     const subBrandFilter = req.query.subBrand;
 
@@ -3366,17 +3363,6 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const trimmedTitle = title.trim();
-
-    const tenantVertical = await getTenantVertical(req.user.tenantId);
-    if (tenantVertical === 'generic' && templateType && !isGenericLandingPage({ templateType })) {
-      return res.status(409).json({ error: 'This route only creates generic landing sites.', code: 'VERTICAL_ROUTE_MISMATCH' });
-    }
-    if (tenantVertical === 'wellness' && templateType && !isPageAllowedForVertical({ templateType }, 'wellness')) {
-      return res.status(409).json({ error: 'This route only creates wellness landing sites.', code: 'VERTICAL_ROUTE_MISMATCH' });
-    }
-    if (tenantVertical === 'travel' && templateType && !isPageAllowedForVertical({ templateType, subBrand }, 'travel')) {
-      return res.status(409).json({ error: 'Travel landing pages must use the travel routes.', code: 'VERTICAL_ROUTE_MISMATCH' });
-    }
 
 
 

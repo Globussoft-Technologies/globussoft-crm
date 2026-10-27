@@ -145,6 +145,7 @@ beforeEach(() => {
   prisma.plotCommission.findMany.mockResolvedValue([]);
   prisma.plotInstallment.findMany.mockResolvedValue([]);
   prisma.plotInstallment.findFirst.mockResolvedValue(null);
+  prisma.plotInstallment.updateMany.mockReset().mockResolvedValue({ count: 1 });
   prisma.customerPickup.findUnique.mockResolvedValue(null);
   prisma.transportPerson.updateMany.mockResolvedValue({ count: 1 });
   prisma.plotBroker.updateMany.mockResolvedValue({ count: 1 });
@@ -3919,7 +3920,7 @@ describe('customer pickup status', () => {
       id: 501, bookingNumber: 'BOOK-501', tenantId: 7, contactId: 61,
       plotSiteId: 30, totalAmount: 4500000, amountPaid: 500000, balance: 4000000,
     });
-    prisma.plotInstallment.findFirst.mockResolvedValue({
+    prisma.plotInstallment.findFirst.mockReset().mockResolvedValue({
       id: 901, tenantId: 7, plotBookingId: 501, contactId: 61,
       sequenceNumber: 2, amount: 250000, status: 'PLANNED',
     });
@@ -3939,6 +3940,30 @@ describe('customer pickup status', () => {
       where: { id: 901 },
       data: { status: 'PAYMENT_INITIATED', paymentId: 801 },
     });
+  });
+
+  test.each(['LINK_CREATED', 'PAYMENT_INITIATED', 'PROCESSING', 'FAILED', 'LINK_CREATING'])('blocks cash and new links for an active or uncertain installment %s', async (status) => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Priya Shah' });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, tenantId: 7, contactId: 61, balance: 1000 });
+    prisma.plotInstallment.findFirst.mockReset().mockResolvedValue({ id: 901, tenantId: 7, plotBookingId: 501, contactId: 61, amount: 100, status, paymentId: status === 'LINK_CREATING' ? null : 801 });
+    for (const method of ['cash', 'payment_link']) {
+      const response = await request(makeApp()).post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+        .send({ amount: 100, plotBookingId: 501, installmentId: 901, method });
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('INSTALLMENT_NOT_PAYABLE');
+    }
+    expect(paymentLink.createInvoicePaymentLink).not.toHaveBeenCalled();
+  });
+
+  test('does not create a link when another request claimed the installment', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Priya Shah' });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, tenantId: 7, contactId: 61, balance: 1000 });
+    prisma.plotInstallment.findFirst.mockReset().mockResolvedValue({ id: 901, tenantId: 7, plotBookingId: 501, contactId: 61, amount: 100, status: 'PLANNED', paymentId: null });
+    prisma.plotInstallment.updateMany.mockResolvedValueOnce({ count: 0 });
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/customer-pickups/61/initial-payment')
+      .send({ amount: 100, plotBookingId: 501, installmentId: 901, method: 'payment_link' });
+    expect(response.status).toBe(409);
+    expect(paymentLink.createInvoicePaymentLink).not.toHaveBeenCalled();
   });
 
   test('returns a gateway error instead of a false payment success when Razorpay supplies no link URL', async () => {

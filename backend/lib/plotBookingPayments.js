@@ -49,7 +49,7 @@ async function reconcilePlotBookingPayment(payment) {
               ? 'PLANNED'
               : 'PAYMENT_INITIATED';
       await tx.plotInstallment.updateMany({
-        where: { id: installmentId, tenantId: payment.tenantId, plotBookingId: booking.id, ...(paymentStatus === 'SUCCESS' ? {} : { paymentId: payment.id }) },
+        where: { id: installmentId, tenantId: payment.tenantId, plotBookingId: booking.id, ...(paymentStatus === 'SUCCESS' ? {} : { paymentId: payment.id }), ...(['PROCESSING', 'FAILED', 'PENDING'].includes(paymentStatus) ? { status: { not: 'PAID' } } : {}) },
         data: {
           status: installmentStatus,
           paymentId: paymentStatus === 'REFUNDED' ? null : payment.id,

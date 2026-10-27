@@ -3711,7 +3711,7 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
     const installment = installmentId === null ? null : await prisma.plotInstallment.findFirst({
       where: { id: installmentId, tenantId, plotBookingId: booking.id, contactId },
     });
-    if (installmentId !== null && (!installment || !["PLANNED", "LINK_CREATED", "PAYMENT_INITIATED", "PROCESSING", "FAILED"].includes(String(installment.status || "").toUpperCase()))) {
+    if (installmentId !== null && (!installment || !["PLANNED", "FAILED"].includes(String(installment.status || "").toUpperCase()) || installment.paymentId)) {
       return res.status(409).json({ error: "This installment is no longer available for payment.", code: "INSTALLMENT_NOT_PAYABLE" });
     }
     if (installment && Math.abs(Number(installment.amount || 0) - amount) > 0.001) {
@@ -3719,6 +3719,15 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
     }
 
     if (method === "payment_link") {
+      if (installment) {
+        // Claim before contacting the gateway: concurrent requests and manual
+        // payments must not issue multiple independently payable links.
+        const claim = await prisma.plotInstallment.updateMany({
+          where: { id: installment.id, tenantId, plotBookingId: booking.id, paymentId: null, status: { in: ['PLANNED', 'FAILED'] } },
+          data: { status: 'LINK_CREATING' },
+        });
+        if (!claim.count) return res.status(409).json({ error: 'This installment already has a payment in progress.', code: 'INSTALLMENT_NOT_PAYABLE' });
+      }
       const { createInvoicePaymentLink } = require("../lib/paymentLink");
       const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
       const paymentDescription = installment
@@ -3802,8 +3811,8 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         throw error;
       }
       if (installment) {
-        const payable = await tx.plotInstallment.findFirst({ where: { id: installment.id, tenantId, plotBookingId: booking.id, status: { in: ["PLANNED", "LINK_CREATED", "PAYMENT_INITIATED", "PROCESSING", "FAILED"] } } });
-        if (!payable) {
+        const claim = await tx.plotInstallment.updateMany({ where: { id: installment.id, tenantId, plotBookingId: booking.id, paymentId: null, status: { in: ['PLANNED', 'FAILED'] } }, data: { status: 'PAID' } });
+        if (!claim.count) {
           const error = new Error("This installment has already been paid.");
           error.code = "INSTALLMENT_NOT_PAYABLE";
           throw error;

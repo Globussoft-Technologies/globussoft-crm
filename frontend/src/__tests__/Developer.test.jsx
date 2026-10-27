@@ -294,6 +294,33 @@ describe('<Developer /> — page surface, API key + webhook CRUD, agent activity
     });
   });
 
+  it('Generic tenant: plot inventory purpose selector sends a scoped key request', async () => {
+    renderDeveloper(GENERIC_USER);
+    await screen.findByText('Zapier Integration');
+
+    const purposeSelect = screen.getByLabelText(/API access scope/i);
+    expect(within(purposeSelect).getByRole('option', { name: /Plot inventory \(read-only\)/i })).toBeInTheDocument();
+    fireEvent.change(purposeSelect, { target: { value: 'plot-inventory-read' } });
+    fireEvent.change(screen.getByPlaceholderText(/Key Name/i), {
+      target: { value: 'Client plot website' },
+    });
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    fireEvent.click(screen.getByRole('button', { name: /Generate Key/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/developer/apikeys' && o?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.name).toBe('Client plot website');
+      expect(body.purpose).toBe('plot-inventory-read');
+      expect(body.subBrand).toBeUndefined();
+    });
+  });
+
   it('Generate Key whitespace-only: Generate button disabled — no POST fires', async () => {
     renderDeveloper();
     await screen.findByText('Zapier Integration');

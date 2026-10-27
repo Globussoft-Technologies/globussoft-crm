@@ -5,6 +5,7 @@ import { useNotify } from '../utils/notify';
 import { isUploadedS3Url } from '../utils/uploadDisplay';
 import UploadedAssetChip from '../components/UploadedAssetChip';
 import { DEFAULT_WELLNESS_LANDING_LAYOUT, DEFAULT_WELLNESS_LANDING_THEME, WELLNESS_LANDING_LAYOUTS, WELLNESS_LANDING_THEMES, getWellnessColorOverrides, resolveWellnessLandingTheme } from '../utils/wellnessLandingThemes';
+import { DEFAULT_GENERIC_LANDING_LAYOUT, DEFAULT_GENERIC_LANDING_THEME, GENERIC_LANDING_LAYOUTS, GENERIC_LANDING_THEMES } from '../utils/genericLandingThemes';
 import WellnessPaletteEditor from '../components/landing-pages/WellnessPaletteEditor';
 
 function clone(value) {
@@ -17,7 +18,7 @@ function clone(value) {
 
 function getWellnessRoot(content) {
   return Array.isArray(content)
-    ? content.find((block) => block && block.type === 'columns' && block.props?.variant === 'wellness-campaign-page')
+    ? content.find((block) => block && block.type === 'columns' && ['wellness-campaign-page', 'generic-campaign-page'].includes(block.props?.variant))
     : null;
 }
 
@@ -82,20 +83,34 @@ function firstBlockText(content, ids = []) {
   return fallback?.props?.text || '';
 }
 
-function pageCampaignName(page = {}, content) {
-  const candidate = firstBlockText(content, ['hero-title-1', 'brand-name', 'cta-title', 'form-title-copy']) || page?.title || page?.name || page?.slug || 'Wellness Landing Page';
-  return String(candidate).trim() || 'Wellness Landing Page';
+function genericSectorLabel(page = {}) {
+  const raw = String(page.templateType || page.sectorKey || '')
+    .replace(/^generic-(?:site|campaign)-/, '')
+    .replace(/-v\d+$/, '')
+    .replace(/_/g, ' ')
+    .trim();
+  return raw ? raw.replace(/\b\w/g, (character) => character.toUpperCase()) : 'Business';
 }
 
-function buildWellnessScaffold(page = {}, content = []) {
-  const campaignName = pageCampaignName(page, content);
+function pageCampaignName(page = {}, content, fallback = 'Wellness Landing Page') {
+  const candidate = firstBlockText(content, ['hero-title-1', 'brand-name', 'cta-title', 'form-title-copy']) || page?.title || page?.name || page?.slug || fallback;
+  return String(candidate).trim() || fallback;
+}
+
+function buildWellnessScaffold(page = {}, content = [], mode = 'wellness') {
+  const isGeneric = mode === 'generic';
+  const defaultThemeId = isGeneric ? DEFAULT_GENERIC_LANDING_THEME : DEFAULT_WELLNESS_LANDING_THEME;
+  const defaultLayoutId = isGeneric ? DEFAULT_GENERIC_LANDING_LAYOUT : DEFAULT_WELLNESS_LANDING_LAYOUT;
+  const campaignName = pageCampaignName(page, content, isGeneric ? 'Business Landing Page' : 'Wellness Landing Page');
   const audience = page?.audience || 'your audience';
   const businessName = page?.businessName || campaignName;
-  const sectorLabel = page?.sectorLabel || 'Wellness';
+  const sectorLabel = page?.sectorLabel || (isGeneric ? genericSectorLabel(page) : 'Wellness');
   const summary = page?.description || `${businessName} invites ${audience} to learn more, submit an enquiry, and receive a prompt follow-up.`;
   const location = page?.eventLocation || page?.location || 'Add location';
   const eventDate = page?.eventDate || 'Add date';
   const eventTime = page?.eventTime || 'Add time';
+  const campaignImageLabel = isGeneric ? `${sectorLabel} campaign` : 'wellness experience';
+  const defaultContact = isGeneric ? 'Add your contact details\ninfo@company.com\nYour location' : '+91 98765 43210\ninfo@company.com\nKoramangala, Bengaluru';
 
   const text = (id, value, extra = {}) => ({ id, type: 'text', props: { text: value, ...extra } });
   const heading = (id, value, level = 'h3', extra = {}) => ({ id, type: 'heading', props: { text: value, level, ...extra } });
@@ -121,7 +136,7 @@ function buildWellnessScaffold(page = {}, content = []) {
   const section = (id, variant, columns, gap = '24px', extraProps = {}) => ({ id, type: 'columns', props: { variant, gap, columns, ...extraProps } });
 
   return [
-    section('wellness-page', 'wellness-campaign-page', [
+    section('wellness-page', isGeneric ? 'generic-campaign-page' : 'wellness-campaign-page', [
       { fullWidth: true, components: [
         section('wellness-header-row', 'wellness-header-row', [
           { components: [
@@ -136,12 +151,12 @@ function buildWellnessScaffold(page = {}, content = []) {
       { fullWidth: true, components: [
         section('wellness-hero-row', 'wellness-hero-row', [
           { components: [
-            text('hero-kicker', page?.heroKicker || 'VISIT - CALL - WRITE', { align: 'left', color: '#b31d15', fontSize: '0.8rem', variant: 'wellness-eyebrow' }),
+            text('hero-kicker', page?.heroKicker || (isGeneric ? 'DISCOVER - CONNECT - GROW' : 'VISIT - CALL - WRITE'), { align: 'left', color: '#b31d15', fontSize: '0.8rem', variant: 'wellness-eyebrow' }),
             heading('hero-title-1', page?.heroTitleLine1 || campaignName, 'h1', { align: 'left', color: '#1f2f2c', variant: 'wellness-display' }),
             heading('hero-title-2', page?.heroTitleLine2 || '', 'h1', { align: 'left', color: '#b31d15', variant: 'wellness-hero-accent' }),
             text('hero-copy', page?.heroCopy || summary, { align: 'left', color: '#5f6c67', fontSize: '1.02rem', variant: 'wellness-body' }),
             button('hero-primary-cta', page?.heroPrimaryCta || 'Get Started', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'left', size: 'medium' }),
-            text('hero-note', page?.heroNote || 'Every submission is editable, trackable, and routed to the right team instantly.', { align: 'left', color: '#5f6c67', fontSize: '0.88rem', variant: 'wellness-note' }),
+            text('hero-note', page?.heroNote || (isGeneric ? 'Every enquiry is captured, tracked, and routed to the right team.' : 'Every submission is editable, trackable, and routed to the right team instantly.'), { align: 'left', color: '#5f6c67', fontSize: '0.88rem', variant: 'wellness-note' }),
           ] },
           { components: [ image('hero-image', `${campaignName} hero image`) ] },
         ], '36px'),
@@ -156,9 +171,9 @@ function buildWellnessScaffold(page = {}, content = []) {
       ] },
       { fullWidth: true, components: [
         section('wellness-gallery-row', 'wellness-gallery-row', [
-          { components: [image('gallery-image-1', `${campaignName} wellness experience`, 'wellness-gallery-image')] },
-          { components: [image('gallery-image-2', `${campaignName} care team`, 'wellness-gallery-image')] },
-          { components: [image('gallery-image-3', `${campaignName} community`, 'wellness-gallery-image')] },
+          { components: [image('gallery-image-1', `${campaignName} ${campaignImageLabel}`, 'wellness-gallery-image')] },
+          { components: [image('gallery-image-2', `${campaignName} team`, 'wellness-gallery-image')] },
+          { components: [image('gallery-image-3', `${campaignName} customer experience`, 'wellness-gallery-image')] },
         ], '8px'),
       ] },
       { fullWidth: true, components: [
@@ -218,7 +233,7 @@ function buildWellnessScaffold(page = {}, content = []) {
       { fullWidth: true, components: [
         section('wellness-cta-row', 'wellness-cta-row', [
           { components: [
-            image('cta-image', `${campaignName} wellness experience`, 'wellness-cta-image'),
+            image('cta-image', `${campaignName} ${campaignImageLabel}`, 'wellness-cta-image'),
           ] },
           { components: [
             heading('cta-title', page?.ctaTitle || 'Ready to get started?', 'h3', { align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' }),
@@ -237,8 +252,8 @@ function buildWellnessScaffold(page = {}, content = []) {
           ] },
           { components: [
             text('register-kicker', page?.registerKicker || 'WHAT HAPPENS NEXT', { align: 'left', color: '#b31d15', fontSize: '0.76rem', variant: 'wellness-eyebrow' }),
-            heading('register-title', page?.registerTitle || `A smoother way to join ${campaignName}.`, 'h2', { align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' }),
-            text('register-copy', page?.registerCopy || `Tell us a few details and the ${businessName} team will confirm availability, share preparation notes, and guide you through the next step.`, { align: 'left', color: '#4d5d58', fontSize: '1rem', variant: 'wellness-body' }),
+            heading('register-title', page?.registerTitle || (isGeneric ? `A clearer way to enquire about ${campaignName}.` : `A smoother way to join ${campaignName}.`), 'h2', { align: 'left', color: '#1f2f2c', variant: 'wellness-section-title' }),
+            text('register-copy', page?.registerCopy || (isGeneric ? `Tell us a few details and the ${businessName} team will respond with the right next step.` : `Tell us a few details and the ${businessName} team will confirm availability, share preparation notes, and guide you through the next step.`), { align: 'left', color: '#4d5d58', fontSize: '1rem', variant: 'wellness-body' }),
             section('register-cards', 'wellness-step-grid', [
               { components: [text('register-card-1-icon', '', { align: 'left', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'mail' }), heading('register-card-1-title', page?.registerCard1Title || 'Confirmation', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-1-body', page?.registerCard1Body || 'Your enquiry is captured in the CRM and routed to the right team.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
               { components: [text('register-card-2-icon', '', { align: 'left', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge', icon: 'users' }), heading('register-card-2-title', page?.registerCard2Title || 'Personal follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-2-body', page?.registerCard2Body || 'A team member can respond with timing, venue, and preparation details.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
@@ -256,12 +271,12 @@ function buildWellnessScaffold(page = {}, content = []) {
             text('footer-links', page?.footerLinks || 'Home | Services | About Us | Contact', { align: 'left', color: '#5f6c67', fontSize: '0.84rem', variant: 'wellness-footer-links' }),
           ] },
           { components: [
-            text('footer-contact', page?.footerContact || '+91 98765 43210\ninfo@company.com\nKoramangala, Bengaluru', { align: 'left', color: '#5f6c67', fontSize: '0.84rem', variant: 'wellness-footer-contact', whiteSpace: 'pre-line' }),
+            text('footer-contact', page?.footerContact || defaultContact, { align: 'left', color: '#5f6c67', fontSize: '0.84rem', variant: 'wellness-footer-contact', whiteSpace: 'pre-line' }),
             text('footer-copy', page?.footerCopy || `(c) ${new Date().getFullYear()} ${businessName}. All rights reserved.`, { align: 'right', color: '#7b807a', fontSize: '0.78rem', variant: 'wellness-footer-copy' }),
           ] },
         ], '8px'),
       ] },
-    ], '24px', { themeId: page?.wellnessTheme || page?.themeId || DEFAULT_WELLNESS_LANDING_THEME, layoutId: page?.wellnessLayout || page?.layoutId || DEFAULT_WELLNESS_LANDING_LAYOUT, customColors: page?.wellnessCustomColors || page?.customColors || undefined, customBaseThemeId: page?.wellnessCustomBaseThemeId || undefined }),
+    ], '24px', { themeId: page?.wellnessTheme || page?.themeId || defaultThemeId, layoutId: page?.wellnessLayout || page?.layoutId || defaultLayoutId, customColors: page?.wellnessCustomColors || page?.customColors || undefined, customBaseThemeId: page?.wellnessCustomBaseThemeId || undefined }),
   ];
 }
 
@@ -517,12 +532,12 @@ function FieldList({ fields, onChange }) {
   );
 }
 
-function SectionOrder({ sections, onMove }) {
+function SectionOrder({ sections, onMove, labels = sectionLabels }) {
   return (
     <Card title="Section order" eyebrow="Layout">
       <div style={{ display: 'grid', gap: '0.6rem' }}>
         {sections.map((section, index) => {
-          const label = sectionLabels[section?.components?.[0]?.id] || section?.components?.[0]?.id || `Section ${index + 1}`;
+          const label = labels[section?.components?.[0]?.id] || section?.components?.[0]?.id || `Section ${index + 1}`;
           return (
             <div key={`${label}-${index}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.65rem 0.75rem', borderRadius: 10, border: '1px solid var(--border-color)', background: 'var(--subtle-bg)' }}>
               <GripLabel />
@@ -570,6 +585,14 @@ const sectionLabels = {
   'wellness-footer-row': 'Footer',
 };
 
+const genericSectionLabels = {
+  ...sectionLabels,
+  'wellness-details-strip': 'Campaign details',
+  'wellness-benefits-row': 'Value and proof',
+  'wellness-process-row': 'Fit and process',
+  'wellness-impact-band': 'Proof band',
+};
+
 function SectionEditor({ title, eyebrow, children }) {
   return <Card title={title} eyebrow={eyebrow}>{children}</Card>;
 }
@@ -578,11 +601,12 @@ function editText(edit, id) {
   return (value) => edit(id, (block) => ({ ...block, props: { ...block.props, text: value } }));
 }
 
-export default function LandingPageWellnessEditor({ content, onChange, page }) {
+export default function LandingPageWellnessEditor({ content, onChange, page, mode = 'wellness' }) {
+  const isGeneric = mode === 'generic';
   const hasRoot = !!getWellnessRoot(content);
   const resolvedContent = useMemo(
-    () => (hasRoot ? content : buildWellnessScaffold(page, content)),
-    [content, hasRoot, page],
+    () => (hasRoot ? content : buildWellnessScaffold(page, content, mode)),
+    [content, hasRoot, page, mode],
   );
   const root = getWellnessRoot(resolvedContent) || null;
   const sections = useMemo(() => getSectionColumns(root), [root]);
@@ -599,11 +623,15 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
     if (next !== resolvedContent) onChange(next);
   };
 
-  const selectedThemeId = root?.props?.themeId || DEFAULT_WELLNESS_LANDING_THEME;
-  const customBaseThemeId = root?.props?.customBaseThemeId || DEFAULT_WELLNESS_LANDING_THEME;
-  const selectedPreset = WELLNESS_LANDING_THEMES.find((theme) => theme.id === selectedThemeId)
-    || WELLNESS_LANDING_THEMES.find((theme) => theme.id === customBaseThemeId)
-    || WELLNESS_LANDING_THEMES.find((theme) => theme.id === DEFAULT_WELLNESS_LANDING_THEME);
+  const themeOptions = isGeneric ? GENERIC_LANDING_THEMES : WELLNESS_LANDING_THEMES;
+  const layoutOptions = isGeneric ? GENERIC_LANDING_LAYOUTS : WELLNESS_LANDING_LAYOUTS;
+  const defaultThemeId = isGeneric ? DEFAULT_GENERIC_LANDING_THEME : DEFAULT_WELLNESS_LANDING_THEME;
+  const defaultLayoutId = isGeneric ? DEFAULT_GENERIC_LANDING_LAYOUT : DEFAULT_WELLNESS_LANDING_LAYOUT;
+  const selectedThemeId = root?.props?.themeId || defaultThemeId;
+  const customBaseThemeId = root?.props?.customBaseThemeId || defaultThemeId;
+  const selectedPreset = themeOptions.find((theme) => theme.id === selectedThemeId)
+    || themeOptions.find((theme) => theme.id === customBaseThemeId)
+    || themeOptions.find((theme) => theme.id === defaultThemeId);
   const customColors = root?.props?.customColors;
   const customTheme = resolveWellnessLandingTheme('custom', customColors || getWellnessColorOverrides(selectedPreset));
   const selectPreset = (themeId) => edit('wellness-page', (block) => {
@@ -706,18 +734,18 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: '1rem', alignItems: 'start', padding: '1.25rem' }}>
       <div style={{ minWidth: 0 }}>
         <div style={{ marginBottom: '1rem' }}>
-          <h2 style={{ margin: 0, fontSize: '1.35rem', color: 'var(--text-primary)' }}>Wellness Landing Page Editor</h2>
+          <h2 style={{ margin: 0, fontSize: '1.35rem', color: 'var(--text-primary)' }}>{isGeneric ? 'Generic Landing Page Editor' : 'Wellness Landing Page Editor'}</h2>
           <p style={{ margin: '0.35rem 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             Edit the marketing page sections directly. The public landing page and preview both use the same block tree.
           </p>
         </div>
 
-        <SectionEditor title="Visual theme" eyebrow="Wellness campaign style">
+        <SectionEditor title="Visual theme" eyebrow={isGeneric ? 'Generic campaign style' : 'Wellness campaign style'}>
           <p style={{ margin: '0 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
-            Choose a palette for this wellness campaign. It is saved with the page and does not affect travel or other CRM pages.
+            Choose a palette for this {isGeneric ? 'generic campaign' : 'wellness campaign'}. It is saved with the page and does not affect other CRM verticals.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
-            {WELLNESS_LANDING_THEMES.map((theme) => {
+            {themeOptions.map((theme) => {
               const selected = selectedThemeId === theme.id;
               return (
                 <button
@@ -747,7 +775,8 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
               Use custom colors
             </label>
             {selectedThemeId === 'custom' ? (
-              <WellnessPaletteEditor
+                <WellnessPaletteEditor
+                vertical={isGeneric ? 'generic' : 'wellness'}
                 theme={customTheme}
                 baseThemeId={selectedPreset.id}
                 onChange={setCustomColors}
@@ -755,7 +784,9 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
               />
             ) : (
               <div style={{ border: '1px dashed var(--border-color)', borderRadius: 8, padding: '0.7rem 0.85rem', background: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                Turn this on to tailor this wellness campaign’s colors by role. The selected preset remains unchanged until you enable custom colors.
+                {isGeneric
+                  ? 'Turn this on to tailor this campaign palette by color role. The selected preset remains unchanged until you enable custom colors.'
+                  : 'Turn this on to tailor this wellness campaign’s colors by role. The selected preset remains unchanged until you enable custom colors.'}
               </div>
             )}
           </div>
@@ -763,8 +794,8 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
             Choose a composition for this campaign. Layout changes the rhythm and visual hierarchy; it does not affect your content or lead form.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
-            {WELLNESS_LANDING_LAYOUTS.map((layout) => {
-              const selected = (root?.props?.layoutId || DEFAULT_WELLNESS_LANDING_LAYOUT) === layout.id;
+            {layoutOptions.map((layout) => {
+              const selected = (root?.props?.layoutId || defaultLayoutId) === layout.id;
               return (
                 <button
                   key={layout.id}
@@ -784,8 +815,8 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
         <SectionEditor title="Brand header" eyebrow="Section 1">
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <Field label="Brand mark" value={header.brandMark?.props?.text} onChange={editText(edit, 'brand-mark')} placeholder="+" />
-            <Field label="Brand line" value={header.brandName?.props?.text} onChange={editText(edit, 'brand-name')} placeholder="Enhance Wellness Initiative" />
-            <Field label="Nav text" value={header.navText?.props?.text} onChange={editText(edit, 'top-nav')} placeholder="HOME   EVENTS   ABOUT US   DONATE   CONTACT" />
+            <Field label="Brand line" value={header.brandName?.props?.text} onChange={editText(edit, 'brand-name')} placeholder={isGeneric ? 'Your company name' : 'Enhance Wellness Initiative'} />
+            <Field label="Nav text" value={header.navText?.props?.text} onChange={editText(edit, 'top-nav')} placeholder={isGeneric ? 'HOME   SOLUTIONS   ABOUT   CONTACT' : 'HOME   EVENTS   ABOUT US   DONATE   CONTACT'} />
           </div>
         </SectionEditor>
 
@@ -799,14 +830,14 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
           <ImageField label="Hero image" value={hero.image?.props?.src} onChange={(value) => edit('hero-image', (block) => ({ ...block, props: { ...block.props, src: value } }))} />
         </SectionEditor>
 
-        <SectionEditor title="Event details" eyebrow="Section 3">
+        <SectionEditor title={isGeneric ? 'Campaign details' : 'Event details'} eyebrow="Section 3">
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <Field label="Date label" value={details.dateLabel?.props?.text} onChange={editText(edit, 'detail-date-label')} placeholder="Date" />
             <Field label="Date value" value={details.dateValue?.props?.text} onChange={editText(edit, 'detail-date-value')} placeholder="15 August 2026" />
             <Field label="Time label" value={details.timeLabel?.props?.text} onChange={editText(edit, 'detail-time-label')} placeholder="Time" />
             <Field label="Time value" value={details.timeValue?.props?.text} onChange={editText(edit, 'detail-time-value')} placeholder="10:00 AM - 4:00 PM" />
             <Field label="Location label" value={details.locationLabel?.props?.text} onChange={editText(edit, 'detail-location-label')} placeholder="Location" />
-            <Field label="Location value" value={details.locationValue?.props?.text} onChange={editText(edit, 'detail-location-value')} placeholder="Koramangala, Bengaluru" />
+            <Field label="Location value" value={details.locationValue?.props?.text} onChange={editText(edit, 'detail-location-value')} placeholder={isGeneric ? 'City, region, or online' : 'Koramangala, Bengaluru'} />
             <Field label="Audience label" value={details.audienceLabel?.props?.text} onChange={editText(edit, 'detail-audience-label')} placeholder="For" />
             <Field label="Audience value" value={details.audienceValue?.props?.text} onChange={editText(edit, 'detail-audience-value')} placeholder="Audience segment" />
           </div>
@@ -826,7 +857,7 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
           ))}
         </SectionEditor>
 
-        <SectionEditor title="Benefits and proof" eyebrow="Section 4">
+        <SectionEditor title={isGeneric ? 'Value and proof' : 'Benefits and proof'} eyebrow="Section 4">
           <Field label="Kicker" value={benefits.kicker?.props?.text} onChange={editText(edit, 'benefits-kicker')} placeholder="WHY CHOOSE THIS PAGE?" />
           <Field label="Title" value={benefits.title?.props?.text} onChange={editText(edit, 'benefits-title')} placeholder="A clear page can improve enquiries." />
           <Field label="Copy" value={benefits.copy?.props?.text} onChange={editText(edit, 'benefits-copy')} placeholder="A short professional paragraph tailored to the campaign" multiline rows={3} />
@@ -839,11 +870,11 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
           ))}
         </SectionEditor>
 
-        <SectionEditor title="Eligibility and process" eyebrow="Section 5">
-          <Field label="Eligibility title" value={process.eligibilityTitle?.props?.text} onChange={editText(edit, 'eligibility-title')} placeholder="Am I eligible?" />
-          <Field label="Eligibility copy" value={process.eligibilityCopy?.props?.text} onChange={editText(edit, 'eligibility-copy')} placeholder="Eligibility explanation" multiline rows={3} />
-          <Field label="Eligibility list" value={process.eligibilityList?.props?.text} onChange={editText(edit, 'eligibility-list')} placeholder="- Age between..." multiline rows={4} />
-          <Field label="Eligibility CTA" value={process.eligibilityCta?.props?.text} onChange={editText(edit, 'eligibility-cta')} placeholder="Know More" />
+        <SectionEditor title={isGeneric ? 'Fit and process' : 'Eligibility and process'} eyebrow="Section 5">
+          <Field label={isGeneric ? 'Audience fit title' : 'Eligibility title'} value={process.eligibilityTitle?.props?.text} onChange={editText(edit, 'eligibility-title')} placeholder={isGeneric ? 'Is this right for you?' : 'Am I eligible?'} />
+          <Field label={isGeneric ? 'Audience fit copy' : 'Eligibility copy'} value={process.eligibilityCopy?.props?.text} onChange={editText(edit, 'eligibility-copy')} placeholder={isGeneric ? 'Explain who benefits from this offer.' : 'Eligibility explanation'} multiline rows={3} />
+          <Field label={isGeneric ? 'Audience fit list' : 'Eligibility list'} value={process.eligibilityList?.props?.text} onChange={editText(edit, 'eligibility-list')} placeholder={isGeneric ? '- Clear business need...' : '- Age between...'} multiline rows={4} />
+          <Field label={isGeneric ? 'Audience fit CTA' : 'Eligibility CTA'} value={process.eligibilityCta?.props?.text} onChange={editText(edit, 'eligibility-cta')} placeholder={isGeneric ? 'See if it fits' : 'Know More'} />
           <Field label="Process title" value={process.processTitle?.props?.text} onChange={editText(edit, 'process-title')} placeholder="How it works" />
           <Field label="Process copy" value={process.processCopy?.props?.text} onChange={editText(edit, 'process-copy')} placeholder="Process explanation" multiline rows={3} />
           {process.steps.map((step, index) => (
@@ -855,9 +886,9 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
           ))}
         </SectionEditor>
 
-        <SectionEditor title="Impact band" eyebrow="Section 6">
+        <SectionEditor title={isGeneric ? 'Proof band' : 'Impact band'} eyebrow="Section 6">
           <Field label="Kicker" value={impact.kicker?.props?.text} onChange={editText(edit, 'impact-kicker')} placeholder="OUR IMPACT" />
-          <Field label="Title" value={impact.title?.props?.text} onChange={editText(edit, 'impact-title')} placeholder="Together, we are making a difference." />
+          <Field label="Title" value={impact.title?.props?.text} onChange={editText(edit, 'impact-title')} placeholder={isGeneric ? 'Make the next decision easier.' : 'Together, we are making a difference.'} />
           <Field label="Copy" value={impact.copy?.props?.text} onChange={editText(edit, 'impact-copy')} placeholder="Impact copy" multiline rows={3} />
           {impact.metrics.map((metric, index) => (
             <Card key={`metric-${index}`} title={`Metric ${index + 1}`} eyebrow={`Metric ${index + 1}`}>
@@ -868,14 +899,14 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
         </SectionEditor>
 
         <SectionEditor title="Call to action" eyebrow="Section 7">
-          <Field label="Title" value={cta.title?.props?.text} onChange={editText(edit, 'cta-title')} placeholder="Ready to make a difference?" />
+          <Field label="Title" value={cta.title?.props?.text} onChange={editText(edit, 'cta-title')} placeholder={isGeneric ? 'Ready to take the next step?' : 'Ready to make a difference?'} />
           <Field label="Copy" value={cta.copy?.props?.text} onChange={editText(edit, 'cta-copy')} placeholder="CTA copy" multiline rows={3} />
           <Field label="Note" value={cta.note?.props?.text} onChange={editText(edit, 'cta-note')} placeholder="CTA note" multiline rows={2} />
           <Field label="Button text" value={cta.button?.props?.text} onChange={editText(edit, 'cta-button')} placeholder="Get Started" />
         </SectionEditor>
 
         <SectionEditor title="Lead capture" eyebrow="Section 8">
-          <Field label="Form title" value={form?.props?.title} onChange={(value) => edit('lead-form', (block) => ({ ...block, props: { ...block.props, title: value } }))} placeholder="Request a Consultation" />
+          <Field label="Form title" value={form?.props?.title} onChange={(value) => edit('lead-form', (block) => ({ ...block, props: { ...block.props, title: value } }))} placeholder={isGeneric ? 'Request more information' : 'Request a Consultation'} />
           <Field label="Submit text" value={form?.props?.submitText} onChange={(value) => edit('lead-form', (block) => ({ ...block, props: { ...block.props, submitText: value } }))} placeholder="Get Started" />
           <Field label="Thank-you message" value={form?.props?.thankYouMessage} onChange={(value) => edit('lead-form', (block) => ({ ...block, props: { ...block.props, thankYouMessage: value } }))} multiline rows={3} />
           <FieldList fields={form?.props?.fields || []} onChange={(fields) => edit('lead-form', (block) => ({ ...block, props: { ...block.props, fields } }))} />
@@ -883,15 +914,15 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
 
         <SectionEditor title="Footer" eyebrow="Section 9">
           <Field label="Brand mark" value={footer.brandMark?.props?.text} onChange={editText(edit, 'footer-brand-mark')} placeholder="+" />
-          <Field label="Brand name" value={footer.brandName?.props?.text} onChange={editText(edit, 'footer-brand-name')} placeholder="Enhance Wellness Initiative" />
-          <Field label="Links" value={footer.links?.props?.text} onChange={editText(edit, 'footer-links')} placeholder="Home | Events | About Us | Donate | Contact" />
+          <Field label="Brand name" value={footer.brandName?.props?.text} onChange={editText(edit, 'footer-brand-name')} placeholder={isGeneric ? 'Your company name' : 'Enhance Wellness Initiative'} />
+          <Field label="Links" value={footer.links?.props?.text} onChange={editText(edit, 'footer-links')} placeholder={isGeneric ? 'Home | Solutions | About | Contact' : 'Home | Events | About Us | Donate | Contact'} />
           <Field label="Contact details" value={footer.contact?.props?.text} onChange={editText(edit, 'footer-contact')} placeholder="Phone, email, location" multiline rows={3} />
           <Field label="Copyright" value={footer.copy?.props?.text} onChange={editText(edit, 'footer-copy')} placeholder="(c) 2026 ..." />
         </SectionEditor>
       </div>
 
       <aside style={{ position: 'sticky', top: 16, minWidth: 0 }}>
-        <SectionOrder sections={sections} onMove={move} />
+        <SectionOrder sections={sections} onMove={move} labels={isGeneric ? genericSectionLabels : sectionLabels} />
         <Card title="Page info" eyebrow="Status">
           <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
             <div><strong>Title:</strong> {page?.title || 'Untitled'}</div>

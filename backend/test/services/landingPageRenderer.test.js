@@ -8,12 +8,12 @@ import landing from '../../services/landingPageRenderer.js';
 const { renderPage } = landing;
 
 describe('module shape', () => {
-  test('does not turn Generic or Travel campaigns into wellness scaffolds', () => {
+  test('generic campaigns use the shared themed surface without travel rendering', () => {
     for (const templateType of ['generic-site-real_estate-v1', 'generic-site-technology-v1', 'generic-site-travel-v1']) {
       const html = renderPage({ templateType, title: 'Original campaign', content: JSON.stringify([{ type: 'heading', props: { text: 'Original offer' } }]) });
       expect(html).toContain('Original offer');
-      expect(html).not.toContain('class="lp-container lp-container--wellness"');
-      expect(html).not.toContain('wellness-campaign-page--');
+      expect(html).toContain('class="lp-container lp-container--wellness"');
+      expect(html).toContain('generic-campaign-page');
     }
   });
   test('exports renderPage', () => {
@@ -188,6 +188,40 @@ describe('renderPage  top-level document', () => {
     expect(html).not.toContain('>Wellness<');
     expect(html).toContain('>Register Now<');
     expect(html).not.toContain('>Contact Us<');
+  });
+
+  test('aligns stale stored campaign years with the persisted detail date', () => {
+    const campaignName = 'Education campaign';
+    const eventDate = '14 November 2032';
+    const eventYear = eventDate.match(/\b(?:19|20)\d{2}\b/)[0];
+    const staleYear = String(Number(eventYear) - 1);
+    const staleTitle = `${campaignName} ${staleYear}`;
+    const alignedTitle = `${campaignName} ${eventYear}`;
+    const html = renderPage({
+      title: campaignName,
+      slug: 'education-campaign',
+      templateType: 'generic-site-education',
+      metaTitle: staleTitle,
+      metaDescription: `Join the ${staleYear} campaign.`,
+      content: JSON.stringify([{
+        id: 'generic-page',
+        type: 'columns',
+        props: {
+          variant: 'generic-campaign-page',
+          columns: [{
+            fullWidth: true,
+            components: [
+              { id: 'hero-title-1', type: 'heading', props: { text: staleTitle } },
+              { id: 'detail-date-value', type: 'heading', props: { text: eventDate } },
+            ],
+          }],
+        },
+      }]),
+    });
+
+    expect(html).toContain(alignedTitle);
+    expect(html).not.toContain(staleTitle);
+    expect(html).toContain(`<meta name="description" content="Join the ${eventYear} campaign." />`);
   });
 
   test('centers legacy wellness registration forms and removes the duplicate form heading', () => {

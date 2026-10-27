@@ -326,6 +326,21 @@ describe('POST /apikeys — create API key', () => {
     const createArg = prisma.apiKey.create.mock.calls[0][0].data;
     expect(createArg.subBrand).toBe('tmc');
   });
+
+  test('201 with optional purpose stores an additive purpose scope', async () => {
+    prisma.apiKey.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 101, ...data })
+    );
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .post('/api/developer/apikeys')
+      .send({ name: 'Plot site website', purpose: 'plot-inventory-read' });
+
+    expect(res.status).toBe(201);
+    const createArg = prisma.apiKey.create.mock.calls[0][0].data;
+    expect(createArg.purpose).toBe('plot-inventory-read');
+    expect(createArg.subBrand).toBeNull();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

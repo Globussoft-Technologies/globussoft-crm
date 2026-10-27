@@ -36,6 +36,34 @@ function clean(value, fallback = '', max = 120) {
   return (text || fallback).slice(0, max);
 }
 
+function extractYear(value) {
+  const match = String(value || '').match(/\b(?:19|20)\d{2}\b/);
+  return match ? match[0] : '';
+}
+
+function alignTextToEventYear(value, eventDate) {
+  if (typeof value !== 'string') return value;
+  const eventYear = extractYear(eventDate);
+  if (!eventYear) return value;
+  return value.replace(/\b(?:19|20)\d{2}\b/g, eventYear);
+}
+
+function normalizeLandingContentYears(value, eventDate, key = '') {
+  if (!extractYear(eventDate)) return value;
+  if (typeof value === 'string') {
+    if (['src', 'url', 'href', 'slug', 'suggestedSlug'].includes(key) || /^(?:https?:|data:)/i.test(value.trim())) {
+      return value;
+    }
+    return alignTextToEventYear(value, eventDate);
+  }
+  if (Array.isArray(value)) return value.map((item) => normalizeLandingContentYears(item, eventDate, key));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([fieldKey, item]) => [
+    fieldKey,
+    normalizeLandingContentYears(item, eventDate, fieldKey),
+  ]));
+}
+
 function slugFor(sectorKey, campaignName) {
   return `${sectorKey}-${campaignName}`
     .toLowerCase()
@@ -48,7 +76,6 @@ function buildGenericLandingSitePrompt(input = {}) {
   const sectorKey = normalizeSectorKey(input.sectorKey);
   const sector = SECTORS[sectorKey];
   const sectorLabel = clean(input.sectorLabel, sector.label, 60);
-  const campaignName = clean(input.campaignName, `${sectorLabel} Landing Site`, 120);
   const businessName = clean(input.businessName, '', 120);
   const campaignGoal = clean(input.campaignGoal, 'capture leads', 200);
   const audience = clean(input.audience, 'qualified visitors', 200);
@@ -56,6 +83,7 @@ function buildGenericLandingSitePrompt(input = {}) {
   const eventDate = clean(input.eventDate, '', 80);
   const eventTime = clean(input.eventTime, '', 80);
   const eventLocation = clean(input.eventLocation || input.location, '', 120);
+  const campaignName = alignTextToEventYear(clean(input.campaignName, `${sectorLabel} Landing Site`, 120), eventDate);
   const tone = clean(input.tone, sector.voice, 120);
   const ctaText = clean(input.ctaText, 'Get Started', 40);
   const imageMode = clean(input.imageMode, 'auto', 20).toLowerCase();
@@ -71,6 +99,7 @@ function buildGenericLandingSitePrompt(input = {}) {
     'Do not write vague filler, stock marketing fluff, or placeholder text.',
     'Do not copy any example campaign already seen elsewhere; create fresh copy from the provided inputs.',
     'If a detail is not provided, infer a sensible professional default instead of leaving the copy empty.',
+    'When an event or launch date is provided, treat it as authoritative. Any year in generated titles or copy must match that date; never invent or reuse a different year.',
     'Image URLs are optional. If you cannot produce a useful image, use an empty string for src.',
     '',
     'Return this shape:',
@@ -93,9 +122,9 @@ function buildGenericLandingSitePrompt(input = {}) {
     `Tone: ${tone}`,
     `CTA label: ${ctaText}`,
     `Image mode: ${imageMode}`,
-    wellnessMode ? `Event date: ${eventDate || '(not provided)'}` : '',
-    wellnessMode ? `Event time: ${eventTime || '(not provided)'}` : '',
-    wellnessMode ? `Event location: ${eventLocation || '(not provided)'}` : '',
+    `Event date: ${eventDate || '(not provided)'}`,
+    `Event time: ${eventTime || '(not provided)'}`,
+    `Event location: ${eventLocation || '(not provided)'}`,
     '',
     wellnessMode
       ? 'The form must capture first name, last name, email, phone, and a message. Use a textarea for the message. Make the labels, section titles, and microcopy sound like a polished live landing page, not a template.'
@@ -109,14 +138,14 @@ function buildWellnessLandingSitePrompt(input = {}) {
   const sectorKey = normalizeSectorKey(input.sectorKey);
   const sector = SECTORS[sectorKey];
   const sectorLabel = clean(input.sectorLabel, sector.label, 60);
-  const campaignName = clean(input.campaignName, `${sectorLabel} Landing Page`, 120);
-  const businessName = clean(input.businessName, campaignName, 120);
   const campaignGoal = clean(input.campaignGoal, 'capture registrations', 200);
   const audience = clean(input.audience, 'qualified visitors', 200);
   const location = clean(input.location, '', 120);
   const eventDate = clean(input.eventDate, 'Add date', 80);
   const eventTime = clean(input.eventTime, 'Add time', 80);
   const eventLocation = clean(input.eventLocation || input.location, 'Add location', 120);
+  const campaignName = alignTextToEventYear(clean(input.campaignName, `${sectorLabel} Landing Page`, 120), eventDate);
+  const businessName = clean(input.businessName, campaignName, 120);
   const tone = clean(input.tone, sector.voice, 120);
   const ctaText = clean(input.ctaText, 'Get Started', 40);
   const imageMode = clean(input.imageMode, 'auto', 20).toLowerCase();
@@ -133,6 +162,7 @@ function buildWellnessLandingSitePrompt(input = {}) {
     'You may generate fresh copy, but the content must remain consistent with the inputs.',
     'Use concise, specific language. No vague filler.',
     'If an input is missing, infer a sensible professional default rather than leaving it blank.',
+    'The provided event date is authoritative. Any year in the campaign title or generated copy must match the year in eventDate; never invent or reuse another year.',
     '',
     'Return this JSON shape:',
     '{',
@@ -263,7 +293,10 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const sectorKey = normalizeSectorKey(input.sectorKey);
   const sector = SECTORS[sectorKey];
   const sectorLabel = clean(input.sectorLabel, sector.label, 60);
-  const campaignName = clean(input.campaignName || sourcePayload.suggestedTitle || input.businessName, `${sectorLabel} Landing Page`, 120);
+  const campaignName = alignTextToEventYear(
+    clean(input.campaignName || sourcePayload.suggestedTitle || input.businessName, `${sectorLabel} Landing Page`, 120),
+    input.eventDate,
+  );
   const businessName = clean(input.businessName, campaignName, 120);
   const audience = clean(input.audience, 'local residents', 180);
   const eventDate = clean(input.eventDate, '15 August 2026', 80);
@@ -272,8 +305,8 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const ctaText = clean(input.ctaText, 'Book Now', 40);
   const heroPrimaryCta = clean(input.heroPrimaryCta, 'Get Started', 40);
   const heroKicker = clean(input.heroKicker, 'VISIT - CALL - WRITE', 40);
-  const heroTitleLine1 = clean(input.heroTitleLine1, campaignName, 80);
-  const heroTitleLine2 = clean(input.heroTitleLine2, '', 40);
+  const heroTitleLine1 = alignTextToEventYear(clean(input.heroTitleLine1, campaignName, 80), eventDate);
+  const heroTitleLine2 = alignTextToEventYear(clean(input.heroTitleLine2, '', 40), eventDate);
   const heroCopy = clean(input.heroCopy || sourcePayload.description, `${businessName} invites ${audience} to explore this ${sectorLabel.toLowerCase()} experience and share their details for a prompt, professional follow-up.`, 260);
   const heroNote = clean(input.heroNote, 'Every submission is editable, trackable, and routed to the right team instantly.', 160);
   const brandMark = clean(input.brandMark, '+', 10);
@@ -583,6 +616,9 @@ module.exports = {
   buildGenericFallback,
   buildWellnessRegistrationBlocks,
   isWellnessSector,
+  extractYear,
+  alignTextToEventYear,
+  normalizeLandingContentYears,
 };
 
 

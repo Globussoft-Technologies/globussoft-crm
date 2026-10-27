@@ -81,6 +81,17 @@ function makeReqResNext({ headers = {} } = {}) {
 }
 
 describe('voyagrAuth', () => {
+  test('rejects plot inventory read keys', async () => {
+    findUniqueMock.mockResolvedValueOnce({
+      id: 1, tenantId: 7, userId: 4, purpose: 'plot-inventory-read',
+      tenant: { id: 7, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({ headers: { 'x-api-key': 'glbs_' + 'a'.repeat(48) } });
+    await voyagrAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.body.code).toBe('WRONG_KEY_PURPOSE');
+    expect(next).not.toHaveBeenCalled();
+  });
   test('returns 401 MISSING_API_KEY when no X-API-Key header', async () => {
     const { req, res, next } = makeReqResNext();
     await voyagrAuth(req, res, next);

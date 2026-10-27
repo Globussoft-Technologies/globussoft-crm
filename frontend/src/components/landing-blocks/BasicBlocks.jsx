@@ -645,7 +645,7 @@ export function ColumnsBlock({ props = {}, renderBlock }) {
   const columns = props.columns || [];
   const gap = props.gap || '24px';
   const variant = props.variant || '';
-  const isWellnessCampaignPage = variant === 'wellness-campaign-page';
+  const isWellnessCampaignPage = ['wellness-campaign-page', 'generic-campaign-page'].includes(variant);
   const isWellnessHeaderRow = variant === 'wellness-header-row';
   const isWellnessHeroRow = variant === 'wellness-hero-row';
   const isWellnessDetailsStrip = variant === 'wellness-details-strip';

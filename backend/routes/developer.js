@@ -124,19 +124,34 @@ router.post("/apikeys", verifyToken, async (req, res) => {
       subBrand = req.body.subBrand;
     }
 
+    // Purpose is optional and additive. Existing keys remain tenant-wide when
+    // omitted. Consumers may use a purpose-scoped key for a read-only partner
+    // surface without changing the behavior of the existing external leads
+    // API or other legacy tenant-wide integrations.
+    let purpose = null;
+    if (req.body.purpose !== undefined && req.body.purpose !== null && req.body.purpose !== "") {
+      if (typeof req.body.purpose !== "string" || req.body.purpose.trim().length > 80) {
+        return res.status(400).json({
+          error: "purpose must be a string of 80 characters or fewer",
+          code: "INVALID_API_KEY_PURPOSE",
+        });
+      }
+      purpose = req.body.purpose.trim();
+    }
+
     const rawKey = `glbs_${crypto.randomBytes(24).toString('hex')}`;
 
     // In production, we would hash the key secret before storing it.
     // However, for this dashboard demo context, we'll store it raw.
-    const key = await prisma.apiKey.create({
-      data: {
-        name,
-        keySecret: rawKey,
-        subBrand, // #899 Part A: null = tenant-wide; 'tmc'|'rfu'|'travelstall'|'visasure' = scoped
-        userId: req.user.userId,
-        tenantId: req.user.tenantId,
-      }
-    });
+    const data = {
+      name,
+      keySecret: rawKey,
+      subBrand, // #899 Part A: null = tenant-wide; 'tmc'|'rfu'|'travelstall'|'visasure' = scoped
+      userId: req.user.userId,
+      tenantId: req.user.tenantId,
+    };
+    if (purpose !== null) data.purpose = purpose;
+    const key = await prisma.apiKey.create({ data });
 
     res.status(201).json({ key, rawKey });
   } catch (err) {

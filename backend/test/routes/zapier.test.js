@@ -118,6 +118,18 @@ function makeApp() {
   return app;
 }
 
+test('inventory read keys cannot execute Zapier actions or webhooks', async () => {
+  prisma.apiKey.findUnique.mockResolvedValue({ id: 1, tenantId: 7, userId: 4, purpose: 'plot-inventory-read' });
+  const app = makeApp();
+  const action = await request(app).post('/api/zapier/actions/create_contact/execute')
+    .set('Authorization', 'Bearer glbs_test').send({ name: 'Blocked' });
+  expect(action.status).toBe(401);
+  const webhook = await request(app).post('/api/zapier/webhook')
+    .send({ apiKey: 'glbs_test', triggerKey: 'contact_created', payload: { name: 'Blocked' } });
+  expect(webhook.status).toBe(403);
+  expect(prisma.contact.create).not.toHaveBeenCalled();
+});
+
 beforeEach(() => {
   prisma.apiKey.findUnique.mockReset();
   prisma.apiKey.update.mockReset();

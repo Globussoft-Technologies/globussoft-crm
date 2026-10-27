@@ -43,6 +43,8 @@ describe('filterSidebarPages', () => {
     expect(getGenericAccessByPath('/clients')).toMatchObject({ sidebarHidden: true });
     expect(pages.some((page) => page.path === '/clients')).toBe(false);
     expect(pages.some((page) => page.path === '/contacts')).toBe(true);
+    expect(getGenericAccessByPath('/landing-sites')).not.toMatchObject({ sidebarHidden: true });
+    expect(pages.some((page) => page.path === '/landing-sites')).toBe(true);
   });
 
   it('uses one access contract for routes, sidebar search, and tours', () => {

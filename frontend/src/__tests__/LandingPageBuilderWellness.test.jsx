@@ -111,4 +111,21 @@ describe('<LandingPageWellnessEditor /> - wellness bootstrap', () => {
     expect(editedContent?.[0]?.props?.themeId).toBe('custom');
     expect(editedContent?.[0]?.props?.customColors?.bg).toBe('#fef2f2');
   });
+
+  it('uses generic campaign names and palette copy in generic mode', () => {
+    render(
+      <LandingPageWellnessEditor
+        content={[]}
+        onChange={vi.fn()}
+        page={{ ...PAGE, templateType: 'generic-site-technology-v2' }}
+        mode="generic"
+      />,
+    );
+
+    expect(screen.getByText('Generic Landing Page Editor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Blueprint clarity/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Conversion flow/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Botanical calm/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Clinical trust/i })).not.toBeInTheDocument();
+  });
 });

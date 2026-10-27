@@ -346,6 +346,42 @@ test('external plot inventory key returns only the safe generic catalog projecti
   expect(plot).not.toHaveProperty('pickupLocationIdsJson');
 });
 
+test('inventory key cannot access other external APIs', async ({ request }) => {
+  for (const [method, path] of [['get', '/api/v1/external/contacts'], ['post', '/api/v1/external/leads'], ['post', '/api/v1/voyagr/leads']]) {
+    const response = await request[method](`${BASE_URL}${path}`, {
+      headers: { 'X-API-Key': externalApiKey },
+    });
+    expect(response.status()).toBe(403);
+  }
+});
+
+test('external inventory filters plots by secondary numeric pickup location', async ({ request }) => {
+  const location = await request.post(`${BASE_URL}/api/pickup-plot-inventory/locations`, {
+    headers: headers(adminToken), data: { name: `${RUN_TAG} Secondary Gate`, address: '27 Test Avenue' },
+  });
+  expect(location.status()).toBe(201);
+  const secondaryId = (await location.json()).id;
+  const update = await request.put(`${BASE_URL}/api/pickup-plot-inventory/plots/${plotId}`, {
+    headers: headers(adminToken),
+    data: {
+      name: `${RUN_TAG} Plot A`, plotNumber: 'A-101', block: 'A', address: '26 Lake Road',
+      area: '2', areaUnit: 'KATHA', price: 250000, roadWidth: '40 ft', facing: 'EAST',
+      propertyType: 'RESIDENTIAL', availability: 'RESERVED', isActive: true,
+      pickupLocationIds: [locationId, secondaryId],
+    },
+  });
+  expect(update.status()).toBe(200);
+  const response = await request.get(`${BASE_URL}/api/v1/external/plot-inventory`, {
+    headers: { 'X-API-Key': externalApiKey },
+    params: { q: RUN_TAG, pickupLocationId: secondaryId, limit: 1 },
+  });
+  expect(response.status()).toBe(200);
+  const body = await response.json();
+  expect(body.total).toBe(1);
+  expect(body.hasMore).toBe(false);
+  expect(body.data.map((row) => row.id)).toContain(plotId);
+});
+
 test('plot creation rejects missing mandatory inventory fields', async ({ request }) => {
   const response = await request.post(`${BASE_URL}/api/pickup-plot-inventory/plots`, {
     headers: headers(adminToken),

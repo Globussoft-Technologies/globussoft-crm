@@ -19,6 +19,7 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const externalAuth = require("../middleware/externalAuth");
+const { isPlotInventoryReadKey, PLOT_INVENTORY_READ_PURPOSE } = require('../lib/apiKeyAuth');
 const { classifyLead } = require("../lib/leadJunkFilter");
 const { pickAssignee } = require("../lib/leadAutoRouter");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
@@ -53,6 +54,15 @@ router.param("id", (req, res, next, id) => {
 
 router.use(externalAuth);
 
+// Keep the purpose boundary explicit at the router as well, including in
+// deployments/tests that substitute the authentication middleware.
+router.use((req, res, next) => {
+  if (isPlotInventoryReadKey(req.apiKey) && (req.method !== 'GET' || !/^\/plot-inventory\/?$/.test(req.path))) {
+    return res.status(403).json({ error: 'API key is restricted to plot inventory reads', code: 'WRONG_KEY_PURPOSE' });
+  }
+  return next();
+});
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.tenantId, ...extra });
@@ -72,7 +82,7 @@ const phoneMatches = (input) => {
 const parseLimit = (v, def = 50, max = 200) => Math.min(parseInt(v) || def, max);
 const parseOffset = (v) => parseInt(v) || 0;
 
-const GENERIC_PLOT_INVENTORY_PURPOSE = "plot-inventory-read";
+const GENERIC_PLOT_INVENTORY_PURPOSE = PLOT_INVENTORY_READ_PURPOSE;
 const PLOT_INVENTORY_AVAILABILITIES = new Set([
   "AVAILABLE",
   "HOLD",
@@ -1146,6 +1156,17 @@ router.get("/plot-inventory", requireGenericPlotInventory, async (req, res) => {
       return res.status(400).json({ error: "pickupLocationId must be a positive integer", code: "INVALID_PICKUP_LOCATION" });
     }
 
+    // Match JSON array members exactly on the database side before pagination.
+    // Accept legacy string IDs as well as today's numeric IDs and treat
+    // malformed historical JSON as an empty array.
+    const matchingPlotIds = pickupLocationId
+      ? (await prisma.$queryRaw`SELECT id FROM PlotSite
+          WHERE tenantId = ${req.tenantId} AND isActive = true
+            AND (JSON_CONTAINS(CASE WHEN JSON_VALID(pickupLocationIdsJson) THEN pickupLocationIdsJson ELSE '[]' END, ${String(pickupLocationId)}, '$')
+              OR JSON_CONTAINS(CASE WHEN JSON_VALID(pickupLocationIdsJson) THEN pickupLocationIdsJson ELSE '[]' END, ${JSON.stringify(String(pickupLocationId))}, '$'))`)
+        .map((row) => Number(row.id))
+      : [];
+
     const where = tenantWhere(req, {
       isActive: true,
       ...(availability ? { availability } : {}),
@@ -1153,7 +1174,7 @@ router.get("/plot-inventory", requireGenericPlotInventory, async (req, res) => {
         ? {
           OR: [
             { pickupLocationId },
-            { pickupLocationIdsJson: { contains: `"${pickupLocationId}"` } },
+            { id: { in: matchingPlotIds } },
           ],
         }
         : {}),

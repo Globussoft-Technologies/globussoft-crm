@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { isPlotInventoryReadKey } = require('../lib/apiKeyAuth');
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
@@ -154,6 +155,7 @@ async function resolveApiKey(req) {
   if (!token) return null;
   const apiKey = await prisma.apiKey.findUnique({ where: { keySecret: token } });
   if (!apiKey) return null;
+  if (isPlotInventoryReadKey(apiKey)) return null;
   // Touch lastUsed (best-effort, fire and forget)
   prisma.apiKey.update({ where: { id: apiKey.id }, data: { lastUsed: new Date() } }).catch(() => {});
   return apiKey;
@@ -266,6 +268,7 @@ router.post("/webhook", async (req, res) => {
 
     const apiKey = await prisma.apiKey.findUnique({ where: { keySecret: rawKey } });
     if (!apiKey) return res.status(401).json({ error: "Invalid API key" });
+    if (isPlotInventoryReadKey(apiKey)) return res.status(403).json({ error: "API key is restricted to plot inventory reads", code: "WRONG_KEY_PURPOSE" });
 
     prisma.apiKey
       .update({ where: { id: apiKey.id }, data: { lastUsed: new Date() } })

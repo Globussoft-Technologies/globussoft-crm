@@ -261,6 +261,7 @@ prisma.location.findMany = vi.fn();
 prisma.plotSite = prisma.plotSite || {};
 prisma.plotSite.count = vi.fn();
 prisma.plotSite.findMany = vi.fn();
+prisma.$queryRaw = vi.fn();
 prisma.pickupLocation = prisma.pickupLocation || {};
 prisma.pickupLocation.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
@@ -311,6 +312,7 @@ beforeEach(() => {
   prisma.location.findMany.mockReset();
   prisma.plotSite.count.mockReset();
   prisma.plotSite.findMany.mockReset();
+  prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.pickupLocation.findMany.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.visit.create.mockReset();
@@ -1449,6 +1451,7 @@ describe("GET /api/v1/external/plot-inventory — generic read-only projection",
 
   test("returns paginated tenant-scoped inventory without internal fields", async () => {
     useGenericTenant();
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 101 }, { id: 102 }]);
     prisma.plotSite.count.mockResolvedValueOnce(2);
     prisma.plotSite.findMany.mockResolvedValueOnce([{
       id: 101,
@@ -1518,8 +1521,12 @@ describe("GET /api/v1/external/plot-inventory — generic read-only projection",
     expect(listArgs.where.availability).toBe("RESERVED");
     expect(listArgs.where.OR).toEqual([
       { pickupLocationId: 7 },
-      { pickupLocationIdsJson: { contains: '"7"' } },
+      { id: { in: [101, 102] } },
     ]);
+    const [sql, ...parameters] = prisma.$queryRaw.mock.calls[0];
+    expect(sql.join('?')).toContain('JSON_VALID');
+    expect(sql.join('?')).toContain('JSON_CONTAINS');
+    expect(parameters).toEqual([7, '7', '"7"']);
     expect(listArgs.skip).toBe(0);
     expect(listArgs.take).toBe(1);
     expect(prisma.pickupLocation.findMany.mock.calls[0][0].where).toEqual({
@@ -1539,6 +1546,19 @@ describe("GET /api/v1/external/plot-inventory — generic read-only projection",
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("WRONG_KEY_PURPOSE");
     expect(prisma.plotSite.count).not.toHaveBeenCalled();
+  });
+
+  test("inventory keys cannot read or mutate other external resources", async () => {
+    useGenericTenant();
+    externalAuthState.apiKey.purpose = "plot-inventory-read";
+    const app = makeApp();
+    for (const path of ["/contacts", "/leads", "/me"]) {
+      const res = await request(app).get(`/api/v1/external${path}`);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("WRONG_KEY_PURPOSE");
+    }
+    const res = await request(app).post("/api/v1/external/leads").send({ name: "Blocked" });
+    expect(res.status).toBe(403);
   });
 
   test("rejects invalid pagination and availability before querying Prisma", async () => {

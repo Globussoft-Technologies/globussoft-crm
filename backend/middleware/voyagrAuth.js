@@ -41,7 +41,7 @@
  *   concept (e.g. /me, /health) simply never call the helpers.
  */
 const prisma = require("../lib/prisma");
-const { installSubBrandHelpers } = require("../lib/apiKeyAuth");
+const { installSubBrandHelpers, isPlotInventoryReadKey } = require("../lib/apiKeyAuth");
 
 module.exports = async function voyagrAuth(req, res, next) {
   try {
@@ -73,6 +73,10 @@ module.exports = async function voyagrAuth(req, res, next) {
       return res
         .status(403)
         .json({ error: "Tenant is not active", code: "TENANT_INACTIVE" });
+    }
+
+    if (isPlotInventoryReadKey(apiKey)) {
+      return res.status(403).json({ error: "API key is restricted to plot inventory reads", code: "WRONG_KEY_PURPOSE" });
     }
 
     // Best-effort lastUsed update — don't block the request on this.

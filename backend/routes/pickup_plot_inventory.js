@@ -3889,8 +3889,23 @@ router.put("/customer-pickups/:contactId/installments", adminOnly, async (req, r
       });
     }
     const installments = await prisma.$transaction(async (tx) => {
+      await require("../lib/plotBookingPayments").lockBooking(tx, tenantId, plotBookingId);
+      const currentBooking = await tx.plotBooking.findFirst({
+        where: { id: plotBookingId, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+      });
+      if (!currentBooking) {
+        throw Object.assign(new Error("Active plot booking not found."), { code: "PLOT_BOOKING_NOT_FOUND" });
+      }
+      if (requestedTotal > Math.max(0, Number(currentBooking.balance || 0)) + 0.001) {
+        throw Object.assign(new Error("The schedule total exceeds the current remaining balance. Refresh the booking and try again."), { code: "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE" });
+      }
+      const currentRows = await tx.plotInstallment.findMany({ where: { tenantId, plotBookingId } });
+      const expectedIds = new Set(existing.map((row) => row.id));
+      if (currentRows.length !== existing.length || currentRows.some((row) => !expectedIds.has(row.id) || row.status !== "PLANNED" || row.paymentId)) {
+        throw Object.assign(new Error("The installment plan changed. Refresh the booking and try again."), { code: "INSTALLMENT_PLAN_LOCKED" });
+      }
       const removed = await tx.plotInstallment.deleteMany({
-        where: { tenantId, plotBookingId, status: "PLANNED", paymentId: null },
+        where: { tenantId, plotBookingId, id: { in: [...expectedIds] }, status: "PLANNED", paymentId: null },
       });
       if (removed.count !== existing.length) {
         const lockError = new Error("The installment plan cannot be edited after an installment payment has started.");
@@ -3916,6 +3931,9 @@ router.put("/customer-pickups/:contactId/installments", adminOnly, async (req, r
     });
     return res.json({ installments: installments.map((row) => ({ ...row, amount: Number(row.amount || 0) })) });
   } catch (error) {
+    if (error.code === "PLOT_BOOKING_NOT_FOUND" || error.code === "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE") {
+      return res.status(error.code === "PLOT_BOOKING_NOT_FOUND" ? 404 : 400).json({ error: error.message, code: error.code });
+    }
     if (error.code === "INSTALLMENT_PLAN_LOCKED") {
       return res.status(409).json({ error: error.message, code: error.code });
     }

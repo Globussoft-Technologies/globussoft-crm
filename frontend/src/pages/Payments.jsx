@@ -217,6 +217,7 @@ function paymentSubjectLabel(payment, { preferPlotSite = false } = {}) {
 // tenant record still carries USD as its default. Other verticals retain the
 // existing tenant-aware currency behavior.
 function formatCurrency(amount, currency) {
+  if (!Number.isFinite(Number(amount))) return "Rate unavailable";
   return formatMoney(amount || 0, currency ? { currency, locale: currency === "INR" ? "en-IN" : undefined } : undefined);
 }
 
@@ -327,7 +328,7 @@ export default function Payments() {
     if (source === target) return amount;
     const sourceRate = currencyRateByCode.get(source);
     const targetRate = currencyRateByCode.get(target);
-    if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return amount;
+    if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return NaN;
     return (amount / sourceRate) * targetRate;
   }, [currencyRateByCode, inferredLedgerCurrency, selectedDisplayCurrency]);
 

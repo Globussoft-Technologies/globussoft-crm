@@ -260,6 +260,33 @@ beforeEach(() => {
 });
 
 describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
+  test.each(['PAID', 'VOIDED', 'REFUNDED', 'CREDIT_NOTE'])('preserves terminal %s property invoice status without payment rows', async (status) => {
+    const invoice = { id: 105, amount: 100, status, currency: 'USD', plotDetails: { quantity: 2, totalPrice: 100 } };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
+    const spy = vi.spyOn(pdfRenderer, 'renderGenericPlotInvoicePdf').mockResolvedValue(Buffer.from('%PDF'));
+    try {
+      const response = await request(makeApp()).get('/api/billing/105/pdf');
+      expect(response.status).toBe(200);
+      expect(spy.mock.calls[0][0]).toEqual(expect.objectContaining({ status,
+        ...(status === 'PAID' ? { amountPaid: 100, balance: 0 } : {}),
+        plotDetails: expect.objectContaining({ quantity: 2, unitPrice: 50, subtotal: 100 }),
+      }));
+    } finally { spy.mockRestore(); }
+  });
+
+  test('keeps every standard invoice line and its persisted status', async () => {
+    const lines = [{ name: 'Consulting', quantity: 2, unitPrice: 50, amount: 100 }, { name: 'Support', quantity: 1, unitPrice: 20, amount: 20 }];
+    const invoice = { id: 106, amount: 120, status: 'VOIDED', lineItemsJson: JSON.stringify(lines) };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
+    const spy = vi.spyOn(pdfRenderer, 'renderProfessionalInvoicePdf').mockResolvedValue(Buffer.from('%PDF'));
+    try {
+      expect((await request(makeApp()).get('/api/billing/106/pdf')).status).toBe(200);
+      expect(spy.mock.calls[0][0]).toEqual(expect.objectContaining({ status: 'VOIDED', lineItemsJson: JSON.stringify(lines) }));
+    } finally { spy.mockRestore(); }
+  });
+
   test("uses the professional renderer with tenant settings for generic invoices", async () => {
     const invoice = {
       id: 101,
@@ -293,7 +320,7 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
     prisma.tenantSetting.findMany.mockResolvedValue(settings);
 
     const renderSpy = vi
-      .spyOn(pdfRenderer, "renderGenericPlotInvoicePdf")
+      .spyOn(pdfRenderer, "renderProfessionalInvoicePdf")
       .mockResolvedValue(Buffer.from("%PDF-tenant-branded"));
 
     try {
@@ -308,8 +335,6 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
         expect.objectContaining({
           id: invoice.id,
           invoiceNum: invoice.invoiceNum,
-          plotDetails: expect.objectContaining({ productName: "Invoice item" }),
-          paymentDetails: expect.objectContaining({ amountPaid: 0, balanceDue: 2499.5 }),
         }),
         invoice.contact,
         null,
@@ -347,7 +372,7 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
     prisma.tenant.findUnique.mockResolvedValue(tenant);
 
     const renderSpy = vi
-      .spyOn(pdfRenderer, "renderGenericPlotInvoicePdf")
+      .spyOn(pdfRenderer, "renderProfessionalInvoicePdf")
       .mockResolvedValue(Buffer.from("%PDF-generic-inr"));
 
     try {
@@ -358,7 +383,6 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
         expect.objectContaining({
           id: invoice.id,
           invoiceNum: invoice.invoiceNum,
-          plotDetails: expect.objectContaining({ productName: "Invoice item" }),
         }),
         invoice.contact,
         null,

@@ -3301,28 +3301,10 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     let renderInvoicePdf = isWellnessInvoice
       ? pdfRenderer.renderProfessionalWellnessInvoicePdf
       : pdfRenderer.renderProfessionalInvoicePdf;
-    if (!isWellnessInvoice && isGenericRequest(req)) {
-      const storedLineItems = parseInvoiceJson(invoice.lineItemsJson, []);
-      const primaryLine = Array.isArray(storedLineItems) && storedLineItems.length
-        ? storedLineItems[0]
-        : null;
-      const baseDetails = invoice.plotDetails || {
-        productName: primaryLine?.name || primaryLine?.productName || invoice.deal?.title || invoice.deal?.name || "Invoice item",
-        name: primaryLine?.name || primaryLine?.productName || invoice.deal?.title || invoice.deal?.name || "Invoice item",
-        plotNumber: primaryLine?.plotNumber || null,
-        siteName: primaryLine?.description || invoice.deal?.title || invoice.deal?.name || null,
-        projectName: primaryLine?.projectName || null,
-        propertyAddress: invoice.shippingAddress || null,
-        address: invoice.shippingAddress || null,
-        size: primaryLine?.size || null,
-        unit: primaryLine?.unit || primaryLine?.areaUnit || null,
-        quantity: Number(primaryLine?.quantity || 1),
-        unitPrice: Number(primaryLine?.unitPrice || invoice.amount || 0),
-        totalPrice: Number(invoice.amount || primaryLine?.amount || 0),
-        bookingNumber: invoice.deal?.id ? `DEAL-${invoice.deal.id}` : invoice.invoiceNum,
-        referenceCode: invoice.invoiceNum,
-        purchaseDate: invoice.issuedDate || invoice.createdAt,
-      };
+    if (!isWellnessInvoice && isGenericRequest(req) && invoice.plotDetails) {
+      // Only property invoices use this single-property layout. Standard
+      // invoices retain every stored product/service line in the corporate PDF.
+      const baseDetails = invoice.plotDetails;
       const successfulPayments = prisma.payment?.findMany
         ? await prisma.payment.findMany({
             where: {
@@ -3345,24 +3327,26 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
       const recordedPaid = invoice.amountPaid == null || invoice.amountPaid === ""
         ? NaN
         : Number(invoice.amountPaid);
-      const amountPaid = Number.isFinite(recordedPaid)
+      const storedStatus = String(invoice.status || "").toUpperCase();
+      const amountPaid = storedStatus === "PAID" ? Number(invoice.amount || 0) : Number.isFinite(recordedPaid)
         ? recordedPaid
         : successfulPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0);
       const totalAmount = Number(invoice.amount || baseDetails.totalPrice || 0);
       const recordedBalance = invoice.balance == null || invoice.balance === ""
         ? NaN
         : Number(invoice.balance);
-      const balanceDue = Number.isFinite(recordedBalance)
+      const balanceDue = storedStatus === "PAID" ? 0 : Number.isFinite(recordedBalance)
         ? Math.max(0, recordedBalance)
         : Math.max(0, totalAmount - amountPaid);
       const dueAt = invoice.dueDate ? new Date(invoice.dueDate) : null;
-      const paymentStatus = balanceDue <= 0
+      const terminalStatus = { VOIDED: "Voided", REFUNDED: "Refunded", CREDIT_NOTE: "Credit_note" }[storedStatus];
+      const paymentStatus = terminalStatus || (balanceDue <= 0
         ? "Paid"
         : amountPaid > 0
           ? "Partial"
           : dueAt && !Number.isNaN(dueAt.getTime()) && dueAt < new Date()
             ? "Overdue"
-            : "Pending";
+            : "Pending");
       let paymentMetadata = {};
       try { paymentMetadata = JSON.parse(latestPayment?.metadata || "{}"); } catch (_error) {}
       const settingMap = new Map(context.settings.map((row) => [row.key, row.value]));
@@ -3385,7 +3369,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
         purchaseDate: baseDetails.purchaseDate || invoice.issuedDate,
         plotDetails: {
           ...baseDetails,
-          unitPrice: subtotal,
+          unitPrice: subtotal / (Number(baseDetails.quantity) > 0 ? Number(baseDetails.quantity) : 1),
           subtotal,
           totalPrice: totalAmount,
         },

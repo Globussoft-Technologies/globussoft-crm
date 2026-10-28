@@ -481,6 +481,20 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText('Invoice #103')).toBeInTheDocument();
   });
 
+  it('does not relabel unconverted amounts when exchange rates are unavailable', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/currencies?fields=summary') return Promise.resolve([]);
+      if (url.startsWith('/api/payments/stats?')) return Promise.resolve({ successfulAmountByCurrency: { INR: 1500 }, byStatus: {} });
+      return defaultFetchMock(url);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Amount' }));
+    fireEvent.change(await screen.findByLabelText('Filter payments by currency'), { target: { value: 'USD' } });
+    await waitFor(() => expect(screen.getAllByText('Rate unavailable').length).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText('$1500.00')).not.toBeInTheDocument();
+  });
+
   it('does not add Generic CRM column filters to other verticals', async () => {
     renderPayments(ADMIN_USER, { id: 2, vertical: 'travel', defaultCurrency: 'USD' });
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());

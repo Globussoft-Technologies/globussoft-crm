@@ -3978,7 +3978,7 @@ describe('customer pickup status', () => {
 
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(prisma.plotInstallment.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: 7, plotBookingId: 501, status: 'PLANNED', paymentId: null },
+      where: { tenantId: 7, plotBookingId: 501, id: { in: [901, 902] }, status: 'PLANNED', paymentId: null },
     });
     expect(response.body.installments.map((row) => row.sequenceNumber)).toEqual([1, 2, 3]);
     expect(response.body.installments.map((row) => row.dueDate.slice(0, 10))).toEqual(['2026-12-20', '2027-03-20', '2027-06-20']);
@@ -4019,6 +4019,23 @@ describe('customer pickup status', () => {
     expect(response.status).toBe(409);
     expect(response.body.code).toBe('INSTALLMENT_PLAN_LOCKED');
     expect(prisma.plotInstallment.create).not.toHaveBeenCalled();
+  });
+
+  test.each(['balance', 'plan', 'cancelled'])('rejects concurrent %s changes under the booking lock', async (change) => {
+    const booking = { id: 501, tenantId: 7, contactId: 61, status: 'PARTIAL', balance: 80000 };
+    prisma.plotBooking.findFirst.mockResolvedValueOnce(booking).mockResolvedValueOnce(
+      change === 'cancelled' ? null : { ...booking, balance: change === 'balance' ? 10000 : 80000 },
+    );
+    const rows = [{ id: 901, status: 'PLANNED', paymentId: null }];
+    prisma.plotInstallment.findMany.mockResolvedValueOnce(rows).mockResolvedValueOnce(
+      change === 'plan' ? [{ ...rows[0], id: 902 }] : rows,
+    );
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/customer-pickups/61/installments')
+      .send({ plotBookingId: 501, frequency: 'MONTHLY', paymentCount: 2, firstPaymentDate: '2026-12-20', amount: 40000 });
+    expect(response.status).toBe(change === 'balance' ? 400 : change === 'cancelled' ? 404 : 409);
+    expect(prisma.$queryRaw.mock.calls.some(([parts]) => parts.join('').includes('FOR UPDATE'))).toBe(true);
+    expect(prisma.plotInstallment.deleteMany).not.toHaveBeenCalled();
   });
 
   test('keeps installment-plan creation exclusive to Generic CRM tenants', async () => {

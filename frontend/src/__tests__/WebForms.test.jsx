@@ -456,6 +456,8 @@ describe('public web form embed footer', () => {
     expect(html).toContain('var pageUrl = pageUrlWithoutQueryOrHash(capturedPageUrl);');
     expect(html).toContain('pageUrlObject = new URL(capturedPageUrl);');
     expect(html).toContain('var query = pageUrlObject');
+    expect(html).toContain('fd.set("_gbsTracking", JSON.stringify(tracking));');
+    expect(html).not.toContain('requestHeaders["X-GBS-Tracking"]');
   });
 
   test('preserves Generic phone country choices made by the visitor', () => {

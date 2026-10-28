@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
+import * as XLSX from "xlsx";
 
 const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
@@ -168,10 +169,287 @@ describe("CsvImportExportToolbar", () => {
     fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
 
     expect(await screen.findByText("Review the mapping of your fields")).toBeInTheDocument();
+    expect(screen.queryByText(/Missing required column\(s\): name/i)).not.toBeInTheDocument();
     const fieldType = screen.getByRole("combobox", { name: "Field type for email" });
     expect(fieldType).toHaveValue("text");
     expect(fieldType).toHaveTextContent("Dropdown");
     fireEvent.change(fieldType, { target: { value: "dropdown" } });
     expect(fieldType).toHaveValue("dropdown");
+  });
+
+  it("puts Add new field above CRM fields and prefills an editable CSV column name for Generic CRM", async () => {
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        mappingFields={[{ key: "email", fieldKey: "email", label: "Email", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+
+    const file = new File(["Department\nSales\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("Department\nSales\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByText("Review the mapping of your fields")).toBeInTheDocument();
+    const crmFieldDropdown = screen.getByRole("combobox", { name: "CRM field for Department" });
+    const options = Array.from(crmFieldDropdown.options).map((option) => option.textContent);
+    expect(options.slice(0, 3)).toEqual(["Choose CRM field", "＋ Add new field", "Email"]);
+    expect(screen.getByText("＋ Department (new field)").closest("div")).toHaveAttribute("data-proposed-field", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit proposed CRM field Department" }));
+    expect(await screen.findByRole("dialog", { name: "Edit field" })).toBeInTheDocument();
+    const labelInput = await screen.findByRole("textbox", { name: "New CRM field label" });
+    expect(labelInput).toHaveValue("Department");
+
+    fireEvent.change(labelInput, { target: { value: "Customer department" } });
+    expect(labelInput).toHaveValue("Customer department");
+
+    fetchApiMock.mockResolvedValueOnce({
+      id: 17,
+      fieldKey: "customer_department",
+      label: "Customer department",
+      fieldType: "text",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save field" }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields", {
+        method: "POST",
+        body: JSON.stringify({
+          label: "Customer department",
+          fieldType: "text",
+          isRequired: false,
+        }),
+      });
+      expect(screen.getByRole("combobox", { name: "CRM field for Department" })).toHaveValue("customer_department");
+    });
+    expect(screen.queryByRole("button", { name: "Edit proposed CRM field Department" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Customer department" })).toBeInTheDocument();
+  });
+
+  it("opens the existing-field list from the proposed field dropdown without opening the editor", async () => {
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        mappingFields={[{ key: "email", fieldKey: "email", label: "Email", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const file = new File(["Work\nOffice\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("Work\nOffice\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByRole("button", { name: "Edit proposed CRM field Work" })).toBeInTheDocument();
+    const dropdown = screen.getByRole("combobox", { name: "CRM field for Work" });
+    expect(dropdown.parentElement.querySelector("svg")).toBeInTheDocument();
+    fireEvent.change(dropdown, { target: { value: "email" } });
+
+    expect(screen.queryByRole("dialog", { name: "Add new field" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "CRM field for Work" })).toHaveValue("email");
+  });
+
+  it("automatically remaps a repeated spreadsheet column when its saved custom field finishes loading", async () => {
+    let resolveSavedFields;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/lead-custom-fields") {
+        return new Promise((resolve) => { resolveSavedFields = resolve; });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        skipMeta
+        mappingFields={[{ key: "name", fieldKey: "name", label: "Name", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const file = new File(["name,,Department\nAsha Patel,ignored,Sales\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("name,,Department\nAsha Patel,ignored,Sales\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByRole("button", { name: "Edit proposed CRM field Department" })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSavedFields([{ id: 31, fieldKey: "department", label: "Department", fieldType: "text" }]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "CRM field for Department" })).toHaveValue("department");
+    });
+    expect(screen.queryByRole("button", { name: "Edit proposed CRM field Department" })).not.toBeInTheDocument();
+  });
+
+  it("maps Mobile to the core phone field so repeated imports can update by phone", async () => {
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        skipMeta
+        mappingFields={[{ key: "phone", fieldKey: "phone", label: "Phone", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const file = new File(["Mobile\n+919876543210\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("Mobile\n+919876543210\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "CRM field for Mobile" })).toHaveValue("phone");
+    });
+    expect(screen.queryByRole("button", { name: "Edit proposed CRM field Mobile" })).not.toBeInTheDocument();
+  });
+
+  it("creates proposed Generic columns in the database before importing their values", async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === "/api/lead-custom-fields" && options?.method === "POST") {
+        return Promise.resolve({ id: 44, fieldKey: "department", label: "Department", fieldType: "text" });
+      }
+      if (url === "/api/lead-custom-fields") return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ imported: 1, updated: 0, skipped: 0, errors: [], importedContacts: [] }),
+    });
+
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        skipMeta
+        mappingFields={[{ key: "name", fieldKey: "name", label: "Name", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const file = new File(["name,,Department\nAsha Patel,ignored,Sales\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("name,,Department\nAsha Patel,ignored,Sales\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByRole("button", { name: "Edit proposed CRM field Department" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields", {
+        method: "POST",
+        body: JSON.stringify({ label: "Department", fieldType: "text", isRequired: false }),
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/csv/contacts/import.csv",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const createFieldCalls = fetchApiMock.mock.calls.filter(
+      ([url, options]) => url === "/api/lead-custom-fields" && options?.method === "POST",
+    );
+    expect(createFieldCalls).toHaveLength(1);
+
+    const importOptions = fetchMock.mock.calls.find(([url]) => url === "/api/csv/contacts/import.csv")[1];
+    expect(JSON.parse(importOptions.body.get("mapping"))).toEqual({
+      name: "name",
+      Department: "department",
+    });
+  });
+
+  it.each(['csv', 'xlsx'])("uses all %s rows and preserves blank-column alignment when creating dropdown options", async (format) => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (options?.method === 'POST') return Promise.resolve({ id: 44, fieldKey: 'tier', fieldType: 'dropdown' });
+      return Promise.resolve([]);
+    });
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ imported: 11, errors: [] }) });
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta
+      mappingFields={[{ fieldKey: 'name', label: 'Name', fieldType: 'text' }]}
+      endpoints={{ import: '/api/csv/contacts/import.csv' }} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    const rows = [['name', '', 'Tier'], ...Array.from({ length: 11 }, (_, index) =>
+      ['Asha Patel', 'ignored', index === 10 ? 'Silver' : 'Gold'])];
+    let file;
+    if (format === 'xlsx') {
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Leads');
+      const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+      file = new File([buffer], 'leads.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      Object.defineProperty(file, 'arrayBuffer', { value: async () => buffer });
+    } else {
+      const csv = rows.map(row => row.join(',')).join('\n');
+      file = new File([csv], 'leads.csv', { type: 'text/csv' });
+      Object.defineProperty(file, 'text', { value: async () => csv });
+    }
+    fireEvent.change(screen.getByLabelText('Select CSV file'), { target: { files: [file] } });
+    const type = await screen.findByRole('combobox', { name: 'Field type for Tier' });
+    expect(screen.queryByText('ignored')).not.toBeInTheDocument();
+    expect(screen.queryByText('Silver')).not.toBeInTheDocument(); // Outside the preview.
+    fireEvent.change(type, { target: { value: 'dropdown' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm import' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/lead-custom-fields', {
+      method: 'POST', body: JSON.stringify({ label: 'Tier', fieldType: 'dropdown', isRequired: false, options: ['Gold', 'Silver'] }),
+    }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/csv/contacts/import.csv', expect.anything()));
+    const payload = fetchMock.mock.calls.find(([url]) => url === '/api/csv/contacts/import.csv')[1].body;
+    expect(JSON.parse(payload.get('mapping'))).toEqual({ name: 'name', Tier: 'tier' });
+  });
+
+  it('rejects option sets over the API limit rather than silently dropping values', async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta
+      endpoints={{ import: '/api/csv/contacts/import.csv' }} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    const csv = 'Tier\n' + Array.from({ length: 51 }, (_, i) => 'Tier ' + i).join('\n');
+    const file = new File([csv], 'leads.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: async () => csv });
+    fireEvent.change(screen.getByLabelText('Select CSV file'), { target: { files: [file] } });
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Field type for Tier' }), { target: { value: 'dropdown' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm import' }));
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/more than 50 options/)));
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps required-column validation for non-Generic imports", async () => {
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        expectedHeaders={["name"]}
+        skipMeta
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    const file = new File(["email\ntest@example.com\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("email\ntest@example.com\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByText("Missing required column(s): name")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm import" })).toBeDisabled();
   });
 });

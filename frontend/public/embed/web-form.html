@@ -4924,9 +4924,10 @@
             Object.keys(detectedLocationMetadata).forEach(function (key) {
               tracking[key] = detectedLocationMetadata[key];
             });
-            // Internal transport header: this is not a form field and is never
-            // exposed in the form builder or rendered in the visitor form.
-            event._gbsTrackingMetadata = tracking;
+            // Carry attribution in the multipart payload. A custom request
+            // header triggers a CORS preflight on external websites and can be
+            // dropped before it reaches the API.
+            fd.set("_gbsTracking", JSON.stringify(tracking));
           }
 
           if (advanced && fd.get("phone") && fd.get("phoneCountry")) {
@@ -5013,19 +5014,13 @@
           }
 
           try {
-            var requestHeaders = {};
-            if (event._gbsTrackingMetadata) {
-              requestHeaders["X-GBS-Tracking"] = JSON.stringify(
-                event._gbsTrackingMetadata,
-              );
-            }
             var res = await fetch(
               apiBase +
                 "/api/forms/public/" +
                 encodeURIComponent(slug) +
                 "/submit?scope=" +
                 encodeURIComponent(scope),
-              { method: "POST", body: fd, headers: requestHeaders },
+              { method: "POST", body: fd },
             );
 
             var json = await res.json().catch(function () {

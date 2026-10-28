@@ -93,6 +93,44 @@ const normalizeFieldType = (fieldType) => (
   IMPORT_FIELD_TYPE_OPTIONS.some((option) => option.value === fieldType) ? fieldType : "text"
 );
 
+const normalizeMappingIdentity = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/^cf_/, "")
+  .replace(/[^a-z0-9]+/g, "");
+
+const buildAvailableMappingFields = (mappingFields, dynamicLeadFields) => (
+  [...mappingFields, ...dynamicLeadFields]
+    .filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id))
+    .filter((field, index, fields) => fields.findIndex(
+      (item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id),
+    ) === index)
+);
+
+const findAvailableMappingField = (fields, value) => {
+  const normalized = normalizeMappingIdentity(value);
+  if (!normalized) return null;
+  const canonicalAliases = {
+    mobile: "phone",
+    mobilenumber: "phone",
+    mobilephone: "phone",
+    phonenumber: "phone",
+    jobtitle: "title",
+  };
+  const canonicalKey = canonicalAliases[normalized];
+  if (canonicalKey) {
+    const canonicalField = fields.find(
+      (field) => normalizeMappingIdentity(field.fieldKey || field.key || field.id) === canonicalKey,
+    );
+    if (canonicalField) return canonicalField;
+  }
+  return fields.find((field) => {
+    const key = normalizeMappingIdentity(field.fieldKey || field.key || field.id);
+    const label = normalizeMappingIdentity(field.label || field.name || field.fieldKey || field.key);
+    return key === normalized || label === normalized;
+  }) || null;
+};
+
 export default function CsvImportExportToolbar({
   entity,
   filters = {},
@@ -402,6 +440,9 @@ function ImportModal({
 }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
+  // Retain all parsed values for option inference; the ten-row preview is
+  // presentation only and must not define the imported field's option set.
+  const importRowsRef = useRef([]);
   const [file, setFile] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [previewHeaders, setPreviewHeaders] = useState([]);
@@ -421,6 +462,7 @@ function ImportModal({
   const [dynamicLeadFields, setDynamicLeadFields] = useState([]);
   const [showAddField, setShowAddField] = useState(false);
   const [addingFieldFor, setAddingFieldFor] = useState("");
+  const [fieldEditorMode, setFieldEditorMode] = useState("add");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldType, setNewFieldType] = useState("text");
   const [newFieldOptions, setNewFieldOptions] = useState("");
@@ -429,18 +471,10 @@ function ImportModal({
 
   const optionFieldTypes = new Set(["dropdown", "radio", "multiselect"]);
 
-  const availableMappingFields = [...mappingFields, ...dynamicLeadFields]
-    .filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id))
-    .filter((field, index, fields) => fields.findIndex((item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id)) === index);
+  const availableMappingFields = buildAvailableMappingFields(mappingFields, dynamicLeadFields);
 
   const findMappingField = (value) => {
-    const normalized = String(value || "").trim().toLowerCase();
-    if (!normalized) return null;
-    return availableMappingFields.find((field) => {
-      const key = String(field.fieldKey || field.key || field.id || "").toLowerCase();
-      const labelText = String(field.label || field.name || field.fieldKey || field.key || "").toLowerCase();
-      return key === normalized || labelText === normalized;
-    }) || null;
+    return findAvailableMappingField(availableMappingFields, value);
   };
 
   const initializeMapping = (headers) => {
@@ -457,8 +491,32 @@ function ImportModal({
     setMappingFieldTypes(types);
   };
 
+  const openAddFieldFor = (header, mode = "add") => {
+    setAddingFieldFor(header);
+    setFieldEditorMode(mode);
+    setNewFieldLabel(header);
+    setShowAddField(true);
+  };
+
+  const updateMappingFor = (header, value) => {
+    if (value === "__add_new_field__") {
+      openAddFieldFor(header, "add");
+      return;
+    }
+    const selectedField = availableMappingFields.find(
+      (field) => (field.fieldKey || field.key || field.id) === value,
+    );
+    setMappingSelections((current) => ({ ...current, [header]: value }));
+    setMappingFieldTypes((current) => ({
+      ...current,
+      [header]: normalizeFieldType(selectedField?.fieldType || current[header]),
+    }));
+  };
+
   const resetAddField = () => {
     setShowAddField(false);
+    setAddingFieldFor("");
+    setFieldEditorMode("add");
     setNewFieldLabel("");
     setNewFieldType("text");
     setNewFieldOptions("");
@@ -491,6 +549,7 @@ function ImportModal({
       setDynamicLeadFields((fields) => [...fields, createdField]);
       if (addingFieldFor) {
         setMappingSelections((current) => ({ ...current, [addingFieldFor]: createdField.fieldKey || createdField.key || createdField.id }));
+        setMappingFieldTypes((current) => ({ ...current, [addingFieldFor]: normalizeFieldType(createdField.fieldType || newFieldType) }));
       }
       notify.success("Field created");
       resetAddField();
@@ -522,6 +581,39 @@ function ImportModal({
     return undefined;
   }, [genericLeadWizard]);
 
+  // The custom-field request and spreadsheet parsing run independently. If
+  // the file is parsed first, rematch its still-unmapped headers as soon as
+  // the saved database fields arrive. Preserve every manual mapping the user
+  // has already chosen.
+  useEffect(() => {
+    if (!genericLeadWizard || !previewHeaders.length) return;
+    const fields = buildAvailableMappingFields(mappingFields, dynamicLeadFields);
+    setMappingSelections((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const header of previewHeaders) {
+        if (next[header]) continue;
+        const field = findAvailableMappingField(fields, header);
+        if (!field) continue;
+        next[header] = field.fieldKey || field.key || field.id;
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+    setMappingFieldTypes((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const header of previewHeaders) {
+        if (mappingSelections[header] || next[header]) continue;
+        const field = findAvailableMappingField(fields, header);
+        if (!field) continue;
+        next[header] = normalizeFieldType(field.fieldType);
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [dynamicLeadFields, genericLeadWizard, mappingFields, mappingSelections, previewHeaders]);
+
   const downloadTemplate = async (format = "csv") => {
     try {
       const token = getAuthToken();
@@ -552,6 +644,7 @@ function ImportModal({
   };
 
   const handleFile = async (f) => {
+    importRowsRef.current = [];
     setFile(f);
     setResult(null);
     setJobId(null);
@@ -577,10 +670,17 @@ function ImportModal({
         const workbook = XLSX.read(await f.arrayBuffer(), { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
-        const headers = (rows[0] || []).map((header) => String(header).trim()).filter(Boolean);
+        const rawHeaders = (rows[0] || []).map((header) => String(header).trim());
+        const headers = rawHeaders.filter(Boolean);
+        // Use header-keyed records for both CSV and XLSX. Dropping blank
+        // headers must never shift the positions of the remaining values.
+        const records = rows.slice(1).map((cells) => Object.fromEntries(
+          rawHeaders.flatMap((header, index) => header ? [[header, cells[index] ?? ""]] : []),
+        ));
+        importRowsRef.current = records;
         setPreviewHeaders(headers);
         initializeMapping(headers);
-        setPreviewRows(rows.slice(1, 11));
+        setPreviewRows(records.slice(0, 10));
       } catch (e) {
         setPreviewError(e.message || "Failed to read Excel file");
       }
@@ -589,13 +689,26 @@ function ImportModal({
     try {
       const text = await f.text();
       const { headers, rows } = parseCsvClient(text);
-      setPreviewHeaders(headers);
-      initializeMapping(headers);
+      importRowsRef.current = rows;
+      // Blank spreadsheet columns have no stable database-field identity.
+      // Generic CRM silently ignores them instead of surfacing a misleading
+      // "label is required" error during automatic field creation.
+      const namedHeaders = headers.filter(Boolean);
+      setPreviewHeaders(namedHeaders);
+      initializeMapping(namedHeaders);
       setPreviewRows(rows.slice(0, 10));
-      const optional = new Set(optionalHeaders);
-      const missing = expectedHeaders.filter((h) => !headers.includes(h) && !optional.has(h));
-      if (missing.length) {
-        setPreviewError(`Missing required column(s): ${missing.join(", ")}`);
+      // Generic CRM has a dedicated mapping step where arbitrary spreadsheet
+      // columns can be mapped to an existing field or turned into a new custom
+      // field. Requiring the template's literal header names before that step
+      // defeats the mapper (for example, "First name" can be mapped instead
+      // of requiring a column literally named "name"). Other verticals keep
+      // the existing strict template validation.
+      if (!genericLeadWizard) {
+        const optional = new Set(optionalHeaders);
+        const missing = expectedHeaders.filter((h) => !namedHeaders.includes(h) && !optional.has(h));
+        if (missing.length) {
+          setPreviewError(`Missing required column(s): ${missing.join(", ")}`);
+        }
       }
     } catch (e) {
       setPreviewError(e.message || "Failed to parse CSV");
@@ -618,11 +731,79 @@ function ImportModal({
       : (importUrl || `/api/wellness/csv/${entity}/import`);
 
     try {
+      let resolvedMappings = { ...mappingSelections };
+      let resolvedFieldTypes = { ...mappingFieldTypes };
+      const fieldsCreatedDuringImport = [];
+
+      if (genericLeadWizard) {
+        let knownFields = [...availableMappingFields];
+        for (const header of previewHeaders) {
+          if (!String(header || "").trim()) continue;
+          if (resolvedMappings[header]) continue;
+
+          let field = findAvailableMappingField(knownFields, header);
+          if (!field) {
+            const fieldType = normalizeFieldType(resolvedFieldTypes[header]);
+            const payload = {
+              label: header,
+              fieldType,
+              isRequired: false,
+            };
+            if (optionFieldTypes.has(fieldType)) {
+              const options = [...new Set(
+                importRowsRef.current
+                  .map((row) => String(row?.[header] ?? "").trim())
+                  .filter(Boolean),
+              )];
+              if (!options.length) {
+                throw new Error(`Add at least one option for the ${header} field before importing.`);
+              }
+              if (options.length > 50) {
+                throw new Error(`The ${header} column has more than 50 options. Choose a text field or reduce its distinct values before importing.`);
+              }
+              payload.options = options;
+            }
+
+            try {
+              field = await fetchApi("/api/lead-custom-fields", {
+                method: "POST",
+                body: JSON.stringify(payload),
+              });
+              field = field?.field || field;
+              fieldsCreatedDuringImport.push(field);
+            } catch (error) {
+              // Another tab or a previous import may have created the same
+              // field after this modal loaded. Reload and reuse it rather
+              // than failing the import with DUPLICATE_FIELD_KEY.
+              if (error?.code !== "DUPLICATE_FIELD_KEY" && error?.status !== 409) throw error;
+              const latest = await fetchApi("/api/lead-custom-fields", { silent: true });
+              const latestFields = Array.isArray(latest) ? latest : (latest?.fields || latest?.customFields || []);
+              knownFields = buildAvailableMappingFields(mappingFields, latestFields);
+              field = findAvailableMappingField(knownFields, header);
+              if (!field) throw error;
+            }
+          }
+
+          const fieldKey = field.fieldKey || field.key || field.id;
+          resolvedMappings[header] = fieldKey;
+          resolvedFieldTypes[header] = normalizeFieldType(field.fieldType || resolvedFieldTypes[header]);
+          if (!knownFields.some((item) => (item.fieldKey || item.key || item.id) === fieldKey)) {
+            knownFields.push(field);
+          }
+        }
+
+        if (fieldsCreatedDuringImport.length) {
+          setDynamicLeadFields((current) => [...current, ...fieldsCreatedDuringImport]);
+        }
+        setMappingSelections(resolvedMappings);
+        setMappingFieldTypes(resolvedFieldTypes);
+      }
+
       const fd = new FormData();
       fd.append("file", file);
       if (genericLeadWizard) {
-        fd.append("mapping", JSON.stringify(mappingSelections));
-        fd.append("mappingFieldTypes", JSON.stringify(mappingFieldTypes));
+        fd.append("mapping", JSON.stringify(resolvedMappings));
+        fd.append("mappingFieldTypes", JSON.stringify(resolvedFieldTypes));
       }
       const token = getAuthToken();
       const res = await fetch(endpoint, {
@@ -652,6 +833,7 @@ function ImportModal({
       } else {
         const normalizedResult = {
           ...normalizedBody,
+          createdFields: fieldsCreatedDuringImport,
           inserted: normalizedBody.inserted ?? normalizedBody.imported ?? 0,
           updated: normalizedBody.updated ?? 0,
           skipped: normalizedBody.skipped ?? 0,
@@ -793,11 +975,85 @@ function ImportModal({
                   <input type="checkbox" defaultChecked aria-label={`Import ${header}`} />
                   <strong>{header}</strong>
                   <span style={{ color: "#059669", fontSize: "1.1rem" }}>✓</span>
-                  <select className="input-field" style={{ height: 36, maxHeight: 220, minHeight: 0, padding: "0.4rem 0.65rem", lineHeight: 1.2 }} value={mappingSelections[header] || ""} aria-label={`CRM field for ${header}`} onChange={(event) => { if (event.target.value === "__add_new_field__") { setAddingFieldFor(header); setNewFieldLabel(header); setShowAddField(true); return; } const selectedField = availableMappingFields.find((field) => (field.fieldKey || field.key || field.id) === event.target.value); setMappingSelections((current) => ({ ...current, [header]: event.target.value })); setMappingFieldTypes((current) => ({ ...current, [header]: normalizeFieldType(selectedField?.fieldType || current[header]) })); }}>
-                    <option value="">Select CRM field</option>
-                    {availableMappingFields.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
-                    <option value="__add_new_field__">＋ Add new field</option>
-                  </select>
+                  {!mappingSelections[header] ? (
+                    <div
+                      data-proposed-field="true"
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) 42px",
+                        height: 36,
+                        border: "1px solid var(--accent-color)",
+                        borderRadius: 8,
+                        background: "var(--accent-bg, #eef2ff)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        aria-label={`Edit proposed CRM field ${header}`}
+                        title="Edit and create this CRM field"
+                        onClick={() => openAddFieldFor(header, "edit")}
+                        style={{
+                          minWidth: 0,
+                          padding: "0.4rem 0.65rem",
+                          border: 0,
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          font: "inherit",
+                          fontWeight: 600,
+                          textAlign: "left",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          cursor: "pointer",
+                        }}
+                      >
+                        ＋ {header} (new field)
+                      </button>
+                      <div
+                        style={{
+                          position: "relative",
+                          height: 36,
+                          borderLeft: "1px solid var(--accent-color)",
+                          display: "grid",
+                          placeItems: "center",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        <ChevronDown size={16} aria-hidden="true" />
+                        <select
+                          value=""
+                          aria-label={`CRM field for ${header}`}
+                          title="Choose an existing CRM field"
+                          onChange={(event) => updateMappingFor(header, event.target.value)}
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            opacity: 0,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <option value="">Choose CRM field</option>
+                          <option value="__add_new_field__">＋ Add new field</option>
+                          {availableMappingFields.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    <select
+                      className="input-field"
+                      style={{ height: 36, maxHeight: 220, minHeight: 0, padding: "0.4rem 0.65rem", lineHeight: 1.2 }}
+                      value={mappingSelections[header]}
+                      aria-label={`CRM field for ${header}`}
+                      onChange={(event) => updateMappingFor(header, event.target.value)}
+                    >
+                      <option value="">Select CRM field</option>
+                      <option value="__add_new_field__">＋ Add new field</option>
+                      {availableMappingFields.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
+                    </select>
+                  )}
                   <select className="input-field" style={{ height: 36, minHeight: 0, padding: "0.4rem 0.65rem" }} value={normalizeFieldType(mappingFieldTypes[header] || findMappingField(mappingSelections[header])?.fieldType)} aria-label={`Field type for ${header}`} onChange={(event) => setMappingFieldTypes((current) => ({ ...current, [header]: event.target.value }))}>
                     {IMPORT_FIELD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
@@ -811,14 +1067,14 @@ function ImportModal({
           <div className="generic-import-step-overlay generic-import-add-field" role="dialog" aria-modal="true" aria-labelledby="add-lead-field-title" style={{ position: "absolute", top: "6.5rem", right: "2rem", zIndex: 50, width: "min(360px, calc(100% - 4rem))", background: "var(--surface-color, #fff)", opacity: 1, padding: "1.25rem", borderRadius: 12, border: "1px solid var(--border-color)", boxShadow: "0 18px 42px rgba(0,0,0,.35)" }}>
             <div className="generic-import-add-field-surface" aria-hidden="true" />
             <div className="generic-import-add-field-content">
-              <h2 id="add-lead-field-title" style={{ marginTop: 0 }}>Add new field</h2>
+              <h2 id="add-lead-field-title" style={{ marginTop: 0 }}>{fieldEditorMode === "edit" ? "Edit field" : "Add new field"}</h2>
               <div style={{ display: "grid", gap: "0.85rem" }}>
-                <label>Label *<input className="input-field" value={newFieldLabel} onChange={(event) => setNewFieldLabel(event.target.value)} autoFocus /></label>
+                <label>Label *<input className="input-field" aria-label="New CRM field label" value={newFieldLabel} onChange={(event) => setNewFieldLabel(event.target.value)} autoFocus /></label>
                 <label>Field type<select className="input-field" value={newFieldType} onChange={(event) => setNewFieldType(event.target.value)}><option value="text">Text</option><option value="textarea">Textarea</option><option value="number">Number</option><option value="date">Date</option><option value="dropdown">Dropdown</option><option value="radio">Radio</option><option value="multiselect">Multi-select</option></select></label>
                 {optionFieldTypes.has(newFieldType) && <label>Options *<input className="input-field" placeholder="Option 1, Option 2" value={newFieldOptions} onChange={(event) => setNewFieldOptions(event.target.value)} /></label>}
                 <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><input type="checkbox" checked={newFieldRequired} onChange={(event) => setNewFieldRequired(event.target.checked)} /> Required field</label>
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}><button type="button" onClick={resetAddField} style={secondaryBtnStyle}>Cancel</button><button type="button" onClick={createField} disabled={savingNewField} style={primaryBtnStyle}>{savingNewField ? "Creating…" : "Create field"}</button></div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}><button type="button" onClick={resetAddField} style={secondaryBtnStyle}>Cancel</button><button type="button" onClick={createField} disabled={savingNewField} style={primaryBtnStyle}>{savingNewField ? "Saving…" : fieldEditorMode === "edit" ? "Save field" : "Create field"}</button></div>
             </div>
           </div>
         )}

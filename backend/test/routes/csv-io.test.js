@@ -115,6 +115,7 @@ prisma.leadCustomFieldDefinition = {
   findMany: vi.fn(),
 };
 prisma.leadCustomFieldValue = {
+  findMany: vi.fn(),
   upsert: vi.fn(),
 };
 prisma.genericImportHistory = {
@@ -174,6 +175,7 @@ beforeEach(() => {
   prisma.membershipPlan.update.mockReset();
   prisma.booking.findMany.mockReset();
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.genericImportHistory.findMany.mockReset().mockResolvedValue([]);
   prisma.genericImportHistory.create.mockReset().mockResolvedValue({ id: 1 });
@@ -263,11 +265,12 @@ describe('GET /api/csv/contacts/export.csv', () => {
 });
 
 describe('GET /api/csv/contacts', () => {
-  test('advertises email and phone as optional while keeping name required', async () => {
+  test('advertises every template header as optional for Generic CRM', async () => {
     const res = await request(makeApp()).get('/api/csv/contacts');
 
     expect(res.status).toBe(200);
     expect(res.body.optionalHeaders).toEqual([
+      'name',
       'email',
       'phone',
       'company',
@@ -379,16 +382,39 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     );
   });
 
-  test('rejects a row without a name even when phone is present', async () => {
+  test('imports a Generic row without a name and derives a database-safe display name', async () => {
+    prisma.contact.findMany.mockResolvedValue([]);
+    prisma.contact.create.mockResolvedValue({ id: 104 });
+
     const res = await request(makeApp())
       .post('/api/csv/contacts/import.csv')
       .set('Content-Type', 'text/csv')
       .send('phone\n+919876543210\n');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ imported: 0, updated: 0, skipped: 1 });
-    expect(res.body.errors).toEqual([{ rowNumber: 2, reason: 'missing name' }]);
-    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Lead +919876543210',
+        phone: '+919876543210',
+        tenantId: 1,
+      }),
+    }));
+  });
+
+  test('combines first-name and last-name columns when Generic name is absent', async () => {
+    prisma.contact.create.mockResolvedValue({ id: 105 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('First name,Last name,email\nAsha,Patel,asha@example.com\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ name: 'Asha Patel' }),
+    }));
   });
 
   test('maps and persists Generic lead custom fields using cf_ field keys', async () => {
@@ -495,6 +521,80 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     );
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
+
+  test('re-importing the same external Id updates the existing Generic lead instead of duplicating it', async () => {
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 15, fieldKey: 'id', fieldType: 'text' },
+    ]);
+    prisma.leadCustomFieldValue.findMany.mockResolvedValue([
+      { contact: { id: 77, deletedAt: null } },
+    ]);
+    prisma.contact.update.mockResolvedValue({ id: 77 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({
+        'External Id': 'id',
+        'First name': 'first_name',
+        Mobile: 'phone',
+      }))
+      .attach(
+        'file',
+        Buffer.from('External Id,First name,Mobile\nLEAD-1001,Asha,+919876543210\n'),
+        { filename: 'repeat-leads.csv', contentType: 'text/csv' },
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0, errors: [] });
+    expect(prisma.leadCustomFieldValue.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, fieldId: 15, valueText: 'LEAD-1001' },
+      select: { contact: { select: { id: true, deletedAt: true } } },
+      orderBy: { id: 'asc' },
+      take: 2,
+    });
+    expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 77 },
+      data: expect.objectContaining({ phone: '+919876543210' }),
+    }));
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test.each(['blank first ID', 'unmatched first ID', 'same contact', 'conflicting contacts', 'ambiguous secondary ID'])(
+    'checks every populated external identifier: %s', async (scenario) => {
+      prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+        { id: 14, fieldKey: 'id', fieldType: 'number' },
+        { id: 15, fieldKey: 'external_id', fieldType: 'text' },
+      ]);
+      prisma.leadCustomFieldValue.findMany.mockImplementation(async ({ where }) => {
+        if (where.fieldId === 14) {
+          return scenario === 'unmatched first ID' ? [] : [{ contact: { id: 77, deletedAt: null } }];
+        }
+        return scenario === 'ambiguous secondary ID'
+          ? [{ contact: { id: 77, deletedAt: null } }, { contact: { id: 78, deletedAt: null } }]
+          : [{ contact: { id: scenario === 'conflicting contacts' ? 78 : 77, deletedAt: null } }];
+      });
+      prisma.contact.update.mockResolvedValue({ id: 77 });
+      const response = await request(makeApp())
+        .post('/api/csv/contacts/import.csv')
+        .field('mapping', JSON.stringify({ Id: 'id', 'External Id': 'external_id' }))
+        .attach('file', Buffer.from(`Id,External Id\n${scenario === 'blank first ID' ? '' : '100'},LEAD-1001\n`),
+          { filename: 'external-ids.csv', contentType: 'text/csv' });
+      const ambiguous = ['conflicting contacts', 'ambiguous secondary ID'].includes(scenario);
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ imported: 0, updated: ambiguous ? 0 : 1, skipped: ambiguous ? 1 : 0 });
+      expect(prisma.leadCustomFieldValue.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { tenantId: 1, fieldId: 15, valueText: 'LEAD-1001' },
+      }));
+      expect(prisma.contact.create).not.toHaveBeenCalled();
+      if (ambiguous) {
+        expect(response.body.errors[0].reason).toMatch(/ambiguous imported id/);
+        expect(prisma.contact.update).not.toHaveBeenCalled();
+        expect(prisma.leadCustomFieldValue.upsert).not.toHaveBeenCalled();
+      } else {
+        expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 77 } }));
+      }
+    },
+  );
 
   test('updates an existing email instead of hitting the tenant email unique constraint', async () => {
     prisma.contact.findFirst.mockResolvedValue({ id: 77 });

@@ -1556,6 +1556,11 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .post('/api/forms/public/contact-us/submit')
 
       .set('X-GBS-Tracking', JSON.stringify({
+        pageUrl: 'https://legacy.example.com/header',
+        utm_source: 'legacy-header',
+      }))
+
+      .field('_gbsTracking', JSON.stringify({
         pageUrl: 'https://example.com/pricing',
         utm_source: 'newsletter',
         location: 'Koramangala, Bengaluru, Karnataka, 560034, India',

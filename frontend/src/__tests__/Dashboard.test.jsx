@@ -16,7 +16,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock fetchApi BEFORE importing the component
@@ -67,26 +67,14 @@ function renderDashboard(userOverride, initialEntry = '/dashboard') {
   );
 }
 
-function expectedRange(days) {
-  const today = new Date();
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1);
-  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const asDate = (date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
-  return { from: asDate(start), to: asDate(end) };
-}
-
-function hasRange(url, range) {
-  const params = new URL(url, 'http://localhost').searchParams;
-  return params.get('from') === range.from && params.get('to') === `${range.to}T23:59:59.999Z`;
-}
-
 describe('<Dashboard />', () => {
   beforeEach(() => {
     fetchApi.mockReset();
+    fetchApi.mockResolvedValue([]);
     sessionStorage.clear();
   });
 
-  it('opens directly with Last 7 days and filters dashboard totals, contacts, and recent deals', async () => {
+  it('loads dashboard totals without a date filter', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 3, wonValue: 300000 });
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
@@ -95,35 +83,21 @@ describe('<Dashboard />', () => {
     });
     renderDashboard();
 
-    const range = expectedRange(7);
     await waitFor(() => {
       const urls = fetchApi.mock.calls.map(([url]) => url);
-      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
-      expect(urls.some((url) => url.startsWith('/api/deals?') && hasRange(url, range))).toBe(true);
-      expect(urls.some((url) => url.startsWith('/api/contacts?count=1') && hasRange(url, range))).toBe(true);
+      expect(urls).toContain('/api/deals/stats?currency=USD');
+      expect(urls).toContain('/api/deals?limit=10&orderBy=createdAt:desc');
+      expect(urls).toContain('/api/contacts?count=1');
     });
-    expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('last7');
+    expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('all');
     expect(screen.getByText('Total Deals').nextElementSibling).toHaveTextContent('3');
     expect(screen.getByText('Total Contacts').nextElementSibling).toHaveTextContent('2');
   });
 
-  it('updates dashboard queries when a date preset changes', async () => {
-    fetchApi.mockImplementation((url) => {
-      if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 1 });
-      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
-      if (url.startsWith('/api/contacts?count=1')) return Promise.resolve({ total: 1 });
-      return Promise.resolve([]);
-    });
+  it('renders dashboard date controls with All time as the default', () => {
     renderDashboard();
-    fireEvent.change(screen.getByRole('combobox', { name: 'Dashboard date preset' }), { target: { value: 'last30' } });
-
-    const range = expectedRange(30);
-    await waitFor(() => {
-      const urls = fetchApi.mock.calls.map(([url]) => url);
-      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
-      expect(urls.some((url) => url.startsWith('/api/contacts?count=1') && hasRange(url, range))).toBe(true);
-    });
-    expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('last30');
+    expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('all');
+    expect(screen.getByLabelText('Dashboard date range')).toBeInTheDocument();
   });
 
   it('does not show an incomplete forecast as zero when an exchange rate is missing', async () => {
@@ -152,7 +126,7 @@ describe('<Dashboard />', () => {
     expect(screen.getByText('My Win Rate').nextElementSibling).toHaveTextContent('67.0%');
   });
 
-  it('passes the selected dates to deal queries and deal links', async () => {
+  it('ignores URL date parameters and keeps links standalone', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 1 });
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
@@ -160,12 +134,8 @@ describe('<Dashboard />', () => {
     });
     renderDashboard(null, '/dashboard?from=2026-10-15&to=2026-10-20');
 
-    await waitFor(() => {
-      const urls = fetchApi.mock.calls.map(([url]) => url);
-      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && new URL(url, 'http://localhost').searchParams.get('from') === '2026-10-15' && new URL(url, 'http://localhost').searchParams.get('to') === '2026-10-20T23:59:59.999Z')).toBe(true);
-      expect(urls.some((url) => url.startsWith('/api/deals?') && new URL(url, 'http://localhost').searchParams.get('from') === '2026-10-15' && new URL(url, 'http://localhost').searchParams.get('to') === '2026-10-20T23:59:59.999Z')).toBe(true);
-    });
-    expect(screen.getByText('Total Deals').closest('a').getAttribute('href')).toBe('/pipeline?from=2026-10-15&to=2026-10-20');
+    await waitFor(() => expect(fetchApi.mock.calls.map(([url]) => url)).toContain('/api/deals/stats?currency=USD'));
+    expect(screen.getByText('Total Deals').closest('a').getAttribute('href')).toBe('/pipeline');
   });
 
   it('renders Closed Revenue from stats.wonValue (not a list reduce of /api/deals)', async () => {
@@ -232,7 +202,7 @@ describe('<Dashboard />', () => {
 
     renderDashboard();
     await waitFor(() => expect(screen.getByText('2,105')).toBeInTheDocument());
-    expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/contacts?count=1') && hasRange(url, expectedRange(7)))).toBe(true);
+    expect(fetchApi.mock.calls.some(([url]) => url === '/api/contacts?count=1')).toBe(true);
     expect(fetchApi).not.toHaveBeenCalledWith('/api/contacts');
   });
 

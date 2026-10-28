@@ -3,6 +3,23 @@
   container: dashboard / inline-size;
 }
 
+/* AreaChart uses a fixed internal drawing width for reliable rendering. Make
+   its wrapper and SVG occupy the card instead of shrinking the whole chart
+   (including axis labels) down to that internal width. */
+.dashboard-pipeline-chart .recharts-wrapper,
+.dashboard-pipeline-chart .recharts-surface {
+  width: 100% !important;
+  max-width: 100%;
+}
+
+.dashboard-pipeline-chart .recharts-surface {
+  height: 100% !important;
+}
+
+.dashboard-pipeline-card {
+  overflow: hidden;
+}
+
 @media (min-width: 900px) {
   .dashboard-page > header {
     gap: clamp(0.5rem, 1cqw, 1rem) !important;
@@ -80,16 +97,16 @@
   }
 
   .dashboard-page .dashboard-kpi-card {
-    padding: clamp(0.5rem, 1.5cqw, 1.5rem) !important;
-    gap: clamp(0.375rem, 0.9cqw, 1rem) !important;
+    padding: clamp(0.4rem, 1.15cqw, 1.5rem) !important;
+    gap: clamp(0.25rem, 0.6cqw, 1rem) !important;
     min-height: clamp(64px, 6cqw, 96px);
     box-sizing: border-box;
   }
 
   .dashboard-page .dashboard-kpi-card > div:first-child {
-    width: clamp(28px, 3.2cqw, 48px) !important;
-    height: clamp(28px, 3.2cqw, 48px) !important;
-    flex: 0 0 clamp(28px, 3.2cqw, 48px);
+    width: clamp(24px, 2.8cqw, 48px) !important;
+    height: clamp(24px, 2.8cqw, 48px) !important;
+    flex: 0 0 clamp(24px, 2.8cqw, 48px);
   }
 
   .dashboard-page .dashboard-kpi-card > div:first-child :is(svg, span) {
@@ -99,20 +116,22 @@
   }
 
   .dashboard-page .dashboard-kpi-copy p {
-    font-size: clamp(0.7rem, calc(0.48rem + 0.48cqw), 0.875rem) !important;
+    font-size: clamp(0.65rem, calc(0.42rem + 0.48cqw), 0.875rem) !important;
     line-height: 1.25;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    letter-spacing: -0.01em;
   }
 
   .dashboard-page .dashboard-kpi-copy h2 {
-    font-size: clamp(1rem, calc(0.7rem + 0.8cqw), 1.5rem) !important;
+    font-size: clamp(0.9rem, calc(0.62rem + 0.8cqw), 1.5rem) !important;
     line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     overflow-wrap: normal !important;
+    letter-spacing: -0.02em;
   }
 
   .dashboard-page .dashboard-panels {

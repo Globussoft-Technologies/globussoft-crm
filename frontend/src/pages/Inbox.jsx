@@ -674,10 +674,11 @@ export default function Inbox({
         border: "1px solid var(--border-color)",
         borderRadius: "12px",
         background: email.read ? "var(--subtle-bg-4)" : "var(--subtle-bg-3)",
-        display: "flex",
+        display: "grid",
+        gridTemplateColumns: "40px minmax(0, 1fr) auto",
+        alignItems: "start",
         gap: "1.5rem",
         minWidth: 0,
-        flexWrap: "wrap",
         cursor: "pointer",
         transition: "background 0.18s ease, border-color 0.18s ease",
       }}
@@ -686,9 +687,9 @@ export default function Inbox({
         <User size={20} color="#fff" />
         <span className="inbox-email-row__avatar-letter" aria-hidden="true">{participantLabel.charAt(0).toUpperCase()}</span>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="inbox-email-row__meta" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginBottom: "0.5rem" }}>
-          <p className="inbox-email-row__address" style={{ fontWeight: "bold", fontSize: "1.05rem", overflowWrap: "anywhere" }}>
+      <div style={{ minWidth: 0, overflow: "hidden", display: "grid", gridTemplateRows: "auto auto auto", alignContent: "start" }}>
+        <div className="inbox-email-row__meta" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", justifyContent: "normal", gap: "1rem", marginBottom: "0.5rem", minWidth: 0 }}>
+          <p className="inbox-email-row__address" style={{ minWidth: 0, margin: 0, fontWeight: "bold", fontSize: "1.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             <span className="inbox-email-row__desktop-address">{email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}</span>
             <span className="inbox-email-row__mobile-participant" title={participantLabel}>{participantLabel}</span>
           </p>
@@ -697,8 +698,8 @@ export default function Inbox({
             <span className="inbox-email-row__mobile-date">{formatMobileInboxDate(email.createdAt)}</span>
           </span>
         </div>
-        <h4 className="inbox-email-row__subject" style={{ fontWeight: "600", marginBottom: "0.5rem", color: "var(--text-primary)", overflowWrap: "anywhere" }}>{email.subject}</h4>
-        <p className="inbox-email-row__preview" style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "anywhere", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: 0 }}>
+        <h4 className="inbox-email-row__subject" style={{ margin: "0 0 0.5rem", fontWeight: "600", lineHeight: "1.35", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", overflowWrap: "normal" }}>{email.subject}</h4>
+        <p className="inbox-email-row__preview" style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "normal", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {isGeneric ? getInboxPreviewText(email.body) : email.body}
         </p>
       </div>
@@ -1134,7 +1135,7 @@ export default function Inbox({
           alignItems: "center",
           flexWrap: "wrap",
           gap: "1rem",
-          marginBottom: "2.25rem",
+          marginBottom: isGeneric ? "1rem" : "2.25rem",
         }}
       >
         <div style={{ minWidth: 0, flex: "1 1 240px" }}>
@@ -1165,13 +1166,13 @@ export default function Inbox({
       <div
         className={`card inbox-list-card${isGeneric ? " inbox-list-card--generic" : ""}`}
         data-testid="inbox-list-card"
-        ref={isGeneric ? undefined : inboxScrollRef}
-        onScroll={isGeneric ? undefined : handleInboxScroll}
+        ref={inboxScrollRef}
+        onScroll={handleInboxScroll}
         style={{
           width: "100%",
           flex: isGeneric ? "1 1 auto" : "0 0 auto",
           maxHeight: "calc(100vh - 320px)",
-          overflowY: "auto",
+          overflowY: isGeneric ? "visible" : "auto",
           overflowX: "hidden",
           padding: "1.25rem",
         }}
@@ -1188,7 +1189,7 @@ export default function Inbox({
           </p>
         ) : (
           <div className={isGeneric ? "inbox-list-content" : undefined} style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <div className={`inbox-toolbar${isGeneric ? " inbox-toolbar--generic" : ""}`} style={{ position: "sticky", top: "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: "-1.25rem 0 0", padding: "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
+            <div className={`inbox-toolbar${isGeneric ? " inbox-toolbar--generic" : ""}`} style={{ position: "sticky", top: isGeneric ? 0 : "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: isGeneric ? 0 : "-1.25rem 0 0", padding: isGeneric ? "0 0 0.75rem" : "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
               <>
                 <div className={`inbox-search${isGeneric ? " inbox-search--generic" : ""}`} style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
                   <Search size={18} color="var(--text-secondary)" />
@@ -1281,8 +1282,6 @@ export default function Inbox({
 
             <div
               className={isGeneric ? "inbox-message-scroll--generic" : undefined}
-              ref={isGeneric ? inboxScrollRef : undefined}
-              onScroll={isGeneric ? handleInboxScroll : undefined}
               style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
             >
             {emails.length === 0 ? (

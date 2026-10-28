@@ -31,6 +31,7 @@ export function pathWithDateRange(path, range) {
 }
 
 const dashboardRangeKey = (scope) => scopedStorageKey('dashboard-date-range', scope);
+const dashboardFilterKey = (scope) => scopedStorageKey('dashboard-filter', scope);
 
 export function readSavedDashboardDateRange(scope) {
   try {
@@ -50,5 +51,34 @@ export function saveDashboardDateRange(scope, range) {
     else sessionStorage.removeItem(key);
   } catch {
     // Storage may be unavailable; URL-based navigation still carries the range.
+  }
+}
+
+export function readSavedDashboardFilter(scope) {
+  try {
+    const stored = sessionStorage.getItem(dashboardFilterKey(scope));
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    const range = readDateRange(new URLSearchParams(
+      setDateRangeParams(new URLSearchParams(), parsed?.range || {}).toString(),
+    ));
+    const allowedPresets = new Set(['all', 'last7', 'last30', 'thisQuarter', 'lastQuarter', 'custom']);
+    if (!allowedPresets.has(parsed?.preset)) return null;
+    return { preset: parsed.preset, range };
+  } catch {
+    return null;
+  }
+}
+
+export function saveDashboardFilter(scope, { preset, range }) {
+  try {
+    const allowedPresets = new Set(['all', 'last7', 'last30', 'thisQuarter', 'lastQuarter', 'custom']);
+    if (!allowedPresets.has(preset)) return;
+    sessionStorage.setItem(dashboardFilterKey(scope), JSON.stringify({
+      preset,
+      range: readDateRange(new URLSearchParams(setDateRangeParams(new URLSearchParams(), range || {}).toString())),
+    }));
+  } catch {
+    // Storage may be unavailable; the dashboard remains usable for this visit.
   }
 }

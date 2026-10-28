@@ -66,7 +66,6 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/pipeline', label: 'Deals and Pipeline', category: 'Sales' },
   { path: '/deal-insights', label: 'Deal Insights', category: 'Sales' },
   { path: '/playbooks', label: 'Playbooks', category: 'Sales' },
-  { path: '/pipelines', label: 'Pipelines', category: 'Sales' },
 
   { path: '/leads', label: 'All Leads', category: 'Leads' },
   { path: '/lead-reports', label: 'Lead Reports', category: 'Leads' },
@@ -100,8 +99,6 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/payments', label: 'Payments', category: 'Finance' },
   { path: '/cpq', label: 'CPQ', category: 'Finance' },
 
-  { path: '/win-loss', label: 'Win/Loss', category: 'Analytics & Reports' },
-  { path: '/funnel', label: 'Funnel', category: 'Analytics & Reports' },
   { path: '/reports', label: 'Reports', category: 'Analytics & Reports' },
   { path: '/agent-reports', label: 'Agent Reports', category: 'Analytics & Reports' },
   { path: '/revenue-goals', label: 'Revenue Goals', category: 'Analytics & Reports' },

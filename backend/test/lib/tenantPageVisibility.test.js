@@ -76,6 +76,10 @@ describe('tenant page visibility normalization', () => {
     expect(new Set(catalog.map((page) => page.path)).size).toBe(catalog.length);
     expect(catalog.map(({ path, label, category }) => ({ path, label, category })))
       .toEqual(visibility.GENERIC_SIDEBAR_PRESENTATION);
+    for (const path of ['/pipelines', '/win-loss', '/funnel']) {
+      expect(visibility.GENERIC_SIDEBAR_PRESENTATION.some((page) => page.path === path)).toBe(false);
+      expect(catalog.some((page) => page.path === path)).toBe(false);
+    }
     expect(catalog.find((page) => page.path === '/dashboard')).toMatchObject({
       label: 'Dashboard',
       category: 'Core',

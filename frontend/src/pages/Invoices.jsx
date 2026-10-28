@@ -291,17 +291,19 @@ function totalsByCurrency(rows, fallbackCurrency, amountForRow = (row) => Number
 function totalInCurrency(rows, targetCurrency, rateByCode, amountForRow = (row) => Number(row.amount || 0)) {
   const target = String(targetCurrency || "USD").toUpperCase();
   const targetRate = rateByCode.get(target);
+  let missingRate = false;
   const total = rows.reduce((sum, row) => {
     const amount = amountForRow(row);
     const source = String(row.currency || target).toUpperCase();
     if (source === target) return sum + amount;
     const sourceRate = rateByCode.get(source);
     if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
-      return sum + amount;
+      missingRate = true;
+      return sum;
     }
     return sum + ((amount / sourceRate) * targetRate);
   }, 0);
-  return formatCurrency(total, target);
+  return missingRate ? `Unavailable (missing exchange rate): ${totalsByCurrency(rows, target, amountForRow)}` : formatCurrency(total, target);
 }
 
 function getInvoiceLineItems(invoice) {

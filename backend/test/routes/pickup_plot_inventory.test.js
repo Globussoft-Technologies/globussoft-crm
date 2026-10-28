@@ -96,6 +96,7 @@ prisma.plotBooking.findFirst = vi.fn();
 prisma.plotBooking.findMany = vi.fn();
 prisma.plotBooking.create = vi.fn();
 prisma.plotBooking.update = vi.fn();
+prisma.plotBooking.updateMany = vi.fn();
 prisma.plotCommission.findMany = vi.fn();
 prisma.plotCommission.findFirst = vi.fn();
 prisma.plotCommission.upsert = vi.fn();
@@ -173,6 +174,7 @@ beforeEach(() => {
   prisma.plotBooking.findMany.mockResolvedValue([]);
   prisma.plotBooking.create.mockResolvedValue({ id: 91, bookingNumber: 'BOOK-TEST', status: 'PLOT_RESERVED' });
   prisma.plotBooking.update.mockResolvedValue({ id: 91 });
+  prisma.plotBooking.updateMany.mockResolvedValue({ count: 1 });
   prisma.plotInvoiceItem.create.mockResolvedValue({ id: 101 });
   prisma.plotWorkflowEvent.create.mockResolvedValue({ id: 111 });
   prisma.plotWorkflowEvent.findMany.mockResolvedValue([]);
@@ -3451,8 +3453,8 @@ describe('customer pickup status', () => {
 
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body).toEqual({ contactId: 61, plotSiteId: 30, unassigned: true });
-    expect(prisma.plotBooking.update).toHaveBeenCalledWith({
-      where: { id: 501 }, data: { status: 'CANCELLED' },
+    expect(prisma.plotBooking.updateMany).toHaveBeenCalledWith({
+      where: { id: 501, tenantId: 7, contactId: 61, plotSiteId: 30, status: 'PLOT_ASSIGNED', paymentStatus: { in: ['', 'UNPAID'] }, amountPaid: 0, invoiceId: null }, data: { status: 'CANCELLED' },
     });
     expect(prisma.plotSite.updateMany).toHaveBeenCalledWith({
       where: { id: 30, tenantId: 7, availability: 'RESERVED' },
@@ -3464,6 +3466,27 @@ describe('customer pickup status', () => {
         eventType: 'CANCELLED', fromStatus: 'PLOT_ASSIGNED', toStatus: 'CANCELLED',
       }),
     });
+  });
+
+  test('does not cancel when payment or booking changes after the initial check', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.transportPerson.findMany.mockResolvedValue([]);
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, status: 'PLOT_ASSIGNED', paymentStatus: 'UNPAID', amountPaid: 0, invoiceId: null });
+    prisma.plotBooking.updateMany.mockResolvedValueOnce({ count: 0 });
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/customer-pickups/61/plots/30');
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PLOT_UNASSIGNMENT_LOCKED');
+    expect(prisma.plotSite.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('rechecks transport assignments inside the cancellation transaction', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 61 });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, status: 'PLOT_ASSIGNED', paymentStatus: 'UNPAID', amountPaid: 0, invoiceId: null });
+    prisma.transportPerson.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]' }]);
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/customer-pickups/61/plots/30');
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('TRANSPORT_WORKFLOW_LOCKED');
+    expect(prisma.plotBooking.updateMany).not.toHaveBeenCalled();
   });
 
   test('prevents deselecting a plot after its booking or payment workflow starts', async () => {

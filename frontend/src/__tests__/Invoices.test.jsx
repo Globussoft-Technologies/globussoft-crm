@@ -426,6 +426,18 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText(/Paid This Month: \$5000\.00/)).toBeInTheDocument();
   });
 
+  it('does not combine unconvertible amounts into a misleading currency total', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) return Promise.resolve([
+        { ...sampleInvoices[0], currency: 'INR' },
+      ]);
+      if (url === '/api/currencies?fields=summary') return Promise.resolve([{ code: 'USD', exchangeRate: 1 }]);
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices();
+    expect(await screen.findByText(/Outstanding: Unavailable \(missing exchange rate\): ₹1234\.56/)).toBeInTheDocument();
+  });
+
   it('shows the empty-state message when /api/billing returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/billing') return Promise.resolve([]);

@@ -3610,7 +3610,24 @@ router.delete("/customer-pickups/:contactId/plots/:plotSiteId", adminOnly, async
       });
     }
     await prisma.$transaction(async (tx) => {
-      await tx.plotBooking.update({ where: { id: booking.id }, data: { status: "CANCELLED" } });
+      const currentTransport = await tx.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      });
+      if (customerTransportStarted(currentTransport, contactId)) {
+        const error = new Error("Plot assignments cannot be changed after transport has started.");
+        error.code = "TRANSPORT_WORKFLOW_LOCKED";
+        throw error;
+      }
+      const cancelled = await tx.plotBooking.updateMany({
+        where: { id: booking.id, tenantId, contactId, plotSiteId, status: "PLOT_ASSIGNED", paymentStatus: { in: ["", "UNPAID"] }, amountPaid: 0, invoiceId: null },
+        data: { status: "CANCELLED" },
+      });
+      if (cancelled.count !== 1) {
+        const error = new Error("This plot can no longer be deselected because its booking or payment workflow has started.");
+        error.code = "PLOT_UNASSIGNMENT_LOCKED";
+        throw error;
+      }
       await tx.plotSite.updateMany({
         where: { id: plotSiteId, tenantId, availability: "RESERVED" },
         data: { availability: "AVAILABLE" },
@@ -3626,10 +3643,14 @@ router.delete("/customer-pickups/:contactId/plots/:plotSiteId", adminOnly, async
         toStatus: "CANCELLED",
         metadata: { unassignedByAdmin: true },
       });
-    });
+    }, { isolationLevel: "Serializable" });
     return res.json({ contactId, plotSiteId, unassigned: true });
   } catch (error) {
     console.error("pickup-plot-inventory DELETE /customer-pickups/:contactId/plots/:plotSiteId error:", error);
+    if (["TRANSPORT_WORKFLOW_LOCKED", "PLOT_UNASSIGNMENT_LOCKED"].includes(error.code)) {
+      return res.status(409).json({ error: error.message, code: error.code });
+    }
+    if (error.code === "P2034") return res.status(409).json({ error: "The assignment changed concurrently. Refresh and try again.", code: "PLOT_UNASSIGNMENT_CONFLICT" });
     return res.status(500).json({ error: "Failed to unassign plot", code: "PLOT_UNASSIGNMENT_FAILED" });
   }
 });

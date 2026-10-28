@@ -203,6 +203,7 @@ router.get("/overview", async (req, res) => {
           tenantId,
           createdAt,
           deletedAt: null,
+          status: "Lead",
           ...(ownerId === null ? {} : { assignedToId: ownerId }),
         },
         select: { id: true, createdAt: true, source: true, status: true, lifecycleStageKey: true },

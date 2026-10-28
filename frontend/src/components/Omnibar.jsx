@@ -808,8 +808,14 @@ export default function Omnibar() {
   // Merge pages (client) + backend results into a single resultSet that the
   // section table iterates over.
   const resultSet = useMemo(
-    () => ({ pages: pageMatches, ...results }),
-    [pageMatches, results],
+    () => ({
+      pages: pageMatches,
+      ...results,
+      // Generic CRM intentionally hides the Estimates page. Suppress record
+      // matches too, otherwise backend search could still expose the page.
+      ...((tenant?.vertical === "generic" || !tenant?.vertical) ? { estimates: [] } : {}),
+    }),
+    [pageMatches, results, tenant?.vertical],
   );
 
   const totalResultCount = useMemo(() => {

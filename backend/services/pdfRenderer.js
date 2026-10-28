@@ -5977,6 +5977,252 @@ async function renderProfessionalWellnessInvoicePdf(invoice, contact, clinic, op
   return bufPromise;
 }
 
+// Generic CRM property-sale invoice used by the Plot & Site customer payment
+// receipt. This renderer is deliberately opt-in so ordinary CRM invoices,
+// Wellness documents, and Travel documents keep their existing layouts.
+async function renderGenericPlotInvoicePdf(invoice, contact, clinic, options = {}) {
+  const opts = options || {};
+  const doc = new PDFDocument({ size: "A4", margin: 36, bufferPages: true });
+  applyRupeeCapableFonts(doc);
+  const bufPromise = streamToBuffer(doc);
+  const tenant = opts.tenant || {};
+  const settings = opts.settings || {};
+  const c = safeClinic(clinic);
+  const plot = invoice?.plotDetails || {};
+  const payment = invoice?.paymentDetails || {};
+  const taxDetails = invoice?.taxDetails || {};
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const currency = opts.currency || invoice?.currency || tenant.defaultCurrency || "INR";
+  const locale = opts.locale || tenant.locale || "en-IN";
+  const navy = "#112A59";
+  const accent = professionalInvoiceColor(
+    tenant.brandColor
+      || professionalInvoiceSetting(settings, ["invoice.brandColor", "branding.color", "branding.primaryColor"])
+      || tenant.themeColor,
+    "#2856D6",
+  );
+  const pale = "#EEF4FF";
+  const border = "#C9D7EC";
+  const muted = "#5E6D88";
+  const success = "#14945E";
+  const danger = "#C83D4B";
+  const brandName = professionalInvoiceSetting(settings, ["invoice.brandName", "branding.name", "company.name"])
+    || tenant.name || c.name || "Organization";
+  const tagline = professionalInvoiceSetting(settings, ["invoice.tagline", "branding.tagline", "company.tagline"]);
+  const companyAddress = professionalInvoiceSetting(settings, [
+    "invoice.companyAddress", "invoice.address", "branding.address", "company.address", "businessAddress",
+  ]) || [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", "), c.country]
+    .filter(Boolean).join("\n");
+  const companyPhone = professionalInvoiceSetting(settings, ["invoice.companyPhone", "branding.phone", "company.phone"]) || c.phone;
+  const companyEmail = professionalInvoiceSetting(settings, ["invoice.companyEmail", "branding.email", "company.email"])
+    || c.email || tenant.ownerEmail;
+  const companyWebsite = professionalInvoiceSetting(settings, ["invoice.companyWebsite", "branding.website", "company.website"]);
+  const invoiceNumber = invoice?.invoiceNum || `INV-${invoice?.id || "-"}`;
+  const issueDate = professionalInvoiceDate(invoice?.issuedDate || invoice?.createdAt, locale);
+  const purchaseDate = professionalInvoiceDate(invoice?.purchaseDate || plot.purchaseDate || invoice?.issuedDate, locale);
+  const dueDate = professionalInvoiceDate(invoice?.dueDate, locale);
+  const paymentDate = professionalInvoiceDate(payment.paymentDate || invoice?.paidAt, locale);
+  const total = Number(invoice?.amount || plot.totalPrice || 0);
+  const quantity = Number(plot.quantity || 1);
+  const unitPrice = Number(plot.unitPrice || (quantity ? total / quantity : total));
+  const discount = Number(invoice?.discountAmount || 0);
+  const explicitTax = Number(taxDetails.totalTax ?? invoice?.taxAmount);
+  const subtotal = Number(plot.subtotal ?? (quantity * unitPrice));
+  const taxTotal = Number.isFinite(explicitTax) ? explicitTax : Math.max(0, total - subtotal + discount);
+  const taxRate = Number(taxDetails.taxRate ?? invoice?.taxRate ?? 0);
+  const cgst = Number(taxDetails.cgst || 0);
+  const sgst = Number(taxDetails.sgst || 0);
+  const igst = Number(taxDetails.igst || 0);
+  const amountPaid = Number(payment.amountPaid ?? invoice?.amountPaid ?? 0);
+  const balanceDue = Number(payment.balanceDue ?? invoice?.balance ?? Math.max(0, total - amountPaid));
+  const paymentStatus = String(payment.status || invoice?.paymentStatus || invoice?.status || "Pending")
+    .replace(/_/g, " ");
+  const statusUpper = paymentStatus.toUpperCase();
+  const isPaid = statusUpper === "PAID" || balanceDue <= 0;
+  const money = (value) => formatMoney(Number(value || 0), currency, locale);
+  const text = (value, fallback = "-") => value == null || String(value).trim() === "" ? fallback : String(value);
+  const drawCard = (x, y, cardWidth, cardHeight, title) => {
+    doc.roundedRect(x, y, cardWidth, cardHeight, 6).fillAndStroke("#FFFFFF", border);
+    doc.rect(x + 1, y + 1, cardWidth - 2, 29).fill(accent);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#FFFFFF").text(title, x + 12, y + 10, { width: cardWidth - 24 });
+  };
+  const pair = (x, y, label, value, cardWidth, options = {}) => {
+    const labelWidth = options.labelWidth || 82;
+    doc.font("Helvetica").fontSize(8.2).fillColor(muted).text(label, x, y, { width: labelWidth });
+    doc.font(options.bold === false ? "Helvetica" : "Helvetica-Bold").fontSize(options.fontSize || 8.4).fillColor(options.color || navy)
+      .text(text(value), x + labelWidth, y, {
+        width: cardWidth - labelWidth,
+        align: options.align || "left",
+        height: options.height || 20,
+        ellipsis: options.ellipsis !== false,
+      });
+  };
+
+  // Company header.
+  const logoWidth = opts.logoBuffer ? 64 : 0;
+  if (opts.logoBuffer) {
+    try { doc.image(opts.logoBuffer, left, 27, { fit: [55, 55] }); } catch (_e) {}
+  }
+  const brandNameWidth = 220;
+  doc.font("Helvetica-Bold");
+  const brandNameFontSize = fitReferenceInvoiceMetadataFont(doc, brandName, brandNameWidth, 18, 9.5);
+  const brandNameFitsSingleLine = doc.widthOfString(brandName) <= brandNameWidth;
+  doc.fontSize(brandNameFontSize).fillColor(navy).text(brandName, left + logoWidth, 30, {
+    width: brandNameWidth,
+    height: 38,
+    lineBreak: !brandNameFitsSingleLine,
+  });
+  if (tagline) doc.font("Helvetica").fontSize(8.5).fillColor(muted).text(tagline, left + logoWidth, 70, { width: 220, height: 14, ellipsis: true });
+  let companyY = 30;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(navy).text(brandName, right - 235, companyY, { width: 235, align: "right" });
+  companyY += 16;
+  doc.font("Helvetica").fontSize(8).fillColor(muted);
+  for (const line of [companyAddress, companyEmail, companyPhone, companyWebsite].filter(Boolean)) {
+    doc.text(String(line), right - 235, companyY, { width: 235, align: "right", height: 28, ellipsis: true });
+    companyY = doc.y + 2;
+  }
+  doc.moveTo(left, 112).lineTo(right, 112).lineWidth(1).strokeColor(accent).stroke();
+
+  // Invoice information and buyer details.
+  doc.font("Helvetica-Bold").fontSize(23).fillColor(navy).text("Invoice", left, 128);
+  doc.roundedRect(left, 158, 150, 24, 5).fill(pale);
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(navy).text(`# ${invoiceNumber}`, left + 10, 165, { width: 130 });
+  pair(left, 198, "Status", paymentStatus, 235, { color: isPaid ? success : (statusUpper === "OVERDUE" ? danger : navy) });
+  pair(left, 217, "Issue date", issueDate, 235);
+  pair(left, 236, "Purchase date", purchaseDate, 235);
+  pair(left, 255, "Due date", dueDate, 235);
+
+  const billX = left + 280;
+  doc.moveTo(billX - 22, 143).lineTo(billX - 22, 276).lineWidth(0.6).strokeColor(border).stroke();
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(navy).text("Bill To", billX, 145);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(navy).text(text(invoice?.customerName || contact?.name, "Customer"), billX, 169, { width: right - billX });
+  let buyerY = 190;
+  doc.font("Helvetica").fontSize(8.8).fillColor(muted);
+  for (const line of [invoice?.customerEmail || contact?.email, invoice?.customerPhone || contact?.phone, invoice?.billingAddress || invoice?.customerAddress || contact?.address].filter(Boolean)) {
+    doc.text(String(line), billX, buyerY, { width: right - billX, height: 31, ellipsis: true });
+    buyerY = doc.y + 4;
+  }
+
+  // Actual property line item (replaces the old generic "Invoice Charge").
+  const tableTop = 294;
+  const columns = [
+    ["#", 22], ["PRODUCT / PLOT", 92], ["DETAILS", 126], ["UNIT", 48],
+    ["QTY", 30], ["UNIT PRICE", 74], ["TAX", 42], ["AMOUNT", 89],
+  ];
+  doc.roundedRect(left, tableTop, width, 32, 6).fill(accent);
+  let columnX = left;
+  doc.font("Helvetica-Bold").fontSize(7.2).fillColor("#FFFFFF");
+  for (const [label, columnWidth] of columns) {
+    doc.text(label, columnX + 4, tableTop + 12, { width: columnWidth - 8, align: ["QTY", "UNIT PRICE", "TAX", "AMOUNT"].includes(label) ? "right" : "left" });
+    columnX += columnWidth;
+  }
+  const details = [
+    plot.plotNumber ? `Plot No. ${plot.plotNumber}` : "",
+    plot.siteName || plot.projectName || "",
+    plot.size ? `${plot.size} ${plot.unit || ""}`.trim() : "",
+  ].filter(Boolean).join("\n");
+  const rowValues = [
+    "1", text(plot.productName || plot.name || "Property"), text(details), text(plot.unit),
+    String(quantity), money(unitPrice), `${taxRate || 0}%`, money(subtotal),
+  ];
+  const rowTop = tableTop + 32;
+  doc.rect(left, rowTop, width, 66).fillAndStroke("#FFFFFF", border);
+  columnX = left;
+  doc.font("Helvetica").fontSize(8.2).fillColor(navy);
+  columns.forEach(([label, columnWidth], index) => {
+    doc.text(rowValues[index], columnX + 4, rowTop + 12, {
+      width: columnWidth - 8,
+      height: 46,
+      ellipsis: true,
+      align: ["QTY", "UNIT PRICE", "TAX", "AMOUNT"].includes(label) ? "right" : "left",
+    });
+    columnX += columnWidth;
+  });
+
+  const gap = 14;
+  const cardWidth = (width - gap) / 2;
+  const leftCardX = left;
+  const rightCardX = left + cardWidth + gap;
+  const cardsTop = rowTop + 82;
+  drawCard(leftCardX, cardsTop, cardWidth, 184, "Product / Property Details");
+  const propertyRows = [
+    ["Plot name", plot.productName || plot.name],
+    ["Plot number", plot.plotNumber],
+    ["Site / Project", plot.siteName || plot.projectName],
+    ["Property address", plot.propertyAddress || plot.address],
+    ["Size / Unit", [plot.size, plot.unit].filter(Boolean).join(" ")],
+    ["Total price", money(plot.totalPrice || total)],
+    ["Booking ref.", plot.bookingNumber || plot.referenceCode],
+  ];
+  const propertyRowOffsets = [37, 53, 69, 85, 121, 139, 157];
+  propertyRows.forEach(([label, value], index) => pair(
+    leftCardX + 12,
+    cardsTop + propertyRowOffsets[index],
+    label,
+    value,
+    cardWidth - 24,
+    {
+      labelWidth: 82,
+      height: label === "Property address" ? 36 : 16,
+      fontSize: label === "Property address" ? 7.6 : 8.4,
+      ellipsis: label !== "Property address",
+    },
+  ));
+
+  drawCard(rightCardX, cardsTop, cardWidth, 184, "Amount Summary");
+  const amountRows = [
+    ["Subtotal", money(subtotal)],
+    ["Discount", money(discount)],
+    ["Tax", money(taxTotal)],
+    ["Total amount", money(total)],
+    ["Amount paid", money(amountPaid)],
+    ["Balance due", money(balanceDue)],
+  ];
+  amountRows.forEach(([label, value], index) => pair(rightCardX + 12, cardsTop + 39 + (index * 21), label, value, cardWidth - 24, {
+    labelWidth: 92,
+    align: "right",
+    color: label === "Balance due" && balanceDue > 0 ? danger : navy,
+  }));
+
+  const lowerTop = cardsTop + 198;
+  drawCard(leftCardX, lowerTop, cardWidth, 154, "Payment Details");
+  const paymentRows = [
+    ["Payment status", paymentStatus],
+    ["Payment method", payment.method],
+    ["Amount paid", money(amountPaid)],
+    ["Transaction ID", payment.transactionId],
+    ["Payment date", paymentDate],
+  ];
+  paymentRows.forEach(([label, value], index) => pair(leftCardX + 12, lowerTop + 39 + (index * 21), label, value, cardWidth - 24, { labelWidth: 88 }));
+
+  drawCard(rightCardX, lowerTop, cardWidth, 154, "Tax Information");
+  const taxRows = [
+    ["Tax type", taxDetails.taxType || "GST"],
+    ["Tax rate", `${taxRate || 0}%`],
+    ["CGST", money(cgst)],
+    ["SGST", money(sgst)],
+    ["IGST", money(igst)],
+    ["Total tax", money(taxTotal)],
+  ];
+  taxRows.forEach(([label, value], index) => pair(rightCardX + 12, lowerTop + 35 + (index * 18), label, value, cardWidth - 24, { labelWidth: 82, align: "right" }));
+
+  // Stay comfortably above PDFKit's bottom-margin auto-pagination threshold;
+  // the property invoice is intentionally a single A4 page.
+  const footerY = doc.page.height - doc.page.margins.bottom - 22;
+  doc.moveTo(left, footerY - 10).lineTo(right, footerY - 10).lineWidth(0.7).strokeColor(accent).stroke();
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(navy).text(brandName, left, footerY, { width: 190 });
+  doc.font("Helvetica").fontSize(7.5).fillColor(muted).text(
+    "This is a system-generated invoice and does not require a signature.",
+    left + 175,
+    footerY,
+    { width: width - 175, align: "right" },
+  );
+  doc.end();
+  return bufPromise;
+}
+
 // Small, monochrome vector glyphs for the Wellness invoice. These stay inside
 // a 12pt footprint so they clarify the adjacent value without competing with
 // the content or changing the table geometry.
@@ -6684,6 +6930,7 @@ module.exports = {
   renderConsentPdf,
   renderBrandedInvoicePdf,
   renderProfessionalInvoicePdf,
+  renderGenericPlotInvoicePdf,
   renderProfessionalWellnessInvoicePdf: renderReferenceWellnessInvoicePdf,
   renderLegacyWellnessInvoicePdf: renderProfessionalWellnessInvoicePdf,
   fitReferenceInvoiceMetadataFont,

@@ -16,7 +16,7 @@ import { describe, test, expect, vi } from 'vitest';
 import zlib from 'node:zlib';
 import pdfR from '../../services/pdfRenderer.js';
 
-const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalInvoicePdf, renderProfessionalWellnessInvoicePdf, fitReferenceInvoiceMetadataFont, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
+const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalInvoicePdf, renderGenericPlotInvoicePdf, renderProfessionalWellnessInvoicePdf, fitReferenceInvoiceMetadataFont, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1109,6 +1109,72 @@ describe('renderProfessionalInvoicePdf', () => {
     expect(text).not.toContain('Notes');
     expect(text).not.toContain('ENTERPRISE INVOICE');
     expect(text).not.toContain('Globussoft CRM');
+  });
+});
+
+describe('renderGenericPlotInvoicePdf', () => {
+  test('renders dynamic company, buyer, property, GST, payment, and balance details without Invoice Charge', async () => {
+    const buf = await renderGenericPlotInvoicePdf(
+      {
+        id: 501,
+        invoiceNum: 'PLOT-2172759B',
+        amount: 342200,
+        amountPaid: 100000,
+        balance: 242200,
+        status: 'PARTIAL',
+        currency: 'INR',
+        issuedDate: '2026-10-27',
+        purchaseDate: '2026-10-25',
+        dueDate: '2026-11-27',
+        customerName: 'Shreya Bansal',
+        customerEmail: 'shreya@example.com',
+        customerPhone: '+91 90000 00000',
+        billingAddress: '456 Green Valley Road, Bengaluru',
+        plotDetails: {
+          productName: 'Green Valley Plot A-12',
+          plotNumber: 'A-12',
+          siteName: 'Green Valley Project',
+          propertyAddress: '80 Feet Road, Bengaluru',
+          size: '1200',
+          unit: 'sq.ft',
+          quantity: 1,
+          unitPrice: 342200,
+          totalPrice: 342200,
+          bookingNumber: 'BOOK-ABC123',
+        },
+        taxDetails: { taxType: 'GST', taxRate: 18, cgst: 0, sgst: 0, igst: 0, totalTax: 0 },
+        paymentDetails: {
+          status: 'Partial',
+          method: 'razorpay',
+          amountPaid: 100000,
+          transactionId: 'pay_TsoxyxvNN1Vrr',
+          paymentDate: '2026-10-27',
+          balanceDue: 242200,
+        },
+      },
+      { name: 'Shreya Bansal', email: 'shreya@example.com' },
+      null,
+      {
+        tenant: { name: 'NovaCrest Technologies', defaultCurrency: 'INR', locale: 'en-IN' },
+        settings: [
+          { key: 'invoice.companyAddress', value: '123 Tech Park, Bengaluru' },
+          { key: 'invoice.companyEmail', value: 'info@novacrest.example' },
+          { key: 'invoice.companyPhone', value: '+91 8045 6789 10' },
+          { key: 'invoice.companyWebsite', value: 'www.novacrest.example' },
+        ],
+      },
+    );
+
+    const text = extractPdfText(buf);
+    for (const expected of [
+      'NovaCrest Technologies', 'PLOT-2172759B', 'Purchase date', 'Shreya Bansal',
+      'Green Valley Plot A-12', 'Green Valley Project', '80 Feet Road, Bengaluru',
+      'Product / Property Details', 'Payment Details', 'Tax Information', 'Amount Summary',
+      'CGST', 'SGST', 'IGST', 'Balance due', 'pay_TsoxyxvNN1Vrr',
+    ]) expect(text).toContain(expected);
+    expect(text).not.toContain('NovaCrest...');
+    expect(text).not.toContain('Invoice Charge');
+    expect((buf.toString('latin1').match(/\/Type\s*\/Page\b/g) || [])).toHaveLength(1);
   });
 });
 

@@ -161,6 +161,7 @@ describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () =>
       byMethod: {},
       totalAmount: 0,
       successfulAmount: 0,
+      successfulAmountByCurrency: {},
       lastPaymentAt: null,
     });
   });
@@ -217,7 +218,19 @@ describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () =>
     const res = await request(app).get('/api/payments/stats');
     expect(res.status).toBe(200);
     expect(res.body.successfulAmount).toBe(350.5);
+    expect(res.body.successfulAmountByCurrency).toEqual({ USD: 350.5 });
     expect(res.body.totalAmount).toBe(525.49);
+  });
+
+  test('8b. successful amounts are also grouped by currency for safe UI conversion', async () => {
+    prisma.payment.findMany.mockResolvedValue([
+      { status: 'SUCCESS', gateway: 'razorpay', amount: 8000, currency: 'INR', createdAt: new Date() },
+      { status: 'CAPTURED', gateway: 'stripe', amount: 100, currency: 'usd', createdAt: new Date() },
+      { status: 'PENDING', gateway: 'stripe', amount: 50, currency: 'EUR', createdAt: new Date() },
+    ]);
+    const res = await request(makeApp()).get('/api/payments/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.successfulAmountByCurrency).toEqual({ INR: 8000, USD: 100 });
   });
 
   test('9. lastPaymentAt is ISO of the MAX createdAt across rows', async () => {
@@ -279,7 +292,7 @@ describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () =>
       { paidAt: null, createdAt: expect.objectContaining({ gte: expect.any(Date), lte: expect.any(Date) }) },
     ]);
     expect(query.select).toEqual({
-      status: true, gateway: true, amount: true, paidAt: true, createdAt: true,
+      status: true, gateway: true, amount: true, currency: true, paidAt: true, createdAt: true,
     });
   });
 

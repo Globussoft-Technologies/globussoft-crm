@@ -260,6 +260,33 @@ beforeEach(() => {
 });
 
 describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
+  test.each(['PAID', 'VOIDED', 'REFUNDED', 'CREDIT_NOTE'])('preserves terminal %s property invoice status without payment rows', async (status) => {
+    const invoice = { id: 105, amount: 100, status, currency: 'USD', plotDetails: { quantity: 2, totalPrice: 100 } };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
+    const spy = vi.spyOn(pdfRenderer, 'renderGenericPlotInvoicePdf').mockResolvedValue(Buffer.from('%PDF'));
+    try {
+      const response = await request(makeApp()).get('/api/billing/105/pdf');
+      expect(response.status).toBe(200);
+      expect(spy.mock.calls[0][0]).toEqual(expect.objectContaining({ status,
+        ...(status === 'PAID' ? { amountPaid: 100, balance: 0 } : {}),
+        plotDetails: expect.objectContaining({ quantity: 2, unitPrice: 50, subtotal: 100 }),
+      }));
+    } finally { spy.mockRestore(); }
+  });
+
+  test('keeps every standard invoice line and its persisted status', async () => {
+    const lines = [{ name: 'Consulting', quantity: 2, unitPrice: 50, amount: 100 }, { name: 'Support', quantity: 1, unitPrice: 20, amount: 20 }];
+    const invoice = { id: 106, amount: 120, status: 'VOIDED', lineItemsJson: JSON.stringify(lines) };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
+    const spy = vi.spyOn(pdfRenderer, 'renderProfessionalInvoicePdf').mockResolvedValue(Buffer.from('%PDF'));
+    try {
+      expect((await request(makeApp()).get('/api/billing/106/pdf')).status).toBe(200);
+      expect(spy.mock.calls[0][0]).toEqual(expect.objectContaining({ status: 'VOIDED', lineItemsJson: JSON.stringify(lines) }));
+    } finally { spy.mockRestore(); }
+  });
+
   test("uses the professional renderer with tenant settings for generic invoices", async () => {
     const invoice = {
       id: 101,
@@ -305,13 +332,16 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
         'INV-GENERIC-101.pdf',
       );
       expect(renderSpy).toHaveBeenCalledWith(
-        invoice,
+        expect.objectContaining({
+          id: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+        }),
         invoice.contact,
         null,
         expect.objectContaining({
           tenant,
           settings,
-          logoBuffer: null,
+          logoBuffer: expect.any(Buffer),
           currency: "INR",
           locale: "en-IN",
         }),
@@ -350,10 +380,180 @@ describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
 
       expect(res.status).toBe(200);
       expect(renderSpy).toHaveBeenCalledWith(
-        invoice,
+        expect.objectContaining({
+          id: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+        }),
         invoice.contact,
         null,
         expect.objectContaining({ currency: invoice.currency || "USD", locale: "en-US" }),
+      );
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  test("uses the one-page branded property renderer for Plot invoices opened from the Generic Invoice page", async () => {
+    const invoice = {
+      id: 103,
+      invoiceNum: "PLOT-PAGE-103",
+      currency: "INR",
+      amount: 342200,
+      amountPaid: 100000,
+      balance: 242200,
+      status: "UNPAID",
+      issuedDate: new Date("2026-10-27T00:00:00.000Z"),
+      dueDate: new Date("2026-11-27T00:00:00.000Z"),
+      contact: { id: 61, name: "Shreya Bansal", stateCode: "IN-KA" },
+    };
+    const tenant = {
+      name: "NovaCrest Technologies", defaultCurrency: "INR", locale: "en-IN",
+      logoUrl: "/uploads/branding/7/logo.png", brandColor: "#2856D6",
+      themeColor: null, ownerEmail: "accounts@novacrest.example", gstStateCode: "IN-KA",
+    };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue(tenant);
+    prisma.tenantSetting.findMany.mockResolvedValue([{ key: "invoice.taxRate", value: "18" }]);
+    prisma.plotInvoiceItem.findMany.mockResolvedValue([{
+      invoiceId: 103, plotBookingId: 501, itemId: 30,
+      description: "Green Valley Plot A-12", quantity: 1,
+      unitPrice: 342200, amount: 342200,
+    }]);
+    prisma.plotSite.findMany.mockResolvedValue([{
+      id: 30, name: "Green Valley Plot A-12", plotNumber: "A-12",
+      block: "A", referenceCode: "GV-A12", address: "80 Feet Road, Bengaluru",
+      area: "1200", areaUnit: "sq.ft", price: 342200,
+      pickupLocation: { name: "Green Valley Project" },
+    }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{
+      id: 501, bookingNumber: "BOOK-ABC123", plotSiteId: 30,
+      totalAmount: 342200, amountPaid: 100000, balance: 242200,
+      paymentStatus: "PARTIAL", reservedAt: new Date("2026-10-25T00:00:00.000Z"),
+      createdAt: new Date("2026-10-25T00:00:00.000Z"),
+    }]);
+    prisma.payment.findMany.mockResolvedValue([{
+      amount: 100000, gateway: "razorpay", gatewayId: "pay_page_103",
+      paidAt: new Date("2026-10-27T08:00:00.000Z"),
+      createdAt: new Date("2026-10-27T07:55:00.000Z"),
+      metadata: JSON.stringify({ razorpayPaymentId: "pay_page_103" }),
+    }]);
+    const renderSpy = vi.spyOn(pdfRenderer, "renderGenericPlotInvoicePdf")
+      .mockResolvedValue(Buffer.from("%PDF-generic-property-page"));
+
+    try {
+      const res = await request(makeApp({ tenantId: 1, vertical: "generic" }))
+        .get("/api/billing/103/pdf");
+
+      expect(res.status).toBe(200);
+      expect(renderSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          invoiceNum: "PLOT-PAGE-103",
+          plotDetails: expect.objectContaining({
+            productName: "Green Valley Plot A-12",
+            siteName: "Green Valley Project",
+            propertyAddress: "80 Feet Road, Bengaluru",
+            size: "1200",
+            unit: "sq.ft",
+            subtotal: 290000,
+          }),
+          paymentDetails: expect.objectContaining({
+            status: "Partial", transactionId: "pay_page_103", balanceDue: 242200,
+          }),
+          taxDetails: expect.objectContaining({
+            taxRate: 18, cgst: 26100, sgst: 26100, igst: 0, totalTax: 52200,
+          }),
+        }),
+        invoice.contact,
+        null,
+        expect.objectContaining({ tenant, currency: "INR", locale: "en-IN" }),
+      );
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+});
+
+describe("GET /api/billing/public/receipt - Generic CRM property invoice", () => {
+  test("renders the paid plot booking with dynamic property and payment details", async () => {
+    const payment = {
+      id: 802, tenantId: 7, contactId: 61, invoiceId: 101,
+      amount: 100000, currency: "INR", gateway: "razorpay",
+      gatewayId: "pay_dynamic_123", status: "SUCCESS",
+      paidAt: new Date("2026-10-27T08:00:00.000Z"),
+      createdAt: new Date("2026-10-27T07:55:00.000Z"),
+      metadata: JSON.stringify({
+        kind: "plot-booking-payment", plotBookingId: 501,
+        plinkId: "plink_dynamic_123", razorpayPaymentId: "pay_dynamic_123",
+      }),
+    };
+    const invoice = {
+      id: 101, invoiceNum: "PLOT-DYNAMIC-101", amount: 342200,
+      amountPaid: 100000, balance: 242200, currency: "INR",
+      issuedDate: new Date("2026-10-27T00:00:00.000Z"),
+      dueDate: new Date("2026-11-27T00:00:00.000Z"),
+      contact: {
+        id: 61, name: "Shreya Bansal", email: "shreya@example.com",
+        phone: "+91 90000 00000", stateCode: "IN-KA",
+      },
+    };
+    const tenant = {
+      name: "NovaCrest Technologies", vertical: "generic",
+      defaultCurrency: "INR", locale: "en-IN", logoUrl: null,
+      brandColor: "#2856D6", themeColor: null,
+      ownerEmail: "accounts@novacrest.example", gstStateCode: "IN-KA",
+    };
+    prisma.payment.findFirst.mockResolvedValue(payment);
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.tenant.findUnique.mockResolvedValue(tenant);
+    prisma.tenantSetting.findMany.mockResolvedValue([{ key: "invoice.taxRate", value: "18" }]);
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, bookingNumber: "BOOK-ABC123", plotSiteId: 30,
+      totalAmount: 342200, amountPaid: 100000, balance: 242200,
+      paymentStatus: "PARTIAL",
+      reservedAt: new Date("2026-10-25T00:00:00.000Z"),
+      createdAt: new Date("2026-10-25T00:00:00.000Z"),
+    });
+    prisma.plotSite.findFirst.mockResolvedValue({
+      id: 30, name: "Green Valley Plot A-12", plotNumber: "A-12",
+      block: "A", referenceCode: "GV-A12", address: "80 Feet Road, Bengaluru",
+      area: "1200", areaUnit: "sq.ft", price: 342200,
+      pickupLocation: { name: "Green Valley Project" },
+    });
+    const renderSpy = vi.spyOn(pdfRenderer, "renderGenericPlotInvoicePdf")
+      .mockResolvedValue(Buffer.from("%PDF-dynamic-property"));
+
+    try {
+      const res = await request(makeApp({ tenantId: 7, vertical: "generic" }))
+        .get("/api/billing/public/receipt?plinkId=plink_dynamic_123");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/application\/pdf/);
+      expect(res.headers["content-disposition"]).toContain('inline; filename="PLOT-DYNAMIC-101.pdf"');
+      expect(renderSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerName: "Shreya Bansal",
+          purchaseDate: new Date("2026-10-25T00:00:00.000Z"),
+          plotDetails: expect.objectContaining({
+            productName: "Green Valley Plot A-12", plotNumber: "A-12",
+            siteName: "Green Valley Project", propertyAddress: "80 Feet Road, Bengaluru",
+            size: "1200", unit: "sq.ft",
+          }),
+          taxDetails: expect.objectContaining({
+            taxType: "GST",
+            taxRate: 18,
+            totalTax: 52200,
+            cgst: 26100,
+            sgst: 26100,
+            igst: 0,
+          }),
+          paymentDetails: expect.objectContaining({
+            status: "Partial", method: "razorpay",
+            transactionId: "pay_dynamic_123", amountPaid: 100000, balanceDue: 242200,
+          }),
+        }),
+        invoice.contact,
+        null,
+        expect.objectContaining({ tenant, currency: "INR", locale: "en-IN" }),
       );
     } finally {
       renderSpy.mockRestore();

@@ -3620,6 +3620,15 @@ html[data-theme="dark"] .travel-flight-details-box {
   background-clip: padding-box;
 }
 
+/* Generic CRM pickup/plot directories keep the complete column-header row
+   visually separate from the scrolling records. The viewport and sticky
+   table mechanics stay unchanged; only the vertical scrollbar rail is
+   inset by the shared header height so it runs beside the body rows. */
+body[data-vertical="generic"]
+  .pickup-plot-table-body-scroll::-webkit-scrollbar-track-piece:vertical {
+  margin-top: 44px;
+}
+
 .top-scroll-sync__bottom--hidden-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;

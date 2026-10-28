@@ -275,7 +275,7 @@ export default function PickupInventory() {
 
       {error && <div role="alert" className="card" style={{ padding: '1rem', color: 'var(--danger-color, #dc2626)' }}>{error}</div>}
       {(!error || loadedRef.current) && <div
-          className="card pickup-plot-table-scroll"
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="pickup-inventory-table-scroll"
           style={{
             flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',

@@ -109,7 +109,7 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.getByTestId('pickup-plot-inventory-page')).toHaveStyle({
       display: 'flex', height: '100%', minHeight: '0', overflow: 'hidden',
     });
-    expect(screen.getByTestId('plot-inventory-table')).toHaveClass('pickup-plot-table-scroll');
+    expect(screen.getByTestId('plot-inventory-table')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('plot-inventory-table')).toHaveStyle({
       flex: '1 1 auto', minHeight: '0', maxHeight: '100%', width: '100%', maxWidth: '100%',
       overflowX: 'auto', overflowY: 'auto',

@@ -136,7 +136,8 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'document_templates', action: 'read' } },
   { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures', requiredPermission: { module: 'documents', action: 'read' } },
   { path: '/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', requiredPermission: { module: 'invoices', action: 'read' } },
-  { path: '/estimates', label: 'Estimates', description: 'Quotes + estimates sent to customers', requiredPermission: { module: 'estimates', action: 'read' } },
+  // Generic CRM: Estimates is intentionally removed from search/navigation.
+  // { path: '/estimates', label: 'Estimates', description: 'Quotes + estimates sent to customers', requiredPermission: { module: 'estimates', action: 'read' } },
   { path: '/expenses', label: 'Expenses', description: 'Team expense submissions', requiredPermission: { module: 'expenses', action: 'read' } },
   { path: '/contracts', label: 'Contracts', description: 'Contract lifecycle management', requiredPermission: { module: 'contracts', action: 'read' } },
   { path: '/projects', label: 'Projects', description: 'Project tracking + task boards', requiredPermission: { module: 'projects', action: 'read' } },
@@ -314,8 +315,8 @@ const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
 
 // Entries returned by /api/pages/me are merged with the local catalogue.
 // Keep this deny-list Generic-only so a stale/server-provided entry cannot
-// make the intentionally hidden Lead Routing page appear in search again.
-const GENERIC_HIDDEN_PAGE_PATHS = new Set(['/lead-routing']);
+// make intentionally hidden pages appear in search again.
+const GENERIC_HIDDEN_PAGE_PATHS = new Set(['/lead-routing', '/estimates']);
 
 export function isTenantPageHidden(path, hiddenPagePaths = []) {
   if (!path || !Array.isArray(hiddenPagePaths)) return false;

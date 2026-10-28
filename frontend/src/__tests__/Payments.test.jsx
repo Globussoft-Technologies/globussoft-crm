@@ -35,9 +35,10 @@ vi.mock('../utils/notify', () => ({
 // Keep the formatter deterministic while asserting the currency selected by
 // the Payments page.
 vi.mock('../utils/money', () => ({
+  currencySymbol: (currency) => ({ INR: '₹', EUR: '€', GBP: '£' }[currency] || '$'),
   formatMoney: (v, opts) => {
     const cur = opts?.currency;
-    const prefix = cur === 'INR' ? '₹' : '$';
+    const prefix = { INR: '₹', EUR: '€', GBP: '£' }[cur] || '$';
     return `${prefix}${(Number(v) || 0).toFixed(2)}`;
   },
 }));
@@ -105,6 +106,14 @@ function defaultFetchMock(url) {
       stripe: { configured: true, webhookConfigured: true },
       razorpay: { configured: true, keyId: 'rzp_test_abc' },
     });
+  }
+  if (url === '/api/currencies?fields=summary') {
+    return Promise.resolve([
+      { code: 'USD', exchangeRate: 1, isBase: true },
+      { code: 'INR', exchangeRate: 80, isBase: false },
+      { code: 'EUR', exchangeRate: 0.9, isBase: false },
+      { code: 'GBP', exchangeRate: 0.8, isBase: false },
+    ]);
   }
   return Promise.resolve(null);
 }
@@ -178,6 +187,54 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getByText(/Total Collected/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Pending/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Failed/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByTestId('payment-summary-chips')).toBeInTheDocument();
+  });
+
+  it('filters the Generic CRM ledger when an invoice-style payment stat is clicked', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+
+    const pendingChip = screen.getByRole('button', { name: /^Pending \(Last 30 Days\): 1$/i });
+    fireEvent.click(pendingChip);
+    expect(pendingChip).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Invoice #102')).toBeInTheDocument();
+    expect(screen.queryByText('Invoice #101')).not.toBeInTheDocument();
+    expect(screen.queryByText('Invoice #103')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Status' }));
+    expect(screen.getByLabelText('Filter payments by status')).toHaveValue('PENDING');
+
+    fireEvent.click(pendingChip);
+    expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #103')).toBeInTheDocument();
+  });
+
+  it('shows plot name and plot number instead of the booking id only in Generic CRM', async () => {
+    const plotPayment = {
+      ...samplePayments[0],
+      id: 77,
+      invoiceId: null,
+      description: 'Initial payment for plot booking BOOK-894D82A651',
+      metadata: { kind: 'plot-booking-payment', plotBookingId: 73 },
+      plotSite: { id: 91, name: 'Green Meadows', plotNumber: 'A-12' },
+    };
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve([plotPayment]);
+      return defaultFetchMock(url);
+    });
+
+    const { unmount } = renderPayments();
+    expect(await screen.findByText('Green Meadows (Plot No. A-12)')).toBeInTheDocument();
+    expect(screen.queryByText(/BOOK-894D82A651/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(screen.getByRole('heading', { name: 'Payment #77' })).toBeInTheDocument();
+    expect(screen.getAllByText('Green Meadows (Plot No. A-12)')).toHaveLength(2);
+    expect(screen.queryByText(/BOOK-894D82A651/)).not.toBeInTheDocument();
+    unmount();
+
+    renderPayments(ADMIN_USER, { id: 2, vertical: 'travel', defaultCurrency: 'USD' });
+    expect(await screen.findByText('Initial payment for plot booking BOOK-894D82A651')).toBeInTheDocument();
+    expect(screen.queryByText('Green Meadows (Plot No. A-12)')).not.toBeInTheDocument();
   });
 
   it('shows a customer-facing payment ledger without loading gateway configuration', async () => {
@@ -185,6 +242,7 @@ describe('<Payments /> — page surface', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: /^Payments$/i })).toBeInTheDocument());
     expect(screen.getByText(/Total Paid/i)).toBeInTheDocument();
     expect(screen.getAllByText('You').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('payment-summary-chips')).not.toBeInTheDocument();
     expect(fetchApiMock).not.toHaveBeenCalledWith('/api/payments/config');
   });
 
@@ -225,7 +283,8 @@ describe('<Payments /> — page surface', () => {
 
     renderPayments();
     expect(await screen.findByText('$54321.00')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Stripe$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Gateway' }));
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'stripe' } });
     expect(await screen.findByText('$250.00')).toBeInTheDocument();
     expect(fetchApiMock.mock.calls.some(([url]) => (
       url.startsWith('/api/payments/stats?')
@@ -308,15 +367,15 @@ describe('<Payments /> — page surface', () => {
     resolvePayments([]);
   });
 
-  it('clicking the "razorpay" gateway tab filters rows to razorpay only', async () => {
+  it('selecting Razorpay from the Gateway header filters rows to razorpay only', async () => {
     renderPayments();
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     expect(screen.getByText('Invoice #101')).toBeInTheDocument();
     expect(screen.getByText('Invoice #102')).toBeInTheDocument();
     expect(screen.getByText('Invoice #103')).toBeInTheDocument();
 
-    const razorpayTab = screen.getByRole('button', { name: /^razorpay$/i });
-    fireEvent.click(razorpayTab);
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Gateway' }));
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'razorpay' } });
 
     await waitFor(() => {
       expect(screen.getByText('Invoice #101')).toBeInTheDocument();
@@ -325,16 +384,162 @@ describe('<Payments /> — page surface', () => {
     });
   });
 
-  it('Gateway Configuration panel renders for ADMIN role', async () => {
+  it('adds invoice-style column filters to the Generic CRM payment ledger', async () => {
+    const rows = [
+      { ...samplePayments[0], description: 'Plot deposit' },
+      { ...samplePayments[1], description: 'Annual renewal' },
+      { ...samplePayments[2], description: 'Support package' },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve(rows);
+      return defaultFetchMock(url);
+    });
+
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Plot deposit')).toBeInTheDocument());
+
+    expect(screen.queryByRole('button', { name: 'Filter Customer' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Filter For' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Amount' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Gateway' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Status' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Paid Date' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^All$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Stripe$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Filter by date')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Gateway' }));
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'razorpay' } });
+    expect(screen.getByLabelText('Filter payments by gateway')).toHaveValue('razorpay');
+    expect(screen.getByText('Plot deposit')).toBeInTheDocument();
+    expect(screen.queryByText('Annual renewal')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'ALL' } });
+    expect(screen.getByLabelText('Filter payments by gateway')).toHaveValue('ALL');
+    expect(screen.getByText('Annual renewal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Status' }));
+    fireEvent.change(screen.getByLabelText('Filter payments by status'), { target: { value: 'FAILED' } });
+    expect(screen.getByText('Support package')).toBeInTheDocument();
+    expect(screen.queryByText('Annual renewal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear payment filters' }));
+    expect(screen.getByText('Plot deposit')).toBeInTheDocument();
+    expect(screen.getByText('Annual renewal')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear payment filters' })).not.toBeInTheDocument();
+  });
+
+  it('opens the native calendar from the full custom paid-date fields', async () => {
+    const originalShowPicker = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'showPicker');
+    const showPicker = vi.fn();
+    Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+      configurable: true,
+      value: showPicker,
+    });
+
+    try {
+      renderPayments();
+      await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Filter Paid Date' }));
+      fireEvent.change(screen.getByLabelText('Filter payments by paid date'), { target: { value: 'custom' } });
+
+      fireEvent.click(screen.getByLabelText('Filter paid date from'));
+      fireEvent.click(screen.getByLabelText('Filter paid date to'));
+      expect(showPicker).toHaveBeenCalledTimes(2);
+    } finally {
+      if (originalShowPicker) {
+        Object.defineProperty(HTMLInputElement.prototype, 'showPicker', originalShowPicker);
+      } else {
+        delete HTMLInputElement.prototype.showPicker;
+      }
+    }
+  });
+
+  it('converts payment rows and Total Collected together when Amount currency changes', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/payments/stats?')) {
+        return Promise.resolve({
+          successfulAmount: 1500,
+          successfulAmountByCurrency: { INR: 1500 },
+          byStatus: { SUCCESS: 1, PENDING: 1, FAILED: 1 },
+        });
+      }
+      return defaultFetchMock(url);
+    });
+
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Amount' }));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'EUR' })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Filter payments by currency'), { target: { value: 'EUR' } });
+
+    expect(screen.getAllByText('€16.88').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('€225.00')).toBeInTheDocument();
+    expect(screen.getByText('€67.50')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #102')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #103')).toBeInTheDocument();
+  });
+
+  it('does not relabel unconverted amounts when exchange rates are unavailable', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/currencies?fields=summary') return Promise.resolve([]);
+      if (url.startsWith('/api/payments/stats?')) return Promise.resolve({ successfulAmountByCurrency: { INR: 1500 }, byStatus: {} });
+      return defaultFetchMock(url);
+    });
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Amount' }));
+    fireEvent.change(await screen.findByLabelText('Filter payments by currency'), { target: { value: 'USD' } });
+    await waitFor(() => expect(screen.getAllByText('Rate unavailable').length).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText('$1500.00')).not.toBeInTheDocument();
+  });
+
+  it('does not add Generic CRM column filters to other verticals', async () => {
+    renderPayments(ADMIN_USER, { id: 2, vertical: 'travel', defaultCurrency: 'USD' });
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Filter Customer' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Filter Status' })).not.toBeInTheDocument();
+  });
+
+  it('opens Gateway Configuration in a popup from the eye action for a Generic CRM admin', async () => {
     renderPayments(ADMIN_USER);
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: /Gateway Configuration/i })).toBeNull();
+    const gatewayAction = screen.getByRole('button', { name: /View gateway configuration/i });
+    expect(gatewayAction.closest('.razorpay-gateway-card')).toBeInTheDocument();
+    expect(gatewayAction.closest('th')).toBeNull();
+    fireEvent.click(gatewayAction);
+    const dialog = screen.getByRole('dialog', { name: /Gateway Configuration/i });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveStyle({ background: 'var(--modal-bg, #ffffff)' });
     expect(screen.getByRole('heading', { name: /Gateway Configuration/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close gateway configuration/i }));
+    expect(screen.queryByRole('dialog', { name: /Gateway Configuration/i })).toBeNull();
   });
 
   it('Gateway Configuration panel is HIDDEN for USER role', async () => {
     renderPayments(REGULAR_USER);
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     expect(screen.queryByRole('heading', { name: /Gateway Configuration/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /View gateway configuration/i })).toBeNull();
+  });
+
+  it('keeps Gateway Configuration inline and omits the eye action outside Generic CRM', async () => {
+    renderPayments(ADMIN_USER, { id: 2, vertical: 'travel', defaultCurrency: 'USD' });
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: /Gateway Configuration/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /View gateway configuration/i })).toBeNull();
+  });
+
+  it('keeps one table layout so the sticky header stays aligned while payment rows scroll', async () => {
+    const { container } = renderPayments(ADMIN_USER);
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    expect(container.querySelector('.finance-page')).toHaveClass('finance-page--generic-ledger');
+    expect(container.querySelector('thead')).toHaveClass('payment-ledger-head');
+    expect(container.querySelector('tbody')).toHaveClass('payment-ledger-body');
+    expect(screen.getByRole('columnheader', { name: /^Actions/ }).closest('table'))
+      .toBe(screen.getAllByRole('button', { name: 'View' })[0].closest('table'));
   });
 
   it('renders the configuration warning when both gateways are unconfigured', async () => {
@@ -385,18 +590,19 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getAllByText(/^Refunded$/).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('Stripe tab filters rows to stripe only; clicking "All" restores all rows', async () => {
+  it('Gateway header filters Stripe rows and restores all rows', async () => {
     renderPayments();
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^stripe$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Gateway' }));
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'stripe' } });
     await waitFor(() => {
       expect(screen.queryByText('Invoice #101')).not.toBeInTheDocument();
       expect(screen.getByText('Invoice #102')).toBeInTheDocument();
       expect(screen.getByText('Invoice #103')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^All$/i }));
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'ALL' } });
     await waitFor(() => {
       expect(screen.getByText('Invoice #101')).toBeInTheDocument();
       expect(screen.getByText('Invoice #102')).toBeInTheDocument();
@@ -500,6 +706,7 @@ describe('<Payments /> — page surface', () => {
       return Promise.resolve(null);
     });
     renderPayments(ADMIN_USER);
+    fireEvent.click(await screen.findByRole('button', { name: /View gateway configuration/i }));
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Gateway Configuration/i })).toBeInTheDocument();
     });
@@ -600,14 +807,15 @@ describe('<Payments /> — pagination', () => {
     });
   });
 
-  it('resets to page 1 when a gateway tab is selected', async () => {
+  it('resets to page 1 when a gateway header filter is selected', async () => {
     renderPayments();
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
     await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 2 of 3/));
 
-    fireEvent.click(screen.getByRole('button', { name: /^stripe$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Gateway' }));
+    fireEvent.change(screen.getByLabelText('Filter payments by gateway'), { target: { value: 'stripe' } });
     await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of/i));
   });
 });

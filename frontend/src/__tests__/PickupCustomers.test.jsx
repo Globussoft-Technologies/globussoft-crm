@@ -540,6 +540,55 @@ describe('<PickupCustomers />', () => {
     expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
   });
 
+  it('edits an installment plan only before an installment payment starts', async () => {
+    const plannedCustomer = {
+      ...payload.customers[0],
+      installments: [
+        { id: 901, plotBookingId: 501, sequenceNumber: 1, frequency: 'MONTHLY', dueDate: '2026-11-27T12:00:00.000Z', amount: 1500000, status: 'PLANNED', paymentId: null },
+        { id: 902, plotBookingId: 501, sequenceNumber: 2, frequency: 'MONTHLY', dueDate: '2026-12-27T12:00:00.000Z', amount: 1500000, status: 'PLANNED', paymentId: null },
+      ],
+    };
+    fetchApi.mockResolvedValue({ ...payload, customers: [plannedCustomer, payload.customers[1]] });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit plan' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit installment plan' });
+    expect(within(dialog).getByLabelText('Installment frequency')).toHaveValue('MONTHLY');
+    expect(within(dialog).getByLabelText('Number of installments')).toHaveValue(2);
+    expect(within(dialog).getByLabelText('First payment date')).toHaveValue('2026-11-27');
+    expect(within(dialog).getByLabelText('Amount per installment')).toHaveValue(1500000);
+
+    fireEvent.change(within(dialog).getByLabelText('Installment frequency'), { target: { value: 'QUARTERLY' } });
+    fireEvent.change(within(dialog).getByLabelText('First payment date'), { target: { value: '2026-12-20' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/61/installments',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ plotBookingId: 501, frequency: 'QUARTERLY', paymentCount: 2, firstPaymentDate: '2026-12-20', amount: 1500000 }),
+      },
+    ));
+  });
+
+  it('hides installment-plan editing after an installment is paid', async () => {
+    fetchApi.mockResolvedValue({
+      ...payload,
+      customers: [{
+        ...payload.customers[0],
+        installments: [
+          { id: 901, sequenceNumber: 1, dueDate: '2026-11-27T12:00:00.000Z', amount: 1500000, status: 'PAID', paymentId: 701 },
+          { id: 902, sequenceNumber: 2, dueDate: '2026-12-27T12:00:00.000Z', amount: 1500000, status: 'PLANNED', paymentId: null },
+        ],
+      }, payload.customers[1]],
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    expect(screen.queryByRole('button', { name: 'Edit plan' })).toBeNull();
+  });
+
   it('shows installment lifecycle actions for initiated, processing, failed, overdue, and paid rows', async () => {
     fetchApi.mockResolvedValue({
       ...payload,
@@ -918,6 +967,9 @@ describe('<PickupCustomers />', () => {
     expect(responsiveCss).toMatch(/\.pickup-installment-table-wrap\s*\{[^}]*max-height:330px[^}]*overflow:auto/s);
     expect(responsiveCss).toMatch(/\.pickup-installment-table th\s*\{[^}]*position:sticky[^}]*top:0/s);
     expect(responsiveCss).toMatch(/\.pickup-payment-history-wrap\s*\{[^}]*max-height:260px[^}]*overflow:auto/s);
+    expect(responsiveCss).toMatch(/\.pickup-history-dialog\s*\{[^}]*overflow-x:hidden;[^}]*overflow-y:auto;/s);
+    expect(responsiveCss).toMatch(/\.pickup-history-dialog::before\s*\{[^}]*display:none;/s);
+    expect(responsiveCss).toMatch(/\.pickup-history-dialog:hover\s*\{[^}]*transform:none;[^}]*border-color:var\(--border-color\)/s);
   });
 
   it('prevents avoidable search overlap and customer-name wrapping', () => {

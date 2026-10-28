@@ -22,6 +22,123 @@ const CACHE_TTL_MS = 30_000;
 // no authenticated starting page.
 const REQUIRED_PAGE_PATHS = new Set(['/home', '/dashboard', '/wellness', '/travel']);
 
+// These Generic routes are mounted in the SPA and remain available by direct
+// URL, but the canonical Generic navigation catalog deliberately marks them
+// `sidebarHidden` (or omits them entirely). Organization Page Visibility is a
+// navigation control, so presenting these routes there would create switches
+// for links that can never appear in the sidebar. Keep this deny-list aligned
+// with GENERIC_SIDEBAR_PAGE_SPECS in frontend/src/utils/sidebarSearch.js.
+const GENERIC_NON_SIDEBAR_PAGE_PATHS = new Set([
+  '/converted-leads',
+  '/callified-data',
+  '/lead-routing',
+  '/estimates',
+  '/sequences',
+  '/surveys',
+  '/knowledge-base',
+  '/dashboards',
+  '/approvals',
+  '/clients',
+  '/forecasting',
+  '/quotas',
+  '/gmail',
+  '/shared-inbox',
+  '/support',
+  '/workflows',
+  '/field-permissions',
+  '/custom-reports',
+  '/lead-scoring',
+  '/booking-pages',
+]);
+
+// Generic CRM Page Visibility mirrors the actual rendered sidebar, including
+// its order, section names and labels. The route remains the catalog page's
+// canonical `path`; these overrides are presentation-only and do not change
+// routing, RBAC or API behaviour. Wellness and Travel continue to use their
+// existing vertical catalogs unchanged.
+const GENERIC_SIDEBAR_PRESENTATION = [
+  { path: '/home', label: 'Home', category: 'Core' },
+  { path: '/dashboard', label: 'Dashboard', category: 'Core' },
+  { path: '/integrations/adsgpt', label: 'AdsGPT', category: 'Core' },
+  { path: '/integrations/callified', label: 'Callified', category: 'Core' },
+
+  { path: '/contacts', label: 'Contacts', category: 'Sales' },
+  { path: '/pipeline', label: 'Deals and Pipeline', category: 'Sales' },
+  { path: '/deal-insights', label: 'Deal Insights', category: 'Sales' },
+  { path: '/playbooks', label: 'Playbooks', category: 'Sales' },
+
+  { path: '/leads', label: 'All Leads', category: 'Leads' },
+  { path: '/lead-reports', label: 'Lead Reports', category: 'Leads' },
+
+  { path: '/inbox', label: 'Inbox', category: 'Communication' },
+  { path: '/whatsapp', label: 'WhatsApp', category: 'Communication' },
+  { path: '/calendar-sync', label: 'Calendar Sync', category: 'Communication' },
+  { path: '/live-chat', label: 'Live Chat', category: 'Communication' },
+
+  { path: '/tasks', label: 'Task Queue', category: 'Work Management' },
+
+  { path: '/tickets', label: 'Tickets', category: 'Customer Support' },
+  { path: '/sla', label: 'SLA Policies', category: 'Customer Support' },
+
+  { path: '/forms', label: 'Web Forms', category: 'Marketing & Automation' },
+  { path: '/landing-sites', label: 'Landing Sites', category: 'Marketing & Automation' },
+  { path: '/marketing', label: 'Marketing Campaign', category: 'Marketing & Automation' },
+  { path: '/ab-tests', label: 'A/B Tests', category: 'Marketing & Automation' },
+  { path: '/web-visitors', label: 'Web Visitors', category: 'Marketing & Automation' },
+  { path: '/chatbots', label: 'Chatbots', category: 'Marketing & Automation' },
+  { path: '/social', label: 'Social Media', category: 'Marketing & Automation' },
+
+  { path: '/signatures', label: 'E-Signatures', category: 'Documents & Delivery' },
+  { path: '/document-templates', label: 'Doc Templates', category: 'Documents & Delivery' },
+  { path: '/document-tracking', label: 'Doc Tracking', category: 'Documents & Delivery' },
+  { path: '/contracts', label: 'Contracts', category: 'Documents & Delivery' },
+  { path: '/projects', label: 'Projects', category: 'Documents & Delivery' },
+
+  { path: '/invoices', label: 'Invoices', category: 'Finance' },
+  { path: '/expenses', label: 'Expenses', category: 'Finance' },
+  { path: '/payments', label: 'Payments', category: 'Finance' },
+  { path: '/cpq', label: 'CPQ', category: 'Finance' },
+
+  { path: '/reports', label: 'Reports', category: 'Analytics & Reports' },
+  { path: '/agent-reports', label: 'Agent Reports', category: 'Analytics & Reports' },
+  { path: '/revenue-goals', label: 'Revenue Goals', category: 'Analytics & Reports' },
+
+  { path: '/sales-teams', label: 'Sales Teams', category: 'Team & Access' },
+  { path: '/staff', label: 'Staff', category: 'Team & Access' },
+  { path: '/settings/roles', label: 'Roles', category: 'Team & Access' },
+  { path: '/territories', label: 'Territories', category: 'Team & Access' },
+
+  { path: '/pickup-plot-inventory', label: 'Plot Inventory', category: 'Pickup & Plot' },
+  { path: '/pickup-inventory', label: 'Pickup Inventory', category: 'Pickup & Plot' },
+  { path: '/pickup-customers', label: 'Customer Workflows', category: 'Pickup & Plot' },
+  { path: '/transport-persons', label: 'Transport Persons', category: 'Pickup & Plot' },
+  { path: '/plot-brokers', label: 'Sales Executives', category: 'Pickup & Plot' },
+  { path: '/billing-persons', label: 'Billing Persons', category: 'Pickup & Plot' },
+  { path: '/pickup-work-assignments', label: 'Assign Staff Work', category: 'Pickup & Plot' },
+  { path: '/transport-workspace', label: 'Transport Work', category: 'Pickup & Plot' },
+  { path: '/sales-workspace', label: 'Site Visits', category: 'Pickup & Plot' },
+
+  { path: '/audit-log', label: 'Audit Log', category: 'Administration' },
+  { path: '/privacy', label: 'Privacy', category: 'Administration' },
+  { path: '/admin/csp-violations', label: 'CSP Violations', category: 'Administration' },
+  { path: '/admin/embed-allowlist', label: 'Embed Allowlist', category: 'Administration' },
+  { path: '/admin/status', label: 'Status', category: 'Administration' },
+  { path: '/commission-profiles', label: 'Commission Profiles', category: 'Administration' },
+  { path: '/commission-data', label: 'Commission Data', category: 'Administration' },
+  { path: '/channels', label: 'Channels', category: 'Administration' },
+  { path: '/industry-templates', label: 'Industry Templates', category: 'Administration' },
+  { path: '/currencies', label: 'Currencies', category: 'Administration' },
+  { path: '/data-import-export', label: 'Import / Export', category: 'Administration' },
+
+  { path: '/sandbox', label: 'Sandbox', category: 'Platform' },
+  { path: '/objects', label: 'App Builder', category: 'Platform' },
+  { path: '/zapier', label: 'Zapier', category: 'Platform' },
+  { path: '/developer', label: 'Developers', category: 'Platform' },
+
+  { path: '/settings', label: 'Settings', category: 'Settings' },
+  { path: '/notification-settings', label: 'Notification Settings', category: 'User' },
+];
+
 // A small set of generic routes still uses the legacy hardcoded sidebar
 // renderer and therefore is not part of the vertical page catalog. Keep
 // those routes in the tenant-visibility catalog until their navigation is
@@ -157,13 +274,18 @@ function catalogPathsForVertical(vertical) {
 function getTenantPageVisibilityCatalog(vertical) {
   const catalog = getCatalogForVertical(vertical);
   if (vertical !== 'generic') return catalog;
-  return [
+  const catalogByPath = new Map([
     ...catalog,
     ...LEGACY_GENERIC_PAGE_CATALOG.map((page) => ({
       ...page,
       requiredPermissions: page.requiredPermissions.map((permission) => ({ ...permission })),
     })),
-  ];
+  ].map((page) => [page.path, page]));
+
+  return GENERIC_SIDEBAR_PRESENTATION.flatMap((sidebarPage) => {
+    const page = catalogByPath.get(sidebarPage.path);
+    return page ? [{ ...page, label: sidebarPage.label, category: sidebarPage.category }] : [];
+  });
 }
 
 function normalizeHiddenPaths(input, vertical) {
@@ -285,6 +407,24 @@ function referencedPermissionKeys(pages) {
   return keys;
 }
 
+// Permission filtering needs to know about every mounted page, including a
+// route intentionally omitted from the sidebar. Otherwise a hidden route such
+// as Generic CRM `/estimates` looks like an unrelated API-only permission and
+// its module incorrectly survives in the role editor. The enabled side still
+// comes from getTenantPageVisibilityCatalog(), so only sidebar-capable pages
+// can keep a page-backed permission module visible.
+function getPermissionReferenceCatalogForVertical(vertical) {
+  const catalog = getCatalogForVertical(vertical);
+  if (vertical !== 'generic') return catalog;
+  return [
+    ...catalog,
+    ...LEGACY_GENERIC_PAGE_CATALOG.map((page) => ({
+      ...page,
+      requiredPermissions: page.requiredPermissions.map((permission) => ({ ...permission })),
+    })),
+  ];
+}
+
 /**
  * Hide a permission module only when none of the tenant-enabled pages uses it.
  * This keeps shared modules (for example reports or marketing) available when
@@ -292,7 +432,7 @@ function referencedPermissionKeys(pages) {
  */
 function filterPermissionCatalogForTenant(catalog, vertical, hiddenPaths) {
   const pages = getTenantPageVisibilityCatalog(vertical);
-  const knownKeys = referencedPermissionKeys(pages);
+  const knownKeys = referencedPermissionKeys(getPermissionReferenceCatalogForVertical(vertical));
   const enabledKeys = referencedPermissionKeys(
     filterPagesByTenantVisibility(pages, { hiddenPaths }),
   );
@@ -324,7 +464,7 @@ function getUnavailablePermissionModules(catalog, knownKeys, enabledKeys) {
 
 function getUnavailablePermissionModulesForTenant(catalog, vertical, hiddenPaths) {
   const pages = getTenantPageVisibilityCatalog(vertical);
-  const knownKeys = referencedPermissionKeys(pages);
+  const knownKeys = referencedPermissionKeys(getPermissionReferenceCatalogForVertical(vertical));
   const enabledKeys = referencedPermissionKeys(
     filterPagesByTenantVisibility(pages, { hiddenPaths }),
   );
@@ -366,6 +506,8 @@ module.exports = {
   SETTING_KEY,
   SETTING_CATEGORY,
   REQUIRED_PAGE_PATHS,
+  GENERIC_NON_SIDEBAR_PAGE_PATHS,
+  GENERIC_SIDEBAR_PRESENTATION,
   LEGACY_GENERIC_PAGE_CATALOG,
   getTenantPageVisibilityCatalog,
   normalizeHiddenPaths,

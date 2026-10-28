@@ -51,6 +51,8 @@ const INVOICE_SETTING_KEYS = [
   "invoice.companyPhone",
   "invoice.companyEmail",
   "invoice.companyWebsite",
+  "invoice.documentTitle",
+  "invoice.taxRate",
   "invoice.notes",
   "branding.name",
   "branding.color",
@@ -67,6 +69,9 @@ const INVOICE_SETTING_KEYS = [
   "company.phone",
   "company.email",
   "company.website",
+  "company.invoiceTitle",
+  "company.tagline",
+  "tax.rate",
   "businessAddress",
 ];
 
@@ -118,6 +123,19 @@ async function loadInvoiceBrandContext(tenantId, tenant) {
     );
   } catch (_e) {
     // Logo loading is fail-soft; text and tenant colors remain available.
+  }
+  // Match the Generic CRM shell exactly: a tenant-uploaded logo wins; when it
+  // is absent, use the same default brand icon shown in the sidebar. Wellness
+  // and Travel retain their independent logo resolution and never use this.
+  if (!logoBuffer && (tenant?.vertical || "generic") === "generic") {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const defaultLogoPath = path.join(__dirname, "..", "..", "frontend", "public", "logo-header-nobg.png");
+      if (fs.existsSync(defaultLogoPath)) logoBuffer = fs.readFileSync(defaultLogoPath);
+    } catch (_e) {
+      // Text-only header remains a safe final fallback if the asset is absent.
+    }
   }
   return { settings, clinic, logoBuffer };
 }
@@ -311,7 +329,7 @@ async function hydrateWellnessInvoiceRows(invoices, tenantId) {
   });
 }
 
-async function hydrateGenericPlotInvoiceRows(invoices, tenantId) {
+async function hydrateGenericPlotInvoiceRows(invoices, tenantId, { detailed = false } = {}) {
   if (!Array.isArray(invoices) || invoices.length === 0) return invoices;
   if (
     !prisma.plotInvoiceItem?.findMany ||
@@ -335,6 +353,9 @@ async function hydrateGenericPlotInvoiceRows(invoices, tenantId) {
       plotBookingId: true,
       itemId: true,
       description: true,
+      quantity: true,
+      unitPrice: true,
+      amount: true,
     },
   });
   if (items.length === 0) return invoices;
@@ -359,13 +380,28 @@ async function hydrateGenericPlotInvoiceRows(invoices, tenantId) {
             plotNumber: true,
             block: true,
             referenceCode: true,
+            address: true,
+            area: true,
+            areaUnit: true,
+            price: true,
+            pickupLocation: { select: { name: true } },
           },
         })
       : [],
     bookingIds.length
       ? prisma.plotBooking.findMany({
           where: { tenantId, id: { in: bookingIds } },
-          select: { id: true, bookingNumber: true, plotSiteId: true },
+          select: {
+            id: true,
+            bookingNumber: true,
+            plotSiteId: true,
+            totalAmount: true,
+            amountPaid: true,
+            balance: true,
+            paymentStatus: true,
+            reservedAt: true,
+            createdAt: true,
+          },
         })
       : [],
   ]);
@@ -378,18 +414,33 @@ async function hydrateGenericPlotInvoiceRows(invoices, tenantId) {
     if (!item) return invoice;
     const booking = bookingById.get(item.plotBookingId);
     const plot = plotById.get(Number(item.itemId) || booking?.plotSiteId);
+    const basePlotDetails = {
+      plotId: plot?.id || item.itemId || booking?.plotSiteId || null,
+      plotNumber: plot?.plotNumber || null,
+      siteName: plot?.name || null,
+      block: plot?.block || null,
+      referenceCode: plot?.referenceCode || null,
+      bookingId: booking?.id || item.plotBookingId || null,
+      bookingNumber: booking?.bookingNumber || null,
+      description: item.description || null,
+    };
     return {
       ...invoice,
-      plotDetails: {
-        plotId: plot?.id || item.itemId || booking?.plotSiteId || null,
-        plotNumber: plot?.plotNumber || null,
-        siteName: plot?.name || null,
-        block: plot?.block || null,
-        referenceCode: plot?.referenceCode || null,
-        bookingId: booking?.id || item.plotBookingId || null,
-        bookingNumber: booking?.bookingNumber || null,
-        description: item.description || null,
-      },
+      plotDetails: detailed ? {
+        ...basePlotDetails,
+        productName: plot?.name || null,
+        name: plot?.name || null,
+        propertyAddress: plot?.address || null,
+        address: plot?.address || null,
+        size: plot?.area || null,
+        unit: plot?.areaUnit || null,
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unitPrice || plot?.price || invoice.amount || 0),
+        totalPrice: Number(booking?.totalAmount || invoice.amount || item.amount || 0),
+        siteName: plot?.pickupLocation?.name || plot?.referenceCode || plot?.block || null,
+        projectName: plot?.pickupLocation?.name || null,
+        purchaseDate: booking?.reservedAt || booking?.createdAt || invoice.issuedDate || null,
+      } : basePlotDetails,
     };
   });
 }
@@ -2928,11 +2979,160 @@ router.get("/public/receipt", async (req, res) => {
 
     const tenant = await prisma.tenant.findUnique({
       where: { id: payment.tenantId },
-      select: { name: true, defaultCurrency: true, locale: true },
+      select: {
+        name: true,
+        vertical: true,
+        defaultCurrency: true,
+        locale: true,
+        logoUrl: true,
+        brandColor: true,
+        themeColor: true,
+        ownerEmail: true,
+        gstStateCode: true,
+      },
     });
     const currency = tenant?.defaultCurrency || "INR";
     const locale = tenant?.locale || undefined;
     const tenantName = tenant?.name || "Your Company";
+
+    // Generic CRM plot payments render a real property invoice using the
+    // booking, plot, buyer, branding and payment records. Other Generic CRM
+    // receipts keep the legacy fallback below; Wellness and Travel never enter
+    // this branch.
+    const plotBookingId = Number(meta.plotBookingId);
+    if (
+      (tenant?.vertical || "generic") === "generic"
+      && meta.kind === "plot-booking-payment"
+      && Number.isInteger(plotBookingId)
+      && plotBookingId > 0
+    ) {
+      const booking = await prisma.plotBooking.findFirst({
+        where: { id: plotBookingId, tenantId: payment.tenantId },
+        select: {
+          id: true,
+          bookingNumber: true,
+          plotSiteId: true,
+          totalAmount: true,
+          amountPaid: true,
+          balance: true,
+          paymentStatus: true,
+          reservedAt: true,
+          createdAt: true,
+        },
+      });
+      const plot = booking
+        ? await prisma.plotSite.findFirst({
+            where: { id: booking.plotSiteId, tenantId: payment.tenantId },
+            select: {
+              id: true,
+              name: true,
+              plotNumber: true,
+              block: true,
+              referenceCode: true,
+              address: true,
+              area: true,
+              areaUnit: true,
+              price: true,
+              pickupLocation: { select: { name: true } },
+            },
+          })
+        : null;
+      if (booking && plot) {
+        const context = await loadInvoiceBrandContext(payment.tenantId, tenant);
+        const settingMap = new Map(context.settings.map((row) => [row.key, row.value]));
+        const configuredTaxRate = Number(settingMap.get("invoice.taxRate") || settingMap.get("tax.rate") || 0);
+        const taxRate = Number.isFinite(configuredTaxRate) && configuredTaxRate >= 0 ? configuredTaxRate : 0;
+        const totalAmount = Number(booking.totalAmount || receiptInvoice.amount || plot.price || 0);
+        const amountPaid = Number(booking.amountPaid || receiptInvoice.amountPaid || payment.amount || 0);
+        const balanceDue = Math.max(0, Number(booking.balance ?? receiptInvoice.balance ?? (totalAmount - amountPaid)));
+        const dueAt = receiptInvoice.dueDate ? new Date(receiptInvoice.dueDate) : null;
+        const paymentStatus = balanceDue <= 0
+          ? "Paid"
+          : amountPaid > 0
+            ? "Partial"
+            : dueAt && !Number.isNaN(dueAt.getTime()) && dueAt < new Date()
+              ? "Overdue"
+              : "Pending";
+        const storedTaxTotal = Number(receiptInvoice.taxAmount);
+        // Plot prices are stored as the final payable amount. When the tenant
+        // configures a GST rate but the legacy invoice has no persisted tax
+        // split, derive GST inclusively so the PDF remains mathematically
+        // consistent: subtotal + GST = the unchanged booking total.
+        const taxTotal = Number.isFinite(storedTaxTotal) && storedTaxTotal > 0
+          ? storedTaxTotal
+          : taxRate > 0
+            ? Math.round(((totalAmount * taxRate) / (100 + taxRate)) * 100) / 100
+            : 0;
+        const subtotal = Math.max(0, Math.round((totalAmount - taxTotal) * 100) / 100);
+        const buyerState = receiptInvoice.contact?.billingStateCode || receiptInvoice.contact?.stateCode || null;
+        const isInterstate = Boolean(buyerState && tenant.gstStateCode && buyerState !== tenant.gstStateCode);
+        const cgst = isInterstate ? 0 : taxTotal / 2;
+        const sgst = isInterstate ? 0 : taxTotal / 2;
+        const igst = isInterstate ? taxTotal : 0;
+        const plotInvoice = {
+          ...receiptInvoice,
+          amount: totalAmount,
+          amountPaid,
+          balance: balanceDue,
+          status: paymentStatus.toUpperCase(),
+          purchaseDate: booking.reservedAt || booking.createdAt,
+          customerName: receiptInvoice.customerName || receiptInvoice.contact?.name,
+          customerEmail: receiptInvoice.customerEmail || receiptInvoice.contact?.email,
+          customerPhone: receiptInvoice.customerPhone || receiptInvoice.contact?.phone,
+          billingAddress: receiptInvoice.billingAddress || receiptInvoice.customerAddress,
+          plotDetails: {
+            productName: plot.name,
+            name: plot.name,
+            plotNumber: plot.plotNumber,
+            siteName: plot.pickupLocation?.name || plot.referenceCode || plot.block,
+            projectName: plot.pickupLocation?.name || null,
+            propertyAddress: plot.address,
+            address: plot.address,
+            size: plot.area,
+            unit: plot.areaUnit,
+            quantity: 1,
+            unitPrice: subtotal,
+            subtotal,
+            totalPrice: totalAmount,
+            bookingNumber: booking.bookingNumber,
+            referenceCode: plot.referenceCode,
+            purchaseDate: booking.reservedAt || booking.createdAt,
+          },
+          taxDetails: {
+            taxType: "GST",
+            taxRate,
+            cgst,
+            sgst,
+            igst,
+            totalTax: taxTotal,
+          },
+          paymentDetails: {
+            status: paymentStatus,
+            method: meta.method || meta.mode || payment.gateway,
+            amountPaid,
+            transactionId: meta.razorpayPaymentId || payment.gatewayId || plinkId,
+            paymentDate: payment.paidAt || payment.createdAt,
+            balanceDue,
+          },
+        };
+        const pdfBuffer = await pdfRenderer.renderGenericPlotInvoicePdf(
+          plotInvoice,
+          receiptInvoice.contact,
+          context.clinic,
+          {
+            tenant,
+            settings: context.settings,
+            logoBuffer: context.logoBuffer,
+            currency: receiptInvoice.currency || currency,
+            locale,
+          },
+        );
+        const filename = `${receiptInvoice.invoiceNum || booking.bookingNumber || `PLOT-${booking.id}`}.pdf`;
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+        return res.status(200).end(pdfBuffer);
+      }
+    }
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     applyRupeeCapableFonts(doc); // ₹ glyph fix
@@ -3062,6 +3262,12 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
         [invoice],
         req.user.tenantId,
       );
+    } else {
+      [invoice] = await hydrateGenericPlotInvoiceRows(
+        [invoice],
+        req.user.tenantId,
+        { detailed: true },
+      );
     }
 
     // The issued invoice's currency stays fixed even when the tenant changes
@@ -3069,6 +3275,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
       select: {
+        vertical: true,
         defaultCurrency: true,
         locale: true,
         name: true,
@@ -3076,6 +3283,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
         brandColor: true,
         themeColor: true,
         ownerEmail: true,
+        gstStateCode: true,
       },
     });
     const currency = invoice.currency || tenant?.defaultCurrency || "USD";
@@ -3090,9 +3298,100 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
       req.user.tenantId,
       tenant,
     );
-    const renderInvoicePdf = isWellnessInvoice
+    let renderInvoicePdf = isWellnessInvoice
       ? pdfRenderer.renderProfessionalWellnessInvoicePdf
       : pdfRenderer.renderProfessionalInvoicePdf;
+    if (!isWellnessInvoice && isGenericRequest(req) && invoice.plotDetails) {
+      // Only property invoices use this single-property layout. Standard
+      // invoices retain every stored product/service line in the corporate PDF.
+      const baseDetails = invoice.plotDetails;
+      const successfulPayments = prisma.payment?.findMany
+        ? await prisma.payment.findMany({
+            where: {
+              tenantId: req.user.tenantId,
+              invoiceId: invoice.id,
+              status: "SUCCESS",
+            },
+            orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+            select: {
+              amount: true,
+              gateway: true,
+              gatewayId: true,
+              paidAt: true,
+              createdAt: true,
+              metadata: true,
+            },
+          })
+        : [];
+      const latestPayment = successfulPayments[0] || null;
+      const recordedPaid = invoice.amountPaid == null || invoice.amountPaid === ""
+        ? NaN
+        : Number(invoice.amountPaid);
+      const storedStatus = String(invoice.status || "").toUpperCase();
+      const amountPaid = storedStatus === "PAID" ? Number(invoice.amount || 0) : Number.isFinite(recordedPaid)
+        ? recordedPaid
+        : successfulPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const totalAmount = Number(invoice.amount || baseDetails.totalPrice || 0);
+      const recordedBalance = invoice.balance == null || invoice.balance === ""
+        ? NaN
+        : Number(invoice.balance);
+      const balanceDue = storedStatus === "PAID" ? 0 : Number.isFinite(recordedBalance)
+        ? Math.max(0, recordedBalance)
+        : Math.max(0, totalAmount - amountPaid);
+      const dueAt = invoice.dueDate ? new Date(invoice.dueDate) : null;
+      const terminalStatus = { VOIDED: "Voided", REFUNDED: "Refunded", CREDIT_NOTE: "Credit_note" }[storedStatus];
+      const paymentStatus = terminalStatus || (balanceDue <= 0
+        ? "Paid"
+        : amountPaid > 0
+          ? "Partial"
+          : dueAt && !Number.isNaN(dueAt.getTime()) && dueAt < new Date()
+            ? "Overdue"
+            : "Pending");
+      let paymentMetadata = {};
+      try { paymentMetadata = JSON.parse(latestPayment?.metadata || "{}"); } catch (_error) {}
+      const settingMap = new Map(context.settings.map((row) => [row.key, row.value]));
+      const configuredTaxRate = Number(settingMap.get("invoice.taxRate") || settingMap.get("tax.rate") || 0);
+      const taxRate = Number.isFinite(configuredTaxRate) && configuredTaxRate >= 0 ? configuredTaxRate : 0;
+      const storedTaxTotal = Number(invoice.taxAmount);
+      const taxTotal = Number.isFinite(storedTaxTotal) && storedTaxTotal > 0
+        ? storedTaxTotal
+        : taxRate > 0
+          ? Math.round(((totalAmount * taxRate) / (100 + taxRate)) * 100) / 100
+          : 0;
+      const subtotal = Math.max(0, Math.round((totalAmount - taxTotal) * 100) / 100);
+      const buyerState = invoice.contact?.billingStateCode || invoice.contact?.stateCode || null;
+      const isInterstate = Boolean(buyerState && tenant.gstStateCode && buyerState !== tenant.gstStateCode);
+      invoice = {
+        ...invoice,
+        status: paymentStatus.toUpperCase(),
+        amountPaid,
+        balance: balanceDue,
+        purchaseDate: baseDetails.purchaseDate || invoice.issuedDate,
+        plotDetails: {
+          ...baseDetails,
+          unitPrice: subtotal / (Number(baseDetails.quantity) > 0 ? Number(baseDetails.quantity) : 1),
+          subtotal,
+          totalPrice: totalAmount,
+        },
+        taxDetails: {
+          taxType: "GST",
+          taxRate,
+          cgst: isInterstate ? 0 : taxTotal / 2,
+          sgst: isInterstate ? 0 : taxTotal / 2,
+          igst: isInterstate ? taxTotal : 0,
+          totalTax: taxTotal,
+        },
+        paymentDetails: {
+          status: paymentStatus,
+          method: invoice.paymentMode || paymentMetadata.method || paymentMetadata.mode || latestPayment?.gateway,
+          amountPaid,
+          transactionId: paymentMetadata.razorpayPaymentId || latestPayment?.gatewayId,
+          paymentDate: latestPayment?.paidAt || latestPayment?.createdAt || invoice.paidAt,
+          balanceDue,
+        },
+      };
+      renderInvoicePdf = pdfRenderer.renderGenericPlotInvoicePdf;
+    }
     const buf = await renderInvoicePdf(
       invoice,
       invoice.contact,

@@ -218,6 +218,36 @@ describe('Omnibar (inline top-bar)', () => {
     });
   });
 
+  it('does not expose Estimate pages or records in Generic CRM search', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            { path: '/estimates', label: 'Estimates', description: 'Quotes and estimates' },
+          ],
+        });
+      }
+      return Promise.resolve({
+        estimates: [{ id: 42, estimateNum: 'EST-042', title: 'Hidden estimate', status: 'Draft' }],
+      });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'estimate' } });
+
+    expect(
+      await screen.findByText(/No algorithmic matches located for/i, {}, { timeout: 2000 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Estimates|EST-042|Hidden estimate/i })).toBeNull();
+  });
+
   it('matches generic CRM sidebar pages even when /api/pages/me omits them', async () => {
     fetchApi.mockImplementation((url) => {
       if (url === '/api/pages/me') return Promise.resolve({ pages: [] });

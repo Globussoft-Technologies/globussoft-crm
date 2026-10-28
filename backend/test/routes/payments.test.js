@@ -96,6 +96,10 @@ prisma.payment.update = vi.fn();
 prisma.payment.updateMany = vi.fn();
 prisma.plotInstallment = prisma.plotInstallment || {};
 prisma.plotInstallment.findFirst = vi.fn();
+prisma.plotBooking = prisma.plotBooking || {};
+prisma.plotBooking.findMany = vi.fn().mockResolvedValue([]);
+prisma.plotSite = prisma.plotSite || {};
+prisma.plotSite.findMany = vi.fn().mockResolvedValue([]);
 prisma.plotBroker = prisma.plotBroker || {};
 prisma.plotBroker.findMany = vi.fn();
 prisma.payment.aggregate = vi.fn();
@@ -360,6 +364,36 @@ describe('GET / — list payments under tenant scope', () => {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 200,
     });
+  });
+
+  test('enriches plot payments with tenant-scoped plot name and number', async () => {
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 41,
+      invoiceId: null,
+      description: 'Initial payment for plot booking BOOK-SECRET',
+      amount: 5000,
+      currency: 'INR',
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      tenantId: 1,
+      metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 73 }),
+      createdAt: new Date('2026-10-27'),
+    }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{ id: 73, plotSiteId: 91 }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 91, name: 'Green Meadows', plotNumber: 'A-12' }]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
+
+    expect(res.status).toBe(200);
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, id: { in: [73] } },
+      select: { id: true, plotSiteId: true },
+    });
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, id: { in: [91] } },
+      select: { id: true, name: true, plotNumber: true },
+    });
+    expect(res.body[0].plotSite).toEqual({ id: 91, name: 'Green Meadows', plotNumber: 'A-12' });
   });
 
   test('?status, ?gateway, ?invoiceId flow through with canonical casing + parsed int', async () => {

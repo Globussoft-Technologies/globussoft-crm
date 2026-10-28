@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { CreditCard, CheckCircle, AlertTriangle, Save, Loader2, Lock, RotateCw, X, Trash2 } from 'lucide-react';
+import { CreditCard, CheckCircle, AlertTriangle, Save, Loader2, Lock, RotateCw, X, Trash2, Eye } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
 // ─────────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ function maskKeyId(keyId) {
   return `${m[1]}••••${tail}`;
 }
 
-export default function RazorpayGatewayCard() {
+export default function RazorpayGatewayCard({ onViewGatewayConfiguration }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -191,11 +191,34 @@ export default function RazorpayGatewayCard() {
           Enter your own Razorpay merchant keys so payments from your customers (invoices, memberships, gift cards) settle directly into <strong>your</strong> account. This is separate from your Globussoft subscription billing.
         </div>
       </div>
+      {onViewGatewayConfiguration && (
+        <button
+          type="button"
+          aria-label="View gateway configuration"
+          title="View gateway configuration"
+          onClick={onViewGatewayConfiguration}
+          style={{
+            width: 36,
+            height: 36,
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            background: 'var(--surface-color)',
+            color: 'var(--text-primary)',
+            cursor: 'pointer',
+          }}
+        >
+          <Eye size={18} aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 
   return (
-    <div style={{ ...GLASS, padding: '1.25rem', marginBottom: '1.5rem' }}>
+    <div className="razorpay-gateway-card" style={{ ...GLASS, padding: '1.25rem', marginBottom: '1.5rem' }}>
       {Header}
 
       {error && (

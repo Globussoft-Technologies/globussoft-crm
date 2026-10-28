@@ -501,7 +501,7 @@ export default function PickupPlotInventory() {
 
       <div
           ref={plotTableViewportRef}
-          className="card pickup-plot-table-scroll"
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="plot-inventory-table"
           style={{
             flex: '1 1 auto', minHeight: 0, maxHeight: '100%', width: '100%', maxWidth: '100%',

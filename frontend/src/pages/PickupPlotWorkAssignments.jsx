@@ -157,7 +157,7 @@ export default function PickupPlotWorkAssignments() {
       </header>
 
       <div
-          className="card pickup-plot-table-scroll"
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="staff-work-assignment-table-scroll"
           style={{ flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >

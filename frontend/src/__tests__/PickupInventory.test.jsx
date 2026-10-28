@@ -126,7 +126,7 @@ describe('<PickupInventory />', () => {
     expect(screen.getByDisplayValue('10')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Created at' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Updated at' })).toBeInTheDocument();
-    expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveClass('pickup-plot-table-scroll');
+    expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveStyle({ overflowX: 'auto', overflowY: 'auto', minHeight: '0' });
     expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1265px', minWidth: '100%' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', tableLayout: 'fixed' });

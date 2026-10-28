@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BriefcaseBusiness, Check, Receipt, Search, Truck, UsersRound } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -40,11 +40,15 @@ export default function PickupPlotWorkAssignments() {
   const [drafts, setDrafts] = useState({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [loadError, setLoadError] = useState('');
   const [savingId, setSavingId] = useState(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     setLoadError('');
     try {
       const response = await fetchApi('/api/pickup-plot-inventory/work-assignments');
@@ -56,7 +60,9 @@ export default function PickupPlotWorkAssignments() {
       setLoadError(message);
       notify.error(message);
     } finally {
+      loadedRef.current = true;
       setLoading(false);
+      setRefreshing(false);
     }
   }, [notify]);
 
@@ -150,12 +156,12 @@ export default function PickupPlotWorkAssignments() {
         </div>
       </header>
 
-      {loading ? <div className="card" style={{ flex: '1 1 0', minHeight: 0, padding: 48, textAlign: 'center' }}>Loading staff…</div> : (
-        <div
+      <div
           className="card pickup-plot-table-scroll"
           data-testid="staff-work-assignment-table-scroll"
           style={{ flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >
+          {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               <col style={{ width: '22%' }} />
@@ -205,7 +211,10 @@ export default function PickupPlotWorkAssignments() {
                   </tr>
                 );
               })}
-              {visibleStaff.length === 0 && (
+              {loading && !loadedRef.current && (
+                <tr><td colSpan="5" style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading staff…</td></tr>
+              )}
+              {!loading && visibleStaff.length === 0 && (
                 <tr>
                   <td colSpan="5" style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>
                     {loadError ? (
@@ -222,7 +231,6 @@ export default function PickupPlotWorkAssignments() {
             </tbody>
           </table>
         </div>
-      )}
     </main>
   );
 }

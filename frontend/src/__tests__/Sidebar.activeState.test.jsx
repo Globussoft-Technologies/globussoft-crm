@@ -63,7 +63,7 @@ beforeEach(() => {
 describe('Sidebar active-state - #631', () => {
   it('carries a dashboard date range into Deals and Reports navigation', async () => {
     renderSidebarAt('/dashboard?from=2026-10-15&to=2026-10-20');
-    const deals = await findLinkByLabel('Deals and Pipeline');
+    const deals = await findLinkByLabel('Deals');
     const reports = await findLinkByLabel('Reports');
     expect(deals.getAttribute('href')).toBe('/pipeline?from=2026-10-15&to=2026-10-20');
     expect(reports.getAttribute('href')).toBe('/reports?from=2026-10-15&to=2026-10-20');

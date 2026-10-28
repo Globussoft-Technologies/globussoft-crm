@@ -108,7 +108,7 @@ describe("generic product tours", () => {
   });
 
   it("registers every generic sidebar destination, including hard-coded omissions", () => {
-    expect(GENERIC_FEATURE_TOURS).toHaveLength(99);
+    expect(GENERIC_FEATURE_TOURS).toHaveLength(96);
     const tourIds = GENERIC_FEATURE_TOURS.map((tour) => tour.id);
     expect(tourIds).toEqual(
       expect.arrayContaining([

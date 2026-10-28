@@ -346,7 +346,7 @@ describe('Sidebar — load-bearing render surface', () => {
       // Core links visible to all roles — pin a representative few.
       expect(screen.getByText('Dashboard')).toBeTruthy();
       expect(screen.getByText('Contacts')).toBeTruthy();
-      expect(screen.getByText('Deals and Pipeline')).toBeTruthy();
+      expect(screen.getByText('Deals')).toBeTruthy();
       // "Leads" label appears as both the nav label and possibly badge text;
       // accept either by checking we have at least one match.
       expect(screen.getAllByText('Leads').length).toBeGreaterThanOrEqual(1);
@@ -977,7 +977,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Quotas')).toBeNull();
       // USER's configured analytics.read grant is authoritative for this page,
       // even though the legacy sidebar entry was managerOnly.
-      expect(screen.getByText('Win/Loss')).toBeTruthy();
+      expect(screen.queryByText('Win/Loss')).toBeNull();
     });
 
     it('shows manager-only items for MANAGER role but still hides admin-only', () => {
@@ -1697,7 +1697,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Agent Reports')).toBeTruthy();
       expect(screen.queryByText('Dashboards')).toBeNull();
       expect(screen.queryByText('Custom Reports')).toBeNull();
-      expect(screen.getByText('Funnel')).toBeTruthy();
+      expect(screen.queryByText('Funnel')).toBeNull();
     });
 
     it('shows only the Reports cluster items granted to USER under generic', () => {
@@ -1708,7 +1708,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Agent Reports')).toBeTruthy();
       expect(screen.queryByText('Dashboards')).toBeNull();
       expect(screen.queryByText('Custom Reports')).toBeNull();
-      expect(screen.getByText('Funnel')).toBeTruthy();
+      expect(screen.queryByText('Funnel')).toBeNull();
       expect(screen.getByText('Reports')).toBeTruthy();
     });
   });

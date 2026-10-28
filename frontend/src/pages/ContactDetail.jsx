@@ -521,7 +521,9 @@ export default function ContactDetail() {
     if (!overviewContactId) return undefined;
     let cancelled = false;
     setOverviewActivitiesLoading(true);
-    fetchActivities(overviewContactId, overviewActivityPage, 5)
+    const overviewPage = isGeneric ? 1 : overviewActivityPage;
+    const overviewLimit = isGeneric ? 100 : 5;
+    fetchActivities(overviewContactId, overviewPage, overviewLimit)
       .then((result) => {
         if (cancelled) return;
         setOverviewActivities(result.data);
@@ -536,7 +538,7 @@ export default function ContactDetail() {
       })
       .finally(() => { if (!cancelled) setOverviewActivitiesLoading(false); });
     return () => { cancelled = true; };
-  }, [overviewContactId, overviewActivityRefreshId, overviewActivityPage]);
+  }, [overviewContactId, overviewActivityRefreshId, overviewActivityPage, isGeneric]);
 
   useEffect(() => {
     if (!moreOpen) return undefined;
@@ -2104,7 +2106,7 @@ export default function ContactDetail() {
                         <div className="cp-empty">No activity yet.</div>
                       )}
                     </div>
-                    {overviewNoteActivities.length > 0 && overviewActivityTotal > 0 && (
+                    {!isGeneric && overviewNoteActivities.length > 0 && overviewActivityTotal > 0 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.65rem' }}>
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem' }}>
                           Showing {((overviewActivityPage - 1) * 5) + 1} - {Math.min(overviewActivityPage * 5, overviewActivityTotal)} of {overviewActivityTotal}

@@ -562,8 +562,11 @@ export default function Invoices() {
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [isLoadingVisitItems, setIsLoadingVisitItems] = useState(false);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
+  const [isRefreshingInvoices, setIsRefreshingInvoices] = useState(false);
   const visitRequestRef = useRef(0);
   const invoiceLoadRequestRef = useRef(0);
+  const invoicesLoadedRef = useRef(false);
   const patientLookupRequestRef = useRef(0);
   const productLookupRequestRef = useRef(0);
   const selectedPatientIdRef = useRef("");
@@ -733,6 +736,9 @@ export default function Invoices() {
   // verticals — activeSubBrand stays undefined there).
   const loadData = useCallback(async () => {
     const requestId = ++invoiceLoadRequestRef.current;
+    const isInitialLoad = !invoicesLoadedRef.current;
+    if (isInitialLoad) setIsLoadingInvoices(true);
+    else setIsRefreshingInvoices(true);
     try {
       // One query string for both filters. URLSearchParams rather than manual
       // concatenation so adding the date params cannot produce a stray `&`
@@ -749,32 +755,39 @@ export default function Invoices() {
         fetchApi("/api/deals"),
       ]);
       if (requestId !== invoiceLoadRequestRef.current) return;
-      setInvoices(
+      const nextInvoices =
         invoiceResult.status === "fulfilled" && Array.isArray(invoiceResult.value)
           ? invoiceResult.value
-          : [],
-      );
-      setContacts(
+          : [];
+      const nextContacts =
         contactResult.status === "fulfilled" && Array.isArray(contactResult.value)
           ? contactResult.value
-          : [],
-      );
-      setDeals(
+          : [];
+      const nextDeals =
         dealResult.status === "fulfilled" && Array.isArray(dealResult.value)
           ? dealResult.value
-          : [],
-      );
+          : [];
 
+      let nextServices = [];
       if (isWellness) {
         const [serviceResult] = await Promise.allSettled([
           fetchApi("/api/wellness/services"),
         ]);
-        setServices(
+        nextServices =
           serviceResult.status === "fulfilled" && Array.isArray(serviceResult.value)
             ? serviceResult.value
-            : [],
-        );
-      } else {
+            : [];
+      }
+      if (requestId !== invoiceLoadRequestRef.current) return;
+
+      // Commit the ledger and its lookup data together. Existing rows remain
+      // mounted while requests are in flight, then the completed response is
+      // applied as one stable update.
+      setInvoices(nextInvoices);
+      setContacts(nextContacts);
+      setDeals(nextDeals);
+      if (isWellness) setServices(nextServices);
+      else {
         // Do not retain vertical-specific catalog data if the same SPA session
         // changes tenant context or a stale component render completes later.
         setPatients([]);
@@ -784,9 +797,18 @@ export default function Invoices() {
       }
     } catch (_err) {
       if (requestId === invoiceLoadRequestRef.current) {
-        setInvoices([]);
-        setContacts([]);
-        setDeals([]);
+        // Keep the last successful ledger visible during a background refresh.
+        if (isInitialLoad) {
+          setInvoices([]);
+          setContacts([]);
+          setDeals([]);
+        }
+      }
+    } finally {
+      if (requestId === invoiceLoadRequestRef.current) {
+        invoicesLoadedRef.current = true;
+        setIsLoadingInvoices(false);
+        setIsRefreshingInvoices(false);
       }
     }
   }, [activeSubBrand, isTravel, isWellness, dateRange, customFrom, customTo]);
@@ -1391,7 +1413,7 @@ export default function Invoices() {
 
   return (
     <div
-      className={`invoices-mobile-page${
+      className={`invoices-mobile-page generic-billing-page${
         isWellness
           ? " invoices-wellness-page"
           : !isTravel
@@ -1402,7 +1424,7 @@ export default function Invoices() {
         padding: "2rem",
         minHeight: "100%",
         boxSizing: "border-box",
-        animation: "fadeIn 0.5s ease-out",
+        animation: isGeneric ? undefined : "fadeIn 0.5s ease-out",
       }}
     >
       <header style={{ marginBottom: "2rem" }}>
@@ -2604,6 +2626,7 @@ export default function Invoices() {
             }}
           >
             <Receipt size={20} color="var(--success-color)" /> Invoice Ledger
+            {isRefreshingInvoices && <span className="pickup-module-refresh-status" role="status">Refreshing data…</span>}
           </h3>
           {isGeneric && hasAnyInvoiceFilter && (
             <button
@@ -2625,7 +2648,11 @@ export default function Invoices() {
           )}
         </div>
 
-        {invoices.length === 0 && dateRange === "ALL" ? (
+        {isLoadingInvoices ? (
+          <div className="invoice-ledger-loading" role="status">
+            Loading billing data…
+          </div>
+        ) : invoices.length === 0 && dateRange === "ALL" ? (
           <div
             style={{
               textAlign: "center",

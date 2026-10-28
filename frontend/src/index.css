@@ -404,6 +404,86 @@ body,
   overflow-y: auto !important;
 }
 
+/* Pickup & Plot module (Generic CRM): keep the workspace stable while its
+   background refresh completes. Transport and Site Visits already use this
+   non-remounting presentation; apply the same shell rule to every sibling
+   page in the module without affecting Wellness or Travel. */
+.app-main > main.generic-page-content:has(.pickup-customers-page),
+.app-main > main.generic-page-content:has(.pickup-inventory-page),
+.app-main > main.generic-page-content:has(.pickup-plot-inventory-page),
+.app-main > main.generic-page-content:has(.pickup-person-directory-page),
+.app-main > main.generic-page-content:has(.transport-workspace),
+.app-main > main.generic-page-content:has([data-testid="staff-work-assignment-page"]),
+.app-main > main.generic-page-content:has(.generic-billing-page),
+.app-main > main.generic-page-content:has(.billing-directory-page) {
+  animation: none !important;
+}
+
+/* Hard stop for nested module effects as well. Some Pickup/Plot controls have
+   local inline transitions or spinner animations, so disabling only the page
+   root is not sufficient for a fully static workspace. */
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-customers-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-inventory-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-plot-inventory-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-person-directory-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.transport-workspace) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has([data-testid="staff-work-assignment-page"]) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.generic-billing-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.billing-directory-page) * {
+  animation: none !important;
+  transition: none !important;
+}
+
+body[data-vertical="generic"] .pickup-inventory-page,
+body[data-vertical="generic"] .pickup-plot-inventory-page,
+body[data-vertical="generic"] .pickup-person-directory-page,
+body[data-vertical="generic"] .pickup-customers-page,
+body[data-vertical="generic"] .billing-directory-page,
+body[data-vertical="generic"] .generic-billing-page,
+body[data-vertical="generic"] .transport-workspace,
+body[data-vertical="generic"] [data-testid="staff-work-assignment-page"] {
+  animation: none !important;
+}
+
+.pickup-module-refresh-status {
+  position: sticky;
+  top: 8px;
+  z-index: 3;
+  width: max-content;
+  max-width: 100%;
+  margin: 8px 8px 0 auto;
+  padding: .25rem .55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  font-size: .7rem;
+  pointer-events: none;
+}
+
+/* Refresh status must not take a row/table-space slot. Keeping it over the
+   existing scroll viewport prevents a refresh from shifting the table down
+   and back up while the response is in flight. */
+body[data-vertical="generic"] .card.pickup-plot-table-scroll {
+  position: relative;
+}
+
+body[data-vertical="generic"] .card.pickup-plot-table-scroll > .pickup-module-refresh-status[role="status"] {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+}
+
+.invoice-ledger-loading {
+  padding: 2.5rem 1.5rem;
+  color: var(--text-secondary);
+  text-align: center;
+  background: var(--subtle-bg-2);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+}
+
 /* Page components have accumulated their own centered max-width wrappers and
    horizontal padding over time. Normalize only the first page-content root;
    dialogs and nested cards retain their intentional sizing. */
@@ -5878,10 +5958,33 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   min-height: 100%;
 }
 
+/* Reports is a static analytics surface; keep its cards and controls stable
+   while the pointer moves across the page. */
+.reports-page .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+.reports-page .card:hover::before {
+  left: -100%;
+}
+
+.reports-page button:hover {
+  transform: none;
+  box-shadow: none;
+  filter: none;
+}
+
+.reports-page .btn-secondary:hover {
+  background: var(--surface-color);
+  border-color: var(--border-color);
+}
+
 .reports-page__overview {
   display: grid;
-  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
-  gap: 2rem;
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+  gap: 1.5rem;
   align-items: start;
 }
 
@@ -8929,7 +9032,15 @@ body[data-vertical="generic"] table.pickup-plot-leads-table td:last-child {
 }
 
 body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr {
-  transition: none;
+  transition: none !important;
+}
+
+body[data-vertical="generic"] .billing-directory-page,
+body[data-vertical="generic"] .billing-directory-page table,
+body[data-vertical="generic"] .billing-directory-page tbody tr,
+body[data-vertical="generic"] .billing-directory-page tbody tr > td {
+  animation: none !important;
+  transition: none !important;
 }
 
 body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-selected):hover,

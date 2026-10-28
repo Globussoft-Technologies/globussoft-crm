@@ -298,7 +298,9 @@ export default function Settings() {
         if (config) {
           setCallifiedConnected(!!config.isActive);
           setCallifiedUpdatedAt(config.updatedAt || null);
-          setCallifiedBaseUrl(config.baseUrl || "https://app.callified.ai");
+          // Generic CRM keeps the URL empty until an administrator enters it;
+          // the input placeholder explains what belongs there.
+          setCallifiedBaseUrl(config.isActive ? (config.baseUrl || "") : "");
           setCallifiedApiKey(config.apiKey || "");
           // Do not pre-fill email/password/webhookSecret from the DB; keep them blank.
         }
@@ -948,7 +950,7 @@ export default function Settings() {
       setCallifiedApiKey("");
       setCallifiedEmail("");
       setCallifiedPassword("");
-      setCallifiedBaseUrl("https://app.callified.ai");
+      setCallifiedBaseUrl(isGenericVertical ? "" : "https://app.callified.ai");
       setCallifiedWebhookSecret("");
       setCallifiedUpdatedAt(null);
       setCallifiedMsg("");
@@ -2309,7 +2311,7 @@ export default function Settings() {
               <input
                 type="text"
                 className="input-field"
-                placeholder="https://app.callified.ai"
+                placeholder="Enter the URL"
                 value={callifiedBaseUrl}
                 onChange={(e) => { setCallifiedBaseUrl(e.target.value); setCallifiedDirty(true); }}
                 disabled={callifiedSaving}

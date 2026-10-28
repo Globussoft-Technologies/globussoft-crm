@@ -1304,6 +1304,34 @@ router.get("/", async (req, res) => {
       parsedMetaMap[p.id] = meta;
     }
 
+    // Generic CRM plot payments deliberately keep invoiceId null and retain
+    // only plotBookingId in metadata. Resolve the tenant-owned booking and
+    // site in batches so the ledger can show the useful plot identity instead
+    // of the internal BOOK-* booking number stored in description.
+    const plotBookingIds = [...new Set(payments
+      .filter((payment) => parsedMetaMap[payment.id]?.kind === "plot-booking-payment")
+      .map((payment) => Number(parsedMetaMap[payment.id]?.plotBookingId))
+      .filter((id) => Number.isInteger(id) && id > 0))];
+    const plotSiteByBookingId = {};
+    if (plotBookingIds.length > 0) {
+      const plotBookings = await prisma.plotBooking.findMany({
+        where: { tenantId, id: { in: plotBookingIds } },
+        select: { id: true, plotSiteId: true },
+      });
+      const plotSiteIds = [...new Set(plotBookings.map((booking) => booking.plotSiteId).filter(Boolean))];
+      const plotSites = plotSiteIds.length > 0
+        ? await prisma.plotSite.findMany({
+            where: { tenantId, id: { in: plotSiteIds } },
+            select: { id: true, name: true, plotNumber: true },
+          })
+        : [];
+      const plotSiteMap = {};
+      plotSites.forEach((site) => { plotSiteMap[site.id] = site; });
+      plotBookings.forEach((booking) => {
+        if (plotSiteMap[booking.plotSiteId]) plotSiteByBookingId[booking.id] = plotSiteMap[booking.plotSiteId];
+      });
+    }
+
     // Some landing-page payments were created before the registration draft
     // was converted, so contactId may still be null even though the payment
     // metadata contains the payer email. Resolve those contacts in the same
@@ -1642,7 +1670,11 @@ router.get("/", async (req, res) => {
           }
         }
       }
-      return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff };
+      const plotBookingId = Number(parsedMetaMap[p.id]?.plotBookingId);
+      const plotSite = parsedMetaMap[p.id]?.kind === "plot-booking-payment"
+        ? (plotSiteByBookingId[plotBookingId] || null)
+        : null;
+      return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff, plotSite };
     }));
   } catch (err) {
     console.error("[Payments] list error:", err);
@@ -1767,7 +1799,7 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
     // full row (metadata blob in particular) into memory just to sum.
     const rows = await prisma.payment.findMany({
       where,
-      select: { status: true, gateway: true, amount: true, paidAt: true, createdAt: true },
+      select: { status: true, gateway: true, amount: true, currency: true, paidAt: true, createdAt: true },
     });
 
     const total = rows.length;
@@ -1775,6 +1807,7 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
     const byMethod = {};
     let totalSum = 0;
     let successSum = 0;
+    const successfulAmountByCurrency = {};
     let lastCreatedAt = null;
 
     for (const r of rows) {
@@ -1789,6 +1822,8 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
       totalSum += amt;
       if (["SUCCESS", "PAID", "CAPTURED"].includes(String(status).toUpperCase())) {
         successSum += amt;
+        const currency = String(r.currency || "USD").toUpperCase();
+        successfulAmountByCurrency[currency] = (successfulAmountByCurrency[currency] || 0) + amt;
       }
       const activityAt = req.query.dateBasis === "payment" ? (r.paidAt || r.createdAt) : r.createdAt;
       if (activityAt && (lastCreatedAt === null || new Date(activityAt) > lastCreatedAt)) {
@@ -1806,6 +1841,9 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
       byMethod,
       totalAmount: round2(totalSum),
       successfulAmount: round2(successSum),
+      successfulAmountByCurrency: Object.fromEntries(
+        Object.entries(successfulAmountByCurrency).map(([currency, amount]) => [currency, round2(amount)]),
+      ),
       lastPaymentAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
     });
   } catch (err) {

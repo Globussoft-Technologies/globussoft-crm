@@ -48,6 +48,22 @@ describe('filterSidebarPages', () => {
     expect(filtered.map((page) => page.path)).toEqual(['/leads']);
   });
 
+  it('keeps Estimates out of Generic CRM search, including server-provided pages', () => {
+    const localPages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+    });
+    expect(localPages.some((page) => page.path === '/estimates')).toBe(false);
+
+    const filtered = filterSidebarPages([
+      { path: '/estimates', label: 'Estimates' },
+      { path: '/invoices', label: 'Invoices' },
+    ], { vertical: 'generic' });
+    expect(filtered.map((page) => page.path)).toEqual(['/invoices']);
+  });
+
   it('uses the shared sidebar visibility flag for generic navigation and search', () => {
     const pages = getGenericSidebarPages({
       isAdmin: true,

@@ -2815,7 +2815,9 @@ function renderGenericNav({
 
       {renderGroup("Finance", <>
         <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
-        <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} />
+        {/* Generic CRM: Estimates is intentionally hidden. Keep the page
+            implementation intact so it can be re-enabled later. */}
+        {/* <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} /> */}
         <Link to="/expenses" icon={IndianRupee} label="Expenses" requiredPermission={{ module: "expenses", action: "read" }} />
         <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
         <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly requiredPermission={{ module: "cpq", action: "read" }} />

@@ -209,11 +209,18 @@ describe('<BrokerCustomerWorkspace />', () => {
     );
   });
 
-  it('shows only the customer-assigned plot and sends it to billing', async () => {
+  it('shows every customer-assigned plot and sends the selected one to billing', async () => {
     const plotShownResponse = {
       ...response,
       customers: response.customers.map((customer) => customer.id === 61
-        ? { ...customer, brokerWorkflow: { status: 'PLOT_SHOWN', updatedAt: null } }
+        ? {
+          ...customer,
+          plotOptions: [
+            ...customer.plotOptions,
+            { id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'AVAILABLE' },
+          ],
+          brokerWorkflow: { status: 'PLOT_SHOWN', updatedAt: null },
+        }
         : customer),
     };
     fetchApi
@@ -228,13 +235,15 @@ describe('<BrokerCustomerWorkspace />', () => {
     render(<BrokerCustomerWorkspace />);
     const plotSelect = await screen.findByLabelText('Selected plot for Li Wei');
     expect(screen.getByRole('option', { name: 'Plot 24 — Plot No. A-24' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'Plot 25 — Plot No. B-25' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'Plot 25 — Plot No. B-25' })).toBeInTheDocument();
     expect(plotSelect).toHaveValue('30');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    fireEvent.change(plotSelect, { target: { value: '31' } });
     fireEvent.click(screen.getByRole('button', { name: /Mark plot selected/i }));
 
     await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
       '/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow',
-      { method: 'PATCH', body: JSON.stringify({ status: 'PLOT_SELECTED', plotId: 30 }) },
+      { method: 'PATCH', body: JSON.stringify({ status: 'PLOT_SELECTED', plotId: 31 }) },
     ));
   });
 

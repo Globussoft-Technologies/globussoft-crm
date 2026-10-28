@@ -67,6 +67,7 @@ describe('PickupPlotWorkAssignments', () => {
     expect(headerActions).toContainElement(screen.getByText('staff with assigned work'));
     expect(screen.getByTestId('staff-work-assignment-count')).toHaveStyle({ height: '44px', boxSizing: 'border-box' });
     expect(screen.getByTestId('staff-work-assignment-page')).toHaveStyle({ overflow: 'hidden', minHeight: '0' });
+    expect(screen.getByTestId('staff-work-assignment-table-scroll')).toHaveClass('pickup-plot-table-body-scroll');
     expect(screen.getByTestId('staff-work-assignment-table-scroll')).toHaveStyle({ overflow: 'auto', minHeight: '0' });
     expect(screen.getByRole('table', { name: 'Staff work assignments' })).toHaveStyle({ tableLayout: 'fixed' });
     expect(screen.getByRole('columnheader', { name: 'Staff' })).toHaveStyle({ position: 'sticky', top: '0px' });

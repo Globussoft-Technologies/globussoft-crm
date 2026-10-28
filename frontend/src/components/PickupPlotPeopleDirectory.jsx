@@ -619,7 +619,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
       </header>
 
       <div
-          className="card pickup-plot-table-scroll"
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid={`${type}-directory-table-scroll`}
           style={{
             flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',

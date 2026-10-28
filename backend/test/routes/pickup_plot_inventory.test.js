@@ -106,6 +106,7 @@ prisma.plotCommission.updateMany = vi.fn();
 prisma.plotInstallment.findMany = vi.fn();
 prisma.plotInstallment.findFirst = vi.fn();
 prisma.plotInstallment.create = vi.fn();
+prisma.plotInstallment.deleteMany = vi.fn();
 prisma.plotInstallment.update = vi.fn();
 prisma.plotInstallment.updateMany = vi.fn();
 prisma.plotInvoiceItem.create = vi.fn();
@@ -1909,6 +1910,40 @@ describe('plot broker mutations', () => {
     expect(response.body.summary).toEqual({ total: 0, completed: 0, waiting: 0 });
   });
 
+  test('lists every plot assigned to a broker customer as a site-visit option', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 3, tenantId: 7, name: 'Sanjeev',
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"PLOT_SHOWN"}}', isActive: true,
+    });
+    prisma.contact.findMany.mockResolvedValue([{ id: 61, name: 'Hariosh' }]);
+    prisma.plotBooking.findMany.mockResolvedValue([
+      { id: 91, contactId: 61, plotSiteId: 30 },
+      { id: 92, contactId: 61, plotSiteId: 31 },
+    ]);
+    prisma.plotSite.findMany.mockResolvedValue([
+      { id: 30, name: 'btm', plotNumber: '11', availability: 'AVAILABLE' },
+      { id: 31, name: 'btm', plotNumber: '10', availability: 'AVAILABLE' },
+    ]);
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED"}}',
+    }]);
+
+    const response = await request(makeApp({ role: 'USER' })).get('/api/pickup-plot-inventory/brokers/me');
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, contactId: { in: [61] }, status: 'PLOT_ASSIGNED' },
+      select: { id: true, contactId: true, plotSiteId: true },
+    });
+    expect(response.body.customers[0].plotOptions).toEqual([
+      expect.objectContaining({ id: 30, plotNumber: '11' }),
+      expect.objectContaining({ id: 31, plotNumber: '10' }),
+    ]);
+  });
+
   test('advances a completed-trip customer through the broker workflow in order', async () => {
     prisma.plotBroker.findFirst.mockResolvedValue({
       id: 51, userId: 3, tenantId: 7, customerIdsJson: '[61]',
@@ -2095,6 +2130,43 @@ describe('plot broker mutations', () => {
     expect(prisma.plotBooking.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ contactId: 61, plotSiteId: 30, transportPersonId: 41, plotBrokerId: 51 }),
     }));
+  });
+
+  test('reserves another plot assigned to the same customer', async () => {
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, userId: 3, tenantId: 7,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      workflowStatusJson: '{"customer-61-plot-30":{"status":"PLOT_SHOWN"}}', isActive: true,
+    });
+    prisma.transportPerson.findMany.mockResolvedValue([{
+      id: 41,
+      assignmentPairsJson: '[{"customerId":61,"plotSiteId":30}]',
+      assignmentStatusJson: '{"customer-61-plot-30":{"status":"COMPLETED"}}',
+    }]);
+    prisma.plotBooking.findMany.mockResolvedValue([
+      { id: 91, contactId: 61, plotSiteId: 30, customerPickupId: 81 },
+      { id: 92, contactId: 61, plotSiteId: 31, customerPickupId: 81 },
+    ]);
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 31, name: 'btm', price: 500000, availability: 'AVAILABLE', isActive: true });
+    prisma.plotBooking.update.mockResolvedValue({ id: 92, bookingNumber: 'BOOK-PLOT-10', status: 'PLOT_RESERVED' });
+
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow')
+      .send({ status: 'PLOT_SELECTED', plotId: 31 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.plotBooking.update).toHaveBeenCalledWith({
+      where: { id: 92 },
+      data: expect.objectContaining({
+        transportPersonId: 41,
+        plotBrokerId: 51,
+        status: 'PLOT_RESERVED',
+        totalAmount: 500000,
+        balance: 500000,
+      }),
+    });
+    expect(prisma.plotBooking.create).not.toHaveBeenCalled();
+    expect(response.body).toMatchObject({ status: 'PLOT_SELECTED', handedToBilling: true });
   });
 
   test('rejects a plot that is not assigned to the customer', async () => {
@@ -3887,6 +3959,66 @@ describe('customer pickup status', () => {
 
     expect(response.status, JSON.stringify(response.body)).toBe(201);
     expect(response.body.installments.map((row) => row.dueDate.slice(0, 7))).toEqual(expectedMonths);
+  });
+
+  test('replaces an unpaid installment plan with the edited schedule', async () => {
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, tenantId: 7, contactId: 61, status: 'PARTIAL', balance: 120000,
+    });
+    prisma.plotInstallment.findMany.mockResolvedValue([
+      { id: 901, status: 'PLANNED', paymentId: null, sequenceNumber: 1 },
+      { id: 902, status: 'PLANNED', paymentId: null, sequenceNumber: 2 },
+    ]);
+    prisma.plotInstallment.deleteMany.mockResolvedValue({ count: 2 });
+    prisma.plotInstallment.create.mockImplementation(async ({ data }) => ({ id: 910 + data.sequenceNumber, ...data }));
+
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/customer-pickups/61/installments')
+      .send({ plotBookingId: 501, frequency: 'QUARTERLY', paymentCount: 3, firstPaymentDate: '2026-12-20', amount: 40000 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(prisma.plotInstallment.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, plotBookingId: 501, status: 'PLANNED', paymentId: null },
+    });
+    expect(response.body.installments.map((row) => row.sequenceNumber)).toEqual([1, 2, 3]);
+    expect(response.body.installments.map((row) => row.dueDate.slice(0, 10))).toEqual(['2026-12-20', '2027-03-20', '2027-06-20']);
+  });
+
+  test('locks installment-plan editing after any installment payment starts', async () => {
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, tenantId: 7, contactId: 61, status: 'PARTIAL', balance: 80000,
+    });
+    prisma.plotInstallment.findMany.mockResolvedValue([
+      { id: 901, status: 'PAID', paymentId: 701, sequenceNumber: 1 },
+      { id: 902, status: 'PLANNED', paymentId: null, sequenceNumber: 2 },
+    ]);
+
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/customer-pickups/61/installments')
+      .send({ plotBookingId: 501, frequency: 'MONTHLY', paymentCount: 2, firstPaymentDate: '2026-12-20', amount: 40000 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('INSTALLMENT_PLAN_LOCKED');
+    expect(prisma.plotInstallment.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('does not replace a plan when a payment starts during the edit', async () => {
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, tenantId: 7, contactId: 61, status: 'PARTIAL', balance: 80000,
+    });
+    prisma.plotInstallment.findMany.mockResolvedValue([
+      { id: 901, status: 'PLANNED', paymentId: null, sequenceNumber: 1 },
+      { id: 902, status: 'PLANNED', paymentId: null, sequenceNumber: 2 },
+    ]);
+    prisma.plotInstallment.deleteMany.mockResolvedValue({ count: 1 });
+
+    const response = await request(makeApp())
+      .put('/api/pickup-plot-inventory/customer-pickups/61/installments')
+      .send({ plotBookingId: 501, frequency: 'MONTHLY', paymentCount: 2, firstPaymentDate: '2026-12-20', amount: 40000 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('INSTALLMENT_PLAN_LOCKED');
+    expect(prisma.plotInstallment.create).not.toHaveBeenCalled();
   });
 
   test('keeps installment-plan creation exclusive to Generic CRM tenants', async () => {

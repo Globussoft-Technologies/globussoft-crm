@@ -286,6 +286,44 @@ describe("<App /> — auth-sync on mount", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
   });
 
+  it("redirects Generic CRM away from the disabled Estimates page", async () => {
+    const token = "generic-token";
+    sessionStorage.setItem("token", token);
+    window.history.pushState({}, "estimates", "/estimates");
+
+    setupFetch((url) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 1,
+            name: "Generic Admin",
+            email: "admin@globussoft.com",
+            role: "ADMIN",
+            tenant: {
+              id: 1,
+              name: "Default Org",
+              slug: "default-org",
+              vertical: "generic",
+            },
+          }),
+        });
+      }
+      if (url === "/api/subscriptions/status") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ daysRemaining: 30, status: "active" }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    });
+
+    render(<App />);
+    await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+  });
+
   it("allows a wellness tenant to stay on /landing-sites", async () => {
     const token = "wellness-token";
     sessionStorage.setItem("token", token);

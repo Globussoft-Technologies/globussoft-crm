@@ -924,6 +924,17 @@ function NonGenericLeadRoutingOnly({ children }) {
   return children;
 }
 
+// Estimates is intentionally disabled for Generic CRM only. Keep the page and
+// its non-generic behavior intact so it can be re-enabled without restoring
+// deleted implementation.
+function NonGenericEstimatesOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (!tenant?.vertical || tenant.vertical === "generic") {
+    return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  return children;
+}
+
 // #207/#214: doctor/telecaller landing on /wellness directly (e.g. clicking
 // the sidebar logo, typing the URL, or refreshing) would still see the Owner
 // Dashboard with org-wide P&L. Gate the Owner Dashboard route to ADMIN/MANAGER
@@ -2816,7 +2827,12 @@ export default function App() {
                           </GenericOnly>
                         }
                       />
-                      <Route path="estimates" element={<Estimates />} />
+                      {/* Generic CRM Estimates page intentionally disabled;
+                          retain its route and implementation for other verticals. */}
+                      <Route
+                        path="estimates"
+                        element={<NonGenericEstimatesOnly><Estimates /></NonGenericEstimatesOnly>}
+                      />
                       <Route path="invoices" element={<Invoices />} />
                       <Route path="tickets" element={<Tickets />} />
                       <Route path="tasks" element={<Tasks />} />

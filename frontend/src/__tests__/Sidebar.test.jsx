@@ -381,6 +381,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/forms');
     });
 
+    it('does not render Estimates in Generic CRM navigation', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      expect(screen.queryByText('Estimates')).toBeNull();
+    });
+
     it('hides the missing pages and external launchers when disabled for a Generic tenant', async () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN', hiddenPagePaths: [
         '/reports', '/pickup-work-assignments', '/integrations/adsgpt', '/integrations/callified',

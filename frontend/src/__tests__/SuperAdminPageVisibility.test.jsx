@@ -34,6 +34,25 @@ beforeEach(() => {
 });
 
 describe("SuperAdminPageVisibility", () => {
+  test("shows each organization's real CRM vertical", async () => {
+    superAdminFetch.mockImplementation((path) => {
+      if (path.startsWith("/tenant-management/tenants/1/page-visibility")) {
+        return Promise.resolve(visibilityResponse);
+      }
+      return Promise.resolve({
+        tenants: [
+          ...tenantsResponse.tenants,
+          { tenantId: 2, organization: "Enhanced Wellness", vertical: "wellness" },
+        ],
+      });
+    });
+
+    render(<SuperAdminPageVisibility />);
+
+    expect(await screen.findByRole("option", { name: "Enhanced Wellness · Wellness" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Enhanced Wellness · Generic CRM" })).not.toBeInTheDocument();
+  });
+
   test('ignores a late organization response and saves only the selected organization state', async () => {
     let resolveFirst;
     const second = { ...visibilityResponse, tenant: { id: 2, name: 'Second Org' }, hiddenPaths: ['/marketing'] };

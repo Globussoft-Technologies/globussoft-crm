@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
@@ -646,14 +646,14 @@ const Layout = () => {
             <div className="travel-content-frame">
               <TenantPageGuard>
                 <PageAccessGuard>
-                  <Outlet />
+                  <Suspense fallback={<div role="status" style={{ padding: '1rem' }}>Loading page…</div>}><Outlet /></Suspense>
                 </PageAccessGuard>
               </TenantPageGuard>
             </div>
           ) : (
             <TenantPageGuard>
               <PageAccessGuard>
-                <Outlet />
+                <Suspense fallback={<div role="status" style={{ padding: '1rem' }}>Loading page…</div>}><Outlet /></Suspense>
               </PageAccessGuard>
             </TenantPageGuard>
           )}

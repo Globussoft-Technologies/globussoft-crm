@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { lazy } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../components/Layout';
@@ -55,7 +56,7 @@ function renderLayout(args = {}) {
       }}>
         <Routes>
           <Route path="/" element={withSubscription ? <SubscriptionGate><Layout /></SubscriptionGate> : <Layout />}>
-            <Route index element={<div data-testid="outlet">HOME</div>} />
+            <Route index element={args.outlet || <div data-testid="outlet">HOME</div>} />
           </Route>
         </Routes>
       </AuthContext.Provider>
@@ -109,6 +110,13 @@ function renderLayoutAtRoute(initialRoute, args = {}) {
 }
 
 describe('Layout', () => {
+  it('keeps navigation mounted while a lazy route is loading', async () => {
+    const PendingPage = lazy(() => new Promise(() => {}));
+    renderLayout({ outlet: <PendingPage /> });
+    expect(await screen.findByText('Loading page…')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('omnibar-stub')).toBeInTheDocument();
+  });
   beforeEach(() => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1440 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 900 });

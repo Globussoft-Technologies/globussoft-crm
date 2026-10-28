@@ -67,7 +67,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9850,
+    "all-js-maxKB": 9900,
+    "//post1610-route-splitting": "9850 → 9900 KB: deploy run 40654897295 measured 9848.4 KB total JS but failed because eager pickup/workspace imports inflated the entry to 763.4 KB. Restoring route-level splitting and adding a content Suspense boundary reduces the entry to 320.5 KB (original 325 KB cap unchanged), while emitted split-chunk/import-preload overhead brings total JS to 9855.2 KB. No dependency is added; retain 44.8 KB total headroom.",
     "//pr1595-integrations-js": "9800 → 9850 KB: PR #1595 adds Maps/Twilio settings, inventory import and workspace calling UI. The Node 24 production build after merging main measured 9801.9 KB JS; retain 48.1 KB headroom. Individual chunk caps remain unchanged.",
     "//pr1590-total-js": "9700 → 9800 KB: PR #1590 adds Generic CRM channel sequence builders, WhatsApp templates, public pickup/plot selection and installment/commission views without adding runtime dependencies. Deploy run 39776541606 measured 9744.1 KB total JS; all individual chunk caps passed and remain unchanged. Retain 55.9 KB headroom.",
     "//pr1588-phone-input-js": "9300 → 9700 KB: PR #1588 deliberately adds @intl-tel-input/react and its lazy-loaded libphonenumber utilities for international travel lead validation. Deploy run 39616931869 measured 9634.0 KB total JS (including a 257.9 KB utils chunk). Retain 66 KB headroom; entry and existing vendor chunk caps remain unchanged.",

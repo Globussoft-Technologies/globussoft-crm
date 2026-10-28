@@ -1513,10 +1513,13 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     const body = req.body || {};
 
     let trackingMetadata = null;
-    const trackingHeader = req.get("x-gbs-tracking");
-    if (formScope === "generic" && trackingHeader) {
+    // New embeds send tracking in the multipart body so cross-origin form
+    // submissions remain simple requests. Keep the header as a fallback for
+    // already-published embed snippets.
+    const trackingInput = body._gbsTracking || req.get("x-gbs-tracking");
+    if (formScope === "generic" && trackingInput) {
       try {
-        const parsed = JSON.parse(String(trackingHeader));
+        const parsed = JSON.parse(String(trackingInput));
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 30).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
         }

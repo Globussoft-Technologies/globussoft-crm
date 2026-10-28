@@ -77,6 +77,38 @@ async function writeImportedCustomFields(contactId, tenantId, customFields, defi
   }
 }
 
+async function findContactByImportedExternalId(tenantId, customFields, definitions) {
+  const externalIdKeys = new Set(["id", "external_id", "lead_id", "contact_id"]);
+  const definition = definitions.find((item) => externalIdKeys.has(item.fieldKey));
+  if (!definition) return null;
+
+  const rawValue = customFields?.[definition.fieldKey];
+  const value = String(rawValue ?? "").trim();
+  if (!value) return null;
+
+  const typedWhere = definition.fieldType === "number" && Number.isFinite(Number(value))
+    ? { valueNumber: Number(value) }
+    : { valueText: value };
+  const matches = await prisma.leadCustomFieldValue.findMany({
+    where: {
+      tenantId,
+      fieldId: definition.id,
+      ...typedWhere,
+    },
+    select: {
+      contact: { select: { id: true, deletedAt: true } },
+    },
+    orderBy: { id: "asc" },
+    take: 2,
+  });
+  if (matches.length > 1) {
+    const error = new Error("ambiguous imported id: multiple contacts match");
+    error.code = "AMBIGUOUS_IMPORTED_ID";
+    throw error;
+  }
+  return matches[0]?.contact || null;
+}
+
 // Body parser for raw text/csv + text/plain bodies — Express's default
 // JSON / urlencoded parsers don't handle these. Without this, posting
 // `text/csv` lands req.body as `{}` and readUploadedCsv() returns null,
@@ -247,10 +279,11 @@ router.get("/contacts", async (req, res) => {
   res.json({
     entity: "contacts",
     headers: CONTACT_IMPORT_COLS.map((c) => c.header),
-    // Generic CRM imports require the lead name; email and phone are optional.
-    // The shared Wellness contact importer retains its email requirement.
+    // Generic CRM accepts arbitrary mapped spreadsheets, so none of the
+    // template headers are mandatory. The shared Wellness contact importer
+    // retains its email requirement.
     optionalHeaders: CONTACT_IMPORT_COLS.map((c) => c.header).filter((header) => (
-      isGeneric ? header !== "name" : header !== "email"
+      isGeneric || header !== "email"
     )),
     sample: CONTACT_TEMPLATE_SAMPLE,
     thresholds: { rows: MAX_IMPORT_ROWS, bytes: 5 * 1024 * 1024 },
@@ -358,23 +391,26 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         }
 
         const importedPhone = normalizePhoneValue(
-          getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
+          getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "mobile", "Mobile", "mobile_number", "mobileNumber", "sms_number", "smsNumber"]),
         );
         const phone = req.user?.vertical === "generic"
           ? normalizeGenericCrmPhone(importedPhone)
           : importedPhone;
-        if (isGeneric && !name) {
-          errors.push({ rowNumber, reason: "missing name" });
-          skipped++;
-          continue;
-        }
         const company = String(getSpreadsheetValue(row, ["company", "Company"])).trim();
         const title = String(getSpreadsheetValue(row, ["title", "Title"])).trim();
         const source = String(getSpreadsheetValue(row, ["source", "Source", "lead_source", "leadSource", "Lead Source"])).trim();
+        const firstName = String(getSpreadsheetValue(sourceRow, ["first name", "First name", "First Name", "first_name", "firstName"])).trim();
+        const lastName = String(getSpreadsheetValue(sourceRow, ["last name", "Last name", "Last Name", "last_name", "lastName"])).trim();
+        const genericFallbackName = [firstName, lastName].filter(Boolean).join(" ")
+          || company
+          || (email ? email.split("@")[0] : "")
+          || (phone ? `Lead ${phone}` : "")
+          || `Imported Lead ${i + 1}`;
         const createData = {
-          // Contact.name is required in the database. Wellness keeps its
-          // legacy email-local-part fallback; Generic requires name itself.
-          name: sanitizeCellForExport(name || email.split("@")[0]),
+          // Contact.name remains required in the database. Generic imports
+          // derive a display name instead of rejecting arbitrary spreadsheets
+          // that do not contain a literal `name` column.
+          name: sanitizeCellForExport(name || (isGeneric ? genericFallbackName : email.split("@")[0])),
           email: email || null,
           phone: phone || null,
           company: sanitizeCellForExport(company),
@@ -406,7 +442,15 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
             where: { email, tenantId: req.user.tenantId },
             select: { id: true, deletedAt: true },
           });
-        } else if (isGeneric && phone) {
+        }
+        if (!existing && isGeneric) {
+          existing = await findContactByImportedExternalId(
+            req.user.tenantId,
+            customFields,
+            customDefinitions,
+          );
+        }
+        if (!existing && isGeneric && phone) {
           // Email-less imports can still update an existing contact when the
           // row has a phone number. Phone is not unique: reject ambiguous
           // matches before any update or tombstone deletion.

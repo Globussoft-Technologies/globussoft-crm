@@ -1431,6 +1431,43 @@ describe('transport person mutations', () => {
     });
   });
 
+  test('rejects a transport assignment whose plot was cancelled while the request waited', async () => {
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30 }]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
+    prisma.plotBooking.findMany.mockResolvedValueOnce([]).mockResolvedValue([{ status: 'CANCELLED' }]);
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
+    });
+    expect(response.status, JSON.stringify(response.body)).toBe(409);
+    expect(response.body.code).toBe('PLOT_ASSIGNMENT_REMOVED');
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.transportPerson.create).not.toHaveBeenCalled();
+  });
+
+  test('allows transport assignment after a cancelled plot is assigned again', async () => {
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30 }]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
+    prisma.plotBooking.findMany.mockResolvedValueOnce([]).mockResolvedValue([{ status: 'CANCELLED' }, { status: 'PLOT_ASSIGNED' }]);
+    prisma.transportPerson.create.mockResolvedValue({ id: 41, name: 'Ravi Kumar', phone: '9000011111' });
+    const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
+    });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+  });
+
+  test('rejects adding a cancelled plot when editing a transport person', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({ id: 41, tenantId: 7, isActive: true });
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 30 }]);
+    prisma.contact.findMany.mockResolvedValue([{ id: 61 }]);
+    prisma.plotBooking.findMany.mockResolvedValueOnce([]).mockResolvedValue([{ status: 'CANCELLED' }]);
+    const response = await request(makeApp()).put('/api/pickup-plot-inventory/transport-persons/41').send({
+      ...vehicleDetails, name: 'Ravi Kumar', phone: '9000011111', plotSiteIds: [30], customerIds: [61],
+    });
+    expect(response.status, JSON.stringify(response.body)).toBe(409);
+    expect(response.body.code).toBe('PLOT_ASSIGNMENT_REMOVED');
+    expect(prisma.transportPerson.update).not.toHaveBeenCalled();
+  });
+
   test('rejects an invalid phone number', async () => {
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/transport-persons').send({
       name: 'Ravi Kumar', phone: '123',
@@ -2466,6 +2503,22 @@ describe('plot broker mutations', () => {
       plotSiteId: 30,
       bookingId: 91,
     }, 7, undefined);
+  });
+
+  test('rejects a stale billing transition after the booking was cancelled', async () => {
+    prisma.user.findFirst.mockResolvedValue({ id: 3, userRoles: [{ role: { key: 'BILLING' } }] });
+    prisma.billingPerson.findFirst.mockResolvedValue({ id: 71, userId: 3, customerIdsJson: '[61]', plotSiteIdsJson: '[30]', isActive: true });
+    prisma.plotBroker.findFirst.mockResolvedValue({
+      id: 51, customerIdsJson: '[61]', plotSiteIdsJson: '[30]', isActive: true,
+      workflowStatusJson: JSON.stringify({ 'customer-61-plot-30': { status: 'PLOT_SELECTED', billingStatus: 'PAYMENT_PENDING', plotId: 30, bookingId: 91 } }),
+    });
+    prisma.plotBooking.findFirst.mockResolvedValueOnce({ id: 91, paymentStatus: 'PAID', amountPaid: 100, balance: 0 }).mockResolvedValueOnce(null);
+    const response = await request(makeApp({ role: 'USER' }))
+      .patch('/api/pickup-plot-inventory/billing/me/assignments/51-61-30/status')
+      .send({ status: 'BOOKING_CONFIRMED' });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PLOT_ASSIGNMENT_REMOVED');
+    expect(prisma.plotBooking.update).not.toHaveBeenCalled();
   });
 
   test('marks the plot sold only after booking confirmation', async () => {

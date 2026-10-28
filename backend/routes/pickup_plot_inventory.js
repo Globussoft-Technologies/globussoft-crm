@@ -376,6 +376,32 @@ function customerTransportStarted(transportPeople, customerId) {
   ));
 }
 
+// Serialize plot deselection with transport assignment for the same customer.
+// A historical cancelled booking must not be resurrected by a request that
+// validated its transport assignments before waiting for the lock. Legacy
+// transport assignments without any booking remain supported.
+async function lockPlotAssignmentCustomers(tx, tenantId, pairs, previousPairs = []) {
+  const previous = new Set(previousPairs.map((pair) => assignmentKey(pair.customerId, pair.plotSiteId)));
+  const added = pairs.filter((pair) => !previous.has(assignmentKey(pair.customerId, pair.plotSiteId)));
+  const customers = [...new Set(added.map((pair) => Number(pair.customerId)))].sort((a, b) => a - b);
+  for (const customerId of customers) {
+    await tx.$queryRaw`SELECT id FROM Contact WHERE id = ${customerId} AND tenantId = ${tenantId} FOR UPDATE`;
+  }
+  for (const pair of added) {
+    if (!Number.isInteger(pair.plotSiteId) || pair.plotSiteId <= 0) continue;
+    const bookings = await tx.plotBooking.findMany({
+      where: { tenantId, contactId: pair.customerId, plotSiteId: pair.plotSiteId },
+      select: { status: true },
+    });
+    if (bookings.length && !bookings.some((booking) => booking.status !== "CANCELLED")) {
+      const error = new Error("The plot assignment was removed. Refresh and select an assigned plot.");
+      error.code = "PLOT_ASSIGNMENT_REMOVED";
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+}
+
 function startedCustomerOwners(people, roleType, statusField) {
   const owners = new Map();
   for (const person of people || []) {
@@ -494,7 +520,7 @@ async function claimCustomerForPerson(client, {
 }
 
 function handleClaimError(error, res) {
-  if (!["CUSTOMER_ALREADY_CLAIMED", "WORKFLOW_CONFLICT", "PLOT_NOT_AVAILABLE"].includes(error?.code)) return false;
+  if (!["CUSTOMER_ALREADY_CLAIMED", "WORKFLOW_CONFLICT", "PLOT_NOT_AVAILABLE", "PLOT_ASSIGNMENT_REMOVED"].includes(error?.code)) return false;
   res.status(error.statusCode || 409).json({ error: error.message, code: error.code });
   return true;
 }
@@ -2840,6 +2866,21 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       );
     };
 
+    // The booking was read before entering the transaction. Revalidate it
+    // after taking the same customer lock as deselection, and the booking row
+    // lock used by payment reconciliation, before making financial writes.
+    const guardBillingBooking = async (tx) => {
+      await lockPlotAssignmentCustomers(tx, req.user.tenantId, [{ customerId, plotSiteId: plotId }]);
+      if (!booking) return;
+      await require("../lib/plotBookingPayments").lockBooking(tx, req.user.tenantId, booking.id);
+      const current = await tx.plotBooking.findFirst({ where: { id: booking.id, tenantId: req.user.tenantId, contactId: customerId, plotSiteId: plotId, status: { not: "CANCELLED" } }, select: { id: true } });
+      if (!current) {
+        const error = new Error("The plot assignment was removed. Refresh before continuing billing.");
+        error.code = "PLOT_ASSIGNMENT_REMOVED";
+        throw error;
+      }
+    };
+
     let invoice = null;
     let payment = null;
     if (nextStatus === "INVOICE_CREATED") {
@@ -2860,6 +2901,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 7);
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         if (!booking) {
           booking = await tx.plotBooking.create({
             data: {
@@ -2946,6 +2988,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         return res.status(502).json({ error: "The invoice email could not be sent.", code: "INVOICE_SEND_FAILED" });
       }
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         if (booking) await tx.plotBooking.update({ where: { id: booking.id }, data: { status: nextStatus } });
         await saveWorkflow(tx, { invoiceSentAt: now });
         await appendWorkflowEvent(tx, req, {
@@ -2986,6 +3029,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
       }
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         payment = await tx.payment.create({
           data: {
             invoiceId: sourceInvoice.id,
@@ -3022,6 +3066,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       const paidAt = new Date();
       const paidAmount = Number(saved.paymentReceivedAmount || saved.invoiceAmount || 0);
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         payment = await tx.payment.update({
           where: { id: Number(saved.paymentId) },
           data: { status: "SUCCESS", paidAt },
@@ -3046,6 +3091,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
     } else if (nextStatus === "PLOT_SOLD") {
       if (!plotId) return res.status(409).json({ error: "The booking has no plot.", code: "PLOT_REQUIRED_FOR_BOOKING" });
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         await tx.plotSite.update({ where: { id: plotId }, data: { availability: "SOLD" } });
         if (booking) await tx.plotBooking.update({ where: { id: booking.id }, data: { status: "PLOT_SOLD", soldAt: new Date() } });
         await saveWorkflow(tx, { plotSoldAt: now });
@@ -3062,6 +3108,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         TRANSACTION_COMPLETED: { transactionCompletedAt: now },
       };
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         if (currentStatus === BILLING_WORKFLOW[0] && nextStatus === BILLING_WORKFLOW[1]) {
           await claimCustomerForPerson(tx, {
             modelName: "billingPerson",
@@ -3610,6 +3657,7 @@ router.delete("/customer-pickups/:contactId/plots/:plotSiteId", adminOnly, async
       });
     }
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM Contact WHERE id = ${contactId} AND tenantId = ${tenantId} FOR UPDATE`;
       const currentTransport = await tx.transportPerson.findMany({
         where: { tenantId },
         select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
@@ -5312,12 +5360,15 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
     if (staffUserId !== undefined && staffUserId !== null && staffUserId !== "") {
       const assignment = await validateAssignableTransportUser(req.user.tenantId, staffUserId);
       if (assignment.error) return res.status(400).json(assignment);
-      person = await prisma.transportPerson.create({
-        data: { ...parsed.data, tenantId: req.user.tenantId, userId: assignment.user.id },
-        include: {
-          pickupLocation: { select: { id: true, name: true, isActive: true } },
-          user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } },
-        },
+      person = await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data));
+        return tx.transportPerson.create({
+          data: { ...parsed.data, tenantId: req.user.tenantId, userId: assignment.user.id },
+          include: {
+            pickupLocation: { select: { id: true, name: true, isActive: true } },
+            user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } },
+          },
+        });
       });
     } else if (email || password) {
       const emailError = !email ? "Work email is required." : validateEmail(email);
@@ -5340,6 +5391,7 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
       }
       const passwordHash = await bcrypt.hash(password, 10);
       person = await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data));
         const user = await tx.user.create({
           data: {
             name: parsed.data.name,
@@ -5366,9 +5418,12 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
     } else {
       // Backward-compatible profile-only path for existing API consumers and
       // legacy data imports. The UI always chooses a staff-account path.
-      person = await prisma.transportPerson.create({
-        data: { ...parsed.data, tenantId: req.user.tenantId },
-        include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
+      person = await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data));
+        return tx.transportPerson.create({
+          data: { ...parsed.data, tenantId: req.user.tenantId },
+          include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
+        });
       });
     }
     await safeNotifyCustomerPickupPlotAssignments({
@@ -5377,6 +5432,7 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
     });
     return res.status(201).json(serializeTransportPerson(person));
   } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory POST /transport-persons error:", error);
     return res.status(500).json({ error: "Failed to create transport person", code: "TRANSPORT_PERSON_CREATE_FAILED" });
   }
@@ -5401,13 +5457,14 @@ router.put("/transport-persons/:id", adminOnly, async (req, res) => {
         user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } },
       },
     });
-    const person = existing.userId ? await prisma.$transaction(async (tx) => {
-      await tx.user.update({
+    const person = await prisma.$transaction(async (tx) => {
+      await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data), assignmentPairs(existing));
+      if (existing.userId) await tx.user.update({
         where: { id: existing.userId },
         data: { name: parsed.data.name, phone: parsed.data.phone },
       });
       return updateTransportPerson(tx);
-    }) : await updateTransportPerson(prisma);
+    });
     await safeNotifyCustomerPickupPlotAssignments({
       tenantId: req.user.tenantId,
       person,
@@ -5415,6 +5472,7 @@ router.put("/transport-persons/:id", adminOnly, async (req, res) => {
     });
     return res.json(serializeTransportPerson(person));
   } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory PUT /transport-persons/:id error:", error);
     return res.status(500).json({ error: "Failed to update transport person", code: "TRANSPORT_PERSON_UPDATE_FAILED" });
   }

@@ -230,10 +230,11 @@ describe('LeadReports — productivity tab', () => {
     expect(container.querySelector('.lead-reports-page__chart')).toHaveStyle({
       height: '560px',
     });
-    for (const label of ['Lead created', 'Lead by source', 'Lead by lifecycle stage', 'Meeting', 'SMS', 'Email', 'WhatsApp']) {
+    for (const label of ['Current leads created', 'Lead by source', 'Lead by lifecycle stage', 'Meeting', 'SMS', 'Email', 'WhatsApp']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
     expect(screen.getByText('Query Builder')).toBeInTheDocument();
+    expect(screen.getByText(/Converted leads are excluded; these are not historical acquisition totals/)).toBeInTheDocument();
     expect(screen.getByText('Aggregate total')).toBeInTheDocument();
   });
 
@@ -241,7 +242,7 @@ describe('LeadReports — productivity tab', () => {
     renderOverviewPage();
     const builder = await screen.findByRole('complementary', { name: 'Lead report query builder' });
     expect(within(builder).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Lead created', 'Lead by source', 'Lead by lifecycle stage', 'Meeting', 'SMS', 'Email', 'WhatsApp',
+      'Current leads created', 'Lead by source', 'Lead by lifecycle stage', 'Meeting', 'SMS', 'Email', 'WhatsApp',
     ]);
     const sourceMetric = within(builder).getByRole('button', { name: 'Lead by source' });
     fireEvent.click(sourceMetric);
@@ -267,7 +268,7 @@ describe('LeadReports — productivity tab', () => {
     renderOverviewPage();
     const toolbar = await screen.findByRole('group', { name: 'Chart type' });
 
-    for (const metric of ['Lead created', 'Meeting', 'SMS', 'Email', 'WhatsApp']) {
+    for (const metric of ['Current leads created', 'Meeting', 'SMS', 'Email', 'WhatsApp']) {
       fireEvent.click(screen.getByRole('button', { name: metric }));
       expect(within(toolbar).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
         'Vertical bar chart', 'Line chart', 'Horizontal bar chart',

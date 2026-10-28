@@ -36,7 +36,7 @@ const TOOLTIP_STYLE = {
 // leads were → what still needs chasing → where they came from → where they
 // are → who we are meeting → who visited and didn't buy.
 const OVERVIEW_METRICS = [
-  { value: 'leadsCreated', label: 'Lead created', color: '#3b82f6' },
+  { value: 'leadsCreated', label: 'Current leads created', color: '#3b82f6' },
   { value: 'bySource', label: 'Lead by source', color: '#a855f7' },
   { value: 'byLifecycleStage', label: 'Lead by lifecycle stage', color: '#6366f1' },
   { value: 'meetings', label: 'Meeting', color: '#f59e0b' },
@@ -626,6 +626,7 @@ function OverviewTab({ d, metric, onMetricChange }) {
       <div className="lead-reports-page__overview-workspace">
         <aside className="card lead-reports-page__query-builder" aria-label="Lead report query builder">
           <h3 className="lead-reports-page__query-title"><Filter size={18} /> Query Builder</h3>
+          <p className="lead-reports-page__panel-sub">Lead metrics include contacts created in the selected period that are still leads. Converted leads are excluded; these are not historical acquisition totals.</p>
           <p className="lead-reports-page__query-label">Select metric</p>
           <div className="lead-reports-page__metric-list">
             {OVERVIEW_METRICS.map((item) => (

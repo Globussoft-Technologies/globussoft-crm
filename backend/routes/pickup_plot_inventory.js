@@ -3667,16 +3667,27 @@ router.delete("/customer-pickups/:contactId/plots/:plotSiteId", adminOnly, async
         error.code = "TRANSPORT_WORKFLOW_LOCKED";
         throw error;
       }
+      const activeBookings = await tx.plotBooking.findMany({
+        where: { tenantId, plotSiteId, status: { not: "CANCELLED" } },
+        select: { id: true, contactId: true, status: true, paymentStatus: true, amountPaid: true, invoiceId: true },
+      });
+      const customerBookings = activeBookings.filter((row) => row.contactId === contactId);
+      if (customerBookings.some((row) => row.status !== "PLOT_ASSIGNED" || Number(row.amountPaid) > 0 || row.invoiceId || !["", "UNPAID"].includes(row.paymentStatus))) {
+        const error = new Error("Another booking for this plot has already entered its booking or payment workflow.");
+        error.code = "PLOT_UNASSIGNMENT_LOCKED";
+        throw error;
+      }
+      const bookingIds = [...new Set([booking.id, ...customerBookings.map((row) => row.id)])];
       const cancelled = await tx.plotBooking.updateMany({
-        where: { id: booking.id, tenantId, contactId, plotSiteId, status: "PLOT_ASSIGNED", paymentStatus: { in: ["", "UNPAID"] }, amountPaid: 0, invoiceId: null },
+        where: { id: { in: bookingIds }, tenantId, contactId, plotSiteId, status: "PLOT_ASSIGNED", paymentStatus: { in: ["", "UNPAID"] }, amountPaid: 0, invoiceId: null },
         data: { status: "CANCELLED" },
       });
-      if (cancelled.count !== 1) {
+      if (cancelled.count !== bookingIds.length) {
         const error = new Error("This plot can no longer be deselected because its booking or payment workflow has started.");
         error.code = "PLOT_UNASSIGNMENT_LOCKED";
         throw error;
       }
-      await tx.plotSite.updateMany({
+      if (!activeBookings.some((row) => row.contactId !== contactId)) await tx.plotSite.updateMany({
         where: { id: plotSiteId, tenantId, availability: "RESERVED" },
         data: { availability: "AVAILABLE" },
       });

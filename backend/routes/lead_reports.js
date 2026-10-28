@@ -170,6 +170,8 @@ router.get("/overview", async (req, res) => {
     const { to, preset } = range;
     const ownerId = parseOwnerId(req);
     const createdAt = range.from ? { gte: range.from, lte: to } : { lte: to };
+    // Lead metrics describe the current Leads population created in the range,
+    // not historical acquisition: converted contacts are intentionally excluded.
     // Lead and meeting metrics mirror the Generic CRM Leads page. Meeting
     // ownership follows Contact.assignedToId (the lead owner), not the staff
     // member who happened to create the activity. Communication metrics below

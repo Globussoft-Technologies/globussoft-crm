@@ -134,7 +134,7 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last30');
   });
 
-  it('clears URL date filters on load, then allows a temporary Last 7 days filter', async () => {
+  it('preserves URL date filters on load and allows switching to Last 7 days', async () => {
     renderPipeline('/pipeline?from=2026-10-15&to=2026-10-20');
     await waitFor(() => {
       const urls = fetchApi.mock.calls.map(([url]) => url);
@@ -142,11 +142,11 @@ describe('Deals and Pipelines page', () => {
         expect(urls.some((url) => {
           if (!url.startsWith(prefix)) return false;
           const params = new URL(url, 'http://localhost').searchParams;
-          return !params.has('from') && !params.has('to');
+          return params.get('from') === '2026-10-15' && params.get('to') === '2026-10-20T23:59:59.999Z';
         })).toBe(true);
       }
     });
-    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('all');
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('custom');
     fireEvent.change(screen.getByRole('combobox', { name: 'Date range' }), { target: { value: 'last7' } });
     await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/deals?') && hasRange(url, expectedRange(7)))).toBe(true));
     expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last7');

@@ -22,17 +22,16 @@
  * so swapping tile labels + adding a `/api/tasks?mine=true` widget is enough
  * to produce a coherent personal dashboard without any backend change.
  */
-import { useState, useEffect, useContext, useRef } from 'react';
+import { useState, useEffect, useContext, useRef, useMemo } from 'react';
 import { Users, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact, currencySymbol } from '../utils/money';
 import { formatPercent } from '../utils/percent';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import CalendarRangePicker from '../components/CalendarRangePicker';
-import { readSavedDashboardFilter, saveDashboardFilter } from '../utils/dateRangeNavigation';
-import { scopedStorageKey } from '../utils/scopedStorage';
+import { readDateRange, setDateRangeParams, pathWithDateRange, readSavedDashboardFilter, saveDashboardFilter } from '../utils/dateRangeNavigation';
 import './Dashboard.css';
 
 const DEFAULT_STATS = {
@@ -80,6 +79,13 @@ function dashboardStageLabel(stage) {
     .replace(/^Closed /, '') || 'Other';
 }
 
+function dashboardPresetForRange(range) {
+  return DASHBOARD_DATE_PRESETS.find(([preset]) => {
+    const candidate = dashboardPresetRange(preset);
+    return candidate.from === range.from && candidate.to === range.to;
+  })?.[0] || 'custom';
+}
+
 function isClosedDashboardStage(stage) {
   const key = String(stage || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
   return key === 'won' || key === 'closed-won' || key === 'lost' || key === 'closed-lost';
@@ -92,6 +98,7 @@ function isLostDashboardStage(stage) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, tenant } = useContext(AuthContext) || {};
   const currency = tenant?.defaultCurrency || 'USD';
   const locale = tenant?.locale || (currency === 'INR' ? 'en-IN' : 'en-US');
@@ -106,8 +113,7 @@ export default function Dashboard() {
   const role = user?.role || 'USER';
   const isUser = role === 'USER';
   const isManager = role === 'MANAGER';
-  const dashboardStorageScope = { tenantId: tenant?.id ?? tenant?.tenantId, userId: user?.id ?? user?.userId };
-  const dashboardStorageScopeKey = scopedStorageKey('dashboard-filter-scope', dashboardStorageScope);
+  const dashboardStorageScope = useMemo(() => ({ tenantId: tenant?.id ?? tenant?.tenantId, userId: user?.id ?? user?.userId }), [tenant?.id, tenant?.tenantId, user?.id, user?.userId]);
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [recentDeals, setRecentDeals] = useState([]);
   const [contactCount, setContactCount] = useState(0);
@@ -115,17 +121,28 @@ export default function Dashboard() {
   const [dashboardTasks, setDashboardTasks] = useState([]);
   const [attributionStats, setAttributionStats] = useState({ byChannel: [] });
   const [allTimeExpectedRevenue, setAllTimeExpectedRevenue] = useState(undefined);
-  const [dashboardDateRange, setDashboardDateRange] = useState({ from: '', to: '' });
-  const [datePreset, setDatePreset] = useState('all');
+  const [dashboardDateRange, setDashboardDateRange] = useState(() => {
+    const range = readDateRange(searchParams);
+    return range.from || range.to ? range : readSavedDashboardFilter(dashboardStorageScope)?.range || { from: '', to: '' };
+  });
+  const [datePreset, setDatePreset] = useState(() => {
+    const range = readDateRange(searchParams);
+    return range.from || range.to ? dashboardPresetForRange(range) : readSavedDashboardFilter(dashboardStorageScope)?.preset || 'all';
+  });
   const [calendarOpenRequest, setCalendarOpenRequest] = useState(0);
   const pipelineChartRef = useRef(null);
   const [pipelineChartWidth, setPipelineChartWidth] = useState(900);
   useEffect(() => {
+    const range = readDateRange(searchParams);
+    if (range.from || range.to) {
+      setDatePreset(dashboardPresetForRange(range));
+      setDashboardDateRange(range);
+      return;
+    }
     const saved = readSavedDashboardFilter(dashboardStorageScope);
-    if (!saved) return;
-    setDatePreset(saved.preset);
-    setDashboardDateRange(saved.range);
-  }, [dashboardStorageScopeKey]);
+    setDatePreset(saved?.preset || 'all');
+    setDashboardDateRange(saved?.range || { from: '', to: '' });
+  }, [dashboardStorageScope, searchParams]);
   useEffect(() => {
     const element = pipelineChartRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return undefined;
@@ -142,6 +159,7 @@ export default function Dashboard() {
     setDatePreset('custom');
     setDashboardDateRange(range);
     saveDashboardFilter(dashboardStorageScope, { preset: 'custom', range });
+    setSearchParams(setDateRangeParams(searchParams, range), { replace: true });
   };
   const dateQuery = dashboardDateRange.from || dashboardDateRange.to
     ? `${dashboardDateRange.from ? `&from=${encodeURIComponent(dashboardDateRange.from)}` : ''}${dashboardDateRange.to ? `&to=${encodeURIComponent(`${dashboardDateRange.to}T23:59:59.999Z`)}` : ''}`
@@ -319,6 +337,7 @@ export default function Dashboard() {
               const range = dashboardPresetRange(preset);
               setDashboardDateRange(range);
               saveDashboardFilter(dashboardStorageScope, { preset, range });
+              setSearchParams(setDateRangeParams(searchParams, range), { replace: true });
             }
           }} className="input-field dashboard-date-preset" style={{ width: 150, height: 38, minWidth: 0, maxWidth: '100%', flex: '0 0 150px', boxSizing: 'border-box', padding: '0 12px', lineHeight: 'normal', cursor: 'pointer', fontSize: 13 }}>
             {DASHBOARD_DATE_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -338,7 +357,7 @@ export default function Dashboard() {
       <div className="dashboard-kpis" data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {tiles.map((stat, i) => (
           <Link key={i}
-            to={stat.path}
+            to={(stat.path === '/pipeline' || stat.path === '/reports') && !stat.label.includes('Expected Revenue') ? pathWithDateRange(stat.path, dashboardDateRange) : stat.path}
             style={{
               textDecoration: 'none',
               color: 'inherit',

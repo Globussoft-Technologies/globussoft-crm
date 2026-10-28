@@ -15,8 +15,9 @@
  *  - Regression pin: zero aggregates render "0" / "0%" / "$0", not "—" or NaN.
  */
 import React from 'react';
+import { formatMoneyCompact } from '../utils/money';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock fetchApi BEFORE importing the component
@@ -100,6 +101,22 @@ describe('<Dashboard />', () => {
     expect(screen.getByLabelText('Dashboard date range')).toBeInTheDocument();
   });
 
+  it('keeps selected presets in queries and links and can return to All time', async () => {
+    renderDashboard();
+    fireEvent.change(screen.getByLabelText('Dashboard date preset'), { target: { value: 'last30' } });
+    await waitFor(() => {
+      expect(screen.getByLabelText('Dashboard date preset')).toHaveValue('last30');
+      const link = screen.getByText('Total Deals').closest('a').getAttribute('href');
+      const params = new URL(link, 'http://localhost').searchParams;
+      expect(params.get('from')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(params.get('to')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/contacts?count=1&from='))).toBe(true);
+    });
+    fireEvent.change(screen.getByLabelText('Dashboard date preset'), { target: { value: 'all' } });
+    await waitFor(() => expect(screen.getByLabelText('Dashboard date preset')).toHaveValue('all'));
+    expect(screen.getByText('Total Deals').closest('a')).toHaveAttribute('href', '/pipeline');
+  });
+
   it('does not show an incomplete forecast as zero when an exchange rate is missing', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) return Promise.resolve({
@@ -126,7 +143,7 @@ describe('<Dashboard />', () => {
     expect(screen.getByText('My Win Rate').nextElementSibling).toHaveTextContent('67.0%');
   });
 
-  it('ignores URL date parameters and keeps links standalone', async () => {
+  it('honors URL date parameters and keeps the range in deal links', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/deals/stats')) return Promise.resolve({ totalDeals: 1 });
       if (url.startsWith('/api/deals?')) return Promise.resolve([]);
@@ -134,8 +151,12 @@ describe('<Dashboard />', () => {
     });
     renderDashboard(null, '/dashboard?from=2026-10-15&to=2026-10-20');
 
-    await waitFor(() => expect(fetchApi.mock.calls.map(([url]) => url)).toContain('/api/deals/stats?currency=USD'));
-    expect(screen.getByText('Total Deals').closest('a').getAttribute('href')).toBe('/pipeline');
+    await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => {
+      if (!url.startsWith('/api/deals/stats?')) return false;
+      const params = new URL(url, 'http://localhost').searchParams;
+      return params.get('from') === '2026-10-15' && params.get('to') === '2026-10-20T23:59:59.999Z';
+    })).toBe(true));
+    expect(screen.getByText('Total Deals').closest('a').getAttribute('href')).toBe('/pipeline?from=2026-10-15&to=2026-10-20');
   });
 
   it('renders Closed Revenue from stats.wonValue (not a list reduce of /api/deals)', async () => {
@@ -179,7 +200,7 @@ describe('<Dashboard />', () => {
     // newest-10 list (which would render $0).
     await waitFor(() => expect(screen.getByText('Closed Revenue')).toBeInTheDocument());
     // Revenue tiles display compact amounts and expose the full value in their title.
-    await waitFor(() => expect(screen.getByText('Closed Revenue').nextElementSibling).toHaveTextContent('$5B'));
+    await waitFor(() => expect(screen.getByText('Closed Revenue').nextElementSibling).toHaveTextContent(formatMoneyCompact(5_000_000_000, { currency: 'USD', locale: 'en-US' })));
     expect(screen.getByText('Closed Revenue').nextElementSibling).toHaveAttribute('title', '$5,000,000,000');
     // Expected Revenue tile reflects stats.expectedValue.
     expect(screen.getByText('Expected Revenue').nextElementSibling).toHaveTextContent('$1.2B');
@@ -259,7 +280,7 @@ describe('<Dashboard />', () => {
 
     await waitFor(() => expect(screen.getByText('Closed Revenue')).toBeInTheDocument());
     // $0 (USD) — Closed Revenue + Expected Revenue.
-    expect(screen.getAllByText('$0').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(formatMoneyCompact(0, { currency: 'USD', locale: 'en-US' })).length).toBeGreaterThanOrEqual(2);
     // Total Contacts + Total Deals — plain "0".
     expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(2);
     // Conversion Rate. #639 canonical 1-decimal format → "0.0%".

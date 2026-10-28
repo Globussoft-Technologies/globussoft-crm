@@ -1081,7 +1081,7 @@ export default function Estimates() {
             overflow-x: auto !important;
           }
           .estimates-ledger-table {
-            min-width: 0 !important;
+            min-width: 760px !important;
             width: 100% !important;
           }
           .estimates-ledger-table col:nth-child(1) { width: 11% !important; }

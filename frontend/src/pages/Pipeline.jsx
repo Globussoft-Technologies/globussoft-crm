@@ -68,6 +68,12 @@ function pipelineDatePresetRange(preset, now = new Date()) {
   if (preset === 'firstQuarter') return { from: dateInputValue(new Date(today.getFullYear(), 0, 1)), to: dateInputValue(new Date(today.getFullYear(), 3, 0)) };
   return { from: dateInputValue(daysAgo(6)), to: dateInputValue(today) };
 }
+function pipelinePresetForRange(range) {
+  return ['last7', 'last30', 'thisQuarter', 'lastQuarter', 'q1', 'q2', 'q3', 'q4'].find((preset) => {
+    const candidate = pipelineDatePresetRange(preset);
+    return candidate.from === range.from && candidate.to === range.to;
+  }) || 'custom';
+}
 function personName(person) { return person ? (person.name || [person.firstName, person.lastName].filter(Boolean).join(' ') || person.email || '') : ''; }
 function dealContact(deal) { return deal.contactName || personName(deal.contact) || deal.company || 'No contact linked'; }
 function ownerName(deal) { return deal.ownerName || personName(deal.owner) || 'Unassigned'; }
@@ -119,8 +125,7 @@ export default function Pipeline() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { from: dateFrom, to: dateTo } = readDateRange(searchParams);
   const { user, tenant } = useContext(AuthContext) || {};
-  const [datePreset, setDatePreset] = useState('all');
-  const clearedDateFilterOnLoadRef = useRef(false);
+  const [datePreset, setDatePreset] = useState(() => dateFrom || dateTo ? 'custom' : 'all');
   const isGeneric = tenant?.vertical === 'generic';
   const locale = user?.locale || tenant?.locale;
   const cardFieldsKey = scopedStorageKey('deals-card-fields-v2', {
@@ -155,16 +160,10 @@ export default function Pipeline() {
 
   useEffect(() => { try { localStorage.setItem(viewKey, view); } catch { /* Storage may be unavailable. */ } }, [view, viewKey]);
 
-  // Date filters are session-only. A browser reload should return to All time
-  // instead of restoring the previous range from the URL.
+  // Explicit URL ranges are navigation context, not stale persisted state.
   useEffect(() => {
-    if (clearedDateFilterOnLoadRef.current) return;
-    clearedDateFilterOnLoadRef.current = true;
-    if (dateFrom || dateTo) {
-      setDatePreset('all');
-      setSearchParams(setDateRangeParams(searchParams, { from: '', to: '' }), { replace: true });
-    }
-  }, [dateFrom, dateTo, searchParams, setSearchParams]);
+    setDatePreset(dateFrom || dateTo ? pipelinePresetForRange({ from: dateFrom, to: dateTo }) : 'all');
+  }, [dateFrom, dateTo]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);

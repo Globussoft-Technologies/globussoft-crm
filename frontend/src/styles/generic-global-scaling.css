@@ -46,7 +46,7 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
   }
 
   body[data-vertical="generic"] .app-main > main.generic-page-content
-    :is(table, .data-table, [role="table"]) {
+    :is(table, .data-table, [role="table"]):not(.estimates-ledger-table) {
     width: 100% !important;
     max-width: 100%;
     min-width: 0 !important;

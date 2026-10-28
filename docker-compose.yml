@@ -39,7 +39,12 @@ services:
       - gbscrm-local
 
   backend:
-    build: ./backend
+    build:
+      # The landing-form embed endpoint renders the canonical web-form
+      # document from frontend/public/embed, so the backend image needs the
+      # repository root as its build context.
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: gbscrm-backend-local
     restart: unless-stopped
     ports:

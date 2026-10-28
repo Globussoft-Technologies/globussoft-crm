@@ -2480,6 +2480,14 @@ const Leads = () => {
   const [stageFilter, setStageFilter] = useState("");
 
   useEffect(() => {
+    if (drillParams.get("create") !== "1") return;
+    setCreating(true);
+    const next = new URLSearchParams(drillParams);
+    next.delete("create");
+    setDrillParams(next, { replace: true });
+  }, [drillParams, setDrillParams]);
+
+  useEffect(() => {
     if (isTravel) setSubBrandFilter(activeSubBrand || "");
   }, [activeSubBrand, isTravel]);
   const [previewLead, setPreviewLead] = useState(null);

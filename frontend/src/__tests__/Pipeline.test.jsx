@@ -112,15 +112,14 @@ describe('Deals and Pipelines page', () => {
     expect(await screen.findByText('Legacy proposal deal')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'proposal' })).toBeInTheDocument();
   });
-  it('defaults directly to Last 7 days for deals and totals', async () => {
+  it('defaults to All time for deals and totals', async () => {
     renderPipeline();
-    const range = expectedRange(7);
     await waitFor(() => {
       const urls = fetchApi.mock.calls.map(([url]) => url);
-      expect(urls.some((url) => url.startsWith('/api/deals?') && hasRange(url, range))).toBe(true);
-      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && !new URL(url, 'http://localhost').searchParams.has('from'))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && !new URL(url, 'http://localhost').searchParams.has('from'))).toBe(true);
     });
-    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last7');
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('all');
   });
 
   it('changes the date range preset for deals and totals', async () => {
@@ -135,7 +134,7 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last30');
   });
 
-  it('loads deals and totals for the dashboard date range, then changes to Last 7 days', async () => {
+  it('preserves URL date filters on load and allows switching to Last 7 days', async () => {
     renderPipeline('/pipeline?from=2026-10-15&to=2026-10-20');
     await waitFor(() => {
       const urls = fetchApi.mock.calls.map(([url]) => url);
@@ -147,7 +146,7 @@ describe('Deals and Pipelines page', () => {
         })).toBe(true);
       }
     });
-    expect(screen.getByText(/Created 2026-10-15 to 2026-10-20/)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('custom');
     fireEvent.change(screen.getByRole('combobox', { name: 'Date range' }), { target: { value: 'last7' } });
     await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/deals?') && hasRange(url, expectedRange(7)))).toBe(true));
     expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last7');

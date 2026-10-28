@@ -22,16 +22,16 @@
  * so swapping tile labels + adding a `/api/tasks?mine=true` widget is enough
  * to produce a coherent personal dashboard without any backend change.
  */
-import React, { useState, useEffect, useContext, useRef } from 'react';
+import { useState, useEffect, useContext, useRef, useMemo } from 'react';
 import { Users, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact, currencySymbol } from '../utils/money';
 import { formatPercent } from '../utils/percent';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import CalendarRangePicker from '../components/CalendarRangePicker';
-import { readDateRange, setDateRangeParams, pathWithDateRange, readSavedDashboardDateRange, saveDashboardDateRange } from '../utils/dateRangeNavigation';
+import { readDateRange, setDateRangeParams, pathWithDateRange, readSavedDashboardFilter, saveDashboardFilter } from '../utils/dateRangeNavigation';
 import './Dashboard.css';
 
 const DEFAULT_STATS = {
@@ -47,48 +47,58 @@ const DEFAULT_STATS = {
 };
 
 const DASHBOARD_DATE_PRESETS = [
-  ['last7', 'Last 7 days'],
-  ['last30', 'Last 30 days'],
-  ['thisQuarter', 'This quarter'],
-  ['lastQuarter', 'Last quarter'],
-  ['q1', 'Q1 (this year)'],
-  ['q2', 'Q2 (this year)'],
-  ['q3', 'Q3 (this year)'],
-  ['q4', 'Q4 (this year)'],
+  ['all', 'All time'], ['last7', 'Last 7 days'], ['last30', 'Last 30 days'],
+  ['thisQuarter', 'This quarter'], ['lastQuarter', 'Last quarter'],
 ];
 
 function dateValue(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function dashboardPresetRange(preset, now = new Date()) {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const quarterStart = Math.floor(today.getMonth() / 3) * 3;
-  const quarter = /^q([1-4])$/.exec(preset);
-  if (quarter) {
-    const startMonth = (Number(quarter[1]) - 1) * 3;
-    return { from: dateValue(new Date(today.getFullYear(), startMonth, 1)), to: dateValue(new Date(today.getFullYear(), startMonth + 3, 0)) };
+  if (preset === 'all') return { from: '', to: '' };
+  if (preset === 'last30') return { from: dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29)), to: dateValue(today) };
+  if (preset === 'thisQuarter') {
+    const startMonth = Math.floor(today.getMonth() / 3) * 3;
+    return { from: dateValue(new Date(today.getFullYear(), startMonth, 1)), to: dateValue(today) };
   }
-  if (preset === 'thisQuarter') return { from: dateValue(new Date(today.getFullYear(), quarterStart, 1)), to: dateValue(today) };
-  if (preset === 'lastQuarter') return { from: dateValue(new Date(today.getFullYear(), quarterStart - 3, 1)), to: dateValue(new Date(today.getFullYear(), quarterStart, 0)) };
-  const days = preset === 'last30' ? 29 : 6;
-  return { from: dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() - days)), to: dateValue(today) };
+  if (preset === 'lastQuarter') {
+    const startMonth = Math.floor(today.getMonth() / 3) * 3;
+    return { from: dateValue(new Date(today.getFullYear(), startMonth - 3, 1)), to: dateValue(new Date(today.getFullYear(), startMonth, 0)) };
+  }
+  return { from: dateValue(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6)), to: dateValue(today) };
+}
+
+function dashboardStageLabel(stage) {
+  return String(stage || '')
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+    .replace(/^Closed /, '') || 'Other';
 }
 
 function dashboardPresetForRange(range) {
-  if (!range.from && !range.to) return 'last7';
   return DASHBOARD_DATE_PRESETS.find(([preset]) => {
-    const dates = dashboardPresetRange(preset);
-    return dates.from === range.from && dates.to === range.to;
+    const candidate = dashboardPresetRange(preset);
+    return candidate.from === range.from && candidate.to === range.to;
   })?.[0] || 'custom';
+}
+
+function isClosedDashboardStage(stage) {
+  const key = String(stage || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+  return key === 'won' || key === 'closed-won' || key === 'lost' || key === 'closed-lost';
+}
+
+function isLostDashboardStage(stage) {
+  const key = String(stage || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+  return key === 'lost' || key === 'closed-lost';
 }
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [dateSearchParams, setDateSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, tenant } = useContext(AuthContext) || {};
   const currency = tenant?.defaultCurrency || 'USD';
   const locale = tenant?.locale || (currency === 'INR' ? 'en-IN' : 'en-US');
@@ -103,53 +113,77 @@ export default function Dashboard() {
   const role = user?.role || 'USER';
   const isUser = role === 'USER';
   const isManager = role === 'MANAGER';
+  const dashboardStorageScope = useMemo(() => ({ tenantId: tenant?.id ?? tenant?.tenantId, userId: user?.id ?? user?.userId }), [tenant?.id, tenant?.tenantId, user?.id, user?.userId]);
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [recentDeals, setRecentDeals] = useState([]);
   const [contactCount, setContactCount] = useState(0);
   const [myPendingTasks, setMyPendingTasks] = useState([]);
-  const dateRange = readDateRange(dateSearchParams);
-  const dateRangeScope = { tenantId: tenant?.id ?? user?.tenantId, userId: user?.id ?? user?.userId };
-  const initialDateRangeRef = useRef(null);
-  const defaultDateAppliedRef = useRef(false);
-  if (!initialDateRangeRef.current) initialDateRangeRef.current = readSavedDashboardDateRange(dateRangeScope) || dashboardPresetRange('last7');
-  const [datePreset, setDatePreset] = useState(() => dashboardPresetForRange(dateRange.from || dateRange.to ? dateRange : initialDateRangeRef.current));
+  const [dashboardTasks, setDashboardTasks] = useState([]);
+  const [attributionStats, setAttributionStats] = useState({ byChannel: [] });
+  const [allTimeExpectedRevenue, setAllTimeExpectedRevenue] = useState(undefined);
+  const [dashboardDateRange, setDashboardDateRange] = useState(() => {
+    const range = readDateRange(searchParams);
+    return range.from || range.to ? range : readSavedDashboardFilter(dashboardStorageScope)?.range || { from: '', to: '' };
+  });
+  const [datePreset, setDatePreset] = useState(() => {
+    const range = readDateRange(searchParams);
+    return range.from || range.to ? dashboardPresetForRange(range) : readSavedDashboardFilter(dashboardStorageScope)?.preset || 'all';
+  });
   const [calendarOpenRequest, setCalendarOpenRequest] = useState(0);
-  const applyingDefaultRange = !defaultDateAppliedRef.current && !dateRange.from && !dateRange.to;
-  const displayedDateRange = applyingDefaultRange ? initialDateRangeRef.current : dateRange;
+  const pipelineChartRef = useRef(null);
+  const [pipelineChartWidth, setPipelineChartWidth] = useState(900);
+  useEffect(() => {
+    const range = readDateRange(searchParams);
+    if (range.from || range.to) {
+      setDatePreset(dashboardPresetForRange(range));
+      setDashboardDateRange(range);
+      return;
+    }
+    const saved = readSavedDashboardFilter(dashboardStorageScope);
+    setDatePreset(saved?.preset || 'all');
+    setDashboardDateRange(saved?.range || { from: '', to: '' });
+  }, [dashboardStorageScope, searchParams]);
+  useEffect(() => {
+    const element = pipelineChartRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const updateWidth = () => {
+      const width = Math.floor(element.getBoundingClientRect().width);
+      if (width > 0) setPipelineChartWidth(width);
+    };
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const updateDateRange = (range) => {
     setDatePreset('custom');
-    setDateSearchParams(setDateRangeParams(dateSearchParams, range), { replace: true });
+    setDashboardDateRange(range);
+    saveDashboardFilter(dashboardStorageScope, { preset: 'custom', range });
+    setSearchParams(setDateRangeParams(searchParams, range), { replace: true });
   };
-  const filteredPath = (path) => pathWithDateRange(path, displayedDateRange);
+  const dateQuery = dashboardDateRange.from || dashboardDateRange.to
+    ? `${dashboardDateRange.from ? `&from=${encodeURIComponent(dashboardDateRange.from)}` : ''}${dashboardDateRange.to ? `&to=${encodeURIComponent(`${dashboardDateRange.to}T23:59:59.999Z`)}` : ''}`
+    : '';
 
   useEffect(() => {
-    if (defaultDateAppliedRef.current) return;
-    defaultDateAppliedRef.current = true;
-    if (!dateRange.from && !dateRange.to) {
-      setDateSearchParams(setDateRangeParams(dateSearchParams, initialDateRangeRef.current), { replace: true });
-    }
-  }, [dateRange.from, dateRange.to, dateSearchParams, setDateSearchParams]);
-
-  useEffect(() => {
-    if (!applyingDefaultRange) saveDashboardDateRange(dateRangeScope, dateRange);
-  }, [applyingDefaultRange, dateRange.from, dateRange.to, dateRangeScope.tenantId, dateRangeScope.userId]);
-
-  useEffect(() => {
-    if (!applyingDefaultRange) setDatePreset(dateRange.from || dateRange.to ? dashboardPresetForRange(dateRange) : 'custom');
-  }, [applyingDefaultRange, dateRange.from, dateRange.to]);
-
-  useEffect(() => {
-    if (applyingDefaultRange) return undefined;
     let active = true;
     // KPI numbers — full-population aggregates from the server.
     // For role=USER the backend auto-scopes to ownerId=userId, so the same
     // call produces personal-pipeline numbers without a query change here.
-    const dateQuery = dateRange.from || dateRange.to
-      ? `${dateRange.from ? `&from=${encodeURIComponent(dateRange.from)}` : ''}${dateRange.to ? `&to=${encodeURIComponent(`${dateRange.to}T23:59:59.999Z`)}` : ''}`
-      : '';
     fetchApi(`/api/deals/stats?currency=${encodeURIComponent(currency)}${dateQuery}`)
-      .then((d) => { if (active) setStats({ ...DEFAULT_STATS, ...(d || {}) }); })
+      .then((d) => {
+        if (!active) return;
+        setStats({ ...DEFAULT_STATS, ...(d || {}) });
+        if (!dateQuery) setAllTimeExpectedRevenue(d?.expectedValue);
+      })
       .catch(() => { if (active) setStats(DEFAULT_STATS); });
+    // Expected Revenue is intentionally independent of the dashboard date
+    // filter: it represents the current all-time pending/open forecast.
+    if (dateQuery) {
+      fetchApi(`/api/deals/stats?currency=${encodeURIComponent(currency)}`)
+        .then((d) => { if (active) setAllTimeExpectedRevenue(d?.expectedValue); })
+        .catch(() => { if (active) setAllTimeExpectedRevenue(undefined); });
+    }
     // Row list for the Recent Deals widget — newest 10 only.
     fetchApi(`/api/deals?limit=10&orderBy=createdAt:desc${dateQuery}`)
       .then((d) => { if (active) setRecentDeals(Array.isArray(d) ? d : []); })
@@ -160,6 +194,9 @@ export default function Dashboard() {
       fetchApi(`/api/contacts?count=1${dateQuery}`)
         .then((d) => setContactCount(Number.isFinite(d?.total) ? d.total : 0))
         .catch(() => setContactCount(0));
+      fetchApi(`/api/attribution/stats${dateQuery ? `?${dateQuery.slice(1)}` : ''}`)
+        .then((d) => setAttributionStats({ byChannel: Array.isArray(d?.byChannel) ? d.byChannel : [] }))
+        .catch(() => setAttributionStats({ byChannel: [] }));
     }
     // Personal pending-tasks list — drives the "My Pending Tasks" tile and
     // the right-rail widget on the USER variant. ?mine=true is the canonical
@@ -168,13 +205,17 @@ export default function Dashboard() {
       fetchApi('/api/tasks?mine=true&status=Pending&limit=10')
         .then((d) => setMyPendingTasks(Array.isArray(d) ? d : []))
         .catch(() => setMyPendingTasks([]));
+    } else {
+      fetchApi('/api/tasks?status=Pending&limit=5')
+        .then((d) => setDashboardTasks(Array.isArray(d) ? d : []))
+        .catch(() => setDashboardTasks([]));
     }
     return () => { active = false; };
-  }, [isUser, currency, dateRange.from, dateRange.to, applyingDefaultRange]);
+  }, [isUser, currency, dateQuery]);
 
   // KPIs derived purely from `stats` (server aggregates), not from any list.
   const totalRevenue = stats.wonValue;
-  const expectedRevenue = stats.expectedValue;
+  const expectedRevenue = allTimeExpectedRevenue !== undefined ? allTimeExpectedRevenue : stats.expectedValue;
   const displayRevenue = (value) => value === null ? 'Unavailable' : formatMoneyCompact(value, moneyOptions);
   // #639 — keep the raw numeric so formatPercent renders a 1-decimal "0.0%"
   // consistently. Pre-fix this was Math.round-d to an integer and rendered
@@ -185,28 +226,37 @@ export default function Dashboard() {
   const dealCount = stats.totalDeals || 0;
   const openDealCount = Math.max(0, dealCount - (stats.wonCount || 0) - (stats.lostCount || 0));
 
-  // Pipeline Analytics chart — fed by the server-side byStage aggregation so
-  // the chart reflects the full tenant, not a paginated slice. We map the
-  // four headline stages and fall back to 0 when a stage is empty.
-  const stageValue = (name) => {
-    const aliases = { lead: ['lead', 'new-lead'], proposal: ['proposal', 'proposal-sent'], won: ['won', 'closed-won'] };
-    const row = (stats.byStage || []).find((r) => (aliases[name] || [name]).includes(r.stage));
-    return row ? row.value : 0;
-  };
-  const chartData = [
-    { name: 'Lead', value: stageValue('lead') },
-    { name: 'Contacted', value: stageValue('contacted') },
-    { name: 'Proposal', value: stageValue('proposal') },
-    { name: 'Won', value: stageValue('won') },
-  ];
+  // Pipeline Analytics uses probability-weighted values for open stages, and
+  // the actual closed value for Won. Lost is excluded from the forecast view.
+  const chartData = (Array.isArray(stats.byStage) ? stats.byStage : [])
+    .filter((row) => !isLostDashboardStage(row.stage))
+    .map((row) => ({
+      name: dashboardStageLabel(row.stage),
+      // Older API deployments expose only byStage.value. Prefer the
+      // probability-weighted stage forecast when present, but do not turn
+      // the chart blank while a compatible backend is being rolled out.
+      value: isClosedDashboardStage(row.stage)
+        ? Number(row.value) || 0
+        : row.expectedValue !== null && row.expectedValue !== undefined && Number.isFinite(Number(row.expectedValue))
+        ? Number(row.expectedValue)
+        : Number(row.value) || 0,
+    }))
+    .filter((row) => row.name !== 'Other' || row.value > 0);
+  const hasPipelineData = chartData.some((row) => row.value > 0);
 
   // Role-aware label set. ADMIN/MANAGER see org/team framing on the same
   // numbers; USER sees personal framing + the contacts tile is swapped for a
   // "My Pending Tasks" tile (more actionable for an individual contributor).
   const pendingTaskCount = myPendingTasks.length;
+  const focusTasks = isUser ? myPendingTasks : dashboardTasks;
+  const revenueTarget = Number(tenant?.settings?.revenueTarget || tenant?.revenueTarget || 0);
+  const revenueProgressTarget = revenueTarget > 0 ? revenueTarget : Math.max(0, totalRevenue + expectedRevenue);
+  const revenueProgress = revenueProgressTarget > 0 ? Math.min(100, (totalRevenue / revenueProgressTarget) * 100) : 0;
+  const leadChannels = (attributionStats.byChannel || []).slice(0, 4);
+  const maxLeadChannelCount = Math.max(1, ...leadChannels.map((row) => Number(row.count) || 0));
   const tiles = isUser
     ? [
-        { label: 'My Closed Revenue', value: displayRevenue(totalRevenue), icon: revenueIcon, color: 'var(--accent-color)', path: '/pipeline', },
+        { label: 'My Closed Revenue', value: displayRevenue(totalRevenue), icon: revenueIcon, color: 'var(--accent-color)', path: '/reports', },
       {
         label: 'My Expected Revenue', value: displayRevenue(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
         path: '/pipeline',
@@ -227,7 +277,7 @@ export default function Dashboard() {
     : [
       {
         label: 'Closed Revenue', value: displayRevenue(totalRevenue), icon: revenueIcon, color: 'var(--accent-color)',
-        path: '/pipeline',
+        path: '/reports',
       },
       {
         label: 'Expected Revenue', value: displayRevenue(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
@@ -280,14 +330,21 @@ export default function Dashboard() {
           <select aria-label="Dashboard date preset" value={datePreset} onChange={(event) => {
             const preset = event.target.value;
             setDatePreset(preset);
-            if (preset === 'custom') setCalendarOpenRequest((request) => request + 1);
-            else setDateSearchParams(setDateRangeParams(dateSearchParams, dashboardPresetRange(preset)), { replace: true });
+            if (preset === 'custom') {
+              setCalendarOpenRequest((request) => request + 1);
+              saveDashboardFilter(dashboardStorageScope, { preset, range: dashboardDateRange });
+            } else {
+              const range = dashboardPresetRange(preset);
+              setDashboardDateRange(range);
+              saveDashboardFilter(dashboardStorageScope, { preset, range });
+              setSearchParams(setDateRangeParams(searchParams, range), { replace: true });
+            }
           }} className="input-field dashboard-date-preset" style={{ width: 150, height: 38, minWidth: 0, maxWidth: '100%', flex: '0 0 150px', boxSizing: 'border-box', padding: '0 12px', lineHeight: 'normal', cursor: 'pointer', fontSize: 13 }}>
             {DASHBOARD_DATE_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             <option value="custom">Custom range</option>
           </select>
-          <CalendarRangePicker value={displayedDateRange} onChange={updateDateRange} label="Dashboard date range" align="right" compact width={190} height={38} openRequest={calendarOpenRequest} />
-          <button className="btn-primary" onClick={() => navigate(filteredPath(ctaPath))}>{ctaLabel}</button>
+          <CalendarRangePicker value={dashboardDateRange} onChange={updateDateRange} label="Dashboard date range" align="right" compact width={190} height={38} openRequest={calendarOpenRequest} />
+          <button className="btn-primary" onClick={() => navigate(ctaPath)}>{ctaLabel}</button>
         </div>
       </header>
 
@@ -300,7 +357,7 @@ export default function Dashboard() {
       <div className="dashboard-kpis" data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {tiles.map((stat, i) => (
           <Link key={i}
-            to={stat.path === '/pipeline' || stat.path === '/reports' ? filteredPath(stat.path) : stat.path}
+            to={(stat.path === '/pipeline' || stat.path === '/reports') && !stat.label.includes('Expected Revenue') ? pathWithDateRange(stat.path, dashboardDateRange) : stat.path}
             style={{
               textDecoration: 'none',
               color: 'inherit',
@@ -320,13 +377,16 @@ export default function Dashboard() {
       </div>
 
       <div className="dashboard-panels" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
-        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem' }}>
+        <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
           </div>
-          <div className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <div ref={pipelineChartRef} className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px', minWidth: 0, minHeight: '260px' }}>
+            {!hasPipelineData ? (
+              <div className="dashboard-empty-copy" style={{ display: 'grid', height: '100%', placeItems: 'center', textAlign: 'center' }}>
+                Pipeline stage values are not available for this range.
+              </div>
+            ) : <AreaChart width={pipelineChartWidth} height={260} style={{ width: '100%', height: '260px' }} data={chartData} margin={{ top: 10, right: 80, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
@@ -340,14 +400,16 @@ export default function Dashboard() {
                     digits and currency symbol. */}
                 <YAxis width={88} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickMargin={8} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px' }}
-                  itemStyle={{ color: 'var(--text-primary)' }}
+                  allowEscapeViewBox={{ x: false, y: false }}
+                  wrapperStyle={{ zIndex: 20, pointerEvents: 'none', maxWidth: 'calc(100% - 8px)' }}
+                  contentStyle={{ backgroundColor: 'var(--tooltip-bg)', backdropFilter: 'blur(8px)', borderColor: 'rgba(59, 130, 246, 0.5)', borderRadius: '8px', fontSize: '14px', lineHeight: 1.4, minWidth: '130px', padding: '10px 12px' }}
+                  labelStyle={{ color: 'var(--text-primary)', fontSize: '13px', marginBottom: '4px' }}
+                  itemStyle={{ color: 'var(--text-primary)', fontSize: '14px' }}
                   formatter={(value) => formatMoney(value, moneyOptions)}
                 />
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                 <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
-              </AreaChart>
-            </ResponsiveContainer>
+              </AreaChart>}
           </div>
         </div>
 
@@ -395,8 +457,8 @@ export default function Dashboard() {
                     key={deal.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => navigate(filteredPath(`/pipeline?dealId=${deal.id}`))}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(filteredPath(`/pipeline?dealId=${deal.id}`)); } }}
+                    onClick={() => navigate(`/pipeline?dealId=${deal.id}`)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/pipeline?dealId=${deal.id}`); } }}
                     className="table-row-hover"
                     style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px', userSelect: 'none' }}
                     title={`Open ${deal.title} in pipeline`}
@@ -414,6 +476,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { scopedStorageKey } from '../utils/scopedStorage';
 import { SEARCH_DEBOUNCE_MS } from '../utils/timing';
-import { readDateRange, setDateRangeParams, readSavedDashboardDateRange } from '../utils/dateRangeNavigation';
+import { readDateRange, setDateRangeParams } from '../utils/dateRangeNavigation';
 import { AuthContext } from '../appContexts';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
@@ -69,10 +69,9 @@ function pipelineDatePresetRange(preset, now = new Date()) {
   return { from: dateInputValue(daysAgo(6)), to: dateInputValue(today) };
 }
 function pipelinePresetForRange(range) {
-  if (!range?.from && !range?.to) return 'last7';
   return ['last7', 'last30', 'thisQuarter', 'lastQuarter', 'q1', 'q2', 'q3', 'q4'].find((preset) => {
-    const dates = pipelineDatePresetRange(preset);
-    return dates.from === range.from && dates.to === range.to;
+    const candidate = pipelineDatePresetRange(preset);
+    return candidate.from === range.from && candidate.to === range.to;
   }) || 'custom';
 }
 function personName(person) { return person ? (person.name || [person.firstName, person.lastName].filter(Boolean).join(' ') || person.email || '') : ''; }
@@ -126,11 +125,7 @@ export default function Pipeline() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { from: dateFrom, to: dateTo } = readDateRange(searchParams);
   const { user, tenant } = useContext(AuthContext) || {};
-  const dateRangeScope = { tenantId: tenant?.id ?? user?.tenantId, userId: user?.id ?? user?.userId };
-  const initialDashboardRangeRef = useRef(null);
-  if (!initialDashboardRangeRef.current) initialDashboardRangeRef.current = readSavedDashboardDateRange(dateRangeScope) || pipelineDatePresetRange('last7');
-  const [datePreset, setDatePreset] = useState(() => pipelinePresetForRange(dateFrom || dateTo ? { from: dateFrom, to: dateTo } : initialDashboardRangeRef.current));
-  const defaultDateInitializedRef = useRef(false);
+  const [datePreset, setDatePreset] = useState(() => dateFrom || dateTo ? 'custom' : 'all');
   const isGeneric = tenant?.vertical === 'generic';
   const locale = user?.locale || tenant?.locale;
   const cardFieldsKey = scopedStorageKey('deals-card-fields-v2', {
@@ -154,7 +149,21 @@ export default function Pipeline() {
   const [expandedStageIds, setExpandedStageIds] = useState([]);
   const [showCreate, setShowCreate] = useState(false); const [createDealDefaults, setCreateDealDefaults] = useState({}); const [selectedDeal, setSelectedDeal] = useState(null); const [dragged, setDragged] = useState(null);
 
+  useEffect(() => {
+    if (searchParams.get('create') !== '1') return;
+    setCreateDealDefaults({ dealType, stage: stages[0]?.id || undefined });
+    setShowCreate(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('create');
+    setSearchParams(next, { replace: true });
+  }, [dealType, searchParams, setSearchParams, stages]);
+
   useEffect(() => { try { localStorage.setItem(viewKey, view); } catch { /* Storage may be unavailable. */ } }, [view, viewKey]);
+
+  // Explicit URL ranges are navigation context, not stale persisted state.
+  useEffect(() => {
+    setDatePreset(dateFrom || dateTo ? pipelinePresetForRange({ from: dateFrom, to: dateTo }) : 'all');
+  }, [dateFrom, dateTo]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
@@ -200,19 +209,6 @@ export default function Pipeline() {
   }, [isGeneric, refreshGenericDealTypes]);
 
   useEffect(() => {
-    if (defaultDateInitializedRef.current) return;
-    if (!dateFrom && !dateTo) {
-      setSearchParams(setDateRangeParams(searchParams, initialDashboardRangeRef.current), { replace: true });
-      return;
-    }
-    defaultDateInitializedRef.current = true;
-  }, [dateFrom, dateTo, searchParams, setSearchParams]);
-
-  useEffect(() => {
-    if (dateFrom || dateTo) setDatePreset(pipelinePresetForRange({ from: dateFrom, to: dateTo }));
-  }, [dateFrom, dateTo]);
-
-  useEffect(() => {
     if (!pipelineMenuOpen) return undefined;
     const closeOnOutsideClick = (event) => {
       if (!pipelineMenuRef.current?.contains(event.target)) setPipelineMenuOpen(false);
@@ -231,7 +227,6 @@ export default function Pipeline() {
   }, [dealTypeMenuOpen]);
 
   const load = useCallback(async () => {
-    if (!dateFrom && !dateTo) return;
     const requestId = ++requestIdRef.current;
     if (firstLoadRef.current) setLoading(true);
     setError('');
@@ -397,9 +392,14 @@ export default function Pipeline() {
     : { padding: '24px 28px', maxWidth: 1500, margin: '0 auto' }}>
     {isGeneric && <button type="button" aria-label="Go back" title="Back" style={{ ...backButton, display: 'inline-flex', marginBottom: 12 }} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>}
     <style>{'.deals-kanban-list { scrollbar-width: thin; scrollbar-color: #94a3b8 #e2e8f0; } .deals-kanban-list::-webkit-scrollbar { width: 10px; } .deals-kanban-list::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 6px; } .deals-kanban-list::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #e2e8f0; }'}</style>
+{/*
     <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}><div><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>{isGeneric && <button type="button" aria-label="Go back" title="Back" style={backButton} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>}<Briefcase size={21} color="var(--accent-color)" /><h1 style={heading}>{isGeneric ? 'Deals' : 'Deals and Pipelines'}</h1></div><p style={subtitle}>Track and manage your deals across different stages</p></div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button type="button" style={secondaryButton} onClick={refreshDeals}><RefreshCw size={14} /> Refresh</button><button type="button" style={primaryButton} onClick={() => { setCreateDealDefaults({ ...(isGeneric ? { dealType } : { pipelineId: pipelineId || undefined }), stage: stages[0]?.id || undefined }); setShowCreate(true); }}><Plus size={15} /> Add deal</button></div></header>
     <section className="generic-deals-toolbar" style={toolbar}><div style={{ display: 'flex', gap: 5, background: 'var(--subtle-bg)', padding: 4, borderRadius: 9 }}><button type="button" style={view === 'kanban' ? activeToggle : toggle} onClick={() => setView('kanban')}><Briefcase size={14} /> Kanban</button><button type="button" style={view === 'list' ? activeToggle : toggle} onClick={() => setView('list')}><List size={14} /> List</button></div>{isGeneric && <label style={control}><span>Deal type</span><div ref={dealTypeMenuRef} style={{ position: 'relative' }}><select tabIndex={-1} value={dealType} onChange={changeDealType} style={hiddenPipelineSelect}><option value="">Select deal type</option>{dealTypes.map((type) => <option key={type.id || type.name} value={type.name}>{type.name}</option>)}</select><button type="button" aria-label="Deal type" aria-haspopup="listbox" aria-expanded={dealTypeMenuOpen} onClick={() => setDealTypeMenuOpen((value) => !value)} style={pipelineSelect}>{dealTypes.find((type) => type.name === dealType)?.name || 'New Business'}<ChevronDown size={14} /></button>{dealTypeMenuOpen && <div role="listbox" aria-label="Deal type options" style={pipelineMenu} onMouseDown={(event) => event.stopPropagation()}>{dealTypes.map((type) => <button type="button" role="option" aria-selected={type.name === dealType} key={type.id || type.name} onClick={() => { changeDealType({ target: { value: type.name } }); setDealTypeMenuOpen(false); }} style={pipelineOption}>{type.name}</button>)}</div>}</div></label>}{!isGeneric && <label style={control}><span>Pipeline</span><div ref={pipelineMenuRef} style={{ position: 'relative' }}><select tabIndex={-1} value={pipelineId} onChange={changePipeline} style={hiddenPipelineSelect}><option value="">All pipelines</option>{pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}</option>)}</select><button type="button" aria-label="Pipeline" aria-haspopup="listbox" aria-expanded={pipelineMenuOpen} onClick={() => setPipelineMenuOpen((value) => !value)} style={pipelineSelect}>{pipelines.find((pipeline) => String(pipeline.id) === String(pipelineId))?.name || 'All pipelines'}<ChevronDown size={14} /></button>{pipelineMenuOpen && <div role="listbox" aria-label="Pipeline options" style={pipelineMenu} onMouseDown={(event) => event.stopPropagation()}><button type="button" role="option" aria-selected={!pipelineId} style={pipelineOption} onClick={() => { changePipeline({ target: { value: '' } }); setPipelineMenuOpen(false); }}>All pipelines</button>{pipelines.map((pipeline) => <button type="button" role="option" aria-selected={String(pipeline.id) === String(pipelineId)} key={pipeline.id} onClick={() => { changePipeline({ target: { value: String(pipeline.id) } }); setPipelineMenuOpen(false); }} style={pipelineOption}>{pipeline.name}</button>)}</div>}</div></label>}<button type="button" style={moreFiltersButton} onClick={() => setShowFilters((value) => !value)}><SlidersHorizontal size={14} /> More filters</button><label style={control}><span>Date range</span><select aria-label="Date range" value={datePreset} onChange={(event) => { const nextPreset = event.target.value; setDatePreset(nextPreset); if (nextPreset !== 'custom') setSearchParams(setDateRangeParams(searchParams, pipelineDatePresetRange(nextPreset)), { replace: true }); }} style={{ ...input, width: 150, height: 44, cursor: 'pointer' }}><option value="last7">Last 7 days</option><option value="last30">Last 30 days</option><option value="thisQuarter">This quarter</option><option value="lastQuarter">Last quarter</option><option value="q1">Q1 (this year)</option><option value="q2">Q2 (this year)</option><option value="q3">Q3 (this year)</option><option value="q4">Q4 (this year)</option><option value="custom">Custom range</option></select></label><div className="deals-pipeline-search-wrap" style={{ marginLeft: 'auto', position: 'relative' }}><Search size={15} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--text-secondary)' }} /><input className="deals-pipeline-search" aria-label="Search deals" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search deals..." style={{ ...input, paddingLeft: 32, width: 210 }} /></div><div style={{ position: 'relative' }}>{!isGeneric && <button type="button" title="Deal settings" aria-label="Deal settings" style={iconButton} onClick={() => setSettingsOpen((value) => !value)}><Settings size={16} /></button>}{settingsOpen && <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 50, width: 220, padding: 6, border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', boxShadow: '0 12px 30px rgba(15,23,42,.15)' }}><button type="button" role="menuitem" style={settingsItem} onClick={() => { setSettingsOpen(false); setShowCardCustomizer(true); }}>Customize deal cards</button></div>}</div></section>
     {datePreset === 'custom' && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '-8px 0 14px', color: 'var(--text-secondary)', fontSize: 12 }}><label style={control}><span>From</span><input type="date" aria-label="Created from" value={dateFrom} max={dateTo || undefined} onChange={(event) => setSearchParams(setDateRangeParams(searchParams, { from: event.target.value, to: dateTo }), { replace: true })} style={{ ...input, width: 150 }} /></label><label style={control}><span>To</span><input type="date" aria-label="Created to" value={dateTo} min={dateFrom || undefined} onChange={(event) => setSearchParams(setDateRangeParams(searchParams, { from: dateFrom, to: event.target.value }), { replace: true })} style={{ ...input, width: 150 }} /></label></div>}
+*/}
+    <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}><div><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>{isGeneric && <button type="button" aria-label="Go back" title="Back" style={backButton} onClick={() => navigate(-1)}><ArrowLeft size={16} /> Back</button>}<Briefcase size={21} color="var(--accent-color)" /><h1 style={heading}>Deals and Pipelines</h1></div><p style={subtitle}>Track and manage your deals across different stages</p></div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button type="button" style={secondaryButton} onClick={refreshDeals}><RefreshCw size={14} /> Refresh</button><button type="button" style={primaryButton} onClick={() => { setCreateDealDefaults({ ...(isGeneric ? { dealType } : { pipelineId: pipelineId || undefined }), stage: stages[0]?.id || undefined }); setShowCreate(true); }}><Plus size={15} /> Add deal</button></div></header>
+    <section className="generic-deals-toolbar" style={toolbar}><div style={{ display: 'flex', gap: 5, background: 'var(--subtle-bg)', padding: 4, borderRadius: 9 }}><button type="button" style={view === 'kanban' ? activeToggle : toggle} onClick={() => setView('kanban')}><Briefcase size={14} /> Kanban</button><button type="button" style={view === 'list' ? activeToggle : toggle} onClick={() => setView('list')}><List size={14} /> List</button></div>{isGeneric && <label style={control}><span>Deal type</span><div ref={dealTypeMenuRef} style={{ position: 'relative' }}><select tabIndex={-1} value={dealType} onChange={changeDealType} style={hiddenPipelineSelect}><option value="">Select deal type</option>{dealTypes.map((type) => <option key={type.id || type.name} value={type.name}>{type.name}</option>)}</select><button type="button" aria-label="Deal type" aria-haspopup="listbox" aria-expanded={dealTypeMenuOpen} onClick={() => setDealTypeMenuOpen((value) => !value)} style={pipelineSelect}>{dealTypes.find((type) => type.name === dealType)?.name || 'New Business'}<ChevronDown size={14} /></button>{dealTypeMenuOpen && <div role="listbox" aria-label="Deal type options" style={pipelineMenu} onMouseDown={(event) => event.stopPropagation()}>{dealTypes.map((type) => <button type="button" role="option" aria-selected={type.name === dealType} key={type.id || type.name} onClick={() => { changeDealType({ target: { value: type.name } }); setDealTypeMenuOpen(false); }} style={pipelineOption}>{type.name}</button>)}</div>}</div></label>}{!isGeneric && <label style={control}><span>Pipeline</span><div ref={pipelineMenuRef} style={{ position: 'relative' }}><select tabIndex={-1} value={pipelineId} onChange={changePipeline} style={hiddenPipelineSelect}><option value="">All pipelines</option>{pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}</option>)}</select><button type="button" aria-label="Pipeline" aria-haspopup="listbox" aria-expanded={pipelineMenuOpen} onClick={() => setPipelineMenuOpen((value) => !value)} style={pipelineSelect}>{pipelines.find((pipeline) => String(pipeline.id) === String(pipelineId))?.name || 'All pipelines'}<ChevronDown size={14} /></button>{pipelineMenuOpen && <div role="listbox" aria-label="Pipeline options" style={pipelineMenu} onMouseDown={(event) => event.stopPropagation()}><button type="button" role="option" aria-selected={!pipelineId} style={pipelineOption} onClick={() => { changePipeline({ target: { value: '' } }); setPipelineMenuOpen(false); }}>All pipelines</button>{pipelines.map((pipeline) => <button type="button" role="option" aria-selected={String(pipeline.id) === String(pipelineId)} key={pipeline.id} onClick={() => { changePipeline({ target: { value: String(pipeline.id) } }); setPipelineMenuOpen(false); }} style={pipelineOption}>{pipeline.name}</button>)}</div>}</div></label>}<button type="button" style={moreFiltersButton} onClick={() => setShowFilters((value) => !value)}><SlidersHorizontal size={14} /> More filters</button><label style={control}><span>Date range</span><select aria-label="Date range" value={datePreset} onChange={(event) => { const nextPreset = event.target.value; setDatePreset(nextPreset); if (nextPreset === 'all') setSearchParams(setDateRangeParams(searchParams, { from: '', to: '' }), { replace: true }); else if (nextPreset !== 'custom') setSearchParams(setDateRangeParams(searchParams, pipelineDatePresetRange(nextPreset)), { replace: true }); }} style={{ ...input, width: 150, height: 44, cursor: 'pointer' }}><option value="all">All time</option><option value="last7">Last 7 days</option><option value="last30">Last 30 days</option><option value="thisQuarter">This quarter</option><option value="lastQuarter">Last quarter</option><option value="q1">Q1 (this year)</option><option value="q2">Q2 (this year)</option><option value="q3">Q3 (this year)</option><option value="q4">Q4 (this year)</option><option value="custom">Custom range</option></select></label><div className="deals-pipeline-search-wrap" style={{ marginLeft: 'auto', position: 'relative' }}><Search size={15} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--text-secondary)' }} /><input className="deals-pipeline-search" aria-label="Search deals" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search deals..." style={{ ...input, paddingLeft: 32, width: 210 }} /></div><div style={{ position: 'relative' }}>{!isGeneric && <button type="button" title="Deal settings" aria-label="Deal settings" style={iconButton} onClick={() => setSettingsOpen((value) => !value)}><Settings size={16} /></button>}{settingsOpen && <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 50, width: 220, padding: 6, border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', boxShadow: '0 12px 30px rgba(15,23,42,.15)' }}><button type="button" role="menuitem" style={settingsItem} onClick={() => { setSettingsOpen(false); setShowCardCustomizer(true); }}>Customize deal cards</button></div>}</div></section>
+    {datePreset === 'custom' && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '-8px 0 14px', color: 'var(--text-secondary)', fontSize: 12 }}><label style={control}><span>From</span><input type="date" aria-label="Created from" value={dateFrom} max={dateTo || undefined} onChange={(event) => { setDatePreset('custom'); setSearchParams(setDateRangeParams(searchParams, { from: event.target.value, to: dateTo }), { replace: true }); }} style={{ ...input, width: 150 }} /></label><label style={control}><span>To</span><input type="date" aria-label="Created to" value={dateTo} min={dateFrom || undefined} onChange={(event) => { setDatePreset('custom'); setSearchParams(setDateRangeParams(searchParams, { from: dateFrom, to: event.target.value }), { replace: true }); }} style={{ ...input, width: 150 }} /></label></div>}
     {(dateFrom || dateTo) && (
       <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 14px', color: 'var(--text-secondary)', fontSize: 13 }}>
         Created {dateFrom || 'any time'} to {dateTo || 'today'}

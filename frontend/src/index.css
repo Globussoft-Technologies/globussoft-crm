@@ -3123,6 +3123,14 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
   box-sizing: border-box;
 }
 
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .landing-pages-page .landing-pages-search.input-field {
+  padding-left: 2.75rem !important;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-forms-page .meeting-form-switcher > button {
+  padding: 11px 14px !important;
+}
+
 @media (max-width: 899px) {
   .travel-content-frame > * {
     max-width: none !important;
@@ -7667,6 +7675,87 @@ body[data-vertical="generic"]
 body[data-vertical="generic"] .cpq-deal-list {
   flex: 1 1 auto;
   padding-right: 0.25rem;
+}
+
+/* CPQ deal picker card styling. Keep the panel compact and scannable while
+   making each deal feel like a deliberate selectable surface. */
+body[data-vertical="generic"] .cpq-deal-panel {
+  padding: 1rem !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+  border-radius: 18px !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-color) 96%, white), var(--surface-color));
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header {
+  padding: 0.15rem 0.25rem 0.8rem;
+  margin-bottom: 0.7rem !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header h2 {
+  font-size: 0.95rem !important;
+  letter-spacing: -0.01em;
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header span {
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.72rem !important;
+  font-weight: 600;
+}
+
+body[data-vertical="generic"] .cpq-deal-list {
+  gap: 0.5rem !important;
+  padding: 0.1rem 0.15rem 0.35rem 0.1rem;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button {
+  min-height: 56px;
+  padding: 0.7rem 0.75rem !important;
+  border-radius: 12px !important;
+  background: color-mix(in srgb, var(--surface-color) 88%, var(--bg-color)) !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent) !important;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color)) !important;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > div:first-child {
+  min-width: 0;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > div:first-child > div:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > div:first-child > div:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 0.2rem;
+  font-size: 0.7rem !important;
+  line-height: 1.2;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0.25rem;
+  box-sizing: content-box;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
 }
 
 @media (max-width: 700px) {

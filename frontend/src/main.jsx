@@ -9,6 +9,7 @@ import './styles/generic-laptop-density.css'
 import './styles/wellness-laptop-density.css'
 import './styles/shared-laptop-typography.css'
 import './styles/viewport-density.css'
+import './styles/generic-global-scaling.css'
 // Travel has one scoped density contract. Keeping it last lets it normalize
 // legacy page-level dimensions without affecting Generic or Wellness CRM.
 import './styles/travel-global-scaling.css'

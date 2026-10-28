@@ -659,7 +659,7 @@ export default function LandingPages() {
   };
 
   return (
-    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.3s ease' }}>
+    <div className="landing-pages-page" style={{ padding: '1.5rem 0 0', width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.3s ease' }}>
       {pageReturnState && (
         <nav
           aria-label="Breadcrumb"
@@ -727,8 +727,8 @@ export default function LandingPages() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search landing pages"
                   aria-label="Search landing pages"
-                  className="input-field"
-                  style={{ width: '100%', paddingLeft: '2.1rem', paddingRight: searchQuery ? '2.2rem' : '0.9rem' }}
+                  className="input-field landing-pages-search"
+                  style={{ width: '100%', paddingLeft: '2.5rem', paddingRight: searchQuery ? '2.2rem' : '0.9rem' }}
                 />
                 {searchQuery && (
                   <button

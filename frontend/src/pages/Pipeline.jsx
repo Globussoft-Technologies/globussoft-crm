@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Briefcase, ChevronDown, Filter, GripVertical, List, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Briefcase, ChevronDown, Filter, GripVertical, List, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
@@ -18,8 +18,6 @@ export const KANBAN_COLUMN_MIN_WIDTH = 220;
 export const slugifyStageName = (name) => String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 const GENERIC_DEAL_TYPES_SETTING_KEY = 'generic.dealTypes';
 const DEFAULT_GENERIC_DEAL_TYPE = { name: 'New Business', isDefault: true, stages: [{ name: 'New Lead' }, { name: 'Contracted' }, { name: 'Negotiation' }, { name: 'Won' }, { name: 'Lost' }] };
-// Deal score generation is intentionally not exposed from pipeline cards.
-const generateDealScore = undefined;
 
 function parseGenericDealTypes(setting) {
   let parsed = setting?.value;
@@ -116,13 +114,13 @@ function FilterDropdown({ ariaLabel, value, options, onChange }) {
   return <span ref={dropdownRef} style={{ position: 'relative' }}><select aria-label={ariaLabel} tabIndex={-1} value={value} onChange={onChange} style={hiddenFilterSelect}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button type="button" aria-label={`${ariaLabel} selector`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} style={filterSelect}>{selected.label}<ChevronDown size={14} /></button>{open && <div role="listbox" aria-label={`${ariaLabel} options`} style={filterMenu} onMouseDown={(event) => event.stopPropagation()}>{options.map((option) => <button type="button" role="option" aria-selected={String(option.value) === String(value)} key={option.value} style={filterOption} onClick={() => { onChange({ target: { value: option.value } }); setOpen(false); }}>{option.label}</button>)}</div>}</span>;
 }
 
-function DealCard({ deal, stage, onOpen, onDragStart, onDelete, cardFields, locale, reportingCurrency }) {
+function DealCard({ deal, stage, onOpen, onDragStart, onDelete, onScore, cardFields, locale, reportingCurrency }) {
   const currentVertical = document.body?.dataset.vertical;
   const isGenericDeal = currentVertical !== 'wellness' && currentVertical !== 'travel';
   const displayName = isGenericDeal ? generatedDealName(deal) : (deal.title || 'Untitled deal');
   const hideProbability = document.body?.dataset.vertical === 'generic';
   return <article className="deals-pipeline-card" draggable onDragStart={(event) => onDragStart(event, deal)} onClick={() => onOpen(deal)} style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderLeft: `3px solid ${stage.color}`, borderRadius: 9, padding: 14, cursor: 'grab', alignSelf: 'start', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
-    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><GripVertical size={15} style={{ color: 'var(--text-secondary)', marginTop: 2, flexShrink: 0 }} aria-hidden="true" /><div style={{ minWidth: 0, flex: 1 }}><h3 className="deals-pipeline-card-title" style={{ margin: 0, fontSize: 13, lineHeight: 1.35, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{displayName}</h3>{cardFields.contact && <p className="deals-pipeline-card-contact" style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{dealContact(deal)}</p>}</div><button type="button" onClick={(event) => { event.stopPropagation(); onDelete(deal); }} aria-label={`Delete deal ${displayName}`} style={iconButton}><Trash2 size={14} /></button></div>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><GripVertical size={15} style={{ color: 'var(--text-secondary)', marginTop: 2, flexShrink: 0 }} aria-hidden="true" /><div style={{ minWidth: 0, flex: 1 }}><h3 className="deals-pipeline-card-title" style={{ margin: 0, fontSize: 13, lineHeight: 1.35, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{displayName}</h3>{cardFields.contact && <p className="deals-pipeline-card-contact" style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{dealContact(deal)}</p>}</div><div style={{ display: 'flex', gap: 5 }}><button type="button" onClick={(event) => { event.stopPropagation(); onScore(deal); }} aria-label={`Generate deal score for ${displayName}`} title="Generate deal score" style={iconButton}><Sparkles size={14} /></button><button type="button" onClick={(event) => { event.stopPropagation(); onDelete(deal); }} aria-label={`Delete deal ${displayName}`} style={iconButton}><Trash2 size={14} /></button></div></div>
     {(cardFields.amount || (cardFields.probability && !hideProbability)) && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 14, alignItems: 'center' }}>{cardFields.amount && <strong className="deals-pipeline-card-amount" style={{ fontSize: 13, color: 'var(--text-primary)' }}>{formatMoney(deal.amount || 0, { currency: deal.currency || reportingCurrency })} {deal.currency || reportingCurrency}</strong>}{cardFields.probability && !hideProbability && <span className="deals-pipeline-card-probability" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{Number(deal.probability ?? 0)}%</span>}</div>}
     {(cardFields.owner || cardFields.expectedClose) && <div className="deals-pipeline-card-footer" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 11, paddingTop: 10, borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)' }}>{cardFields.owner && <span>{ownerName(deal)}</span>}{cardFields.expectedClose && <span>{dateLabel(deal.expectedClose, locale)}</span>}</div>}
   </article>;
@@ -147,7 +145,7 @@ export default function Pipeline() {
   });
   const [deals, setDeals] = useState([]); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [dealTypes, setDealTypes] = useState([]);
   const [staff, setStaff] = useState([]); const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [view, setView] = useState(() => { try { return isGeneric ? 'list' : (localStorage.getItem(viewKey) === 'list' ? 'list' : 'kanban'); } catch { return isGeneric ? 'list' : 'kanban'; } }); const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [view, setView] = useState(() => { try { return localStorage.getItem(viewKey) === 'list' ? 'list' : 'kanban'; } catch { return 'kanban'; } }); const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(50); const [total, setTotal] = useState(0); const [totalPages, setTotalPages] = useState(1);
   const [pipelineMenuOpen, setPipelineMenuOpen] = useState(false);
   const pipelineMenuRef = useRef(null);
@@ -290,6 +288,17 @@ export default function Pipeline() {
     if (await load()) notify.success('Deals refreshed');
   };
 
+  const generateDealScore = async (deal) => {
+    try {
+      const result = await fetchApi(`/api/ai_scoring/score/${deal.id}`);
+      const probability = Number(result?.probability ?? result?.score);
+      setDeals((current) => current.map((item) => item.id === deal.id && Number.isFinite(probability) ? { ...item, probability } : item));
+      notify.success('Deal score updated');
+    } catch {
+      notify.error('Unable to generate deal score');
+    }
+  };
+
   useEffect(() => {
     if (isGeneric || pipelineSelectionResolvedRef.current || pipelines.length === 0) return;
     pipelineSelectionResolvedRef.current = true;
@@ -330,7 +339,7 @@ export default function Pipeline() {
       allStages.push(...normalizePipelineStages(DEFAULT_GENERIC_DEAL_TYPE.stages));
     }
     const known = new Set(allStages.map((stage) => stage.id));
-    for (const item of isGeneric && !dealType ? [...visibleDeals, ...(stats?.byStage || [])] : []) {
+    for (const item of isGeneric ? [...visibleDeals, ...(stats?.byStage || [])] : []) {
       const id = stageIdForDeal(item, effectiveStages);
       if (id && !known.has(id)) {
         known.add(id);

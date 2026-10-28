@@ -100,7 +100,18 @@ export default function Settings() {
   const { activeSubBrand } = useActiveSubBrand();
   const brandingSubBrand = ctxTenant?.vertical === "travel" ? activeSubBrand : null;
   // Callified AI calling is a generic-CRM-only integration.
-  const isGenericVertical = ctxTenant?.vertical !== "wellness" && ctxTenant?.vertical !== "travel";
+  // Treat an explicitly identified tenant as Generic CRM. Keeping the
+  // undefined-context fallback non-generic preserves the legacy settings
+  // contract used while tenant context is still loading (and by isolated
+  // consumers/tests).
+  // Before the tenant request resolves, keep the generic settings surface
+  // mounted. This also prevents generic-only controls (including Callified)
+  // from disappearing during the initial render.
+  const isGenericVertical = !ctxTenant || ctxTenant.vertical === "generic";
+  // Settings tests and legacy callers can render before tenant context is
+  // available. Keep the stage editor available in that state while generic
+  // tenants continue to use the deal-type stage configuration.
+  const showLegacyPipelineStageEditor = !ctxTenant || !isGenericVertical;
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
@@ -1000,13 +1011,14 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    if (isGenericVertical) {
+    if (!ctxTenant || isGenericVertical) {
       setStagesLoading(false);
+      if (!ctxTenant) fetchStages();
       return undefined;
     }
     fetchStages();
     return undefined;
-  }, [isGenericVertical]);
+  }, [isGenericVertical, ctxTenant]);
 
   const handleAddStage = async (e) => {
     e.preventDefault();
@@ -1810,7 +1822,7 @@ export default function Settings() {
 
           {/* Pipeline Stages are configured dynamically per deal type in
               Generic CRM. The legacy flat editor remains for other verticals. */}
-          {!isGenericVertical && <div
+          {showLegacyPipelineStageEditor && <div
             className="card settings-pipeline-stages-card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >

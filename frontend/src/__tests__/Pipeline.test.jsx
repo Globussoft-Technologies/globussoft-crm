@@ -112,6 +112,19 @@ describe('Deals and Pipelines page', () => {
     expect(await screen.findByText('Legacy proposal deal')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'proposal' })).toBeInTheDocument();
   });
+  it('maps legacy closed stage aliases into the configured Won and Lost columns', async () => {
+    mockApi({
+      deals: [
+        { ...DEALS[1], stage: 'closed-won' },
+        { ...DEALS[2], stage: 'closed-lost' },
+      ],
+    });
+    renderPipeline();
+    expect(await screen.findByRole('heading', { name: 'Won' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Lost' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'closed-won' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'closed-lost' })).not.toBeInTheDocument();
+  });
   it('defaults to All time for deals and totals', async () => {
     renderPipeline();
     await waitFor(() => {

@@ -283,17 +283,16 @@ export default function Reports() {
               configuredStageMap.set(key, { name: stageName, value: 0 });
             }
           });
-          const includeUnconfiguredStages = !dealType;
           const stageData = configuredStageMap.size
             ? [
                 ...Array.from(configuredStageMap.entries()).map(([key, stage]) => {
                   return merged.get(key) || stage;
                 }),
-                ...(includeUnconfiguredStages
-                  ? [...merged.entries()]
-                    .filter(([key]) => !configuredStageMap.has(key))
-                    .map(([, value]) => value)
-                  : []),
+                // A selected type can still have deals in retired stages.
+                // Preserve those API rows so charts and totals remain complete.
+                ...[...merged.entries()]
+                  .filter(([key]) => !configuredStageMap.has(key))
+                  .map(([, value]) => value),
               ]
             : [...merged.values()];
           setData(configuredStageMap.size ? stageData : stageData.sort((a, b) => {

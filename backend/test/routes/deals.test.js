@@ -176,6 +176,30 @@ beforeEach(() => {
 // ─── GET / — list with tenant + soft-delete + USER-role scoping ─────
 
 describe('GET /api/deals — list with tenant + soft-delete + role scoping', () => {
+  test.each(['/api/deals?dealType=Renewal', '/api/deals/stats?dealType=Renewal'])(
+    'keeps legacy stages visible for a selected deal type in %s', async (url) => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+      prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+        { id: 'new-business', name: 'New Business', isDefault: true, stages: [{ name: 'New Lead' }] },
+        { id: 'renewal', name: 'Renewal', stages: [{ name: 'Review' }, { name: 'Won' }] },
+      ]) });
+      const legacy = { id: 81, title: 'Existing renewal', dealType: 'Renewal', stage: 'retired-stage',
+        amount: 125, currency: 'USD', tenantId: 1, contact: null, owner: null };
+      prisma.deal.findMany.mockImplementation(async ({ where }) =>
+        where.AND?.some(condition => condition.stage?.in && !condition.stage.in.includes(legacy.stage)) ? [] : [legacy]);
+      const response = await request(makeApp()).get(url);
+      expect(response.status).toBe(200);
+      const where = prisma.deal.findMany.mock.calls[0][0].where;
+      expect(where).toMatchObject({ tenantId: 1, dealType: 'Renewal' });
+      expect(JSON.stringify(where)).not.toContain('"stage"');
+      if (url.includes('/stats')) {
+        expect(response.body.totalDeals).toBe(1);
+        expect(response.body.totalValue).toBe(125);
+        expect(response.body.byStage).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'retired-stage', count: 1 })]));
+      } else expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: 81, stage: 'retired-stage' })]));
+    },
+  );
+
   test.each(['/api/deals?dealType=Sales', '/api/deals/stats?dealType=Sales'])('includes untyped deals for the renamed New Business type in %s', async (url) => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
       { id: 'new-business', name: 'Sales', isDefault: false, stages: [{ name: 'Review' }] },

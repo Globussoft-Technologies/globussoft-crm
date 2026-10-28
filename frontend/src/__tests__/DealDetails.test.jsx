@@ -54,6 +54,53 @@ describe('<DealDetails />', () => {
     expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42');
   });
 
+  it.each(['missing', 'failed', 'invalid', 'pending'])('does not save a currency change with %s rates', async (scenario) => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/deals/42') return Promise.resolve({ ...deal, amount: 8300, currency: 'INR' });
+      if (url === '/api/currencies') {
+        if (scenario === 'failed') return Promise.reject(new Error('Currency request failed'));
+        if (scenario === 'pending') return new Promise(() => {});
+        return Promise.resolve(scenario === 'invalid' ? [{ code: 'INR', exchangeRate: 0 }, { code: 'USD', exchangeRate: 1 }] : []);
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+    const control = await screen.findByRole('combobox', { name: 'Deal currency' });
+    fireEvent.change(control, { target: { value: 'USD' } });
+    await waitFor(() => expect(control).not.toBeDisabled());
+    expect(control).toHaveValue('INR');
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+  });
+
+  it('saves a correctly converted deal currency when rates are available', async () => {
+    const rates = [{ code: 'INR', exchangeRate: 83 }, { code: 'USD', exchangeRate: 1 }];
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/deals/42') return Promise.resolve({ ...deal, amount: 8300, currency: 'INR', ...(options?.method === 'PUT' ? JSON.parse(options.body) : {}) });
+      if (url === '/api/currencies') return Promise.resolve(rates);
+      return Promise.resolve([]);
+    });
+    renderPage();
+    const control = await screen.findByRole('combobox', { name: 'Deal currency' });
+    await act(async () => {});
+    fireEvent.change(control, { target: { value: 'USD' } });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42', {
+      method: 'PUT', body: JSON.stringify({ amount: 100, currency: 'USD' }),
+    }));
+  });
+
+  it.each(['amount', 'currency'])('blocks the inline %s editor from saving without exchange rates', async (field) => {
+    fetchApiMock.mockImplementation((url) => url === '/api/deals/42'
+      ? Promise.resolve({ ...deal, amount: 8300, currency: 'INR' }) : Promise.resolve([]));
+    renderPage();
+    await screen.findByRole('heading', { name: deal.title });
+    act(() => window.dispatchEvent(new CustomEvent('deal-details-edit', { detail: { field, anchor: { bottom: 100, left: 10 } } })));
+    const dialog = screen.getByRole('dialog', { name: field === 'amount' ? 'Edit Amount' : 'Edit Currency' });
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'USD' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/Exchange rates unavailable/);
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+  });
+
   it('loads every stage from the selected Generic CRM pipeline and highlights only the deal stage', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/deals/42') return Promise.resolve({ ...deal, pipelineId: 7 });

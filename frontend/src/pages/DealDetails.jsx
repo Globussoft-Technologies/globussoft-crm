@@ -4,7 +4,7 @@ import { ArrowLeft, BriefcaseBusiness, FileText, Pencil, Settings2, NotebookPen,
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
-import { convertCurrency } from '../utils/currency';
+import { convertCurrencyStrict } from '../utils/currency';
 import { generatedDealName } from '../utils/dealDisplay';
 import { formatDate, formatDateMedium, formatDateTime } from '../utils/date';
 import { useNotify } from '../utils/notify';
@@ -207,13 +207,13 @@ function InlineDealEditor({ deal, stages, pipelines, genericDealTypes, isGeneric
     return () => { active = false; };
   }, [deal.contact, field]);
   useEffect(() => {
-    if (field !== 'amount') return undefined;
+    if (field !== 'amount' && !(field === 'currency' && isGeneric)) return undefined;
     let active = true;
     fetchApi('/api/currencies', { silent: true })
       .then((result) => { if (active) setCurrencyOptions(Array.isArray(result) ? result : (result?.data || [])); })
       .catch(() => { if (active) setCurrencyOptions([]); });
     return () => { active = false; };
-  }, [field]);
+  }, [field, isGeneric]);
   const submit = async (event) => {
     event.preventDefault();
     if (field === 'amount' && (value === '' || Number(value) < 0)) { setError('Enter a valid amount.'); return; }
@@ -225,11 +225,12 @@ function InlineDealEditor({ deal, stages, pipelines, genericDealTypes, isGeneric
         const updatedContact = await fetchApi(`/api/contacts/${deal.contactId}/assign`, { method: 'PUT', body: JSON.stringify({ assignedToId: value ? Number(value) : null }) });
         onSaved({ contact: { ...deal.contact, ...updatedContact } }); onClose(); setField(''); return;
       }
-      const body = { [field]: field === 'amount' && isGeneric ? convertCurrency(Number(value), deal.currency, currencyValue, currencyOptions) : field === 'amount' ? Number(value) : field === 'probability' ? Number(value) : ['contactId', 'pipelineId'].includes(field) ? (value ? Number(value) : null) : ['expectedClose', 'lostReason'].includes(field) ? (value || null) : field === 'stage' ? value : (value.trim ? value.trim() : value) };
+      const body = { [field]: field === 'amount' && isGeneric ? convertCurrencyStrict(Number(value), deal.currency, currencyValue, currencyOptions) : field === 'amount' ? Number(value) : field === 'probability' ? Number(value) : ['contactId', 'pipelineId'].includes(field) ? (value ? Number(value) : null) : ['expectedClose', 'lostReason'].includes(field) ? (value || null) : field === 'stage' ? value : (value.trim ? value.trim() : value) };
       if (field === 'amount' && isGeneric) body.currency = currencyValue;
+      if (field === 'currency' && isGeneric) body.amount = convertCurrencyStrict(deal.amount, deal.currency, value, currencyOptions);
       const updated = await fetchApi(`/api/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify(body) });
       onSaved(updated); onClose(); setField('');
-    } catch (err) { setError(err?.serverMessage || err?.body?.error || 'Unable to save this field.'); } finally { setSaving(false); }
+    } catch (err) { setError(err?.serverMessage || err?.body?.error || err?.message || 'Unable to save this field.'); } finally { setSaving(false); }
   };
   if (!field || !anchor) return null;
   const options = field === 'stage' ? stages : field === 'contactId' ? contactOptions : field === 'assignedToId' ? staffOptions : field === 'dealType' ? genericDealTypes.map((item) => ({ id: item.name, name: item.name })) : field === 'pipelineId' ? pipelines : [];
@@ -664,14 +665,14 @@ function DealCurrencyControl({ deal, onSaved, compact = false }) {
   const changeCurrency = async (event) => {
     const nextCurrency = event.target.value;
     if (!nextCurrency || nextCurrency === deal.currency || saving) return;
-    const convertedAmount = convertCurrency(deal.amount, deal.currency, nextCurrency, currencies);
     setSaving(true);
     try {
+      const convertedAmount = convertCurrencyStrict(deal.amount, deal.currency, nextCurrency, currencies);
       const updated = await fetchApi(`/api/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ amount: convertedAmount, currency: nextCurrency }) });
       onSaved(updated);
       notify.success(`Deal amount converted to ${nextCurrency}.`);
     } catch (error) {
-      notify.error(error?.body?.error || 'Unable to convert the deal amount.');
+      notify.error(error?.body?.error || error?.message || 'Unable to convert the deal amount.');
     } finally {
       setSaving(false);
     }

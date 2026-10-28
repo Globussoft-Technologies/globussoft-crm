@@ -440,6 +440,9 @@ function ImportModal({
 }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
+  // Retain all parsed values for option inference; the ten-row preview is
+  // presentation only and must not define the imported field's option set.
+  const importRowsRef = useRef([]);
   const [file, setFile] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [previewHeaders, setPreviewHeaders] = useState([]);
@@ -641,6 +644,7 @@ function ImportModal({
   };
 
   const handleFile = async (f) => {
+    importRowsRef.current = [];
     setFile(f);
     setResult(null);
     setJobId(null);
@@ -666,10 +670,17 @@ function ImportModal({
         const workbook = XLSX.read(await f.arrayBuffer(), { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
-        const headers = (rows[0] || []).map((header) => String(header).trim()).filter(Boolean);
+        const rawHeaders = (rows[0] || []).map((header) => String(header).trim());
+        const headers = rawHeaders.filter(Boolean);
+        // Use header-keyed records for both CSV and XLSX. Dropping blank
+        // headers must never shift the positions of the remaining values.
+        const records = rows.slice(1).map((cells) => Object.fromEntries(
+          rawHeaders.flatMap((header, index) => header ? [[header, cells[index] ?? ""]] : []),
+        ));
+        importRowsRef.current = records;
         setPreviewHeaders(headers);
         initializeMapping(headers);
-        setPreviewRows(rows.slice(1, 11));
+        setPreviewRows(records.slice(0, 10));
       } catch (e) {
         setPreviewError(e.message || "Failed to read Excel file");
       }
@@ -678,6 +689,7 @@ function ImportModal({
     try {
       const text = await f.text();
       const { headers, rows } = parseCsvClient(text);
+      importRowsRef.current = rows;
       // Blank spreadsheet columns have no stable database-field identity.
       // Generic CRM silently ignores them instead of surfacing a misleading
       // "label is required" error during automatic field creation.
@@ -738,14 +750,16 @@ function ImportModal({
               isRequired: false,
             };
             if (optionFieldTypes.has(fieldType)) {
-              const columnIndex = previewHeaders.indexOf(header);
               const options = [...new Set(
-                previewRows
-                  .map((row) => String(Array.isArray(row) ? row[columnIndex] ?? "" : row?.[header] ?? "").trim())
+                importRowsRef.current
+                  .map((row) => String(row?.[header] ?? "").trim())
                   .filter(Boolean),
               )];
               if (!options.length) {
                 throw new Error(`Add at least one option for the ${header} field before importing.`);
+              }
+              if (options.length > 50) {
+                throw new Error(`The ${header} column has more than 50 options. Choose a text field or reduce its distinct values before importing.`);
               }
               payload.options = options;
             }

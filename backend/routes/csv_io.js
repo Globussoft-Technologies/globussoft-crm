@@ -79,34 +79,38 @@ async function writeImportedCustomFields(contactId, tenantId, customFields, defi
 
 async function findContactByImportedExternalId(tenantId, customFields, definitions) {
   const externalIdKeys = new Set(["id", "external_id", "lead_id", "contact_id"]);
-  const definition = definitions.find((item) => externalIdKeys.has(item.fieldKey));
-  if (!definition) return null;
-
-  const rawValue = customFields?.[definition.fieldKey];
-  const value = String(rawValue ?? "").trim();
-  if (!value) return null;
-
-  const typedWhere = definition.fieldType === "number" && Number.isFinite(Number(value))
-    ? { valueNumber: Number(value) }
-    : { valueText: value };
-  const matches = await prisma.leadCustomFieldValue.findMany({
-    where: {
-      tenantId,
-      fieldId: definition.id,
-      ...typedWhere,
-    },
-    select: {
-      contact: { select: { id: true, deletedAt: true } },
-    },
-    orderBy: { id: "asc" },
-    take: 2,
-  });
-  if (matches.length > 1) {
-    const error = new Error("ambiguous imported id: multiple contacts match");
-    error.code = "AMBIGUOUS_IMPORTED_ID";
-    throw error;
+  const matchedContacts = new Map();
+  for (const definition of definitions) {
+    if (!externalIdKeys.has(definition.fieldKey)) continue;
+    const value = String(customFields?.[definition.fieldKey] ?? "").trim();
+    if (!value) continue;
+    const typedWhere = definition.fieldType === "number" && Number.isFinite(Number(value))
+      ? { valueNumber: Number(value) }
+      : { valueText: value };
+    const matches = await prisma.leadCustomFieldValue.findMany({
+      where: {
+        tenantId,
+        fieldId: definition.id,
+        ...typedWhere,
+      },
+      select: {
+        contact: { select: { id: true, deletedAt: true } },
+      },
+      orderBy: { id: "asc" },
+      take: 2,
+    });
+    for (const match of matches) {
+      if (match.contact) matchedContacts.set(match.contact.id, match.contact);
+    }
+    // Check every populated identifier, not just the first definition. Never
+    // choose one lead when different identifiers resolve to different leads.
+    if (matchedContacts.size > 1) {
+      const error = new Error("ambiguous imported id: multiple contacts match");
+      error.code = "AMBIGUOUS_IMPORTED_ID";
+      throw error;
+    }
   }
-  return matches[0]?.contact || null;
+  return matchedContacts.values().next().value || null;
 }
 
 // Body parser for raw text/csv + text/plain bodies — Express's default

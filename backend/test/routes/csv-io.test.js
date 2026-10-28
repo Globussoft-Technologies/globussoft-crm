@@ -559,6 +559,43 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 
+  test.each(['blank first ID', 'unmatched first ID', 'same contact', 'conflicting contacts', 'ambiguous secondary ID'])(
+    'checks every populated external identifier: %s', async (scenario) => {
+      prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+        { id: 14, fieldKey: 'id', fieldType: 'number' },
+        { id: 15, fieldKey: 'external_id', fieldType: 'text' },
+      ]);
+      prisma.leadCustomFieldValue.findMany.mockImplementation(async ({ where }) => {
+        if (where.fieldId === 14) {
+          return scenario === 'unmatched first ID' ? [] : [{ contact: { id: 77, deletedAt: null } }];
+        }
+        return scenario === 'ambiguous secondary ID'
+          ? [{ contact: { id: 77, deletedAt: null } }, { contact: { id: 78, deletedAt: null } }]
+          : [{ contact: { id: scenario === 'conflicting contacts' ? 78 : 77, deletedAt: null } }];
+      });
+      prisma.contact.update.mockResolvedValue({ id: 77 });
+      const response = await request(makeApp())
+        .post('/api/csv/contacts/import.csv')
+        .field('mapping', JSON.stringify({ Id: 'id', 'External Id': 'external_id' }))
+        .attach('file', Buffer.from(`Id,External Id\n${scenario === 'blank first ID' ? '' : '100'},LEAD-1001\n`),
+          { filename: 'external-ids.csv', contentType: 'text/csv' });
+      const ambiguous = ['conflicting contacts', 'ambiguous secondary ID'].includes(scenario);
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ imported: 0, updated: ambiguous ? 0 : 1, skipped: ambiguous ? 1 : 0 });
+      expect(prisma.leadCustomFieldValue.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { tenantId: 1, fieldId: 15, valueText: 'LEAD-1001' },
+      }));
+      expect(prisma.contact.create).not.toHaveBeenCalled();
+      if (ambiguous) {
+        expect(response.body.errors[0].reason).toMatch(/ambiguous imported id/);
+        expect(prisma.contact.update).not.toHaveBeenCalled();
+        expect(prisma.leadCustomFieldValue.upsert).not.toHaveBeenCalled();
+      } else {
+        expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 77 } }));
+      }
+    },
+  );
+
   test('updates an existing email instead of hitting the tenant email unique constraint', async () => {
     prisma.contact.findFirst.mockResolvedValue({ id: 77 });
     prisma.contact.update.mockResolvedValue({ id: 77 });

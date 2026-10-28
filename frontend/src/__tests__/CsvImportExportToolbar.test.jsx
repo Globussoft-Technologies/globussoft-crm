@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
+import * as XLSX from "xlsx";
 
 const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
@@ -374,6 +375,62 @@ describe("CsvImportExportToolbar", () => {
       name: "name",
       Department: "department",
     });
+  });
+
+  it.each(['csv', 'xlsx'])("uses all %s rows and preserves blank-column alignment when creating dropdown options", async (format) => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (options?.method === 'POST') return Promise.resolve({ id: 44, fieldKey: 'tier', fieldType: 'dropdown' });
+      return Promise.resolve([]);
+    });
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ imported: 11, errors: [] }) });
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta
+      mappingFields={[{ fieldKey: 'name', label: 'Name', fieldType: 'text' }]}
+      endpoints={{ import: '/api/csv/contacts/import.csv' }} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    const rows = [['name', '', 'Tier'], ...Array.from({ length: 11 }, (_, index) =>
+      ['Asha Patel', 'ignored', index === 10 ? 'Silver' : 'Gold'])];
+    let file;
+    if (format === 'xlsx') {
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Leads');
+      const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+      file = new File([buffer], 'leads.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      Object.defineProperty(file, 'arrayBuffer', { value: async () => buffer });
+    } else {
+      const csv = rows.map(row => row.join(',')).join('\n');
+      file = new File([csv], 'leads.csv', { type: 'text/csv' });
+      Object.defineProperty(file, 'text', { value: async () => csv });
+    }
+    fireEvent.change(screen.getByLabelText('Select CSV file'), { target: { files: [file] } });
+    const type = await screen.findByRole('combobox', { name: 'Field type for Tier' });
+    expect(screen.queryByText('ignored')).not.toBeInTheDocument();
+    expect(screen.queryByText('Silver')).not.toBeInTheDocument(); // Outside the preview.
+    fireEvent.change(type, { target: { value: 'dropdown' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm import' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/lead-custom-fields', {
+      method: 'POST', body: JSON.stringify({ label: 'Tier', fieldType: 'dropdown', isRequired: false, options: ['Gold', 'Silver'] }),
+    }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/csv/contacts/import.csv', expect.anything()));
+    const payload = fetchMock.mock.calls.find(([url]) => url === '/api/csv/contacts/import.csv')[1].body;
+    expect(JSON.parse(payload.get('mapping'))).toEqual({ name: 'name', Tier: 'tier' });
+  });
+
+  it('rejects option sets over the API limit rather than silently dropping values', async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta
+      endpoints={{ import: '/api/csv/contacts/import.csv' }} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    const csv = 'Tier\n' + Array.from({ length: 51 }, (_, i) => 'Tier ' + i).join('\n');
+    const file = new File([csv], 'leads.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: async () => csv });
+    fireEvent.change(screen.getByLabelText('Select CSV file'), { target: { files: [file] } });
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Field type for Tier' }), { target: { value: 'dropdown' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm import' }));
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/more than 50 options/)));
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps required-column validation for non-Generic imports", async () => {

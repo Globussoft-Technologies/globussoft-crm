@@ -563,6 +563,23 @@ describe('<Reports /> — broad page surface', () => {
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', minWidth: '0px' });
   });
 
+  it('exports a chart PDF with the display currency rather than a default deal-detail report', async () => {
+    fetchApiMock.mockImplementation((url, opts) => url.startsWith('/api/currencies')
+      ? Promise.resolve([{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate: 83 }])
+      : defaultFetchImpl(url, opts));
+    render(<Reports />);
+    fireEvent.change(await screen.findByLabelText('Display currency'), { target: { value: 'INR' } });
+    fireEvent.click(screen.getByRole('button', { name: /PDF/i }));
+    await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([url]) => url.includes('/api/reports/export-pdf'));
+      expect(call).toBeTruthy();
+      const params = new URL(call[0], 'http://localhost').searchParams;
+      expect(params.get('type')).toBe('chart');
+      expect(params.get('metric')).toBe('revenue');
+      expect(params.get('currency')).toBe(screen.getByLabelText('Display currency').value);
+    });
+  });
+
   it('CSV export button triggers a /api/reports/export-csv fetch with Bearer token', async () => {
     render(<Reports />);
     // Wait for initial mount.
@@ -586,6 +603,7 @@ describe('<Reports /> — broad page surface', () => {
       // Chart-mode params: metric + groupBy on the URL.
       expect(fetchCall[0]).toContain('metric=revenue');
       expect(fetchCall[0]).toContain('groupBy=stage');
+      expect(fetchCall[0]).toContain('currency=');
     });
   });
 });

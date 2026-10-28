@@ -66,12 +66,10 @@ async function aggregateMoneyByCurrency(rows, groupBy, tenantId, requestedCurren
 }
 
 // ─── Dynamic BI Query Endpoint ───
-router.get("/query", async (req, res) => {
-  try {
+async function buildChartReport(req) {
     const { metric = "revenue", groupBy = "stage", startDate, endDate, dealType } = req.query;
-    const _tenantId = req.user.tenantId;
     const dateErr = validateDateRange(startDate, endDate);
-    if (dateErr) return res.status(dateErr.status).json(dateErr);
+    if (dateErr) throw Object.assign(new Error(dateErr.error), dateErr);
     const dealTypeWhere = await reportDealTypeWhere(prisma, req.user.tenantId, dealType);
 
     if (metric === "revenue") {
@@ -82,7 +80,7 @@ router.get("/query", async (req, res) => {
       });
       const formatted = (await aggregateMoneyByCurrency(data, groupBy, req.user.tenantId, req.query.currency))
         .filter((row) => row.value > 0).map(({ name, value }) => ({ name, value }));
-      return res.json(formatted);
+      return formatted;
     }
 
     if (metric === "count") {
@@ -95,7 +93,7 @@ router.get("/query", async (req, res) => {
         name: String(d[groupBy] || 'Unknown').toUpperCase(),
         value: d._count.id
       }));
-      return res.json(formatted);
+      return formatted;
     }
 
     if (metric === "win_rate") {
@@ -103,11 +101,11 @@ router.get("/query", async (req, res) => {
       const total = await prisma.deal.count({ where: baseWhere });
       const won = await prisma.deal.count({ where: { ...baseWhere, stage: 'won' } });
       const lost = await prisma.deal.count({ where: { ...baseWhere, stage: 'lost' } });
-      return res.json([
+      return [
         { name: 'Won', value: won },
         { name: 'Lost', value: lost },
         { name: 'In Progress', value: total - won - lost },
-      ]);
+      ];
     }
 
     if (metric === "tasks") {
@@ -117,7 +115,7 @@ router.get("/query", async (req, res) => {
         _count: { id: true }
       });
       const formatted = data.map(d => ({ name: d.status, value: d._count.id }));
-      return res.json(formatted);
+      return formatted;
     }
 
     if (metric === "contacts_by_source") {
@@ -127,7 +125,7 @@ router.get("/query", async (req, res) => {
         _count: { id: true }
       });
       const formatted = data.map(d => ({ name: d.source || 'Unknown', value: d._count.id }));
-      return res.json(formatted);
+      return formatted;
     }
 
     if (metric === "contacts_by_status") {
@@ -137,7 +135,7 @@ router.get("/query", async (req, res) => {
         _count: { id: true }
       });
       const formatted = data.map(d => ({ name: d.status, value: d._count.id }));
-      return res.json(formatted);
+      return formatted;
     }
 
     if (metric === "invoices") {
@@ -152,7 +150,7 @@ router.get("/query", async (req, res) => {
         _count: { id: true }
       });
       const formatted = await aggregateMoneyByCurrency(data, 'status', req.user.tenantId, req.query.currency);
-      return res.json(formatted);
+      return formatted;
     }
 
     if (metric === "expenses") {
@@ -163,10 +161,15 @@ router.get("/query", async (req, res) => {
         _count: { id: true }
       });
       const formatted = data.map(d => ({ name: d.category, value: d._sum.amount || 0, count: d._count.id }));
-      return res.json(formatted);
+      return formatted;
     }
 
-    res.status(400).json({ error: "Unsupported metric requested by BI Engine." });
+    throw Object.assign(new Error("Unsupported metric requested by BI Engine."), { status: 400 });
+}
+
+router.get("/query", async (req, res) => {
+  try {
+    res.json(await buildChartReport(req));
   } catch (err) {
     console.error("[BI Engine Error]:", err);
     res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to generate dynamic report payload.", ...(err.code ? { code: err.code } : {}) });
@@ -366,7 +369,7 @@ router.get("/detailed/:type", async (req, res) => {
 // ─── CSV Export ───
 router.get("/export-csv", async (req, res) => {
   try {
-    const { metric = "revenue", groupBy = "stage", startDate, endDate, type } = req.query;
+    const { startDate, endDate, type } = req.query;
     const tenantId = req.user.tenantId;
     const baseWhere = buildWhere(req, startDate, endDate);
 
@@ -423,17 +426,7 @@ router.get("/export-csv", async (req, res) => {
       return res.send(csv);
     }
 
-    let formatted = [];
-
-    if (metric === "revenue") {
-      const data = await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _sum: { amount: true } });
-      formatted = data.map(d => ({ name: String(d[groupBy]).toUpperCase(), value: d._sum.amount || 0 })).filter(d => d.value > 0);
-    } else if (metric === "count") {
-      const data = await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _count: { id: true } });
-      formatted = data.map(d => ({ name: String(d[groupBy]).toUpperCase(), value: d._count.id }));
-    } else {
-      return res.status(400).json({ error: "Unsupported metric for CSV export." });
-    }
+    const formatted = await buildChartReport(req);
 
     let csv = "Name,Value\n";
     formatted.forEach(row => {
@@ -445,7 +438,7 @@ router.get("/export-csv", async (req, res) => {
     res.send(csv);
   } catch (err) {
     console.error("[CSV Export Error]:", err);
-    res.status(500).json({ error: "Failed to export CSV report." });
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to export CSV report.", ...(err.code ? { code: err.code } : {}) });
   }
 });
 
@@ -503,7 +496,8 @@ function drawReportTable(doc, columns, rows, opts = {}) {
 // ─── PDF Export ───
 router.get("/export-pdf", async (req, res) => {
   try {
-    const { type = "deals", startDate, endDate, metric = "revenue", groupBy = "stage" } = req.query;
+    const { startDate, endDate, metric = "revenue", groupBy = "stage" } = req.query;
+    const type = req.query.type || (req.query.metric ? "chart" : "deals");
     const tenantId = req.user.tenantId;
     const baseWhere = buildWhere(req, startDate, endDate);
 
@@ -512,7 +506,11 @@ router.get("/export-pdf", async (req, res) => {
       where: { id: tenantId },
       select: { defaultCurrency: true, locale: true },
     });
-    const currency = tenant?.defaultCurrency || "USD";
+    const isChart = !['deals', 'contacts', 'tasks', 'agent-performance'].includes(type);
+    // Resolve/validate before streaming PDF headers, so a missing exchange
+    // rate returns a normal error instead of a partial PDF attachment.
+    const chartData = isChart ? await buildChartReport(req) : null;
+    const currency = isChart && ['revenue', 'invoices'].includes(metric) ? String(req.query.currency || tenant?.defaultCurrency || "USD").toUpperCase() : tenant?.defaultCurrency || "USD";
     const locale = tenant?.locale || undefined;
 
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -622,26 +620,23 @@ router.get("/export-pdf", async (req, res) => {
         { header: 'Contact', width: 90 },
       ], rows, { startY: doc.y });
     } else {
-      const data = metric === "revenue"
-        ? await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _sum: { amount: true } })
-        : await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _count: { id: true } });
-
-      doc.fontSize(14).fillColor('#000').text(`${metric === 'revenue' ? 'Revenue' : 'Deal Count'} by ${groupBy}`, { underline: true });
+      const isMoney = ['revenue', 'invoices', 'expenses'].includes(metric);
+      doc.fontSize(14).fillColor('#000').text(`${metric} by ${groupBy}${isMoney ? ` (${currency})` : ''}`, { underline: true });
       doc.moveDown(0.5);
-      const rows = data.map((d) => [
-        String(d[groupBy] || 'Unknown').toUpperCase(),
-        metric === 'revenue' ? formatMoney(d._sum.amount || 0, currency, locale) : String(d._count.id),
+      const rows = chartData.map((d) => [
+        d.name,
+        isMoney ? formatMoney(d.value, currency, locale) : String(d.value),
       ]);
       drawReportTable(doc, [
         { header: String(groupBy).toUpperCase(), width: 300 },
-        { header: metric === 'revenue' ? 'Revenue' : 'Count', width: 195, align: 'right' },
+        { header: isMoney ? `Amount (${currency})` : 'Count', width: 195, align: 'right' },
       ], rows, { startY: doc.y });
     }
 
     doc.end();
   } catch (err) {
     console.error("[PDF Export Error]:", err);
-    res.status(500).json({ error: "Failed to generate PDF report." });
+    if (!res.headersSent) res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to generate PDF report.", ...(err.code ? { code: err.code } : {}) });
   }
 });
 

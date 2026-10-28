@@ -396,7 +396,7 @@ export default function Reports() {
     const endpoint = format === 'pdf' ? 'export-pdf' : 'export-csv';
     const params = viewMode === 'table'
       ? `type=${detailType}${dateParams()}`
-      : `metric=${metric}&groupBy=${groupBy}${needsGroupBy && dealType ? `&dealType=${encodeURIComponent(dealType)}` : ''}${dateParams()}`;
+      : `${format === 'pdf' ? 'type=chart&' : ''}metric=${metric}&groupBy=${groupBy}&currency=${encodeURIComponent(displayCurrency)}${needsGroupBy && dealType ? `&dealType=${encodeURIComponent(dealType)}` : ''}${dateParams()}`;
     fetch(`/api/reports/${endpoint}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => {
         if (!res.ok) throw new Error(`${format.toUpperCase()} export failed`);

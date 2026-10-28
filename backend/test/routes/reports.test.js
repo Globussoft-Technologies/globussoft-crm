@@ -503,6 +503,41 @@ describe('GET /detailed/:type — raw table dumps', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /export-csv — CSV blob streaming', () => {
+  test('matches the chart conversion and renamed legacy deal-type filter', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ id: 'new-business', name: 'Sales' }]) });
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate: 83 }]);
+    prisma.deal.groupBy.mockResolvedValue([
+      { stage: 'won', currency: 'USD', _sum: { amount: 100 } },
+      { stage: 'won', currency: 'INR', _sum: { amount: 8300 } },
+    ]);
+    const params = 'metric=revenue&groupBy=stage&currency=INR&dealType=Sales';
+    const chart = await request(makeApp()).get(`/api/reports/query?${params}`);
+    const csv = await request(makeApp()).get(`/api/reports/export-csv?${params}`);
+    expect(csv.status).toBe(200);
+    expect(csv.text).toBe(`Name,Value\n"WON",${chart.body[0].value}\n`);
+    expect(chart.body[0].value).toBe(16600);
+    expect(prisma.deal.groupBy).toHaveBeenLastCalledWith(expect.objectContaining({
+      by: ['stage', 'currency'], where: { tenantId: 1, OR: [{ dealType: 'Sales' }, { dealType: null }] },
+    }));
+  });
+
+  test('applies the deal-type filter to count exports too', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    prisma.deal.groupBy.mockResolvedValue([{ stage: 'won', _count: { id: 2 } }]);
+    const csv = await request(makeApp()).get('/api/reports/export-csv?metric=count&groupBy=stage&dealType=Renewal');
+    expect(csv.status).toBe(200);
+    expect(csv.text).toContain('"WON",2');
+    expect(prisma.deal.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 1, dealType: 'Renewal' } }));
+  });
+
+  test.each(['export-csv', 'export-pdf'])('%s returns a normal error when exchange rates are missing', async (endpoint) => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }]);
+    prisma.deal.groupBy.mockResolvedValue([{ stage: 'won', currency: 'INR', _sum: { amount: 8300 } }]);
+    const response = await request(makeApp()).get(`/api/reports/${endpoint}?metric=revenue&currency=USD`);
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('MISSING_EXCHANGE_RATE');
+    expect(response.headers['content-type']).toMatch(/application\/json/);
+  });
   test('type=deals — emits text/csv, attachment headers, escaped quotes, header row', async () => {
     prisma.deal.findMany.mockResolvedValue([
       {
@@ -563,6 +598,26 @@ describe('GET /export-csv — CSV blob streaming', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /export-pdf — PDF blob streaming', () => {
+  test('renders converted chart totals using the selected currency and deal-type filter', async () => {
+    const PDFDocument = requireCJS('pdfkit');
+    const textSpy = vi.spyOn(PDFDocument.prototype, 'text');
+    try {
+      prisma.tenantSetting.findUnique.mockResolvedValue(null);
+      prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate: 83 }]);
+      prisma.deal.groupBy.mockResolvedValue([
+        { stage: 'won', currency: 'USD', _sum: { amount: 100 } },
+        { stage: 'won', currency: 'INR', _sum: { amount: 8300 } },
+      ]);
+      const response = await request(makeApp()).get('/api/reports/export-pdf?type=chart&metric=revenue&groupBy=stage&currency=USD&dealType=Renewal');
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toMatch(/application\/pdf/);
+      expect(textSpy.mock.calls.some(([value]) => value === '$200.00')).toBe(true);
+      expect(prisma.deal.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 1, dealType: 'Renewal' }, by: ['stage', 'currency'] }));
+      expect(prisma.deal.findMany).not.toHaveBeenCalled();
+    } finally {
+      textSpy.mockRestore();
+    }
+  });
   test('emits application/pdf + pulls tenant currency for INR/locale rendering (#286/#330)', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR', locale: 'en-IN' });
     prisma.deal.findMany.mockResolvedValue([

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { lazy } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Layout from '../components/Layout';
@@ -55,7 +56,7 @@ function renderLayout(args = {}) {
       }}>
         <Routes>
           <Route path="/" element={withSubscription ? <SubscriptionGate><Layout /></SubscriptionGate> : <Layout />}>
-            <Route index element={<div data-testid="outlet">HOME</div>} />
+            <Route index element={args.outlet || <div data-testid="outlet">HOME</div>} />
           </Route>
         </Routes>
       </AuthContext.Provider>
@@ -109,7 +110,16 @@ function renderLayoutAtRoute(initialRoute, args = {}) {
 }
 
 describe('Layout', () => {
+  it('keeps navigation mounted while a lazy route is loading', async () => {
+    const PendingPage = lazy(() => new Promise(() => {}));
+    renderLayout({ outlet: <PendingPage /> });
+    expect(await screen.findByText('Loading page…')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('omnibar-stub')).toBeInTheDocument();
+  });
   beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1440 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 900 });
     setupPushMock.mockClear();
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation((url) => Promise.resolve(url === '/api/subscriptions/access'
@@ -132,10 +142,11 @@ describe('Layout', () => {
   });
 
   it.each(['generic', 'travel', 'wellness'])(
-    'uses the drawer at compact laptop widths for %s',
+    'keeps compact laptop layout scoped to the active vertical for %s',
     async (vertical) => {
+      window.innerWidth = 1024;
       const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
-        matches: query === '(max-width: 1439px)',
+        matches: false,
         media: query,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
@@ -143,13 +154,47 @@ describe('Layout', () => {
 
       try {
         renderLayout({ tenant: { vertical } });
-        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'true'));
-        expect(matchMedia).toHaveBeenCalledWith('(max-width: 1439px)');
+        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'false'));
+        expect(matchMedia).toHaveBeenCalledWith('(max-width: 899px)');
+        const shell = document.querySelector('.app-shell');
+        expect(shell).not.toHaveClass('app-shell--scaled');
+        expect(shell).toHaveStyle({ inset: '0' });
+        if (vertical === 'generic') expect(document.querySelector('main.page-fade-in')).toHaveClass('generic-page-content');
       } finally {
         matchMedia.mockRestore();
       }
     },
   );
+
+  it('keeps the travel shell at viewport size when a laptop window is resized', () => {
+    window.innerWidth = 1024;
+    renderTravelLayout();
+    const shell = document.querySelector('.app-shell');
+    window.innerWidth = 1280;
+    fireEvent.resize(window);
+    expect(shell).not.toHaveClass('app-shell--scaled');
+    expect(shell).toHaveStyle({ inset: '0' });
+    window.innerWidth = 1440;
+    fireEvent.resize(window);
+    expect(shell).toHaveStyle({ inset: '0' });
+  });
+
+  it('keeps the drawer layout below the desktop threshold', async () => {
+    window.innerWidth = 899;
+    const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      matches: query === '(max-width: 899px)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    try {
+      renderLayout();
+      expect(document.querySelector('.app-shell')).not.toHaveClass('app-shell--scaled');
+      await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'true'));
+    } finally {
+      matchMedia.mockRestore();
+    }
+  });
 
   it('keeps the shell viewport-sized and confines scrolling to the main region', () => {
     renderTravelLayout();
@@ -163,9 +208,9 @@ describe('Layout', () => {
     expect(scrollRegion).toHaveStyle({ minHeight: '0', overflowY: 'auto' });
   });
 
-  it('renders Softphone for generic tenants', () => {
+  it('hides the phone-call FAB for generic tenants', () => {
     renderLayout({ tenant: { vertical: 'generic' } });
-    expect(screen.getByTestId('softphone-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
   });
 
   it('hides Softphone for wellness tenants (Callified handles voice)', () => {

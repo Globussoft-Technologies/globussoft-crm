@@ -74,20 +74,35 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys.indexOf('webForm')).toBe(keys.indexOf('source') + 1);
   });
 
-  test('first-ever load defaults every builtin visible, including Web Form', async () => {
+  test('first-ever generic Leads load uses the compact calling-focused default', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 
     expect(res.status).toBe(200);
-    expect(res.body.visible).toContain('webForm');
-    expect(res.body.visible).toContain('location');
-    expect(res.body.visible).toContain('pickupLocation');
+    expect(res.body.visible).toEqual([
+      'name', 'phone', 'email', 'campaign', 'callStatus', 'callifiedAi',
+      'callifiedScore', 'source', 'webForm', 'createdAt', 'lastUpdated',
+      'actions',
+    ]);
     expect(res.body.availableColumns.find((c) => c.key === 'location')).toMatchObject({
       label: 'Location',
     });
     expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).toMatchObject({
       label: 'Pickup Location',
-      lockedVisible: true,
     });
+    expect(res.body.availableColumns.find((c) => c.key === 'plotAssign')).toMatchObject({
+      label: 'Plot Assign',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).toMatchObject({
+      label: 'Overall Status',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'lifecycleStage')).toMatchObject({
+      label: 'Lifecycle Stage',
+      filterField: 'lifecycleStageKey',
+      filterKind: 'enum',
+    });
+    expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).not.toHaveProperty('lockedVisible');
+    expect(res.body.availableColumns.find((c) => c.key === 'plotAssign')).not.toHaveProperty('lockedVisible');
+    expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).not.toHaveProperty('lockedVisible');
   });
 
   test('an existing preference can intentionally keep Tags hidden', async () => {
@@ -98,7 +113,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 
     expect(res.status).toBe(200);
-    expect(res.body.visible).toEqual(['name', 'email', 'pickupLocation', 'actions']);
+    expect(res.body.visible).toEqual(['name', 'email', 'actions']);
     expect(res.body.visible).not.toContain('tags');
   });
 
@@ -111,12 +126,13 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.availableColumns.find((c) => c.key === 'medium')).toMatchObject({
       label: 'Medium',
     });
-    // Medium sits next to the attribution pair without disturbing the
-    // Source → Web Form adjacency pinned above.
-    expect(keys.indexOf('medium')).toBe(keys.indexOf('webForm') + 1);
+    // Lifecycle Stage now sits between Web Form and Medium without
+    // disturbing the Source → Web Form adjacency pinned above.
+    expect(keys.indexOf('lifecycleStage')).toBe(keys.indexOf('webForm') + 1);
+    expect(keys.indexOf('medium')).toBe(keys.indexOf('lifecycleStage') + 1);
     expect(keys.indexOf('medium')).not.toBe(keys.indexOf('source') + 1);
-    // First-ever load defaults Medium visible (every builtin is visible).
-    expect(res.body.visible).toContain('medium');
+    // Medium stays available but is opt-in under the compact default.
+    expect(res.body.visible).not.toContain('medium');
   });
 
   test('contacts catalog is unchanged (no Web Form column there)', async () => {
@@ -133,6 +149,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.status).toBe(200);
     const byKey = new Map(res.body.availableColumns.map((c) => [c.key, c.label]));
     expect(byKey.get('status')).toBe('Status');
+    expect(byKey.get('lifecycleStage')).toBe('Lifecycle Stage');
     expect(byKey.get('title')).toBe('Job Title');
     expect(byKey.get('firstName')).toBe('First Name');
     expect(byKey.get('lastName')).toBe('Last Name');
@@ -179,7 +196,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     // Locked columns restored (name first, actions appended), known keys kept, unknown dropped.
-    expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'pickupLocation', 'actions']);
+    expect(res.body.visible).toEqual(['name', 'status', 'title', 'website', 'actions']);
     expect(prisma.tableColumnPreference.upsert).toHaveBeenCalled();
   });
 
@@ -207,6 +224,8 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys).toContain('email');
     for (const genericOnlyKey of [
       'webForm',
+      'plotAssign',
+      'overallPickupStatus',
       'medium',
       'campaign',
       'callStatus',

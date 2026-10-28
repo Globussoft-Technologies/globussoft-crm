@@ -23,7 +23,9 @@ const {
   buildWellnessRegistrationBlocks,
   isWellnessSector,
   normalizeSectorKey,
+  normalizeLandingContentYears,
 } = require('./landingSitePrompts');
+const { buildGenericCampaignPage } = require('./landingPageRenderer');
 
 const INTEGRATION = 'llm';
 const MODEL_PRIMARY = 'gemini-2.5-flash';
@@ -156,7 +158,9 @@ async function enrichWithImages(payload, input, options = {}) {
         aspectRatio: '16:9',
         stockOnly: true,
         excludeUrls: usedUrls,
-        ...(wellnessMode ? { excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'] } : {}),
+        // Landing-site imagery is a tenant-controlled Pexels surface. Do not
+        // silently fall back to another provider or an AI-generated image.
+        excludeProviders: ['unsplash', 'pixabay', 'ai-fallback'],
         ...(wellnessMode ? {
           relevanceTerms: wellnessImagePlan.relevanceTerms,
           requireRelevance: true,
@@ -266,7 +270,12 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     stub = true;
   }
 
-  const fallback = buildGenericFallback(input);
+  // The selected event date is authoritative. AI copy can otherwise retain
+  // a stale year beside the selected date, so normalize all generated text
+  // before it is converted into stored blocks.
+  payload = normalizeLandingContentYears(payload, input.eventDate);
+
+  const fallback = normalizeLandingContentYears(buildGenericFallback(input), input.eventDate);
   if (wellnessMode) {
     const wellnessContent = payload && typeof payload.content === 'object' && !Array.isArray(payload.content) ? payload.content : {};
     const wellnessInput = {
@@ -288,9 +297,20 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     if (!payload.description) payload.description = fallback.description;
     if (!payload.seoMeta || typeof payload.seoMeta !== 'object') payload.seoMeta = fallback.seoMeta;
     payload.blocks = ensureBlockArray(payload.blocks);
-    if (!payload.blocks.length) {
-      payload.blocks = fallback.blocks;
-    }
+    if (!payload.blocks.length) payload.blocks = fallback.blocks;
+    payload.blocks = buildGenericCampaignPage({
+      ...input,
+      title: payload.suggestedTitle,
+      description: payload.description,
+      sectorLabel: input.sectorLabel || sectorKey,
+      businessName: input.businessName,
+      audience: input.audience,
+      location: input.location,
+      themeId: input.wellnessTheme,
+      layoutId: input.wellnessLayout,
+      wellnessCustomColors: input.wellnessCustomColors,
+      wellnessCustomBaseThemeId: input.wellnessCustomBaseThemeId,
+    }, payload.blocks);
   }
 
   payload = await enrichWithImages({ ...payload, blocks: ensureBlockArray(payload.blocks) }, imageInput, options);

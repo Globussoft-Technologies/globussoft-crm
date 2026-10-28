@@ -389,6 +389,7 @@ function defaultSettings() {
   // previously-created forms; email and SMS are opt-in per submitted lead.
   contactNotificationChannels: ["whatsapp"],
   contactNotificationMessage: "Thank you for contacting us through {{form}}. Our team will be in touch shortly.",
+  contactNotificationTemplates: { emailTemplateId: null, smsTemplateId: null, whatsappTemplateId: null },
   optInEnabled: false,
    optInText: "I agree to receive communication on newsletters, promotional content, offers and events.",
   optInLinkText: "",
@@ -13610,6 +13611,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           color: var(--text-secondary);
         }
         .wf-forms-library {
+          container-type: inline-size;
           display: grid;
           gap: 16px;
           padding: 18px;
@@ -13689,27 +13691,32 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           container-type: inline-size;
           display: grid;
           width: 100%;
-          grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 380px));
-          justify-content: start;
-          gap: 14px;
+          /* Keep the card count stable while there is usable width. The
+             cards, gaps, and their contents then contract together instead
+             of jumping to fewer columns and wrapping early. */
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: clamp(8px, 1.1vw, 14px);
+        }
+        @container (max-width: 639px) {
+          .wf-library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @container (max-width: 359px) {
+          .wf-library-grid { grid-template-columns: minmax(0, 1fr); }
         }
         .wf-library-card {
           container-type: inline-size;
           width: 100%;
-          max-width: 380px;
           display: grid;
           grid-template-rows: auto auto 1fr;
           gap: 16px;
-          flex: 0 1 380px;
           box-sizing: border-box;
           min-width: 0;
-          min-height: 306px;
+          min-height: clamp(220px, 24vw, 306px);
           padding: 16px;
           border: 1px solid var(--border-color);
           border-radius: 16px;
           background: var(--surface-2, var(--surface-color));
           color: var(--text-primary);
-          transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
         }
         .wf-library-card[draggable="true"] { cursor: grab; }
         .wf-library-card.dragging { opacity: 0.55; cursor: grabbing; }
@@ -13718,12 +13725,6 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         .wf-form-drag-preview-copy { display: grid; min-width: 0; gap: 2px; }
         .wf-form-drag-preview-copy small { color: var(--text-secondary); font-size: 0.7rem; line-height: 1.2; }
         .wf-form-drag-preview-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; line-height: 1.2; }
-        .wf-library-card:hover,
-        .wf-library-card.active {
-          border-color: rgba(91, 107, 255, 0.72);
-          box-shadow: 0 18px 40px rgba(91, 107, 255, 0.14);
-          transform: translateY(-1px);
-        }
         .wf-library-card.menu-open { position: relative; z-index: 2; }
         .wf-library-card-top {
           display: grid;
@@ -13784,6 +13785,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           padding: 0.55rem 0.6rem;
           white-space: nowrap;
           font-size: 0.85rem;
+        }
+        .wf-library-primary-row > .btn-primary::after { display: none; }
+        .wf-library-primary-row > .btn-primary:hover {
+          transform: none;
+          box-shadow: 0 4px 15px var(--accent-glow);
         }
         .wf-library-action-buttons > .wf-danger-action {
           grid-column: 2;
@@ -20345,7 +20351,15 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         </section>
       ) : null}
 
-      {canViewFormLeads && leadsForm && <WebFormLeadsModal key={leadsForm.id} form={leadsForm} onClose={() => setLeadsForm(null)} />}
+      {canViewFormLeads && leadsForm && <WebFormLeadsModal
+        key={leadsForm.id}
+        form={leadsForm}
+        onClose={() => setLeadsForm(null)}
+        onOpenLead={navigateForm ? (contactId) => {
+          setLeadsForm(null);
+          navigateForm(`/leads/${contactId}`);
+        } : undefined}
+      />}
       {folderToDelete && typeof document !== "undefined" ? createPortal(
         <div className="wf-folder-delete-overlay">
           <div className="wf-folder-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="wf-folder-delete-title" aria-describedby="wf-folder-delete-description" onKeyDown={(event) => { if (event.key === "Escape" && !deletingFolder) setFolderToDelete(null); }}>
@@ -20632,29 +20646,6 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                           <span>Enable WhatsApp number field and same-as-phone checkbox</span>
                         </label>
                         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 6 }}>When enabled, visitors can provide a WhatsApp number or select the phone number for WhatsApp automation.</div>
-                      </div> : null}
-                      {scope === "generic" ? <div className="wf-settings-block">
-                        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>Send an automatic message to all leads</div>
-                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>Choose each channel independently. Messages are sent automatically to all leads using the contact details submitted with the form.</div>
-                        {selectedForm.scope === "generic" ? (
-                          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 6 }}>Generic CRM WhatsApp uses the approved template selected on the WhatsApp Templates page for every lead, regardless of lead status.</div>
-                        ) : null}
-                        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-                          {[['email', 'Send email automatically to all leads'], ['sms', 'Send SMS automatically to all leads'], ['whatsapp', 'Send WhatsApp automatically to all leads']].map(([channel, label]) => (
-                            <label key={channel} className="wf-settings-toggle">
-                              <input
-                                type="checkbox"
-                                checked={Array.isArray(selectedForm.settings.contactNotificationChannels) && selectedForm.settings.contactNotificationChannels.includes(channel)}
-                                onChange={(e) => {
-                                  const current = Array.isArray(selectedForm.settings.contactNotificationChannels) ? selectedForm.settings.contactNotificationChannels : [];
-                                  const next = e.target.checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel);
-                                  applyDraft({ settings: { ...selectedForm.settings, contactNotificationChannels: next } });
-                                }}
-                              />
-                              <span>{label}</span>
-                            </label>
-                          ))}
-                        </div>
                       </div> : null}
                       <div className="wf-settings-block">
                         <label className="wf-settings-toggle">

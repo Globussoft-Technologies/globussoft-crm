@@ -34,6 +34,17 @@ describe('tenant page visibility normalization', () => {
     expect(visibility.isPathHidden('/travel/tallying', ['/travel/tally'])).toBe(false);
   });
 
+  it('exposes missing Generic pages and integration shortcuts only for Generic tenants', () => {
+    const paths = ['/reports', '/pickup-work-assignments', '/integrations/adsgpt', '/integrations/callified'];
+    expect(visibility.normalizeHiddenPaths(paths, 'generic')).toEqual([...paths].sort());
+    for (const vertical of ['wellness', 'travel']) {
+      const catalog = visibility.getTenantPageVisibilityCatalog(vertical);
+      for (const path of paths) expect(catalog.some(page => page.path === path)).toBe(false);
+    }
+    const catalog = visibility.getTenantPageVisibilityCatalog('generic');
+    for (const path of paths) expect(catalog.filter(page => page.path === path)).toHaveLength(1);
+  });
+
   it('includes legacy generic sidebar routes in the visibility catalog', () => {
     expect(visibility.normalizeHiddenPaths([
       '/invoices',
@@ -47,6 +58,40 @@ describe('tenant page visibility normalization', () => {
     ]);
     expect(visibility.getTenantPageVisibilityCatalog('wellness')
       .some((page) => page.path === '/pickup-inventory')).toBe(false);
+  });
+
+  it('exposes only Generic sidebar controls, not mounted-but-hidden routes', () => {
+    const paths = visibility.getTenantPageVisibilityCatalog('generic').map((page) => page.path);
+    expect(paths).toContain('/contacts');
+    expect(paths).toContain('/integrations/adsgpt');
+    expect(paths).toContain('/integrations/callified');
+    for (const path of visibility.GENERIC_NON_SIDEBAR_PAGE_PATHS) {
+      expect(paths, `${path} must not appear in Organization Page Visibility`).not.toContain(path);
+    }
+  });
+
+  it('uses the exact Generic sidebar order, section, label and route presentation', () => {
+    const catalog = visibility.getTenantPageVisibilityCatalog('generic');
+    expect(catalog).toHaveLength(visibility.GENERIC_SIDEBAR_PRESENTATION.length);
+    expect(new Set(catalog.map((page) => page.path)).size).toBe(catalog.length);
+    expect(catalog.map(({ path, label, category }) => ({ path, label, category })))
+      .toEqual(visibility.GENERIC_SIDEBAR_PRESENTATION);
+    for (const path of ['/pipelines', '/win-loss', '/funnel']) {
+      expect(visibility.GENERIC_SIDEBAR_PRESENTATION.some((page) => page.path === path)).toBe(false);
+      expect(catalog.some((page) => page.path === path)).toBe(false);
+    }
+    expect(catalog.find((page) => page.path === '/dashboard')).toMatchObject({
+      label: 'Dashboard',
+      category: 'Core',
+    });
+    expect(catalog.find((page) => page.path === '/pipeline')).toMatchObject({
+      label: 'Deals and Pipeline',
+      category: 'Sales',
+    });
+    expect(catalog.find((page) => page.path === '/cpq')).toMatchObject({
+      label: 'CPQ',
+      category: 'Finance',
+    });
   });
 });
 
@@ -101,10 +146,28 @@ describe('tenant page visibility resolution', () => {
 
   it('reports hidden permission modules separately for the role editor', () => {
     expect(visibility.getUnavailablePermissionModulesForTenant(
-      { lead_scoring: ['read'], reports: ['read'] },
+      { deal_insights: ['read'], reports: ['read'] },
       'generic',
-      ['/lead-scoring'],
-    )).toEqual(['lead_scoring']);
+      ['/deal-insights'],
+    )).toEqual(['deal_insights']);
+  });
+
+  it('removes permission modules backed only by Generic routes hidden from the sidebar', () => {
+    const catalog = visibility.filterPermissionCatalogForTenant(
+      {
+        estimates: ['read', 'write'],
+        forecasting: ['read'],
+        contacts: ['read'],
+        payments: ['read'],
+      },
+      'generic',
+      [],
+    );
+
+    expect(catalog.estimates).toBeUndefined();
+    expect(catalog.forecasting).toBeUndefined();
+    expect(catalog.contacts).toEqual(['read']);
+    expect(catalog.payments).toEqual(['read']);
   });
 
   it('makes a permission unavailable only when every matching page is hidden', async () => {

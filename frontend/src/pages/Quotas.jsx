@@ -149,7 +149,7 @@ export default function Quotas() {
     .map(r => ({ name: r.name, pct: r.attainmentPct, achieved: r.achieved, target: r.target }));
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div style={{ padding: '2rem', minHeight: '100%', overflowX: 'clip', animation: 'fadeIn 0.5s ease-out' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>

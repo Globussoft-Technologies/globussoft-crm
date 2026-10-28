@@ -1,0 +1,502 @@
+/* Fluid viewport density.
+ *
+ * The app has many older pages with inline desktop-sized values. These rules
+ * keep the desktop baseline intact and progressively compact the shared CRM
+ * chrome, controls, cards, icons, and chart labels as the available viewport
+ * gets smaller. Layout-specific breakpoints still decide when a page must
+ * genuinely stack or scroll.
+ */
+
+@media (min-width: 900px) and (max-width: 1919px) {
+  .app-shell {
+    /* Keep the middle value genuinely fluid. The previous coefficients made
+       calc() exceed the clamp maximum at almost every desktop width, which
+       made controls stop shrinking on smaller laptop viewports. */
+    --viewport-control-font: clamp(0.72rem, calc(0.45rem + 0.36vw), 0.875rem);
+    --viewport-body-font: clamp(0.75rem, calc(0.5rem + 0.4vw), 0.9375rem);
+    --viewport-card-padding: clamp(0.7rem, calc(0.35rem + 0.9vw), 1.5rem);
+    --viewport-control-y: clamp(0.3rem, calc(0.18rem + 0.2vw), 0.55rem);
+    --viewport-control-x: clamp(0.45rem, calc(0.25rem + 0.3vw), 0.9rem);
+    --viewport-icon-size: clamp(13px, calc(8px + 0.52vw), 18px);
+  }
+
+  .app-shell .app-main > main {
+    font-size: var(--viewport-body-font);
+  }
+
+  .app-shell .app-main > main :is(button, input, select, textarea, [role="tab"]) {
+    font-size: var(--viewport-control-font) !important;
+  }
+
+  .app-shell .app-main > main :is(.card, .glass) {
+    padding: var(--viewport-card-padding) !important;
+  }
+
+  .app-shell .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, button, input, select, textarea) {
+    padding-block: var(--viewport-control-y) !important;
+    padding-inline: var(--viewport-control-x) !important;
+  }
+
+  .app-shell .app-main > main :is(button, a, h1, h2, h3, h4, [role="button"]) > svg,
+  .app-shell .app-main > main .recharts-wrapper svg {
+    flex-shrink: 0;
+  }
+
+  .app-shell .app-main > main :is(button, a, h1, h2, h3, h4, [role="button"]) > svg {
+    width: var(--viewport-icon-size) !important;
+    height: var(--viewport-icon-size) !important;
+  }
+
+  .app-shell .app-main > main svg.lucide {
+    width: var(--viewport-icon-size) !important;
+    height: var(--viewport-icon-size) !important;
+    flex-shrink: 0;
+  }
+
+  .app-shell .app-main > main :is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text) {
+    font-size: clamp(0.58rem, calc(0.42rem + 0.18vw), 0.75rem) !important;
+  }
+
+  .app-shell .app-topbar {
+    gap: clamp(4px, 0.7vw, 12px) !important;
+    padding-inline: clamp(8px, 1.5vw, 24px) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root {
+    width: clamp(170px, 30vw, 420px) !important;
+    min-width: 0 !important;
+  }
+}
+
+@media (max-width: 899px) {
+  .app-shell {
+    --viewport-control-font: clamp(0.68rem, calc(0.4rem + 0.34vw), 0.82rem);
+    --viewport-body-font: clamp(0.72rem, calc(0.45rem + 0.36vw), 0.875rem);
+    --viewport-card-padding: clamp(0.55rem, calc(0.3rem + 0.65vw), 0.9rem);
+    --viewport-control-y: clamp(0.25rem, calc(0.14rem + 0.2vw), 0.45rem);
+    --viewport-control-x: clamp(0.35rem, calc(0.2rem + 0.28vw), 0.7rem);
+    --viewport-icon-size: clamp(12px, calc(8px + 0.5vw), 16px);
+  }
+
+  .app-shell .app-main > main {
+    font-size: var(--viewport-body-font);
+  }
+
+  .app-shell .app-main > main :is(button, input, select, textarea, [role="tab"]) {
+    font-size: var(--viewport-control-font) !important;
+  }
+
+  .app-shell .app-main > main :is(.card, .glass) {
+    padding: var(--viewport-card-padding) !important;
+  }
+
+  .app-shell .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, button, input, select, textarea) {
+    padding-block: var(--viewport-control-y) !important;
+    padding-inline: var(--viewport-control-x) !important;
+  }
+
+  .app-shell .app-main > main :is(button, a, h1, h2, h3, h4, [role="button"]) > svg {
+    width: var(--viewport-icon-size) !important;
+    height: var(--viewport-icon-size) !important;
+    flex-shrink: 0;
+  }
+
+  .app-shell .app-main > main svg.lucide {
+    width: var(--viewport-icon-size) !important;
+    height: var(--viewport-icon-size) !important;
+    flex-shrink: 0;
+  }
+
+  .app-shell .app-main > main :is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text) {
+    font-size: clamp(0.52rem, calc(0.4rem + 0.18vw), 0.68rem) !important;
+  }
+
+  /* The omnibar and its body-mounted-looking result panel are inline-styled;
+     class-scoped overrides keep them shrinking with the viewport too. */
+  .app-shell .app-topbar .omnibar-root {
+    width: clamp(145px, 38vw, 320px) !important;
+    min-width: 0 !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root > div:first-child {
+    height: clamp(30px, 8vw, 36px) !important;
+    gap: clamp(4px, 1.5vw, 8px) !important;
+    padding: clamp(4px, 1.1vw, 6px) clamp(6px, 1.8vw, 10px) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root input {
+    font-size: clamp(0.68rem, 2.7vw, 0.82rem) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root > [role="listbox"] {
+    max-width: calc(100vw - 16px);
+    max-height: min(70vh, 420px);
+    border-radius: clamp(8px, 2vw, 12px);
+  }
+
+  .app-shell .app-topbar .omnibar-root > [role="listbox"] > div {
+    padding: clamp(0.2rem, 1vw, 0.4rem) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root [role="option"] {
+    gap: clamp(0.35rem, 1.8vw, 0.75rem) !important;
+    padding: clamp(0.35rem, 1.6vw, 0.5rem) clamp(0.45rem, 2vw, 0.75rem) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root [role="option"] > div:first-child {
+    padding: clamp(4px, 1.4vw, 7px) !important;
+    border-radius: clamp(6px, 1.8vw, 8px);
+  }
+
+  .app-shell .app-topbar .omnibar-root [role="option"] svg {
+    width: clamp(12px, 3.4vw, 16px) !important;
+    height: clamp(12px, 3.4vw, 16px) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root [role="option"] > div:nth-child(2) > div:first-child {
+    font-size: clamp(0.72rem, 2.8vw, 0.9rem) !important;
+  }
+
+  .app-shell .app-topbar .omnibar-root [role="option"] > div:nth-child(2) > div:nth-child(2) {
+    font-size: clamp(0.62rem, 2.3vw, 0.78rem) !important;
+  }
+}
+
+/* Search fields with an absolutely-positioned leading icon need a reserved
+   left inset. The fluid control padding above must not let the placeholder
+   slide underneath the icon. */
+.app-shell .app-main > main
+  :is(.staff-team-search, .travel-staff-search) input,
+.app-shell .app-main > main .whatsapp-thread-search {
+  padding-left: 2.5rem !important;
+}
+
+/* Staff search also has a positioned Lucide icon over the input. Text-indent
+   is a second guard against generic input-padding rules pulling the text back
+   underneath that icon. */
+.app-shell .app-main > main
+  :is(.staff-team-search, .travel-staff-search) input {
+  text-indent: 0.75rem !important;
+}
+
+@media (min-width: 900px) and (max-width: 1199px) {
+  .currencies-table {
+    width: 100% !important;
+    table-layout: fixed;
+  }
+
+  .currencies-table :is(th, td) {
+    padding: clamp(0.35rem, 0.6vw, 0.65rem) !important;
+    font-size: clamp(0.64rem, 0.72vw, 0.78rem) !important;
+    overflow-wrap: anywhere;
+  }
+
+  .currencies-table :is(th, td):nth-child(1) { width: 12%; }
+  .currencies-table :is(th, td):nth-child(2) { width: 11%; }
+  .currencies-table :is(th, td):nth-child(3) { width: 18%; }
+  .currencies-table :is(th, td):nth-child(4) { width: 27%; }
+  .currencies-table :is(th, td):nth-child(5) { width: 10%; }
+  .currencies-table :is(th, td):nth-child(6) { width: 22%; }
+
+  .currencies-table td > div[style*="inline-flex"] {
+    gap: 2px !important;
+  }
+
+  .currencies-table td > div[style*="inline-flex"] button {
+    width: 26px !important;
+    height: 26px !important;
+    padding: 0 !important;
+  }
+}
+
+/* Pickup Inventory search has the same absolute leading icon pattern. */
+.pickup-inventory-controls > label:first-child > input[type="search"] {
+  padding-left: 42px !important;
+  text-indent: 0 !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content
+  .pickup-inventory-page .pickup-inventory-controls > label:first-child
+  > input.input-field[type="search"] {
+  padding-left: 42px !important;
+  text-indent: 0 !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content
+  input.pickup-plot-work-search[type="search"] {
+  padding-left: 42px !important;
+  text-indent: 0 !important;
+}
+
+.pickup-plot-work-search-wrap > input.pickup-plot-work-search[type="search"] {
+  padding-left: 32px !important;
+  text-indent: 0 !important;
+}
+
+
+.pickup-plot-work-search-wrap > svg {
+  left: 10px !important;
+}
+
+/* Zapier Integration: keep the three-step setup compact as the available
+ * content area narrows. The mobile stylesheet stacks the steps at 600px;
+ * retain that fallback only where three readable cards can no longer fit. */
+@media (min-width: 541px) and (max-width: 1199px) {
+  body[data-vertical="generic"] main.generic-page-content .zapier-page {
+    padding: clamp(1rem, 2.2vw, 2rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page-header {
+    gap: clamp(0.5rem, 1.6vw, 1rem);
+    margin-bottom: clamp(1.25rem, 2.8vw, 2.5rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page-header > div {
+    gap: clamp(0.55rem, 1.35vw, 1rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page-header > div > div:first-child {
+    width: clamp(40px, 5vw, 56px) !important;
+    height: clamp(40px, 5vw, 56px) !important;
+    flex: 0 0 auto;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page-header > div > div:first-child svg {
+    width: clamp(20px, 2.5vw, 28px) !important;
+    height: clamp(20px, 2.5vw, 28px) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page-header h1 {
+    font-size: clamp(1.25rem, calc(1.15rem + 0.08vw), 2rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page-header > a {
+    padding: clamp(0.45rem, 0.8vw, 0.75rem) clamp(0.75rem, 1.5vw, 1.5rem) !important;
+    font-size: clamp(0.68rem, calc(0.62rem + 0.02vw), 0.875rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page > .card {
+    padding: clamp(1rem, 2.1vw, 2rem) !important;
+    margin-bottom: clamp(1rem, 2.1vw, 2rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-setup-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: clamp(0.6rem, 1.5vw, 1.5rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-setup-step {
+    padding: clamp(0.7rem, 1.45vw, 1.5rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-setup-step > div:first-child {
+    width: clamp(26px, 2.8vw, 32px) !important;
+    height: clamp(26px, 2.8vw, 32px) !important;
+    margin-bottom: clamp(0.45rem, 0.75vw, 0.75rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-setup-step p,
+  body[data-vertical="generic"] main.generic-page-content .zapier-page > .card > div:last-child {
+    font-size: clamp(0.66rem, calc(0.6rem + 0.02vw), 0.875rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page th,
+  body[data-vertical="generic"] main.generic-page-content .zapier-page td {
+    padding: clamp(0.45rem, 0.8vw, 1rem) clamp(0.35rem, 0.65vw, 1rem) !important;
+    font-size: clamp(0.64rem, calc(0.58rem + 0.02vw), 0.9rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-table-scroll td:last-child button {
+    min-height: 0 !important;
+    padding: clamp(0.22rem, 0.42vw, 0.4rem) clamp(0.4rem, 0.65vw, 0.75rem) !important;
+    gap: clamp(0.2rem, 0.35vw, 0.4rem) !important;
+    border-radius: clamp(4px, 0.5vw, 6px) !important;
+    font-size: clamp(0.58rem, calc(0.54rem + 0.018vw), 0.8rem) !important;
+    line-height: 1.15;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-table-scroll td:last-child button svg {
+    width: clamp(11px, 1.15vw, 14px) !important;
+    height: clamp(11px, 1.15vw, 14px) !important;
+  }
+}
+
+@media (max-width: 540px) {
+  body[data-vertical="generic"] main.generic-page-content .zapier-page {
+    padding: clamp(0.75rem, 3vw, 1rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .zapier-page > .card {
+    padding: clamp(0.75rem, 3vw, 1rem) !important;
+  }
+}
+
+/* Web Forms library: reduce density before changing the card geometry.
+ * The library's container queries otherwise switch from four columns to
+ * three, two, and one in large visual jumps. Keep the familiar two-up
+ * library longer, and let the contents shrink fluidly with the viewport.
+ */
+@media (max-width: 1199px) {
+  body[data-vertical="generic"] main.generic-page-content .wf-forms-library {
+    gap: clamp(0.6rem, 1.35vw, 1rem) !important;
+    padding: clamp(0.7rem, 1.55vw, 1.125rem) !important;
+    border-radius: clamp(0.75rem, 1.4vw, 1.125rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-head {
+    gap: clamp(0.5rem, 1.3vw, 1rem);
+    padding-bottom: clamp(0.55rem, 1.15vw, 0.875rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-head h3 {
+    font-size: clamp(0.86rem, calc(0.76rem + 0.02vw), 1rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-head p,
+  body[data-vertical="generic"] main.generic-page-content .wf-library-card p,
+  body[data-vertical="generic"] main.generic-page-content .wf-library-meta {
+    font-size: clamp(0.64rem, calc(0.58rem + 0.02vw), 0.82rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-folder-toolbar {
+    gap: clamp(0.35rem, 0.8vw, 0.5rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-grid {
+    gap: clamp(0.5rem, 1.15vw, 0.875rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-card {
+    height: clamp(13.75rem, 24vw, 19.125rem) !important;
+    min-height: 0 !important;
+    padding: clamp(0.6rem, 1.35vw, 1rem) !important;
+    gap: clamp(0.55rem, 1.35vw, 1rem);
+    border-radius: clamp(0.7rem, 1.25vw, 1rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-card h4 {
+    font-size: clamp(0.72rem, calc(0.66rem + 0.02vw), 0.95rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-status-pill {
+    padding: clamp(0.18rem, 0.35vw, 0.24rem) clamp(0.38rem, 0.65vw, 0.55rem);
+    font-size: clamp(0.58rem, calc(0.54rem + 0.018vw), 0.72rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-form-menu-trigger {
+    width: clamp(24px, 2.6vw, 28px);
+    height: clamp(24px, 2.6vw, 28px);
+    border-radius: clamp(6px, 0.8vw, 8px);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-primary-row > .btn-primary,
+  body[data-vertical="generic"] main.generic-page-content .wf-library-action-buttons > .btn-secondary {
+    min-height: clamp(30px, 3.5vw, 40px);
+    padding: clamp(0.34rem, 0.65vw, 0.55rem) clamp(0.35rem, 0.7vw, 0.6rem) !important;
+    font-size: clamp(0.62rem, calc(0.56rem + 0.02vw), 0.85rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-library-actions,
+  body[data-vertical="generic"] main.generic-page-content .wf-library-action-buttons {
+    gap: clamp(0.35rem, 0.75vw, 0.5rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .wf-form-toolbar {
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr) !important;
+    gap: clamp(0.5rem, 1vw, 0.75rem);
+  }
+}
+
+@media (max-width: 430px) {
+  body[data-vertical="generic"] main.generic-page-content .wf-library-card {
+    height: auto !important;
+    min-height: 0;
+  }
+}
+
+/* Scheduled reports: keep the action column usable in a narrow workspace.
+ * The shared Reports rules hide horizontal overflow on desktop, which can
+ * clip the final Actions column when the sidebar leaves a smaller content
+ * area. Only this table gets a compact, scrollable surface; the report data
+ * and its controls remain unchanged. */
+@media (max-width: 1199px) {
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table {
+    font-size: clamp(0.66rem, calc(0.6rem + 0.02vw), 0.85rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule .reports-page__table-shell {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table th,
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table td {
+    padding-block: clamp(0.45rem, 0.8vw, 0.75rem) !important;
+    padding-inline: clamp(0.3rem, 0.65vw, 0.65rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule > div:first-child {
+    gap: clamp(0.45rem, 0.9vw, 0.75rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule > div:first-child h3 {
+    font-size: clamp(0.8rem, calc(0.72rem + 0.025vw), 1.1rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table td:last-child > div {
+    gap: clamp(0.25rem, 0.55vw, 0.65rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table td:last-child button {
+    font-size: clamp(0.62rem, calc(0.58rem + 0.018vw), 0.8rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__schedule-table .report-schedule-status-badge {
+    padding-inline: clamp(0.3rem, 0.55vw, 0.6rem) !important;
+  }
+}
+
+/* Generic Staff Directory: preserve the wide, resizable table while making
+ * its saved 1,000px desktop baseline progressively denser on laptop-sized
+ * content areas. The table remains horizontally scrollable when all ten
+ * columns cannot fit, so secondary columns and row actions stay accessible. */
+@media (min-width: 601px) and (max-width: 1400px) {
+  body[data-vertical="generic"] main.generic-page-content .staff-team-table-scroll--generic .staff-generic-resizable-table {
+    min-width: clamp(760px, 88vw, 1000px) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .staff-team-table-scroll--generic .staff-generic-resizable-table th,
+  body[data-vertical="generic"] main.generic-page-content .staff-team-table-scroll--generic .staff-generic-resizable-table td {
+    padding-block: clamp(0.35rem, 0.6vw, 0.75rem) !important;
+    padding-inline: clamp(0.25rem, 0.45vw, 0.5rem) !important;
+    font-size: clamp(0.64rem, calc(0.58rem + 0.02vw), 0.875rem) !important;
+    line-height: 1.25;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .staff-team-table-scroll--generic .staff-generic-resizable-table th {
+    font-size: clamp(0.58rem, calc(0.54rem + 0.018vw), 0.75rem) !important;
+  }
+}
+
+/* Staff Directory owns its vertical scroll on desktop. The legacy responsive
+ * rule hides the page scrollbar because the short directory used to fit in
+ * the viewport; that prevents longer staff lists from being reachable. */
+@media (min-width: 901px) {
+  .app-main > main:has(.staff-directory-page) {
+    overflow-y: auto !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+
+  .app-main > main:has(.staff-directory-page)::-webkit-scrollbar {
+    display: block !important;
+    width: 8px !important;
+  }
+
+  .app-main > main:has(.staff-directory-page)::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 999px;
+  }
+}
+
+

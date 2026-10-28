@@ -19,6 +19,7 @@ import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
 import CountBadge from "../../components/CountBadge";
+import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 
 const SUB_BRANDS = [
@@ -684,7 +685,12 @@ export default function Diagnostics() {
             )}
           </div>
         ) : (
-          <div className="diagnostics-table-scroll" role="region" aria-label="Diagnostics records" tabIndex={0}>
+          <TopScrollSync
+            contentClassName="diagnostics-table-scroll"
+            contentRole="region"
+            contentAriaLabel="Diagnostics records"
+            contentTabIndex={0}
+          >
             <table
                 className="diagnostics-table"
                 aria-label="Diagnostics results"
@@ -807,7 +813,7 @@ export default function Diagnostics() {
                   })}
                 </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
         {total > 0 && (
           <DiagnosticsPager

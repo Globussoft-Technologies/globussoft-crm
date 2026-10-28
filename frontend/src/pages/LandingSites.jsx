@@ -15,6 +15,7 @@ import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { DEFAULT_WELLNESS_LANDING_LAYOUT, DEFAULT_WELLNESS_LANDING_THEME, WELLNESS_LANDING_LAYOUTS, WELLNESS_LANDING_THEMES } from '../utils/wellnessLandingThemes';
 import { getWellnessColorOverrides, resolveWellnessLandingTheme } from '../utils/wellnessLandingThemes';
+import { DEFAULT_GENERIC_LANDING_LAYOUT, DEFAULT_GENERIC_LANDING_THEME, GENERIC_LANDING_LAYOUTS, GENERIC_LANDING_THEMES } from '../utils/genericLandingThemes';
 import WellnessPaletteEditor from '../components/landing-pages/WellnessPaletteEditor';
 
 
@@ -97,7 +98,7 @@ const SECTOR_OPTIONS = [
 
 function buildTemplateType(sectorKey) {
 
-  return `generic-site-${sectorKey}-v1`;
+  return `generic-site-${sectorKey}-v2`;
 
 }
 
@@ -254,8 +255,12 @@ export default function LandingSites() {
   const auth = useContext(AuthContext) || {};
 
   const tenantVertical = auth?.user?.tenant?.vertical || auth?.tenant?.vertical || 'generic';
+  const tenantId = auth?.user?.tenant?.id || auth?.tenant?.id || '';
 
   const isWellnessTenant = tenantVertical === 'wellness';
+  const isCampaignTenant = tenantVertical === 'generic' || isWellnessTenant;
+  const paletteOptions = isWellnessTenant ? WELLNESS_LANDING_THEMES : GENERIC_LANDING_THEMES;
+  const layoutOptions = isWellnessTenant ? WELLNESS_LANDING_LAYOUTS : GENERIC_LANDING_LAYOUTS;
   const themeName = useDocumentTheme();
   const isDarkTheme = themeName === 'dark';
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -310,13 +315,13 @@ export default function LandingSites() {
 
     imageMode: 'auto',
 
-    wellnessTheme: DEFAULT_WELLNESS_LANDING_THEME,
+    wellnessTheme: wellness ? DEFAULT_WELLNESS_LANDING_THEME : DEFAULT_GENERIC_LANDING_THEME,
 
     wellnessCustomColors: null,
 
-    wellnessCustomBaseThemeId: DEFAULT_WELLNESS_LANDING_THEME,
+    wellnessCustomBaseThemeId: wellness ? DEFAULT_WELLNESS_LANDING_THEME : DEFAULT_GENERIC_LANDING_THEME,
 
-    wellnessLayout: DEFAULT_WELLNESS_LANDING_LAYOUT,
+    wellnessLayout: wellness ? DEFAULT_WELLNESS_LANDING_LAYOUT : DEFAULT_GENERIC_LANDING_LAYOUT,
 
   });
 
@@ -428,11 +433,6 @@ export default function LandingSites() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFilter, isWellnessTenant]);
 
-  const currentPublishedLandingSite = useMemo(
-    () => pinnedPage || pages.find((p) => p.status === 'PUBLISHED') || null,
-    [pages, pinnedPage],
-  );
-
   const visiblePages = useMemo(() => {
 
     const mergedPages = pinnedPage
@@ -500,7 +500,7 @@ export default function LandingSites() {
 
           title: isWellnessTenant ? 'Untitled Wellness Event Landing Site' : 'Untitled Landing Site',
 
-          templateType: buildTemplateType(sectorKey),
+          templateType: isWellnessTenant ? 'wellness-site-wellness-v1' : buildTemplateType(sectorKey),
 
           content: JSON.stringify([]),
 
@@ -603,13 +603,13 @@ export default function LandingSites() {
 
           imageMode: form.imageMode,
 
-          wellnessTheme: isWellnessTenant ? form.wellnessTheme : undefined,
+          wellnessTheme: isCampaignTenant ? form.wellnessTheme : undefined,
 
-          wellnessCustomColors: isWellnessTenant && form.wellnessTheme === 'custom' ? form.wellnessCustomColors : undefined,
+          wellnessCustomColors: isCampaignTenant && form.wellnessTheme === 'custom' ? form.wellnessCustomColors : undefined,
 
-          wellnessCustomBaseThemeId: isWellnessTenant && form.wellnessTheme === 'custom' ? form.wellnessCustomBaseThemeId : undefined,
+          wellnessCustomBaseThemeId: isCampaignTenant && form.wellnessTheme === 'custom' ? form.wellnessCustomBaseThemeId : undefined,
 
-          wellnessLayout: isWellnessTenant ? form.wellnessLayout : undefined,
+          wellnessLayout: isCampaignTenant ? form.wellnessLayout : undefined,
 
           autoCreate: true,
 
@@ -685,11 +685,6 @@ export default function LandingSites() {
 
 
   const handlePublish = async (page) => {
-    const anotherLiveSite = page.status !== 'PUBLISHED' ? currentPublishedLandingSite && currentPublishedLandingSite.id !== page.id ? currentPublishedLandingSite : null : null;
-    if (anotherLiveSite) {
-      notify.error(`Only one published landing site is allowed at a time. Unpublish "${anotherLiveSite.title}" first.`);
-      return;
-    }
     try {
       await fetchApi(`/api/landing-pages/${page.id}/${page.status === 'PUBLISHED' ? 'unpublish' : 'publish'}`, { method: 'POST' });
       notify.success(page.status === 'PUBLISHED' ? 'Unpublished.' : 'Published. Public URL is live.');
@@ -747,7 +742,8 @@ export default function LandingSites() {
 
   const handleCopyUrl = (page) => {
 
-    const url = `${window.location.origin}/landing-sites/${page.slug}`;
+    const publicBase = isWellnessTenant ? `/wellness/landing-sites/${tenantId}` : `/landing-sites/${tenantId}`;
+    const url = `${window.location.origin}${publicBase}/${page.slug}`;
 
     navigator.clipboard.writeText(url).then(() => {
 
@@ -812,11 +808,11 @@ export default function LandingSites() {
             </div>
             <div>
               <h3 style={{ fontSize: '1rem', fontWeight: 800, marginBottom: '0.1rem' }}>Landing Site Library</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>Browse, publish, and manage your wellness landing sites.</p>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>Browse, publish, and manage your {isWellnessTenant ? 'wellness' : 'generic'} landing sites.</p>
             </div>
           </div>
 
-          {isWellnessTenant && (
+          {isCampaignTenant && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.35rem' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -871,6 +867,9 @@ export default function LandingSites() {
 
             const convRate = page.visits > 0 ? (page.submissions / page.visits) * 100 : 0;
             const isPinned = page.status === 'PUBLISHED';
+            const publicPath = isWellnessTenant
+              ? `/wellness/landing-sites/${tenantId}/${page.slug}`
+              : `/landing-sites/${tenantId}/${page.slug}`;
 
             return (
 
@@ -947,25 +946,12 @@ export default function LandingSites() {
 
                   </Link>
 
-                  {(() => {
-                    const anotherLive = page.status !== 'PUBLISHED' && currentPublishedLandingSite && currentPublishedLandingSite.id !== page.id;
-                    const liveTitle = anotherLive ? currentPublishedLandingSite.title : null;
-                    return (
-                      <button
-                        onClick={() => handlePublish(page)}
-                        disabled={anotherLive}
-                        title={
-                          page.status === 'PUBLISHED'
-                            ? 'Take this landing site offline'
-                            : anotherLive
-                              ? `Only one published landing site is allowed at a time. Unpublish "${liveTitle}" first.`
-                              : 'Publish this landing site'
-                        }
-                        style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: anotherLive ? 'not-allowed' : 'pointer', opacity: anotherLive ? 0.55 : 1 }}>
-                        <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
-                      </button>
-                    );
-                  })()}
+                  <button
+                    onClick={() => handlePublish(page)}
+                    title={page.status === 'PUBLISHED' ? 'Take this landing site offline' : 'Publish this landing site'}
+                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer' }}>
+                    <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
+                  </button>
 
                   <button onClick={() => handleDuplicate(page.id)} title="Duplicate" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
 
@@ -991,7 +977,7 @@ export default function LandingSites() {
 
                     <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.6rem' }}>
 
-                      <input readOnly value={`${window.location.origin}/landing-sites/${page.slug}`} onClick={(e) => e.target.select()} style={{ flex: 1, fontSize: '0.72rem', padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }} />
+                      <input readOnly value={`${window.location.origin}${publicPath}`} onClick={(e) => e.target.select()} style={{ flex: 1, fontSize: '0.72rem', padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }} />
 
                       <button onClick={() => handleCopyUrl(page)} title="Copy public URL" style={{ padding: '5px 10px', borderRadius: '5px', border: '1px solid var(--border-color)', background: copiedId === page.id ? '#10b981' : 'none', color: copiedId === page.id ? '#fff' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', fontWeight: 600, flexShrink: 0, transition: 'background 0.2s, color 0.2s' }}>
 
@@ -999,7 +985,7 @@ export default function LandingSites() {
 
                       </button>
 
-                      <a href={`${window.location.origin}/landing-sites/${page.slug}`} target="_blank" rel="noreferrer" title="Open public page in new tab" style={{ padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}>
+                      <a href={`${window.location.origin}${publicPath}`} target="_blank" rel="noreferrer" title="Open public page in new tab" style={{ padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}>
 
                         <ExternalLink size={12} />
 
@@ -1065,7 +1051,7 @@ export default function LandingSites() {
 
                   <select value={form.sectorKey} onChange={(e) => setForm((s) => ({ ...s, sectorKey: e.target.value }))} className="input-field">
 
-                    {SECTOR_OPTIONS.map((sector) => <option key={sector.key} value={sector.key}>{sector.label}</option>)}
+                    {SECTOR_OPTIONS.filter((sector) => !['travel', 'wellness', 'health', 'hospital', 'fitness'].includes(sector.key)).map((sector) => <option key={sector.key} value={sector.key}>{sector.label}</option>)}
 
                   </select>
 
@@ -1077,16 +1063,16 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign name <span style={{ color: '#ef4444' }}>*</span></span>
 
-                <input className="input-field" value={form.campaignName} onChange={(e) => setForm((s) => ({ ...s, campaignName: e.target.value }))} placeholder="Hair Treatment Consultation" />
+                <input className="input-field" value={form.campaignName} onChange={(e) => setForm((s) => ({ ...s, campaignName: e.target.value }))} placeholder={isWellnessTenant ? 'Hair Treatment Consultation' : 'Q4 Product Launch'} />
 
               </label>
 
-              {isWellnessTenant && (
+              {isCampaignTenant && (
                 <div style={{ gridColumn: '1 / -1', border: '1px solid rgba(31,138,112,0.2)', borderRadius: 14, padding: '0.8rem', background: 'rgba(31,138,112,0.04)' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.25rem' }}>Wellness campaign palette</div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.25rem' }}>{isWellnessTenant ? 'Wellness campaign palette' : 'Generic campaign palette'}</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>Choose the visual direction for this campaign. You can change it later in the builder.</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
-                    {WELLNESS_LANDING_THEMES.map((theme) => {
+                    {paletteOptions.map((theme) => {
                       const selected = form.wellnessTheme === theme.id;
                       return (
                         <button
@@ -1120,21 +1106,24 @@ export default function LandingSites() {
                     </label>
                     {form.wellnessTheme === 'custom' ? (
                       <WellnessPaletteEditor
+                        vertical={isWellnessTenant ? 'wellness' : 'generic'}
                         theme={resolveWellnessLandingTheme('custom', form.wellnessCustomColors)}
-                        baseThemeId={form.wellnessCustomBaseThemeId || DEFAULT_WELLNESS_LANDING_THEME}
+                        baseThemeId={form.wellnessCustomBaseThemeId || (isWellnessTenant ? DEFAULT_WELLNESS_LANDING_THEME : DEFAULT_GENERIC_LANDING_THEME)}
                         onChange={(nextTheme) => setForm((current) => ({ ...current, wellnessTheme: 'custom', wellnessCustomColors: getWellnessColorOverrides(nextTheme) }))}
                         onReset={() => setForm((current) => ({ ...current, wellnessCustomColors: getWellnessColorOverrides(WELLNESS_LANDING_THEMES.find((theme) => theme.id === (current.wellnessCustomBaseThemeId || DEFAULT_WELLNESS_LANDING_THEME))) }))}
                       />
                     ) : (
                       <div style={{ border: '1px dashed var(--border-color)', borderRadius: 8, padding: '0.65rem 0.8rem', background: 'rgba(255,255,255,0.45)', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                        Turn this on to fine-tune the wellness palette by color role before generating the campaign.
+                        {isWellnessTenant
+                          ? 'Turn this on to fine-tune the wellness palette by color role before generating the campaign.'
+                          : 'Turn this on to fine-tune the campaign palette by color role before generating the page.'}
                       </div>
                     )}
                   </div>
                   <div style={{ fontSize: '0.8rem', fontWeight: 700, margin: '0.9rem 0 0.25rem' }}>Campaign layout</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>Choose the page composition that best fits this wellness campaign.</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>Choose the page composition that best fits this campaign.</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
-                    {WELLNESS_LANDING_LAYOUTS.map((layout) => {
+                    {layoutOptions.map((layout) => {
                       const selected = form.wellnessLayout === layout.id;
                       return (
                         <button
@@ -1155,39 +1144,39 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Business name <span style={{ color: '#ef4444' }}>*</span></span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Business name' : 'Business or organization'} <span style={{ color: '#ef4444' }}>*</span></span>
 
-                <input className="input-field" value={form.businessName} onChange={(e) => setForm((s) => ({ ...s, businessName: e.target.value }))} placeholder="Glow Hair Studio" />
-
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign goal <span style={{ color: '#ef4444' }}>*</span></span>
-
-                <input className="input-field" value={form.campaignGoal} onChange={(e) => setForm((s) => ({ ...s, campaignGoal: e.target.value }))} placeholder="collect enquiries" />
+                <input className="input-field" value={form.businessName} onChange={(e) => setForm((s) => ({ ...s, businessName: e.target.value }))} placeholder={isWellnessTenant ? 'Glow Hair Studio' : 'Northstar Digital'} />
 
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Audience <span style={{ color: '#ef4444' }}>*</span></span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Campaign goal' : 'Campaign objective'} <span style={{ color: '#ef4444' }}>*</span></span>
 
-                <input className="input-field" value={form.audience} onChange={(e) => setForm((s) => ({ ...s, audience: e.target.value }))} placeholder="people exploring hair treatment options" />
-
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Location</span>
-
-                <input className="input-field" value={form.location} onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))} placeholder="Koramangala" />
+                <input className="input-field" value={form.campaignGoal} onChange={(e) => setForm((s) => ({ ...s, campaignGoal: e.target.value }))} placeholder={isWellnessTenant ? 'collect enquiries' : 'capture qualified leads'} />
 
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event date</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Audience' : 'Target audience'} <span style={{ color: '#ef4444' }}>*</span></span>
+
+                <input className="input-field" value={form.audience} onChange={(e) => setForm((s) => ({ ...s, audience: e.target.value }))} placeholder={isWellnessTenant ? 'people exploring hair treatment options' : 'decision-makers comparing solutions'} />
+
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Location' : 'Market or service area'}</span>
+
+                <input className="input-field" value={form.location} onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))} placeholder={isWellnessTenant ? 'Koramangala' : 'Bengaluru or online'} />
+
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Event date' : 'Launch date'}</span>
 
                 <input type="date" min={todayDateValue} className="input-field" value={normalizeDateInputValue(form.eventDate)} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} />
 
@@ -1195,7 +1184,7 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event time</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Event time' : 'Launch time'}</span>
 
                 <input
                   type="time"
@@ -1220,23 +1209,23 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event venue</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Event venue' : 'Campaign location'}</span>
 
-                <input className="input-field" value={form.eventLocation} onChange={(e) => setForm((s) => ({ ...s, eventLocation: e.target.value }))} placeholder="Main clinic branch" />
-
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Tone</span>
-
-                <input className="input-field" value={form.tone} onChange={(e) => setForm((s) => ({ ...s, tone: e.target.value }))} placeholder="calm, professional, and reassuring" />
+                <input className="input-field" value={form.eventLocation} onChange={(e) => setForm((s) => ({ ...s, eventLocation: e.target.value }))} placeholder={isWellnessTenant ? 'Main clinic branch' : 'Office, venue, or online'} />
 
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>CTA label</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'Tone' : 'Brand voice'}</span>
+
+                <input className="input-field" value={form.tone} onChange={(e) => setForm((s) => ({ ...s, tone: e.target.value }))} placeholder={isWellnessTenant ? 'calm, professional, and reassuring' : 'clear, confident, and practical'} />
+
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{isWellnessTenant ? 'CTA label' : 'Primary CTA'}</span>
 
                 <input className="input-field" value={form.ctaText} onChange={(e) => setForm((s) => ({ ...s, ctaText: e.target.value }))} placeholder="Get Started" />
 

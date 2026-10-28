@@ -10,6 +10,16 @@ const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const { cleanPickupAddress } = require("../lib/callifiedPickup");
 const { safeNotifyCustomerPickupPlotAssignments } = require("../lib/pickupPlotAssignmentWhatsApp");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
+const { allocateCommissionAcrossPayments, syncPlotCommission } = require("../lib/genericPlotCommission");
+const { verifySelectionToken } = require("../lib/genericPickupPlotSelection");
+const callifiedClient = require("../services/callifiedClient");
+const { startBrowserCall } = require("../lib/callifiedAgentBridge");
+const { sendCallifiedError } = require("../lib/callifiedErrors");
+const { wasRecentlyDialed, redialCooldownError } = require("../lib/callifiedRedialGuard");
+const { clearDnpRetryState } = require("../lib/callifiedDnpRetryEngine");
+const { CALL_STATUS } = require("../lib/callifiedLeadStatus");
+const { writeAudit } = require("../lib/audit");
 const {
   normalizeBoundary,
   calculateBoundaryAreaSqFt,
@@ -32,6 +42,8 @@ const AVAILABILITY = new Set(["AVAILABLE", "HOLD", "BOOKED", "REGISTERED", "RESE
 const PLOT_AREA_UNITS = new Set(["SQ_FT", "KATHA"]);
 const PLOT_FACINGS = new Set(["NORTH", "SOUTH", "EAST", "WEST", "NORTH_EAST", "NORTH_WEST", "SOUTH_EAST", "SOUTH_WEST"]);
 const PLOT_PROPERTY_TYPES = new Set(["RESIDENTIAL", "COMMERCIAL"]);
+const MAX_INVENTORY_IMPORT_ROWS = 200;
+const INVALID_IMPORT_BOOLEAN = Symbol("INVALID_IMPORT_BOOLEAN");
 const TRANSPORT_STATUS_FLOW = [
   "ASSIGNED",
   "ACCEPTED",
@@ -111,6 +123,16 @@ function text(value, maxLength = 500) {
   return normalized ? normalized.slice(0, maxLength) : null;
 }
 
+function addUtcMonthsClamped(date, months) {
+  const result = new Date(date);
+  const desiredDay = result.getUTCDate();
+  result.setUTCDate(1);
+  result.setUTCMonth(result.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(result.getUTCFullYear(), result.getUTCMonth() + 1, 0)).getUTCDate();
+  result.setUTCDate(Math.min(desiredDay, lastDay));
+  return result;
+}
+
 function parseBoolean(value, fallback = true) {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -166,6 +188,32 @@ function parseMaxAssignments(value) {
   if (value === "" || value === null || value === undefined) return null;
   const limit = Number(value);
   return Number.isInteger(limit) && limit > 0 && limit <= 100000 ? limit : NaN;
+}
+
+function importBoolean(value, fallback = true) {
+  if (value === "" || value === null || value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "yes", "y", "1", "active"].includes(normalized)) return true;
+  if (["false", "no", "n", "0", "inactive"].includes(normalized)) return false;
+  return INVALID_IMPORT_BOOLEAN;
+}
+
+function importKey(...values) {
+  return values.map((value) => String(value || "").trim().toLowerCase()).join("\u0000");
+}
+
+function importRows(body) {
+  if (!Array.isArray(body?.rows) || body.rows.length === 0) {
+    return { error: "Add at least one spreadsheet row to import." };
+  }
+  if (body.rows.length > MAX_INVENTORY_IMPORT_ROWS) {
+    return { error: `Import up to ${MAX_INVENTORY_IMPORT_ROWS} rows at a time.` };
+  }
+  if (body.rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
+    return { error: "Every imported row must be an object." };
+  }
+  return { rows: body.rows };
 }
 
 function parseStoredArray(value) {
@@ -227,6 +275,56 @@ function appendPersonAssignment(person, customerId, plotSiteId) {
   };
 }
 
+function replacePersonPlotAssignment(person, customerId, previousPlotSiteId, replacementPlotSiteId, statusField = null) {
+  const currentPairs = assignmentPairs(person);
+  const hasMatchingPair = currentPairs.some((pair) => (
+    pair.customerId === Number(customerId) && pair.plotSiteId === Number(previousPlotSiteId)
+  ));
+  if (!hasMatchingPair) return null;
+
+  const pairs = currentPairs.map((pair) => (
+    pair.customerId === Number(customerId) && pair.plotSiteId === Number(previousPlotSiteId)
+      ? { ...pair, plotSiteId: Number(replacementPlotSiteId) }
+      : pair
+  ));
+  const pairPlotIds = new Set(pairs.map((pair) => Number(pair.plotSiteId)));
+  const plotSiteIds = [...new Set([
+    ...parseStoredArray(person.plotSiteIdsJson)
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && (
+        id !== Number(previousPlotSiteId) || pairPlotIds.has(id)
+      )),
+    Number(replacementPlotSiteId),
+  ])];
+  const data = {
+    plotSiteIdsJson: sanitizeJsonForStringColumn(plotSiteIds),
+    assignmentPairsJson: sanitizeJsonForStringColumn(pairs),
+  };
+  if (Object.hasOwn(person, "plotSiteId") && Number(person.plotSiteId) === Number(previousPlotSiteId)) {
+    data.plotSiteId = Number(replacementPlotSiteId);
+  }
+  if (statusField) {
+    const statuses = parseStoredObject(person[statusField]);
+    const previousKey = assignmentKey(customerId, previousPlotSiteId);
+    const replacementKey = assignmentKey(customerId, replacementPlotSiteId);
+    if (statuses[previousKey]) {
+      statuses[replacementKey] = {
+        ...statuses[previousKey],
+        ...(Number(statuses[previousKey].plotId) === Number(previousPlotSiteId)
+          ? { plotId: Number(replacementPlotSiteId) }
+          : {}),
+      };
+      delete statuses[previousKey];
+    }
+    const legacyKey = `customer-${Number(customerId)}`;
+    if (Number(statuses[legacyKey]?.plotId) === Number(previousPlotSiteId)) {
+      statuses[legacyKey] = { ...statuses[legacyKey], plotId: Number(replacementPlotSiteId) };
+    }
+    data[statusField] = sanitizeJsonForStringColumn(statuses);
+  }
+  return data;
+}
+
 function removeCustomerFromPerson(person, customerId, statusField = null) {
   const remainingCustomerIds = parseStoredArray(person.customerIdsJson)
     .map(Number)
@@ -270,6 +368,38 @@ function personStartedCustomer(person, customerId, roleType, statusField) {
       }
       return normalizeBrokerWorkflowStatus(saved) !== BROKER_WORKFLOW[0];
     });
+}
+
+function customerTransportStarted(transportPeople, customerId) {
+  return (transportPeople || []).some((person) => (
+    assignmentPairs(person).some((pair) => pair.customerId === Number(customerId))
+  ));
+}
+
+// Serialize plot deselection with transport assignment for the same customer.
+// A historical cancelled booking must not be resurrected by a request that
+// validated its transport assignments before waiting for the lock. Legacy
+// transport assignments without any booking remain supported.
+async function lockPlotAssignmentCustomers(tx, tenantId, pairs, previousPairs = []) {
+  const previous = new Set(previousPairs.map((pair) => assignmentKey(pair.customerId, pair.plotSiteId)));
+  const added = pairs.filter((pair) => !previous.has(assignmentKey(pair.customerId, pair.plotSiteId)));
+  const customers = [...new Set(added.map((pair) => Number(pair.customerId)))].sort((a, b) => a - b);
+  for (const customerId of customers) {
+    await tx.$queryRaw`SELECT id FROM Contact WHERE id = ${customerId} AND tenantId = ${tenantId} FOR UPDATE`;
+  }
+  for (const pair of added) {
+    if (!Number.isInteger(pair.plotSiteId) || pair.plotSiteId <= 0) continue;
+    const bookings = await tx.plotBooking.findMany({
+      where: { tenantId, contactId: pair.customerId, plotSiteId: pair.plotSiteId },
+      select: { status: true },
+    });
+    if (bookings.length && !bookings.some((booking) => booking.status !== "CANCELLED")) {
+      const error = new Error("The plot assignment was removed. Refresh and select an assigned plot.");
+      error.code = "PLOT_ASSIGNMENT_REMOVED";
+      error.statusCode = 409;
+      throw error;
+    }
+  }
 }
 
 function startedCustomerOwners(people, roleType, statusField) {
@@ -390,7 +520,7 @@ async function claimCustomerForPerson(client, {
 }
 
 function handleClaimError(error, res) {
-  if (!["CUSTOMER_ALREADY_CLAIMED", "WORKFLOW_CONFLICT", "PLOT_NOT_AVAILABLE"].includes(error?.code)) return false;
+  if (!["CUSTOMER_ALREADY_CLAIMED", "WORKFLOW_CONFLICT", "PLOT_NOT_AVAILABLE", "PLOT_ASSIGNMENT_REMOVED"].includes(error?.code)) return false;
   res.status(error.statusCode || 409).json({ error: error.message, code: error.code });
   return true;
 }
@@ -547,12 +677,40 @@ function completedTransportTrips(transportPeople) {
       const key = assignmentKey(pair.customerId, pair.plotSiteId);
       const saved = statuses[key] || statuses[`customer-${pair.customerId}`];
       if (saved?.status === "COMPLETED") {
-        completedTrips.set(key, { updatedAt: saved.updatedAt || null, transportPersonId: person.id || null });
+        completedTrips.set(key, {
+          updatedAt: saved.updatedAt || null,
+          pickupAt: saved.pickupAt || null,
+          dropOffAt: saved.dropOffAt || saved.updatedAt || null,
+          scheduledPickupAt: saved.scheduledPickupAt || null,
+          scheduledDropOffAt: saved.scheduledDropOffAt || null,
+          transportPersonId: person.id || null,
+        });
         completedTrips.set(pair.customerId, saved.updatedAt || null);
       }
     }
   }
   return completedTrips;
+}
+
+function transportTripDetails(transportPeople) {
+  const trips = new Map();
+  for (const person of transportPeople) {
+    const statuses = parseStoredObject(person.assignmentStatusJson);
+    for (const pair of assignmentPairs(person)) {
+      const key = assignmentKey(pair.customerId, pair.plotSiteId);
+      const saved = statuses[key] || statuses[`customer-${pair.customerId}`] || {};
+      trips.set(key, {
+        status: TRANSPORT_STATUS_FLOW.includes(saved.status) ? saved.status : "ASSIGNED",
+        updatedAt: saved.updatedAt || null,
+        pickupAt: saved.pickupAt || null,
+        dropOffAt: saved.dropOffAt || null,
+        scheduledPickupAt: saved.scheduledPickupAt || null,
+        scheduledDropOffAt: saved.scheduledDropOffAt || null,
+        transportPersonId: person.id || null,
+      });
+    }
+  }
+  return trips;
 }
 
 function normalizeBrokerWorkflowStatus(saved) {
@@ -572,6 +730,18 @@ function normalizeBillingWorkflowStatus(saved) {
   };
   if (legacyStatuses[saved?.billingStatus]) return legacyStatuses[saved.billingStatus];
   return saved?.status === "BILLED" ? "TRANSACTION_COMPLETED" : BILLING_WORKFLOW[0];
+}
+
+function billingStatusWithBooking(status, booking) {
+  if (!booking) return status;
+  const totalAmount = Number(booking.totalAmount || 0);
+  const balance = Number(booking.balance ?? totalAmount);
+  const fullyPaid = booking.paymentStatus === "PAID" || (totalAmount > 0 && balance <= 0);
+  if (!fullyPaid) return status;
+
+  const currentIndex = BILLING_WORKFLOW.indexOf(status);
+  const verifiedIndex = BILLING_WORKFLOW.indexOf("PAYMENT_VERIFIED");
+  return currentIndex >= 0 && currentIndex < verifiedIndex ? "PAYMENT_VERIFIED" : status;
 }
 
 async function requireBillingProfile(req, res) {
@@ -732,6 +902,10 @@ function buildTransportAssignments(
       assignmentKey: key,
       status,
       statusUpdatedAt: saved.updatedAt || null,
+      pickupAt: saved.pickupAt || null,
+      dropOffAt: saved.dropOffAt || null,
+      scheduledPickupAt: saved.scheduledPickupAt || null,
+      scheduledDropOffAt: saved.scheduledDropOffAt || null,
       customer: customerId ? customerMap.get(customerId) || null : null,
       pickup: customerPickup ? {
         id: customerPickup.id,
@@ -755,6 +929,10 @@ function findCustomerTransportStatus(customerId, transportPeople) {
     return {
       status: TRANSPORT_STATUS_FLOW.includes(saved.status) ? saved.status : "ASSIGNED",
       statusUpdatedAt: saved.updatedAt || person.updatedAt || null,
+      pickupAt: saved.pickupAt || null,
+      dropOffAt: saved.dropOffAt || null,
+      scheduledPickupAt: saved.scheduledPickupAt || null,
+      scheduledDropOffAt: saved.scheduledDropOffAt || null,
       transportPerson: { id: person.id, name: person.name, phone: person.phone },
     };
   }
@@ -806,12 +984,16 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
       transport: {
         status: transport.status,
         updatedAt: transport.statusUpdatedAt,
+        pickupAt: transport.pickupAt,
+        dropOffAt: transport.dropOffAt,
+        scheduledPickupAt: transport.scheduledPickupAt,
+        scheduledDropOffAt: transport.scheduledDropOffAt,
         assignee: transport.transportPerson,
       },
       broker: {
         status: brokerStatus,
         updatedAt: saved?.updatedAt || null,
-        assignee: broker ? { id: broker.id, name: broker.name, phone: broker.phone } : null,
+        assignee: broker ? { id: broker.id, name: broker.name, phone: broker.phone, commissionPercent: broker.commissionPercent == null ? null : Number(broker.commissionPercent) } : null,
       },
       billing: {
         status: billingStatus,
@@ -986,7 +1168,239 @@ async function requireGenericTenant(req, res, next) {
   }
 }
 
+// Public, token-scoped customer selection used by Generic web-form leads.
+// This is intentionally defined before the authenticated router middleware.
+const PUBLIC_SELECTION_SOURCE = "Selected by customer from Generic web-form link";
+
+async function hasCompletedPublicSelection(db, tenantId, contactId) {
+  const [pickup, booking] = await Promise.all([
+    db.customerPickup.findFirst({
+      where: { tenantId, contactId, sourceExcerpt: PUBLIC_SELECTION_SOURCE },
+      select: { id: true },
+    }),
+    db.plotBooking.findFirst({
+      where: { tenantId, contactId },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(pickup || booking);
+}
+
+router.get("/public/selection/:token", async (req, res) => {
+  try {
+    const { tenantId, contactId } = verifySelectionToken(req.params.token);
+    const [tenant, contact, pickupLocations, plots, completed] = await Promise.all([
+      prisma.tenant.findFirst({ where: { id: tenantId, vertical: "generic" }, select: { id: true, name: true } }),
+      prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null }, select: { id: true, name: true } }),
+      prisma.pickupLocation.findMany({ where: { tenantId, isActive: true }, orderBy: [{ name: "asc" }, { id: "asc" }], select: { id: true, name: true, address: true } }),
+      prisma.plotSite.findMany({ where: { tenantId, isActive: true, availability: "AVAILABLE", plotNumber: { not: null } }, orderBy: [{ name: "asc" }, { plotNumber: "asc" }], select: { id: true, name: true, plotNumber: true, address: true, area: true, areaUnit: true, price: true } }),
+      hasCompletedPublicSelection(prisma, tenantId, contactId),
+    ]);
+    if (!tenant || !contact) return res.status(404).json({ error: "This selection link is no longer available.", code: "SELECTION_NOT_FOUND" });
+    if (completed) return res.json({ completed: true, contact: { name: contact.name } });
+    return res.json({ contact: { name: contact.name }, pickupLocations, plots: plots.map((plot) => ({ ...plot, price: plot.price == null ? null : Number(plot.price) })) });
+  } catch (_error) {
+    return res.status(400).json({ error: "This selection link is invalid or expired.", code: "SELECTION_TOKEN_INVALID" });
+  }
+});
+
+router.post("/public/selection/:token", async (req, res) => {
+  try {
+    const { tenantId, contactId } = verifySelectionToken(req.params.token);
+    const pickupLocationId = Number(req.body?.pickupLocationId);
+    const plotSiteId = Number(req.body?.plotSiteId);
+    if (!Number.isInteger(pickupLocationId) || pickupLocationId <= 0 || !Number.isInteger(plotSiteId) || plotSiteId <= 0) {
+      return res.status(400).json({ error: "Select a pickup location and an interested plot.", code: "SELECTION_REQUIRED" });
+    }
+    const [tenant, contact, pickupLocation, plot] = await Promise.all([
+      prisma.tenant.findFirst({ where: { id: tenantId, vertical: "generic" }, select: { id: true } }),
+      prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null }, select: { id: true } }),
+      prisma.pickupLocation.findFirst({ where: { id: pickupLocationId, tenantId, isActive: true }, select: { id: true, address: true } }),
+      prisma.plotSite.findFirst({ where: { id: plotSiteId, tenantId, isActive: true }, select: { id: true, name: true, plotNumber: true, price: true, availability: true } }),
+    ]);
+    if (!tenant || !contact) return res.status(404).json({ error: "This selection link is no longer available.", code: "SELECTION_NOT_FOUND" });
+    if (!pickupLocation) return res.status(400).json({ error: "That pickup location is no longer available.", code: "PICKUP_LOCATION_UNAVAILABLE" });
+    if (!plot || String(plot.availability || "").toUpperCase() !== "AVAILABLE") return res.status(409).json({ error: "That plot is no longer available. Please choose another.", code: "PLOT_NOT_AVAILABLE" });
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Serialize submissions for this contact. Without this lock, two quick
+      // clicks could both pass the read check and create different bookings.
+      await tx.$queryRaw`SELECT id FROM Contact WHERE id = ${contactId} AND tenantId = ${tenantId} FOR UPDATE`;
+      if (await hasCompletedPublicSelection(tx, tenantId, contactId)) {
+        const alreadyCompleted = new Error("This selection link has already been used.");
+        alreadyCompleted.code = "SELECTION_ALREADY_COMPLETED";
+        throw alreadyCompleted;
+      }
+      await tx.contact.update({
+        where: { id: contactId },
+        data: { interestedPlotArea: `${plot.name}${plot.plotNumber ? ` - Plot ${plot.plotNumber}` : ""}` },
+      });
+      const pickup = await tx.customerPickup.upsert({
+        where: { tenantId_contactId: { tenantId, contactId } },
+        create: { tenantId, contactId, pickupAddress: pickupLocation.address, sourceExcerpt: PUBLIC_SELECTION_SOURCE },
+        update: { pickupAddress: pickupLocation.address, sourceExcerpt: PUBLIC_SELECTION_SOURCE },
+      });
+      const existing = await tx.plotBooking.findFirst({ where: { tenantId, contactId, plotSiteId, status: { not: "CANCELLED" } }, select: { id: true, bookingNumber: true } });
+      const booking = existing || await tx.plotBooking.create({ data: { bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`, tenantId, contactId, customerPickupId: pickup.id, plotSiteId, status: "PLOT_ASSIGNED", paymentStatus: "UNPAID", totalAmount: Number(plot.price || 0), balance: Number(plot.price || 0) }, select: { id: true, bookingNumber: true } });
+      return { pickup, booking };
+    });
+    require("../lib/eventBus").emitEvent(
+      "pickup_plot.selected",
+      {
+        contactId,
+        pickupPointId: result.pickup.id,
+        pickupLocationId,
+        plotSiteId,
+        bookingId: result.booking.id,
+      },
+      tenantId,
+    ).catch((eventError) => console.error("[GenericCampaign] pickup/plot selection event failed:", eventError.message));
+    return res.status(200).json({ saved: true, pickupAddress: result.pickup.pickupAddress, plot: { id: plot.id, name: plot.name, plotNumber: plot.plotNumber }, bookingId: result.booking.id });
+  } catch (error) {
+    if (error?.code === "SELECTION_ALREADY_COMPLETED") return res.status(409).json({ error: "This selection link has already been used.", code: error.code, completed: true });
+    if (error?.name === "JsonWebTokenError" || error?.name === "TokenExpiredError") return res.status(400).json({ error: "This selection link is invalid or expired.", code: "SELECTION_TOKEN_INVALID" });
+    console.error("pickup-plot-inventory public selection error:", error);
+    return res.status(500).json({ error: "Unable to save your selection. Please try again.", code: "SELECTION_SAVE_FAILED" });
+  }
+});
+
 router.use(verifyToken, requireGenericTenant);
+
+async function workspaceCallingProfiles(req) {
+  const select = { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true };
+  const tenantId = req.user.tenantId;
+  if (isAdminWorkspaceOverview(req)) {
+    const [transportPeople, brokers] = await Promise.all([
+      prisma.transportPerson.findMany({ where: { tenantId, isActive: true }, select }),
+      prisma.plotBroker.findMany({ where: { tenantId, isActive: true }, select }),
+    ]);
+    return [...transportPeople, ...brokers];
+  }
+  const [transportPerson, broker] = await Promise.all([
+    prisma.transportPerson.findFirst({ where: { tenantId, userId: req.user.userId, isActive: true }, select }),
+    prisma.plotBroker.findFirst({ where: { tenantId, userId: req.user.userId, isActive: true }, select }),
+  ]);
+  return [transportPerson, broker].filter(Boolean);
+}
+
+async function findWorkspaceCallCustomer(req) {
+  const contactId = Number(req.params.contactId);
+  if (!Number.isInteger(contactId) || contactId <= 0) return null;
+  const profiles = await workspaceCallingProfiles(req);
+  const assigned = profiles.some((profile) => assignmentPairs(profile)
+    .some((pair) => pair.customerId === contactId));
+  if (!assigned) return null;
+  return prisma.contact.findFirst({
+    where: { id: contactId, tenantId: req.user.tenantId, deletedAt: null },
+    select: { id: true, name: true, phone: true, email: true, company: true },
+  });
+}
+
+router.get("/calling/campaigns", async (req, res) => {
+  try {
+    const profiles = await workspaceCallingProfiles(req);
+    if (!isAdminWorkspaceOverview(req) && profiles.length === 0) {
+      return res.status(403).json({ error: "No active transport or Sales Executive profile is linked to this login", code: "CALLING_PROFILE_NOT_LINKED" });
+    }
+    const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
+    return res.json({ campaigns: Array.isArray(campaigns) ? campaigns : [] });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] calling campaigns", "Failed to fetch Callified campaigns");
+  }
+});
+
+router.get("/calling/customers/:contactId/context", async (req, res) => {
+  try {
+    const customer = await findWorkspaceCallCustomer(req);
+    if (!customer) return res.status(404).json({ error: "Assigned customer not found", code: "CALLING_CUSTOMER_NOT_FOUND" });
+    const normalizedPhone = callifiedClient.normalizeCallifiedPhone(customer.phone || "");
+    const phoneValid = normalizedPhone.replace(/\D/g, "").length >= 10;
+    const recent = await wasRecentlyDialed(req.user.tenantId, customer.id);
+    return res.json({
+      contactId: customer.id,
+      patientName: customer.name,
+      phone: customer.phone || null,
+      normalizedPhone: phoneValid ? normalizedPhone : null,
+      phoneValid,
+      recentCallAt: recent ? recent.toISOString() : null,
+    });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] calling context", "Failed to load call details for this customer");
+  }
+});
+
+router.post("/calling/customers/:contactId/ai-call", async (req, res) => {
+  try {
+    const campaignId = Number(req.body?.campaignId);
+    if (!Number.isInteger(campaignId) || campaignId <= 0) {
+      return res.status(400).json({ error: "campaignId is required", code: "MISSING_CAMPAIGN_ID" });
+    }
+    const customer = await findWorkspaceCallCustomer(req);
+    if (!customer) return res.status(404).json({ error: "Assigned customer not found", code: "CALLING_CUSTOMER_NOT_FOUND" });
+    const recent = await wasRecentlyDialed(req.user.tenantId, customer.id);
+    if (recent) return res.status(429).json(redialCooldownError(recent));
+
+    await clearDnpRetryState(customer.id).catch((error) => {
+      console.error(`[pickup-plot-inventory] failed to clear DNP retry state for contact ${customer.id}:`, error.message);
+    });
+    await prisma.contact.update({
+      where: { id: customer.id, tenantId: req.user.tenantId },
+      data: {
+        callifiedLeadStatus: CALL_STATUS.CONNECTED,
+        callifiedLeadStatusSource: "manual",
+        callifiedLeadStatusReason: "Workspace call in progress.",
+        callifiedLeadStatusUpdatedAt: new Date(),
+      },
+    });
+    const result = await callifiedClient.initiateCallForContact({
+      tenantId: req.user.tenantId,
+      contactId: customer.id,
+      campaignId,
+      userId: req.user.userId,
+      interest: "Generic CRM pickup and plot customer",
+    });
+    await writeAudit("CallifiedCall", "INITIATE", String(result.callifiedLeadId), req.user.userId, req.user.tenantId, {
+      surface: "generic_pickup_plot_workspace",
+      mode: "ai",
+      contactId: customer.id,
+      campaignId,
+    });
+    return res.json({ ...result, mode: "ai", contactId: customer.id });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] customer ai-call", "Failed to start the AI call");
+  }
+});
+
+router.post("/calling/customers/:contactId/manual-call", async (req, res) => {
+  try {
+    const campaignId = Number(req.body?.campaignId);
+    if (!Number.isInteger(campaignId) || campaignId <= 0) {
+      return res.status(400).json({ error: "campaignId is required", code: "MISSING_CAMPAIGN_ID" });
+    }
+    const customer = await findWorkspaceCallCustomer(req);
+    if (!customer) return res.status(404).json({ error: "Assigned customer not found", code: "CALLING_CUSTOMER_NOT_FOUND" });
+    const recent = await wasRecentlyDialed(req.user.tenantId, customer.id);
+    if (recent) return res.status(429).json(redialCooldownError(recent));
+
+    const result = await startBrowserCall({
+      tenantId: req.user.tenantId,
+      contactId: customer.id,
+      campaignId,
+      userId: req.user.userId,
+      interest: "Generic CRM pickup and plot customer",
+    });
+    await writeAudit("CallifiedCall", "BROWSER_CALL", String(result.callifiedLeadId), req.user.userId, req.user.tenantId, {
+      surface: "generic_pickup_plot_workspace",
+      mode: "browser",
+      contactId: customer.id,
+      campaignId,
+      callSid: result.callSid,
+    });
+    return res.json({ ...result, contactId: customer.id });
+  } catch (error) {
+    return sendCallifiedError(res, error, "[pickup-plot-inventory] customer manual-call", "Failed to start the manual call");
+  }
+});
 
 const WORKSPACE_ASSIGNMENT_TYPES = Object.freeze({
   transport: {
@@ -1598,6 +2012,92 @@ router.get("/transport-persons/me", requirePermission("transport_workspace", "re
   }
 });
 
+router.patch("/transport-persons/me/assignments/:assignmentKey/schedule", requirePermission("transport_workspace", "update"), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const assignedProfileId = adminAssignedProfileId(req);
+    const person = await prisma.transportPerson.findFirst({
+      where: {
+        tenantId,
+        ...(assignedProfileId ? { id: assignedProfileId } : { userId: req.user.userId }),
+        isActive: true,
+      },
+    });
+    if (!person) {
+      return res.status(403).json({ error: "No active transport profile is linked to this login", code: "TRANSPORT_PROFILE_NOT_LINKED" });
+    }
+    const assignments = buildTransportAssignments(
+      person,
+      [],
+      parseStoredArray(person.plotSiteIdsJson).map((id) => ({ id: Number(id) })),
+      parseStoredArray(person.customerIdsJson).map((id) => ({ id: Number(id) })),
+    );
+    const assignment = assignments.find((row) => row.assignmentKey === req.params.assignmentKey);
+    if (!assignment) {
+      return res.status(404).json({ error: "Assigned trip not found", code: "TRANSPORT_ASSIGNMENT_NOT_FOUND" });
+    }
+    if (assignment.status === "COMPLETED") {
+      return res.status(409).json({ error: "Completed trip times cannot be rescheduled.", code: "TRANSPORT_TRIP_COMPLETED" });
+    }
+    const hasPickupTime = req.body?.scheduledPickupAt !== undefined;
+    const hasDropOffTime = req.body?.scheduledDropOffAt !== undefined;
+    if (!hasPickupTime && !hasDropOffTime) {
+      return res.status(400).json({ error: "Choose a pickup or drop-off time.", code: "INVALID_TRANSPORT_SCHEDULE" });
+    }
+    const pickupDate = hasPickupTime ? new Date(req.body.scheduledPickupAt) : null;
+    const dropOffDate = hasDropOffTime ? new Date(req.body.scheduledDropOffAt) : null;
+    if ((pickupDate && Number.isNaN(pickupDate.getTime())) || (dropOffDate && Number.isNaN(dropOffDate.getTime()))) {
+      return res.status(400).json({ error: "Choose a valid pickup or drop-off time.", code: "INVALID_TRANSPORT_SCHEDULE" });
+    }
+    const currentMinute = new Date();
+    currentMinute.setSeconds(0, 0);
+    if ((pickupDate && pickupDate < currentMinute) || (dropOffDate && dropOffDate < currentMinute)) {
+      return res.status(400).json({ error: "Pickup and drop-off times must be the present time or a future time.", code: "TRANSPORT_SCHEDULE_IN_PAST" });
+    }
+    const statuses = parseStoredObject(person.assignmentStatusJson);
+    const previousStatus = statuses[assignment.assignmentKey]
+      || statuses[`customer-${assignment.customer?.id}`]
+      || {};
+    // Partial updates must also respect the other time already saved on the trip.
+    const effectivePickupDate = pickupDate || (previousStatus.scheduledPickupAt
+      ? new Date(previousStatus.scheduledPickupAt) : null);
+    const effectiveDropOffDate = dropOffDate || (previousStatus.scheduledDropOffAt
+      ? new Date(previousStatus.scheduledDropOffAt) : null);
+    if (effectivePickupDate && effectiveDropOffDate && effectiveDropOffDate < effectivePickupDate) {
+      return res.status(400).json({ error: "Drop-off time cannot be earlier than pickup time.", code: "INVALID_TRANSPORT_SCHEDULE_ORDER" });
+    }
+    statuses[assignment.assignmentKey] = {
+      ...previousStatus,
+      status: assignment.status,
+      ...(pickupDate ? { scheduledPickupAt: pickupDate.toISOString() } : {}),
+      ...(dropOffDate ? { scheduledDropOffAt: dropOffDate.toISOString() } : {}),
+    };
+    await saveWorkflowOptimistically(
+      prisma.transportPerson,
+      person,
+      "assignmentStatusJson",
+      statuses,
+      tenantId,
+    );
+    await writeAudit("TransportPerson", "SCHEDULE_TRIP", String(person.id), req.user.userId, tenantId, {
+      assignmentKey: assignment.assignmentKey,
+      scheduledPickupAt: statuses[assignment.assignmentKey].scheduledPickupAt || null,
+      scheduledDropOffAt: statuses[assignment.assignmentKey].scheduledDropOffAt || null,
+    });
+    return res.json({
+      assignmentKey: assignment.assignmentKey,
+      scheduledPickupAt: statuses[assignment.assignmentKey].scheduledPickupAt || null,
+      scheduledDropOffAt: statuses[assignment.assignmentKey].scheduledDropOffAt || null,
+      pickupAt: previousStatus.pickupAt || null,
+      dropOffAt: previousStatus.dropOffAt || null,
+    });
+  } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
+    console.error("pickup-plot-inventory PATCH /transport-persons/me/assignments/:assignmentKey/schedule error:", error);
+    return res.status(500).json({ error: "Failed to save pickup and drop-off times", code: "TRANSPORT_SCHEDULE_UPDATE_FAILED" });
+  }
+});
+
 router.patch("/transport-persons/me/assignments/:assignmentKey/status", requirePermission("transport_workspace", "update"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -1633,7 +2133,16 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/status", requireP
     }
     const now = new Date().toISOString();
     const statuses = parseStoredObject(person.assignmentStatusJson);
-    statuses[assignment.assignmentKey] = { status: nextStatus, updatedAt: now };
+    const previousStatus = statuses[assignment.assignmentKey]
+      || statuses[`customer-${assignment.customer?.id}`]
+      || {};
+    statuses[assignment.assignmentKey] = {
+      ...previousStatus,
+      status: nextStatus,
+      updatedAt: now,
+      ...(nextStatus === "PICKED_UP" ? { pickupAt: now } : {}),
+      ...(nextStatus === "COMPLETED" ? { dropOffAt: now } : {}),
+    };
     await prisma.$transaction(async (tx) => {
       if (assignment.status === TRANSPORT_STATUS_FLOW[0] && nextStatus === TRANSPORT_STATUS_FLOW[1]) {
         await claimCustomerForPerson(tx, {
@@ -1662,7 +2171,13 @@ router.patch("/transport-persons/me/assignments/:assignmentKey/status", requireP
         metadata: { transportPersonId: person.id },
       });
     });
-    return res.json({ assignmentKey: assignment.assignmentKey, status: nextStatus, statusUpdatedAt: now });
+    return res.json({
+      assignmentKey: assignment.assignmentKey,
+      status: nextStatus,
+      statusUpdatedAt: now,
+      pickupAt: statuses[assignment.assignmentKey].pickupAt || null,
+      dropOffAt: statuses[assignment.assignmentKey].dropOffAt || null,
+    });
   } catch (error) {
     if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory PATCH /transport-persons/me/assignments/:assignmentKey/status error:", error);
@@ -1692,6 +2207,7 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
       select: { id: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, assignmentStatusJson: true },
     }) : [];
     const completedTrips = completedTransportTrips(transportPeople);
+    const tripDetails = transportTripDetails(transportPeople);
     const awaitingBrokerPairs = adminOverview
       ? transportPeople.flatMap(assignmentPairs).filter((pair) => (
           completedTrips.has(assignmentKey(pair.customerId, pair.plotSiteId))
@@ -1700,7 +2216,20 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
       : [];
     const pairs = [...brokerPairs, ...awaitingBrokerPairs];
     const customerIds = [...new Set(pairs.map((row) => row.customerId))];
-    const plotSiteIds = [...new Set(pairs.map((row) => row.plotSiteId).filter(Number.isInteger))];
+    const assignedBookings = customerIds.length ? await prisma.plotBooking.findMany({
+      where: { tenantId, contactId: { in: customerIds }, status: "PLOT_ASSIGNED" },
+      select: { id: true, contactId: true, plotSiteId: true },
+    }) : [];
+    const assignedPlotIdsByCustomer = new Map();
+    for (const booking of assignedBookings) {
+      const plotIds = assignedPlotIdsByCustomer.get(Number(booking.contactId)) || [];
+      plotIds.push(Number(booking.plotSiteId));
+      assignedPlotIdsByCustomer.set(Number(booking.contactId), plotIds);
+    }
+    const plotSiteIds = [...new Set([
+      ...pairs.map((row) => row.plotSiteId),
+      ...assignedBookings.map((row) => Number(row.plotSiteId)),
+    ].filter(Number.isInteger))];
     const [customers, plots] = await Promise.all([
       customerIds.length ? prisma.contact.findMany({
         where: { tenantId, id: { in: customerIds }, deletedAt: null },
@@ -1710,10 +2239,7 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         where: {
           tenantId,
           isActive: true,
-          OR: [
-            { availability: "AVAILABLE" },
-            ...(plotSiteIds.length ? [{ id: { in: plotSiteIds } }] : []),
-          ],
+          id: { in: plotSiteIds },
         },
         select: { id: true, name: true, plotNumber: true, address: true, referenceCode: true, availability: true },
         orderBy: [{ plotNumber: "asc" }, { name: "asc" }],
@@ -1721,16 +2247,25 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
     ]);
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotMap = new Map(plots.map((row) => [row.id, row]));
-    const plotOptions = plots.filter((row) => row.availability === "AVAILABLE");
     const rows = brokers.flatMap((broker) => {
       const brokerStatuses = parseStoredObject(broker.workflowStatusJson);
       return assignmentPairs(broker).map(({ customerId, plotSiteId }) => {
         const customer = customerMap.get(customerId);
         const key = assignmentKey(customerId, plotSiteId);
         const tripCompleted = completedTrips.has(key);
+        const trip = tripDetails.get(key) || {};
         const brokerWorkflow = brokerStatuses[key] || brokerStatuses[`customer-${customerId}`];
+        const siteVisitAt = trip.dropOffAt || trip.scheduledDropOffAt || null;
+        const brokerStatus = normalizeBrokerWorkflowStatus(brokerWorkflow);
+        const effectiveBrokerStatus = brokerStatus === "READY_TO_SCHEDULE" && siteVisitAt
+          ? "VISIT_SCHEDULED"
+          : brokerStatus;
         const plot = plotMap.get(Number(brokerWorkflow?.plotId || plotSiteId)) || null;
         if (!customer || !plot) return null;
+        const plotOptions = [...new Set([
+          plotSiteId,
+          ...(assignedPlotIdsByCustomer.get(customerId) || []),
+        ])].map((id) => plotMap.get(Number(id))).filter(Boolean);
         return {
           ...customer,
           assignmentKey: key,
@@ -1739,12 +2274,16 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
           plotOptions,
           tripCompleted,
           tripCompletedAt: tripCompleted ? completedTrips.get(key)?.updatedAt || null : null,
+          pickupAt: trip.pickupAt || null,
+          dropOffAt: trip.dropOffAt || null,
+          scheduledPickupAt: trip.scheduledPickupAt || null,
+          scheduledDropOffAt: trip.scheduledDropOffAt || null,
           tripMessage: tripCompleted ? "Trip completed" : "Trip not completed",
           ...(tripCompleted ? {
             brokerWorkflow: {
-              status: normalizeBrokerWorkflowStatus(brokerWorkflow),
+              status: effectiveBrokerStatus,
               updatedAt: brokerWorkflow?.updatedAt || null,
-              visitScheduledAt: brokerWorkflow?.visitScheduledAt || null,
+              visitScheduledAt: brokerWorkflow?.visitScheduledAt || siteVisitAt,
             },
           } : {}),
         };
@@ -1763,6 +2302,10 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         plot,
         tripCompleted: true,
         tripCompletedAt: completedTrips.get(key)?.updatedAt || null,
+        pickupAt: completedTrips.get(key)?.pickupAt || null,
+        dropOffAt: completedTrips.get(key)?.dropOffAt || null,
+        scheduledPickupAt: completedTrips.get(key)?.scheduledPickupAt || null,
+        scheduledDropOffAt: completedTrips.get(key)?.scheduledDropOffAt || null,
         tripMessage: "Trip completed",
       });
     }
@@ -1881,7 +2424,12 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
       });
     }
     const statuses = parseStoredObject(broker.workflowStatusJson);
-    const currentStatus = normalizeBrokerWorkflowStatus(statuses[key] || statuses[`customer-${customerId}`]);
+    const savedWorkflow = statuses[key] || statuses[`customer-${customerId}`];
+    const transportSiteVisitAt = completedTrip.dropOffAt || completedTrip.scheduledDropOffAt || null;
+    const normalizedCurrentStatus = normalizeBrokerWorkflowStatus(savedWorkflow);
+    const currentStatus = normalizedCurrentStatus === "READY_TO_SCHEDULE" && transportSiteVisitAt
+      ? "VISIT_SCHEDULED"
+      : normalizedCurrentStatus;
     const requestedStatus = req.body?.status;
     const allowedStatuses = {
       READY_TO_SCHEDULE: ["VISIT_SCHEDULED"],
@@ -1894,7 +2442,10 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
       PLOT_SHOWN: ["PLOT_SELECTED"],
       PLOT_SELECTED: [],
     }[currentStatus] || [];
-    if (!allowedStatuses.includes(requestedStatus)) {
+    const canMarkPlotShownFromTransport = requestedStatus === "PLOT_SHOWN"
+      && Boolean(transportSiteVisitAt)
+      && ["READY_TO_SCHEDULE", "VISIT_SCHEDULED", "VISIT_CONFIRMED", "REMINDER_SENT"].includes(currentStatus);
+    if (!allowedStatuses.includes(requestedStatus) && !canMarkPlotShownFromTransport) {
       return res.status(409).json({
         error: allowedStatuses.length ? `Choose the next site visit step: ${allowedStatuses.join(" or ")}.` : "The site visit workflow is already complete.",
         code: "INVALID_BROKER_WORKFLOW_TRANSITION",
@@ -1903,7 +2454,9 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
       });
     }
     const now = new Date().toISOString();
-    let visitScheduledAt = statuses[key]?.visitScheduledAt || statuses[`customer-${customerId}`]?.visitScheduledAt || null;
+    let visitScheduledAt = statuses[key]?.visitScheduledAt
+      || statuses[`customer-${customerId}`]?.visitScheduledAt
+      || transportSiteVisitAt;
     if (["VISIT_SCHEDULED", "VISIT_RESCHEDULED"].includes(requestedStatus)) {
       const requestedVisitDate = text(req.body?.visitScheduledAt, 80);
       const parsedVisitDate = requestedVisitDate ? new Date(requestedVisitDate) : null;
@@ -1918,6 +2471,10 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
     let reservedPlot = null;
     let booking = null;
     if (requestedStatus === "PLOT_SELECTED") {
+      const assignedBookings = await prisma.plotBooking.findMany({
+        where: { tenantId, contactId: customerId, status: "PLOT_ASSIGNED" },
+        select: { id: true, bookingNumber: true, plotSiteId: true, customerPickupId: true },
+      });
       const submittedPlotId = req.body?.plotId;
       const plotId = submittedPlotId === undefined || submittedPlotId === null || submittedPlotId === ""
         ? pair.plotSiteId
@@ -1931,6 +2488,16 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
           code: "PLOT_REQUIRED_FOR_BOOKING",
         });
       }
+      const assignedPlotIds = new Set([
+        Number(pair.plotSiteId),
+        ...assignedBookings.map((row) => Number(row.plotSiteId)),
+      ]);
+      if (!assignedPlotIds.has(plotId)) {
+        return res.status(409).json({
+          error: "Choose the plot assigned to this customer.",
+          code: "PLOT_NOT_ASSIGNED_TO_CUSTOMER",
+        });
+      }
       const plot = await prisma.plotSite.findFirst({ where: { id: plotId, tenantId, isActive: true } });
       if (!plot) {
         return res.status(409).json({ error: "The assigned plot is not active.", code: "PLOT_NOT_AVAILABLE" });
@@ -1942,6 +2509,7 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
         });
       }
       await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, tenantId, [{ customerId, plotSiteId: plotId }]);
         const reservation = await tx.plotSite.updateMany({
           where: { id: plotId, tenantId, isActive: true, availability: "AVAILABLE" },
           data: { availability: "RESERVED" },
@@ -1953,25 +2521,40 @@ router.patch(["/brokers/me/customers/:customerId/workflow", "/brokers/me/assignm
           throw error;
         }
         reservedPlot = { ...plot, availability: "RESERVED" };
-        const customerPickup = await tx.customerPickup.findFirst({
-          where: { tenantId, contactId: customerId },
-          select: { id: true },
-        });
-        booking = await tx.plotBooking.create({
-          data: {
-            bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
-            tenantId,
-            contactId: customerId,
-            customerPickupId: customerPickup?.id || null,
-            plotSiteId: plotId,
-            transportPersonId: completedTrip.transportPersonId,
-            plotBrokerId: broker.id,
-            status: "PLOT_RESERVED",
-            paymentStatus: "UNPAID",
-            totalAmount: Number(plot.price || 0),
-            balance: Number(plot.price || 0),
-          },
-        });
+        const assignedBooking = assignedBookings.find((row) => Number(row.plotSiteId) === plotId);
+        if (assignedBooking) {
+          booking = await tx.plotBooking.update({
+            where: { id: assignedBooking.id },
+            data: {
+              transportPersonId: completedTrip.transportPersonId,
+              plotBrokerId: broker.id,
+              status: "PLOT_RESERVED",
+              totalAmount: Number(plot.price || 0),
+              balance: Number(plot.price || 0),
+              reservedAt: new Date(now),
+            },
+          });
+        } else {
+          const customerPickup = await tx.customerPickup.findFirst({
+            where: { tenantId, contactId: customerId },
+            select: { id: true },
+          });
+          booking = await tx.plotBooking.create({
+            data: {
+              bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
+              tenantId,
+              contactId: customerId,
+              customerPickupId: customerPickup?.id || null,
+              plotSiteId: plotId,
+              transportPersonId: completedTrip.transportPersonId,
+              plotBrokerId: broker.id,
+              status: "PLOT_RESERVED",
+              paymentStatus: "UNPAID",
+              totalAmount: Number(plot.price || 0),
+              balance: Number(plot.price || 0),
+            },
+          });
+        }
         statuses[key] = {
           ...statuses[key],
           status: requestedStatus,
@@ -2116,7 +2699,7 @@ router.get("/billing/me", requirePermission("billing_workspace", "read"), async 
       ...visibleQueue.map((row) => row.plotId),
       ...waitingQueue.map((row) => row.plotSiteId),
     ].filter(Boolean))];
-    const [customers, plots] = await Promise.all([
+    const [customers, plots, plotBookings] = await Promise.all([
       customerIds.length ? prisma.contact.findMany({
         where: { tenantId, id: { in: customerIds }, deletedAt: null },
         select: { id: true, name: true, phone: true, email: true, company: true },
@@ -2125,29 +2708,55 @@ router.get("/billing/me", requirePermission("billing_workspace", "read"), async 
         where: { tenantId, id: { in: plotIds }, isActive: true },
         select: { id: true, name: true, plotNumber: true, address: true, referenceCode: true, price: true },
       }) : [],
+      customerIds.length && plotIds.length ? prisma.plotBooking.findMany({
+        where: {
+          tenantId,
+          contactId: { in: customerIds },
+          plotSiteId: { in: plotIds },
+          status: { not: "CANCELLED" },
+        },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true, bookingNumber: true, contactId: true, plotSiteId: true,
+          invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
+          amountPaid: true, balance: true,
+        },
+      }) : [],
     ]);
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotMap = new Map(plots.map((row) => [row.id, row]));
-    const assignments = visibleQueue.map((row) => ({
-      assignmentKey: `${row.brokerId}-${row.customerId}-${row.plotId}`,
-      assignedStaff: row.billingPerson ? assignedStaff(row.billingPerson) : null,
-      awaitingAssignment: !row.billingPerson,
-      broker: { id: row.brokerId, name: row.brokerName },
-      customer: customerMap.get(row.customerId) || null,
-      plot: row.plotId ? plotMap.get(row.plotId) || null : null,
-      status: row.billingStatus,
-      statusUpdatedAt: row.billingUpdatedAt,
-      bookingId: row.bookingId,
-      bookingNumber: row.bookingNumber,
-      invoiceId: row.invoiceId,
-      invoiceNum: row.invoiceNum,
-      invoiceAmount: row.invoiceAmount,
-      amountPaid: row.amountPaid,
-      balance: row.balance,
-      paymentId: row.paymentId,
-      paymentMethod: row.paymentMethod,
-      transactionRef: row.transactionRef,
-    })).filter((row) => row.customer && row.plot);
+    const bookingById = new Map(plotBookings.map((row) => [Number(row.id), row]));
+    const bookingByPair = new Map();
+    for (const booking of plotBookings) {
+      const key = assignmentKey(booking.contactId, booking.plotSiteId);
+      if (!bookingByPair.has(key)) bookingByPair.set(key, booking);
+    }
+    const assignments = visibleQueue.map((row) => {
+      const booking = bookingById.get(Number(row.bookingId))
+        || bookingByPair.get(assignmentKey(row.customerId, row.plotId))
+        || null;
+      return {
+        assignmentKey: `${row.brokerId}-${row.customerId}-${row.plotId}`,
+        assignedStaff: row.billingPerson ? assignedStaff(row.billingPerson) : null,
+        awaitingAssignment: !row.billingPerson,
+        broker: { id: row.brokerId, name: row.brokerName },
+        customer: customerMap.get(row.customerId) || null,
+        plot: row.plotId ? plotMap.get(row.plotId) || null : null,
+        status: billingStatusWithBooking(row.billingStatus, booking),
+        statusUpdatedAt: row.billingUpdatedAt,
+        bookingId: booking?.id || row.bookingId,
+        bookingNumber: booking?.bookingNumber || row.bookingNumber,
+        invoiceId: booking?.invoiceId || row.invoiceId,
+        invoiceNum: row.invoiceNum,
+        invoiceAmount: booking ? Number(booking.totalAmount) : row.invoiceAmount,
+        amountPaid: booking ? Number(booking.amountPaid) : row.amountPaid,
+        balance: booking ? Number(booking.balance) : row.balance,
+        paymentStatus: booking?.paymentStatus || null,
+        paymentId: row.paymentId,
+        paymentMethod: row.paymentMethod,
+        transactionRef: row.transactionRef,
+      };
+    }).filter((row) => row.customer && row.plot);
     const waitingAssignments = waitingQueue.map((row) => {
       const brokerAssignment = brokerAssignments.get(assignmentKey(row.customerId, row.plotSiteId));
       return {
@@ -2257,7 +2866,15 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
     if (normalizeBrokerWorkflowStatus(statuses[key]) !== "PLOT_SELECTED") {
       return res.status(409).json({ error: "Customer has not been handed to Billing", code: "CUSTOMER_NOT_READY_FOR_BILLING" });
     }
-    const currentStatus = normalizeBillingWorkflowStatus(statuses[key]);
+    const saved = { ...statuses[key] };
+    const plotId = requestedPlotId;
+    let booking = saved.bookingId
+      ? await prisma.plotBooking.findFirst({ where: { id: Number(saved.bookingId), tenantId: req.user.tenantId } })
+      : await findActivePlotBooking(prisma, req.user.tenantId, customerId, plotId);
+    const currentStatus = billingStatusWithBooking(
+      normalizeBillingWorkflowStatus(statuses[key]),
+      booking,
+    );
     const nextStatus = BILLING_WORKFLOW[BILLING_WORKFLOW.indexOf(currentStatus) + 1];
     if (!nextStatus || req.body?.status !== nextStatus) {
       return res.status(409).json({
@@ -2268,11 +2885,6 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       });
     }
     const now = new Date().toISOString();
-    const saved = { ...statuses[key] };
-    const plotId = requestedPlotId;
-    let booking = saved.bookingId
-      ? await prisma.plotBooking.findFirst({ where: { id: Number(saved.bookingId), tenantId: req.user.tenantId } })
-      : await findActivePlotBooking(prisma, req.user.tenantId, customerId, plotId);
     if (
       currentStatus === BILLING_WORKFLOW[0]
       && nextStatus === BILLING_WORKFLOW[1]
@@ -2295,6 +2907,21 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       );
     };
 
+    // The booking was read before entering the transaction. Revalidate it
+    // after taking the same customer lock as deselection, and the booking row
+    // lock used by payment reconciliation, before making financial writes.
+    const guardBillingBooking = async (tx) => {
+      await lockPlotAssignmentCustomers(tx, req.user.tenantId, [{ customerId, plotSiteId: plotId }]);
+      if (!booking) return;
+      await require("../lib/plotBookingPayments").lockBooking(tx, req.user.tenantId, booking.id);
+      const current = await tx.plotBooking.findFirst({ where: { id: booking.id, tenantId: req.user.tenantId, contactId: customerId, plotSiteId: plotId, status: { not: "CANCELLED" } }, select: { id: true } });
+      if (!current) {
+        const error = new Error("The plot assignment was removed. Refresh before continuing billing.");
+        error.code = "PLOT_ASSIGNMENT_REMOVED";
+        throw error;
+      }
+    };
+
     let invoice = null;
     let payment = null;
     if (nextStatus === "INVOICE_CREATED") {
@@ -2315,6 +2942,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 7);
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         if (!booking) {
           booking = await tx.plotBooking.create({
             data: {
@@ -2401,6 +3029,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         return res.status(502).json({ error: "The invoice email could not be sent.", code: "INVOICE_SEND_FAILED" });
       }
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         if (booking) await tx.plotBooking.update({ where: { id: booking.id }, data: { status: nextStatus } });
         await saveWorkflow(tx, { invoiceSentAt: now });
         await appendWorkflowEvent(tx, req, {
@@ -2441,6 +3070,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
       }
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         payment = await tx.payment.create({
           data: {
             invoiceId: sourceInvoice.id,
@@ -2477,6 +3107,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
       const paidAt = new Date();
       const paidAmount = Number(saved.paymentReceivedAmount || saved.invoiceAmount || 0);
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         payment = await tx.payment.update({
           where: { id: Number(saved.paymentId) },
           data: { status: "SUCCESS", paidAt },
@@ -2501,6 +3132,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
     } else if (nextStatus === "PLOT_SOLD") {
       if (!plotId) return res.status(409).json({ error: "The booking has no plot.", code: "PLOT_REQUIRED_FOR_BOOKING" });
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         await tx.plotSite.update({ where: { id: plotId }, data: { availability: "SOLD" } });
         if (booking) await tx.plotBooking.update({ where: { id: booking.id }, data: { status: "PLOT_SOLD", soldAt: new Date() } });
         await saveWorkflow(tx, { plotSoldAt: now });
@@ -2517,6 +3149,7 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
         TRANSACTION_COMPLETED: { transactionCompletedAt: now },
       };
       await prisma.$transaction(async (tx) => {
+        await guardBillingBooking(tx);
         if (currentStatus === BILLING_WORKFLOW[0] && nextStatus === BILLING_WORKFLOW[1]) {
           await claimCustomerForPerson(tx, {
             modelName: "billingPerson",
@@ -2545,6 +3178,22 @@ router.patch("/billing/me/assignments/:assignmentKey/status", requirePermission(
           stage: "BILLING", fromStatus: currentStatus, toStatus: nextStatus, occurredAt: now,
         });
       });
+    }
+    if (nextStatus === "PAYMENT_VERIFIED" && payment?.id) {
+      await require("../lib/eventBus").emitEvent(
+        "payment.collected",
+        { paymentId: payment.id, invoiceId: invoice?.id || saved.invoiceId, contactId: customerId, bookingId: booking?.id },
+        req.user.tenantId,
+        req.io,
+      ).catch((eventError) => console.error("[GenericCampaign] plot payment event failed:", eventError.message));
+    }
+    if (nextStatus === "BOOKING_CONFIRMED") {
+      require("../lib/eventBus").emitEvent(
+        "plot.confirmed",
+        { contactId: customerId, plotSiteId: plotId, bookingId: booking?.id },
+        req.user.tenantId,
+        req.io,
+      ).catch((eventError) => console.error("[GenericCampaign] plot confirmation event failed:", eventError.message));
     }
     const responseStatus = payment?.workflowStatus || nextStatus;
     return res.json({
@@ -2627,7 +3276,7 @@ router.get("/lead-status", async (req, res) => {
       return rows.map((row) => row.id);
     };
     const [transportIds, brokerIds] = await Promise.all([assignedIds('TransportPerson'), assignedIds('PlotBroker')]);
-    const [pickups, transportPeople, brokers, eventPages] = await Promise.all([
+    const [pickups, transportPeople, brokers, eventPages, plotBookings] = await Promise.all([
       prisma.customerPickup.findMany({
         where: { tenantId, contactId: { in: visibleContactIds } },
         orderBy: { updatedAt: "desc" },
@@ -2651,6 +3300,15 @@ router.get("/lead-status", async (req, res) => {
         });
         return { contactId, events: events.slice(0, 50).reverse(), hasMore: events.length > 50 };
       })),
+      prisma.plotBooking.findMany({
+        where: {
+          tenantId,
+          contactId: { in: visibleContactIds },
+          status: { not: "CANCELLED" },
+        },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true, contactId: true, plotSiteId: true, status: true, updatedAt: true },
+      }),
     ]);
     const selectedPlotIds = brokers.flatMap((broker) => {
       const statuses = parseStoredObject(broker.workflowStatusJson);
@@ -2664,6 +3322,7 @@ router.get("/lead-status", async (req, res) => {
         assignmentPairs(person).filter((pair) => visibleContactIds.includes(pair.customerId))
           .map((pair) => pair.plotSiteId)),
       ...selectedPlotIds,
+      ...plotBookings.map((booking) => Number(booking.plotSiteId)),
     ].filter((id) => Number.isInteger(id) && id > 0))];
     if (plotIds.length > 200) {
       const error = new Error("Too many plot assignments. Request fewer contacts.");
@@ -2692,13 +3351,51 @@ router.get("/lead-status", async (req, res) => {
       });
       historyByCustomer.set(event.contactId, history);
     }
-    const customers = pickups.map((pickup) => ({
-      ...pickup,
-      pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
-      ...findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap),
-      workflowHistory: historyByCustomer.get(pickup.contactId) || [],
-      workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === pickup.contactId)?.hasMore || false },
-    }));
+    const bookingsByContact = new Map();
+    for (const booking of plotBookings) {
+      const rows = bookingsByContact.get(Number(booking.contactId)) || [];
+      rows.push(booking);
+      bookingsByContact.set(Number(booking.contactId), rows);
+    }
+    const pickupContactIds = new Set(pickups.map((pickup) => Number(pickup.contactId)));
+    const customers = pickups.map((pickup) => {
+      const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap);
+      const bookingPlots = (bookingsByContact.get(Number(pickup.contactId)) || [])
+        .map((booking) => plotMap.get(Number(booking.plotSiteId)))
+        .filter(Boolean);
+      const assignedPlots = [...new Map([
+        workflowStatus.assignedPlot,
+        ...bookingPlots,
+      ].filter(Boolean).map((plot) => [Number(plot.id), plot])).values()];
+      return {
+        ...pickup,
+        pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
+        ...workflowStatus,
+        assignedPlot: workflowStatus.assignedPlot || assignedPlots[0] || null,
+        assignedPlots,
+        workflowHistory: historyByCustomer.get(pickup.contactId) || [],
+        workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === pickup.contactId)?.hasMore || false },
+      };
+    });
+    for (const [contactId, bookings] of bookingsByContact) {
+      if (pickupContactIds.has(contactId)) continue;
+      const assignedPlots = [...new Map(bookings
+        .map((booking) => plotMap.get(Number(booking.plotSiteId)))
+        .filter(Boolean)
+        .map((plot) => [Number(plot.id), plot])).values()];
+      const latestBooking = bookings[0];
+      customers.push({
+        contactId,
+        pickupAddress: null,
+        assignedPlot: assignedPlots[0] || null,
+        assignedPlots,
+        currentStage: "plot",
+        currentStatus: latestBooking?.status || "PLOT_ASSIGNED",
+        currentStatusUpdatedAt: latestBooking?.updatedAt || null,
+        workflowHistory: historyByCustomer.get(contactId) || [],
+        workflowHistoryPagination: { page: historyPage, pageSize: 50, hasMore: eventPages.find((page) => page.contactId === contactId)?.hasMore || false },
+      });
+    }
     return res.json({ customers, pickupLocations });
   } catch (error) {
     console.error("pickup-plot-inventory GET /lead-status error:", error);
@@ -2721,8 +3418,17 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
     if (plotSiteIds.length < 1 || plotSiteIds.length > 50 || plotSiteIds.some((id) => !Number.isInteger(id) || id <= 0)) {
       return res.status(400).json({ error: "Select between 1 and 50 valid plots.", code: "INVALID_PLOT_IDS" });
     }
+    const replacePlotSiteId = req.body?.replacePlotSiteId === undefined
+      ? null
+      : Number(req.body.replacePlotSiteId);
+    if (replacePlotSiteId !== null && (!Number.isInteger(replacePlotSiteId) || replacePlotSiteId <= 0 || plotSiteIds.length !== 1)) {
+      return res.status(400).json({
+        error: "Choose one valid assigned plot and one replacement plot number.",
+        code: "INVALID_PLOT_REPLACEMENT",
+      });
+    }
 
-    const [contact, customerPickup, plots, existingBookings] = await Promise.all([
+    const [contact, customerPickup, plots, existingBookings, transportPeople] = await Promise.all([
       prisma.contact.findFirst({
         where: { id: contactId, tenantId, deletedAt: null },
         select: { id: true },
@@ -2739,12 +3445,16 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
         where: { tenantId, contactId, status: { not: "CANCELLED" } },
         select: { id: true, plotSiteId: true, bookingNumber: true, status: true },
       }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      }),
     ]);
     if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
-    if (!customerPickup) {
+    if (customerTransportStarted(transportPeople, contactId)) {
       return res.status(409).json({
-        error: "Capture the customer's pickup location before assigning plots.",
-        code: "PICKUP_LOCATION_REQUIRED",
+        error: "Pickup location and plot assignments cannot be changed after transport has started.",
+        code: "TRANSPORT_WORKFLOW_LOCKED",
       });
     }
     if (plots.length !== plotSiteIds.length) {
@@ -2780,8 +3490,117 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
     }
     const existingPlots = existingPlotIds.size ? await prisma.plotSite.findMany({
       where: { tenantId, id: { in: [...existingPlotIds] } },
-      select: { id: true, name: true, plotNumber: true },
+      select: { id: true, name: true, plotNumber: true, availability: true },
     }) : [];
+
+    if (replacePlotSiteId !== null) {
+      const sourceBooking = existingBookings.find((booking) => Number(booking.plotSiteId) === replacePlotSiteId);
+      const sourcePlot = existingPlots.find((plot) => Number(plot.id) === replacePlotSiteId);
+      const replacementPlot = plots[0];
+      if (!sourceBooking || !sourcePlot) {
+        return res.status(404).json({ error: "The assigned plot was not found.", code: "ASSIGNED_PLOT_NOT_FOUND" });
+      }
+      const sourceBookingStatus = String(sourceBooking.status || "").trim().toUpperCase();
+      const sourceAvailability = String(sourcePlot.availability || "").trim().toUpperCase();
+      if (
+        sourceAvailability === "SOLD" ||
+        ["PLOT_SOLD", "TRANSACTION_COMPLETED"].includes(sourceBookingStatus)
+      ) {
+        return res.status(409).json({
+          error: "A purchased plot cannot be changed. View the selected plot instead.",
+          code: "PURCHASED_PLOT_IMMUTABLE",
+        });
+      }
+      if (Number(replacementPlot.id) === replacePlotSiteId || existingPlotIds.has(Number(replacementPlot.id))) {
+        return res.status(409).json({
+          error: "Choose a different plot number that is not already assigned to this customer.",
+          code: "PLOT_ALREADY_ASSIGNED",
+        });
+      }
+      if (normalizePlotName(sourcePlot.name) !== normalizePlotName(replacementPlot.name)) {
+        return res.status(400).json({
+          error: "Choose a replacement number from the same Plot / Site name.",
+          code: "PLOT_NAME_MISMATCH",
+        });
+      }
+
+      const [transportPeople, brokers, billingPeople] = await Promise.all([
+        prisma.transportPerson.findMany({ where: { tenantId } }),
+        prisma.plotBroker.findMany({ where: { tenantId } }),
+        prisma.billingPerson.findMany({ where: { tenantId } }),
+      ]);
+      await prisma.$transaction(async (tx) => {
+        if (["RESERVED", "SOLD"].includes(sourceAvailability)) {
+          const reserved = await tx.plotSite.updateMany({
+            where: { id: replacementPlot.id, tenantId, isActive: true, availability: "AVAILABLE" },
+            data: { availability: sourceAvailability },
+          });
+          if (reserved.count !== 1) {
+            const error = new Error("The replacement plot is no longer available. Refresh and choose another plot.");
+            error.statusCode = 409;
+            error.code = "PLOT_NOT_AVAILABLE";
+            throw error;
+          }
+          await tx.plotSite.updateMany({
+            where: { id: replacePlotSiteId, tenantId, availability: sourceAvailability },
+            data: { availability: "AVAILABLE" },
+          });
+        }
+        await tx.plotBooking.update({
+          where: { id: sourceBooking.id },
+          data: { plotSiteId: replacementPlot.id },
+        });
+        if (sourceBooking.invoiceId) {
+          await tx.plotInvoiceItem.updateMany({
+            where: { tenantId, plotBookingId: sourceBooking.id },
+            data: { itemId: replacementPlot.id, description: replacementPlot.name },
+          });
+        }
+        for (const person of transportPeople) {
+          const data = replacePersonPlotAssignment(
+            person, contactId, replacePlotSiteId, replacementPlot.id, "assignmentStatusJson",
+          );
+          if (data) await tx.transportPerson.update({ where: { id: person.id }, data });
+        }
+        for (const person of brokers) {
+          const data = replacePersonPlotAssignment(
+            person, contactId, replacePlotSiteId, replacementPlot.id, "workflowStatusJson",
+          );
+          if (data) await tx.plotBroker.update({ where: { id: person.id }, data });
+        }
+        for (const person of billingPeople) {
+          const data = replacePersonPlotAssignment(
+            person, contactId, replacePlotSiteId, replacementPlot.id,
+          );
+          if (data) await tx.billingPerson.update({ where: { id: person.id }, data });
+        }
+        await appendWorkflowEvent(tx, req, {
+          bookingId: sourceBooking.id,
+          contactId,
+          plotSiteId: replacementPlot.id,
+          stage: "PLOT",
+          fromStatus: sourceBooking.status,
+          toStatus: "PLOT_CHANGED",
+          metadata: {
+            previousPlotSiteId: replacePlotSiteId,
+            replacementPlotSiteId: replacementPlot.id,
+          },
+        });
+      });
+
+      return res.json({
+        contactId,
+        replacedPlotSiteId: replacePlotSiteId,
+        replacementPlotSiteId: Number(replacementPlot.id),
+        assignedPlotIds: existingBookings.map((booking) => (
+          Number(booking.plotSiteId) === replacePlotSiteId
+            ? Number(replacementPlot.id)
+            : Number(booking.plotSiteId)
+        )),
+        bookingsUpdated: 1,
+      });
+    }
+
     const selectedPlotName = [...selectedPlotNames][0] || "";
     const existingNumbers = new Set(existingPlots
       .filter((plot) => normalizePlotName(plot.name) === selectedPlotName)
@@ -2802,7 +3621,7 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
             bookingNumber: `BOOK-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
             tenantId,
             contactId,
-            customerPickupId: customerPickup.id,
+            customerPickupId: customerPickup?.id || null,
             plotSiteId: plot.id,
             status: "PLOT_ASSIGNED",
             paymentStatus: "UNPAID",
@@ -2840,6 +3659,289 @@ router.post("/customer-pickups/:contactId/plots", adminOnly, async (req, res) =>
   }
 });
 
+router.delete("/customer-pickups/:contactId/plots/:plotSiteId", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    const plotSiteId = Number(req.params.plotSiteId);
+    if (![contactId, plotSiteId].every((id) => Number.isInteger(id) && id > 0)) {
+      return res.status(400).json({ error: "Invalid customer or plot id", code: "INVALID_ID" });
+    }
+    const [contact, booking, transportPeople] = await Promise.all([
+      prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null }, select: { id: true } }),
+      prisma.plotBooking.findFirst({
+        where: { tenantId, contactId, plotSiteId, status: { not: "CANCELLED" } },
+        select: { id: true, status: true, paymentStatus: true, amountPaid: true, invoiceId: true },
+      }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      }),
+    ]);
+    if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
+    if (!booking) return res.status(404).json({ error: "Assigned plot not found", code: "ASSIGNED_PLOT_NOT_FOUND" });
+    if (customerTransportStarted(transportPeople, contactId)) {
+      return res.status(409).json({
+        error: "Plot assignments cannot be changed after transport has started.",
+        code: "TRANSPORT_WORKFLOW_LOCKED",
+      });
+    }
+    if (
+      String(booking.status || "").trim().toUpperCase() !== "PLOT_ASSIGNED"
+      || Number(booking.amountPaid || 0) > 0
+      || booking.invoiceId
+      || !["", "UNPAID"].includes(String(booking.paymentStatus || "").trim().toUpperCase())
+    ) {
+      return res.status(409).json({
+        error: "This plot can no longer be deselected because its booking or payment workflow has started.",
+        code: "PLOT_UNASSIGNMENT_LOCKED",
+      });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM Contact WHERE id = ${contactId} AND tenantId = ${tenantId} FOR UPDATE`;
+      const currentTransport = await tx.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      });
+      if (customerTransportStarted(currentTransport, contactId)) {
+        const error = new Error("Plot assignments cannot be changed after transport has started.");
+        error.code = "TRANSPORT_WORKFLOW_LOCKED";
+        throw error;
+      }
+      const activeBookings = await tx.plotBooking.findMany({
+        where: { tenantId, plotSiteId, status: { not: "CANCELLED" } },
+        select: { id: true, contactId: true, status: true, paymentStatus: true, amountPaid: true, invoiceId: true },
+      });
+      const customerBookings = activeBookings.filter((row) => row.contactId === contactId);
+      if (customerBookings.some((row) => row.status !== "PLOT_ASSIGNED" || Number(row.amountPaid) > 0 || row.invoiceId || !["", "UNPAID"].includes(row.paymentStatus))) {
+        const error = new Error("Another booking for this plot has already entered its booking or payment workflow.");
+        error.code = "PLOT_UNASSIGNMENT_LOCKED";
+        throw error;
+      }
+      const bookingIds = [...new Set([booking.id, ...customerBookings.map((row) => row.id)])];
+      const cancelled = await tx.plotBooking.updateMany({
+        where: { id: { in: bookingIds }, tenantId, contactId, plotSiteId, status: "PLOT_ASSIGNED", paymentStatus: { in: ["", "UNPAID"] }, amountPaid: 0, invoiceId: null },
+        data: { status: "CANCELLED" },
+      });
+      if (cancelled.count !== bookingIds.length) {
+        const error = new Error("This plot can no longer be deselected because its booking or payment workflow has started.");
+        error.code = "PLOT_UNASSIGNMENT_LOCKED";
+        throw error;
+      }
+      if (!activeBookings.some((row) => row.contactId !== contactId)) await tx.plotSite.updateMany({
+        where: { id: plotSiteId, tenantId, availability: "RESERVED" },
+        data: { availability: "AVAILABLE" },
+      });
+      await appendWorkflowEvent(tx, req, {
+        bookingId: booking.id,
+        contactId,
+        plotSiteId,
+        stage: "PLOT",
+        eventType: "PLOT_UNASSIGNED",
+        label: "Plot unassigned",
+        fromStatus: "PLOT_ASSIGNED",
+        toStatus: "CANCELLED",
+        metadata: { unassignedByAdmin: true },
+      });
+    }, { isolationLevel: "Serializable" });
+    return res.json({ contactId, plotSiteId, unassigned: true });
+  } catch (error) {
+    console.error("pickup-plot-inventory DELETE /customer-pickups/:contactId/plots/:plotSiteId error:", error);
+    if (["TRANSPORT_WORKFLOW_LOCKED", "PLOT_UNASSIGNMENT_LOCKED"].includes(error.code)) {
+      return res.status(409).json({ error: error.message, code: error.code });
+    }
+    if (error.code === "P2034") return res.status(409).json({ error: "The assignment changed concurrently. Refresh and try again.", code: "PLOT_UNASSIGNMENT_CONFLICT" });
+    return res.status(500).json({ error: "Failed to unassign plot", code: "PLOT_UNASSIGNMENT_FAILED" });
+  }
+});
+
+router.post("/customer-pickups/:contactId/installments", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    const plotBookingId = Number(req.body?.plotBookingId);
+    const frequency = String(req.body?.frequency || "").trim().toUpperCase();
+    const paymentCount = Number(req.body?.paymentCount);
+    const amount = Math.round((Number(req.body?.amount) + Number.EPSILON) * 100) / 100;
+    const firstPaymentDate = text(req.body?.firstPaymentDate, 10);
+    const firstMonth = Number(req.body?.firstMonth);
+    const firstYear = Number(req.body?.firstYear);
+    if (!Number.isInteger(contactId) || contactId <= 0 || !Number.isInteger(plotBookingId) || plotBookingId <= 0) {
+      return res.status(400).json({ error: "Choose a valid customer and plot booking.", code: "INVALID_INSTALLMENT_BOOKING" });
+    }
+    const frequencyMonths = { MONTHLY: 1, QUARTERLY: 3, HALF_YEARLY: 6, YEARLY: 12 };
+    if (!frequencyMonths[frequency]) {
+      return res.status(400).json({ error: "Choose Monthly, Quarterly, Half-Yearly, or Yearly payment frequency.", code: "INVALID_INSTALLMENT_FREQUENCY" });
+    }
+    if (!Number.isInteger(paymentCount) || paymentCount < 1 || paymentCount > 120) {
+      return res.status(400).json({ error: "Number of payments must be between 1 and 120.", code: "INVALID_INSTALLMENT_COUNT" });
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Enter a valid amount for each installment.", code: "INVALID_INSTALLMENT_AMOUNT" });
+    }
+    const firstDueDate = firstPaymentDate
+      ? new Date(`${firstPaymentDate}T12:00:00.000Z`)
+      : new Date(Date.UTC(firstYear, firstMonth - 1, 1, 12));
+    const validLegacyDate = Number.isInteger(firstMonth) && firstMonth >= 1 && firstMonth <= 12
+      && Number.isInteger(firstYear) && firstYear >= new Date().getFullYear();
+    if (Number.isNaN(firstDueDate.getTime()) || (!firstPaymentDate && !validLegacyDate)) {
+      return res.status(400).json({ error: "Choose a valid first payment date.", code: "INVALID_INSTALLMENT_START" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Installment plans are available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const booking = await prisma.plotBooking.findFirst({
+      where: { id: plotBookingId, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+    });
+    if (!booking) return res.status(404).json({ error: "Active plot booking not found.", code: "PLOT_BOOKING_NOT_FOUND" });
+    const existing = await prisma.plotInstallment.findMany({
+      where: { tenantId, plotBookingId },
+      orderBy: { sequenceNumber: "asc" },
+    });
+    const reservedAmount = existing
+      .filter((row) => !["PAID", "CANCELLED"].includes(String(row.status || "").toUpperCase()))
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const requestedTotal = amount * paymentCount;
+    const availableBalance = Math.max(0, Number(booking.balance || 0) - reservedAmount);
+    if (requestedTotal > availableBalance + 0.001) {
+      return res.status(400).json({
+        error: `The schedule total cannot exceed the unplanned balance of ${availableBalance.toFixed(2)}.`,
+        code: "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE",
+      });
+    }
+    const nextSequence = existing.reduce((max, row) => Math.max(max, Number(row.sequenceNumber || 0)), 0) + 1;
+    const installments = await prisma.$transaction(Array.from({ length: paymentCount }, (_, index) => {
+      const dueDate = addUtcMonthsClamped(firstDueDate, frequencyMonths[frequency] * index);
+      return prisma.plotInstallment.create({
+        data: {
+          tenantId,
+          plotBookingId,
+          contactId,
+          sequenceNumber: nextSequence + index,
+          frequency,
+          dueDate,
+          amount,
+          status: "PLANNED",
+        },
+      });
+    }));
+    return res.status(201).json({ installments: installments.map((row) => ({ ...row, amount: Number(row.amount || 0) })) });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /customer-pickups/:contactId/installments error:", error);
+    return res.status(500).json({ error: "Failed to create installment schedule", code: "INSTALLMENT_SCHEDULE_CREATE_FAILED" });
+  }
+});
+
+router.put("/customer-pickups/:contactId/installments", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const contactId = Number(req.params.contactId);
+    const plotBookingId = Number(req.body?.plotBookingId);
+    const frequency = String(req.body?.frequency || "").trim().toUpperCase();
+    const paymentCount = Number(req.body?.paymentCount);
+    const amount = Math.round((Number(req.body?.amount) + Number.EPSILON) * 100) / 100;
+    const firstPaymentDate = text(req.body?.firstPaymentDate, 10);
+    if (!Number.isInteger(contactId) || contactId <= 0 || !Number.isInteger(plotBookingId) || plotBookingId <= 0) {
+      return res.status(400).json({ error: "Choose a valid customer and plot booking.", code: "INVALID_INSTALLMENT_BOOKING" });
+    }
+    const frequencyMonths = { MONTHLY: 1, QUARTERLY: 3, HALF_YEARLY: 6, YEARLY: 12 };
+    if (!frequencyMonths[frequency]) {
+      return res.status(400).json({ error: "Choose Monthly, Quarterly, Half-Yearly, or Yearly payment frequency.", code: "INVALID_INSTALLMENT_FREQUENCY" });
+    }
+    if (!Number.isInteger(paymentCount) || paymentCount < 1 || paymentCount > 120) {
+      return res.status(400).json({ error: "Number of payments must be between 1 and 120.", code: "INVALID_INSTALLMENT_COUNT" });
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Enter a valid amount for each installment.", code: "INVALID_INSTALLMENT_AMOUNT" });
+    }
+    const firstDueDate = new Date(`${firstPaymentDate}T12:00:00.000Z`);
+    if (!firstPaymentDate || Number.isNaN(firstDueDate.getTime())) {
+      return res.status(400).json({ error: "Choose a valid first payment date.", code: "INVALID_INSTALLMENT_START" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Installment plans are available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const booking = await prisma.plotBooking.findFirst({
+      where: { id: plotBookingId, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+    });
+    if (!booking) return res.status(404).json({ error: "Active plot booking not found.", code: "PLOT_BOOKING_NOT_FOUND" });
+    const existing = await prisma.plotInstallment.findMany({
+      where: { tenantId, plotBookingId },
+      orderBy: { sequenceNumber: "asc" },
+    });
+    if (!existing.length) {
+      return res.status(404).json({ error: "Installment plan not found.", code: "INSTALLMENT_PLAN_NOT_FOUND" });
+    }
+    if (existing.some((row) => String(row.status || "PLANNED").toUpperCase() !== "PLANNED" || row.paymentId)) {
+      return res.status(409).json({
+        error: "The installment plan cannot be edited after an installment payment has started.",
+        code: "INSTALLMENT_PLAN_LOCKED",
+      });
+    }
+    const requestedTotal = amount * paymentCount;
+    const availableBalance = Math.max(0, Number(booking.balance || 0));
+    if (requestedTotal > availableBalance + 0.001) {
+      return res.status(400).json({
+        error: `The schedule total cannot exceed the remaining balance of ${availableBalance.toFixed(2)}.`,
+        code: "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE",
+      });
+    }
+    const installments = await prisma.$transaction(async (tx) => {
+      await require("../lib/plotBookingPayments").lockBooking(tx, tenantId, plotBookingId);
+      const currentBooking = await tx.plotBooking.findFirst({
+        where: { id: plotBookingId, tenantId, contactId, status: { notIn: ["CANCELLED", "PLOT_ASSIGNED"] } },
+      });
+      if (!currentBooking) {
+        throw Object.assign(new Error("Active plot booking not found."), { code: "PLOT_BOOKING_NOT_FOUND" });
+      }
+      if (requestedTotal > Math.max(0, Number(currentBooking.balance || 0)) + 0.001) {
+        throw Object.assign(new Error("The schedule total exceeds the current remaining balance. Refresh the booking and try again."), { code: "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE" });
+      }
+      const currentRows = await tx.plotInstallment.findMany({ where: { tenantId, plotBookingId } });
+      const expectedIds = new Set(existing.map((row) => row.id));
+      if (currentRows.length !== existing.length || currentRows.some((row) => !expectedIds.has(row.id) || row.status !== "PLANNED" || row.paymentId)) {
+        throw Object.assign(new Error("The installment plan changed. Refresh the booking and try again."), { code: "INSTALLMENT_PLAN_LOCKED" });
+      }
+      const removed = await tx.plotInstallment.deleteMany({
+        where: { tenantId, plotBookingId, id: { in: [...expectedIds] }, status: "PLANNED", paymentId: null },
+      });
+      if (removed.count !== existing.length) {
+        const lockError = new Error("The installment plan cannot be edited after an installment payment has started.");
+        lockError.code = "INSTALLMENT_PLAN_LOCKED";
+        throw lockError;
+      }
+      const rows = [];
+      for (let index = 0; index < paymentCount; index += 1) {
+        rows.push(await tx.plotInstallment.create({
+          data: {
+            tenantId,
+            plotBookingId,
+            contactId,
+            sequenceNumber: index + 1,
+            frequency,
+            dueDate: addUtcMonthsClamped(firstDueDate, frequencyMonths[frequency] * index),
+            amount,
+            status: "PLANNED",
+          },
+        }));
+      }
+      return rows;
+    });
+    return res.json({ installments: installments.map((row) => ({ ...row, amount: Number(row.amount || 0) })) });
+  } catch (error) {
+    if (error.code === "PLOT_BOOKING_NOT_FOUND" || error.code === "INSTALLMENT_SCHEDULE_EXCEEDS_BALANCE") {
+      return res.status(error.code === "PLOT_BOOKING_NOT_FOUND" ? 404 : 400).json({ error: error.message, code: error.code });
+    }
+    if (error.code === "INSTALLMENT_PLAN_LOCKED") {
+      return res.status(409).json({ error: error.message, code: error.code });
+    }
+    console.error("pickup-plot-inventory PUT /customer-pickups/:contactId/installments error:", error);
+    return res.status(500).json({ error: "Failed to update installment schedule", code: "INSTALLMENT_SCHEDULE_UPDATE_FAILED" });
+  }
+});
+
 router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -2863,6 +3965,13 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       : Number(submittedBookingId);
     if (plotBookingId !== null && (!Number.isInteger(plotBookingId) || plotBookingId <= 0)) {
       return res.status(400).json({ error: "Choose a valid plot booking.", code: "INVALID_PLOT_BOOKING_ID" });
+    }
+    const submittedInstallmentId = req.body?.installmentId;
+    const installmentId = submittedInstallmentId === undefined || submittedInstallmentId === null || submittedInstallmentId === ""
+      ? null
+      : Number(submittedInstallmentId);
+    if (installmentId !== null && (!Number.isInteger(installmentId) || installmentId <= 0)) {
+      return res.status(400).json({ error: "Choose a valid installment.", code: "INVALID_INSTALLMENT_ID" });
     }
 
     const [contact, booking] = await Promise.all([
@@ -2892,10 +4001,31 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         balance,
       });
     }
+    const installment = installmentId === null ? null : await prisma.plotInstallment.findFirst({
+      where: { id: installmentId, tenantId, plotBookingId: booking.id, contactId },
+    });
+    if (installmentId !== null && (!installment || !["PLANNED", "FAILED"].includes(String(installment.status || "").toUpperCase()) || installment.paymentId)) {
+      return res.status(409).json({ error: "This installment is no longer available for payment.", code: "INSTALLMENT_NOT_PAYABLE" });
+    }
+    if (installment && Math.abs(Number(installment.amount || 0) - amount) > 0.001) {
+      return res.status(400).json({ error: "Payment amount must match the scheduled installment.", code: "INSTALLMENT_AMOUNT_MISMATCH" });
+    }
 
     if (method === "payment_link") {
+      if (installment) {
+        // Claim before contacting the gateway: concurrent requests and manual
+        // payments must not issue multiple independently payable links.
+        const claim = await prisma.plotInstallment.updateMany({
+          where: { id: installment.id, tenantId, plotBookingId: booking.id, paymentId: null, status: { in: ['PLANNED', 'FAILED'] } },
+          data: { status: 'LINK_CREATING' },
+        });
+        if (!claim.count) return res.status(409).json({ error: 'This installment already has a payment in progress.', code: 'INSTALLMENT_NOT_PAYABLE' });
+      }
       const { createInvoicePaymentLink } = require("../lib/paymentLink");
       const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+      const paymentDescription = installment
+        ? `Installment ${installment.sequenceNumber} for plot booking ${booking.bookingNumber}`
+        : `Initial payment for plot booking ${booking.bookingNumber}`;
       const result = await createInvoicePaymentLink({
         tenantId,
         invoice: { id: booking.id, invoiceNum: booking.bookingNumber, amount },
@@ -2905,11 +4035,25 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         gatewayPref: "razorpay",
         tenantName: tenant?.name || undefined,
         baseUrl: getFrontendUrlFromRequest(req),
-        travelContext: { kind: "plot-booking-payment", plotBookingId: booking.id },
-        description: `Initial payment for plot booking ${booking.bookingNumber}`,
+        travelContext: { kind: "plot-booking-payment", plotBookingId: booking.id, ...(installment ? { installmentId: installment.id } : {}) },
+        description: paymentDescription,
       });
       if (result.error) {
-        return res.status(502).json({ error: result.error, code: result.code || "PAYMENT_LINK_FAILED" });
+        const gatewayStatus = Number(result.status);
+        const responseStatus = gatewayStatus >= 400 && gatewayStatus < 600 ? gatewayStatus : 502;
+        return res.status(responseStatus).json({ error: result.error, code: result.code || "PAYMENT_LINK_FAILED" });
+      }
+      if (!result.url) {
+        return res.status(502).json({
+          error: "Razorpay did not return a hosted payment link. Please verify the payment gateway configuration.",
+          code: "PAYMENT_LINK_URL_MISSING",
+        });
+      }
+      if (installment) {
+        await prisma.plotInstallment.update({
+          where: { id: installment.id },
+          data: { status: "PAYMENT_INITIATED", paymentId: result.paymentId },
+        });
       }
       return res.json({
         mode: "payment_link",
@@ -2919,18 +4063,18 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       });
     }
 
-    const transactionRef = text(req.body?.transactionRef, 128);
-    if (!transactionRef) {
+    const transactionRef = method === "cash" ? null : text(req.body?.transactionRef, 128);
+    if (method !== "cash" && !transactionRef) {
       return res.status(400).json({ error: "Transaction reference is required.", code: "PAYMENT_REFERENCE_REQUIRED" });
     }
     const paidAt = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
     if (Number.isNaN(paidAt.getTime())) {
       return res.status(400).json({ error: "Choose a valid payment date.", code: "INVALID_PAYMENT_DATE" });
     }
-    const duplicatePayment = await prisma.payment.findFirst({
+    const duplicatePayment = transactionRef ? await prisma.payment.findFirst({
       where: { tenantId, plotPaymentReference: transactionRef },
       select: { id: true },
-    });
+    }) : null;
     if (duplicatePayment) {
       return res.status(409).json({ error: "That transaction reference has already been recorded.", code: "DUPLICATE_TRANSACTION_REFERENCE" });
     }
@@ -2959,6 +4103,14 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
         error.code = "PAYMENT_EXCEEDS_BALANCE";
         throw error;
       }
+      if (installment) {
+        const claim = await tx.plotInstallment.updateMany({ where: { id: installment.id, tenantId, plotBookingId: booking.id, paymentId: null, status: { in: ['PLANNED', 'FAILED'] } }, data: { status: 'PAID' } });
+        if (!claim.count) {
+          const error = new Error("This installment has already been paid.");
+          error.code = "INSTALLMENT_NOT_PAYABLE";
+          throw error;
+        }
+      }
       nextAmountPaid = accountedPaid + amount;
       nextBalance = Math.max(0, Number(current.totalAmount || 0) - nextAmountPaid);
       payment = await tx.payment.create({
@@ -2973,9 +4125,16 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
           status: "SUCCESS",
           paidAt,
           tenantId,
-          metadata: JSON.stringify({ kind: "plot-booking-payment", plotBookingId: booking.id, mode: "manual" }),
+          metadata: JSON.stringify({ kind: "plot-booking-payment", plotBookingId: booking.id, mode: "manual", ...(installment ? { installmentId: installment.id } : {}) }),
         },
       });
+      if (installment) {
+        await tx.plotInstallment.update({
+          where: { id: installment.id },
+          data: { status: "PAID", paymentId: payment.id },
+        });
+      }
+      await syncPlotCommission(tx, payment, current);
       await tx.plotBooking.update({
         where: { id: booking.id },
         data: {
@@ -2983,6 +4142,16 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
           balance: nextBalance,
           paymentStatus: nextBalance === 0 ? "PAID" : "PARTIAL",
         },
+      });
+      await syncPlotBookingInvoice(tx, {
+        tenantId,
+        booking,
+        contact,
+        paymentId: payment.id,
+        amountPaid: nextAmountPaid,
+        balance: nextBalance,
+        paymentMode: method,
+        paidAt,
       });
       await appendWorkflowEvent(tx, req, {
         bookingId: booking.id,
@@ -3011,6 +4180,7 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
       booking: { id: booking.id, amountPaid: nextAmountPaid, balance: nextBalance },
     });
   } catch (error) {
+    if (error.code === "INSTALLMENT_NOT_PAYABLE") return res.status(409).json({ error: error.message, code: error.code });
     if (error.code === "PAYMENT_EXCEEDS_BALANCE") {
       return res.status(400).json({ error: error.message, code: error.code });
     }
@@ -3022,12 +4192,200 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
   }
 });
 
-router.get("/customer-pickups", adminOnly, async (req, res) => {
+router.patch("/commissions/:id/rate", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments] = await Promise.all([
+    const commissionId = Number(req.params.id);
+    const commissionPercent = Math.round((Number(req.body?.commissionPercent) + Number.EPSILON) * 100) / 100;
+    if (!Number.isInteger(commissionId) || commissionId <= 0) {
+      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
+    }
+    if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+      return res.status(400).json({ error: "Commission percentage must be between 0 and 100.", code: "INVALID_COMMISSION_PERCENT" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+    if (!commission) return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
+    if (String(commission.status || "EARNED").toUpperCase() !== "EARNED") {
+      return res.status(409).json({ error: "Only an earned commission can be edited.", code: "COMMISSION_NOT_EDITABLE" });
+    }
+    const commissionAmount = Math.round((Number(commission.eligibleAmount || 0) * commissionPercent / 100 + Number.EPSILON) * 100) / 100;
+    const updated = await prisma.plotCommission.update({
+      where: { id: commission.id },
+      data: { commissionPercent, commissionAmount },
+    });
+    await appendWorkflowEvent(prisma, req, {
+      bookingId: commission.plotBookingId,
+      contactId: commission.contactId,
+      stage: "COMMISSION",
+      fromStatus: commission.status,
+      toStatus: "RATE_UPDATED",
+      metadata: { commissionId: commission.id, previousPercent: Number(commission.commissionPercent || 0), commissionPercent, commissionAmount },
+    });
+    return res.json({
+      ...updated,
+      commissionPercent: Number(updated.commissionPercent || 0),
+      eligibleAmount: Number(updated.eligibleAmount || 0),
+      commissionAmount: Number(updated.commissionAmount || 0),
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory PATCH /commissions/:id/rate error:", error);
+    return res.status(500).json({ error: "Failed to update commission percentage", code: "COMMISSION_RATE_UPDATE_FAILED" });
+  }
+});
+
+router.patch("/commissions/:id/amount", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const commissionId = Number(req.params.id);
+    const commissionAmount = Number(req.body?.commissionAmount);
+    if (!Number.isInteger(commissionId) || commissionId <= 0) {
+      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
+    }
+    if (!Number.isFinite(commissionAmount) || commissionAmount < 0) {
+      return res.status(400).json({ error: "Enter a valid commission amount.", code: "INVALID_COMMISSION_AMOUNT" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+    if (!commission) {
+      return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
+    }
+    if (String(commission.status || "EARNED").toUpperCase() !== "EARNED") {
+      return res.status(409).json({ error: "Only an earned commission can be edited.", code: "COMMISSION_NOT_EDITABLE" });
+    }
+    const eligibleAmount = Number(commission.eligibleAmount || 0);
+    if (commissionAmount > eligibleAmount) {
+      return res.status(400).json({ error: "Commission cannot be greater than the customer payment.", code: "COMMISSION_EXCEEDS_PAYMENT" });
+    }
+    const roundedAmount = Math.round((commissionAmount + Number.EPSILON) * 100) / 100;
+    const commissionPercent = eligibleAmount > 0
+      ? Math.round(((roundedAmount / eligibleAmount) * 100 + Number.EPSILON) * 100) / 100
+      : 0;
+    const updated = await prisma.plotCommission.update({
+      where: { id: commission.id },
+      data: { commissionAmount: roundedAmount, commissionPercent },
+    });
+    await appendWorkflowEvent(prisma, req, {
+      bookingId: commission.plotBookingId,
+      contactId: commission.contactId,
+      stage: "COMMISSION",
+      fromStatus: commission.status,
+      toStatus: "AMOUNT_UPDATED",
+      metadata: { commissionId: commission.id, previousAmount: Number(commission.commissionAmount || 0), commissionAmount: roundedAmount },
+    });
+    return res.json({
+      ...updated,
+      commissionPercent: Number(updated.commissionPercent || 0),
+      eligibleAmount: Number(updated.eligibleAmount || 0),
+      commissionAmount: Number(updated.commissionAmount || 0),
+      netPaymentAmount: Math.max(0, Number(updated.eligibleAmount || 0) - Number(updated.commissionAmount || 0)),
+    });
+  } catch (error) {
+    console.error("pickup-plot-inventory PATCH /commissions/:id/amount error:", error);
+    return res.status(500).json({ error: "Failed to update commission amount", code: "COMMISSION_AMOUNT_UPDATE_FAILED" });
+  }
+});
+
+router.patch("/commissions/:id/status", adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const commissionId = Number(req.params.id);
+    const requestedStatus = String(req.body?.status || "").trim().toUpperCase();
+    if (!Number.isInteger(commissionId) || commissionId <= 0) {
+      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
+    }
+    if (!new Set(["APPROVED", "PAID"]).has(requestedStatus)) {
+      return res.status(400).json({ error: "Commission status must be Approved or Paid.", code: "INVALID_COMMISSION_STATUS" });
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
+      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
+    }
+    let updated;
+    await prisma.$transaction(async (tx) => {
+      const initial = await tx.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+      if (!initial) { const error = new Error("Commission entry not found."); error.code = "COMMISSION_NOT_FOUND"; throw error; }
+      await require("../lib/plotBookingPayments").lockBooking(tx, tenantId, initial.plotBookingId);
+      const commission = await tx.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
+      if (!commission) {
+        const error = new Error("Commission entry not found."); error.code = "COMMISSION_NOT_FOUND"; throw error;
+      }
+      const currentStatus = String(commission.status || "EARNED").toUpperCase();
+      const validTransition = (currentStatus === "EARNED" && requestedStatus === "APPROVED")
+        || (currentStatus === "APPROVED" && requestedStatus === "PAID")
+        || currentStatus === requestedStatus;
+      if (!validTransition) {
+        const error = new Error(`Commission cannot move from ${currentStatus} to ${requestedStatus}.`);
+        error.code = "INVALID_COMMISSION_TRANSITION";
+        throw error;
+      }
+      const funded = await require("../lib/plotBookingPayments").successfulPaymentTotal(tx, tenantId, commission.plotBookingId);
+      if (funded + 0.001 < Number(commission.commissionAmount)) {
+        const error = new Error("Commission must be fully deducted from successful payments before approval or payout.");
+        error.code = "COMMISSION_NOT_FUNDED";
+        throw error;
+      }
+      const now = new Date();
+      updated = currentStatus === requestedStatus
+        ? commission
+        : await tx.plotCommission.update({
+          where: { id: commission.id },
+          data: requestedStatus === "APPROVED"
+            ? { status: "APPROVED", approvedAt: now, approvedByUserId: req.user.userId }
+            : { status: "PAID", paidAt: now, paidByUserId: req.user.userId },
+        });
+      if (currentStatus !== requestedStatus) {
+        await appendWorkflowEvent(tx, req, {
+          bookingId: commission.plotBookingId,
+          contactId: commission.contactId,
+          stage: "COMMISSION",
+          eventType: `COMMISSION_${requestedStatus}`,
+          label: requestedStatus === "APPROVED" ? "Commission approved" : "Commission marked paid",
+          fromStatus: currentStatus,
+          toStatus: requestedStatus,
+          occurredAt: now.toISOString(),
+          metadata: { commissionId: commission.id, paymentId: commission.paymentId, amount: Number(commission.commissionAmount || 0) },
+        });
+      }
+    });
+    return res.json({
+      ...updated,
+      commissionPercent: Number(updated.commissionPercent || 0),
+      eligibleAmount: Number(updated.eligibleAmount || 0),
+      commissionAmount: Number(updated.commissionAmount || 0),
+    });
+  } catch (error) {
+    if (["COMMISSION_NOT_FUNDED", "INVALID_COMMISSION_TRANSITION", "COMMISSION_NOT_FOUND"].includes(error.code)) return res.status(error.code === "COMMISSION_NOT_FOUND" ? 404 : 409).json({ error: error.message, code: error.code });
+    console.error("pickup-plot-inventory PATCH /commissions/:id/status error:", error);
+    return res.status(500).json({ error: "Failed to update commission status", code: "COMMISSION_STATUS_UPDATE_FAILED" });
+  }
+});
+
+router.get("/customer-pickups", requirePermission("billing_workspace", "read"), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const adminOverview = isAdminWorkspaceOverview(req);
+    const profile = adminOverview ? null : await requireBillingProfile(req, res);
+    if (!adminOverview && !profile) return;
+    const pairs = profile ? assignmentPairs(profile.billingPerson).filter((pair) => (
+      Number.isInteger(pair.customerId) && pair.customerId > 0
+      && Number.isInteger(pair.plotSiteId) && pair.plotSiteId > 0
+    )) : [];
+    const allowedPairKeys = new Set(pairs.map((pair) => assignmentKey(pair.customerId, pair.plotSiteId)));
+    const contactIds = [...new Set(pairs.map((pair) => pair.customerId))];
+    const plotIds = [...new Set(pairs.map((pair) => pair.plotSiteId))];
+    const pairWhere = pairs.map((pair) => ({ contactId: pair.customerId, plotSiteId: pair.plotSiteId }));
+    const customerScope = adminOverview ? {} : { contactId: { in: contactIds } };
+    const assignmentScope = adminOverview ? {} : { OR: pairWhere.length ? pairWhere : [{ id: -1 }] };
+    const [pickups, transportPeople, brokers, workflowEvents, plots, bookings, plotPayments, pickupLocations] = await Promise.all([
       prisma.customerPickup.findMany({
-        where: { tenantId, contact: { deletedAt: null } },
+        where: { tenantId, ...customerScope, contact: { deletedAt: null } },
         orderBy: { updatedAt: "desc" },
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true } },
@@ -3039,14 +4397,14 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
       }),
       prisma.plotBroker.findMany({
         where: { tenantId, isActive: true },
-        select: { id: true, name: true, phone: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
+        select: { id: true, name: true, phone: true, commissionPercent: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
       }),
       prisma.plotWorkflowEvent.findMany({
-        where: { tenantId },
+        where: { tenantId, ...assignmentScope },
         orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
       }),
       prisma.plotSite.findMany({
-        where: { tenantId },
+        where: { tenantId, ...(!adminOverview ? { id: { in: plotIds } } : {}) },
         select: {
           id: true, name: true, plotNumber: true, block: true, address: true,
           referenceCode: true, area: true, areaUnit: true, roadWidth: true,
@@ -3054,11 +4412,11 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         },
       }),
       prisma.plotBooking.findMany({
-        where: { tenantId },
+        where: { tenantId, ...assignmentScope },
         orderBy: { updatedAt: "desc" },
         select: {
           id: true, bookingNumber: true, contactId: true, plotSiteId: true,
-          invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
+          plotBrokerId: true, invoiceId: true, status: true, paymentStatus: true, totalAmount: true,
           amountPaid: true, balance: true, reservedAt: true, soldAt: true,
           completedAt: true, createdAt: true, updatedAt: true,
         },
@@ -3066,6 +4424,7 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
       prisma.payment.findMany({
         where: {
           tenantId,
+          ...customerScope,
           OR: [
             { invoiceId: { not: null } },
             { metadata: { contains: '"kind":"plot-booking-payment"' } },
@@ -3073,13 +4432,98 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         },
         orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
         select: {
-          id: true, invoiceId: true, contactId: true, description: true,
+          id: true, tenantId: true, invoiceId: true, contactId: true, description: true,
           amount: true, currency: true, gateway: true, gatewayId: true,
           status: true, paidAt: true, createdAt: true, metadata: true,
         },
       }),
+      prisma.pickupLocation.findMany({
+        where: { tenantId, isActive: true },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, address: true, googleMapsLink: true },
+      }),
     ]);
+    // Legacy person records contain tenant-wide assignment JSON. Trim it
+    // before deriving workflow state so another plot for the same customer
+    // cannot leak through a shared transport/broker profile.
+    if (!adminOverview) {
+      for (const person of [...transportPeople, ...brokers]) {
+        const allowed = assignmentPairs(person).filter((pair) => allowedPairKeys.has(assignmentKey(pair.customerId, pair.plotSiteId)));
+        person.assignmentPairsJson = JSON.stringify(allowed);
+        person.customerIdsJson = JSON.stringify([...new Set(allowed.map((pair) => pair.customerId))]);
+        person.plotSiteIdsJson = JSON.stringify([...new Set(allowed.map((pair) => pair.plotSiteId))]);
+        for (const field of ["assignmentStatusJson", "workflowStatusJson"]) {
+          const statuses = parseStoredObject(person[field]);
+          person[field] = JSON.stringify(Object.fromEntries(allowed.map((pair) => {
+            const key = assignmentKey(pair.customerId, pair.plotSiteId);
+            return [key, statuses[key] || statuses[`customer-${pair.customerId}`]];
+          }).filter(([, value]) => value)));
+        }
+      }
+    }
+    let plotCommissions = [];
+    if (req.user.role === "ADMIN") {
+      const bookingMap = new Map(bookings.map((booking) => [Number(booking.id), booking]));
+      for (const payment of plotPayments) {
+        if (String(payment.status || "").toUpperCase() !== "SUCCESS") continue;
+        let metadata = {};
+        try { metadata = JSON.parse(payment.metadata || "{}"); } catch { continue; }
+        const booking = bookingMap.get(Number(metadata.plotBookingId));
+        if (metadata.kind === "plot-booking-payment" && booking) {
+          await syncPlotCommission(prisma, payment, booking);
+        }
+      }
+      plotCommissions = await prisma.plotCommission.findMany({
+        where: { tenantId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+    }
+    const plotInstallments = await prisma.plotInstallment.findMany({
+      where: { tenantId },
+      orderBy: [{ plotBookingId: "asc" }, { sequenceNumber: "asc" }],
+    });
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
+    const brokerMap = new Map(brokers.map((broker) => [Number(broker.id), broker]));
+    const commissionsByBooking = new Map();
+    for (const commission of plotCommissions) {
+      const rows = commissionsByBooking.get(Number(commission.plotBookingId)) || [];
+      const broker = brokerMap.get(Number(commission.plotBrokerId));
+      rows.push({
+        ...commission,
+        commissionPercent: Number(commission.commissionPercent || 0),
+        eligibleAmount: Number(commission.eligibleAmount || 0),
+        commissionAmount: Number(commission.commissionAmount || 0),
+        brokerName: broker?.name || "Sales Executive",
+      });
+      commissionsByBooking.set(Number(commission.plotBookingId), rows);
+    }
+    const installmentsByBooking = new Map();
+    const plotPaymentById = new Map(plotPayments.map((payment) => [Number(payment.id), payment]));
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    for (const installment of plotInstallments) {
+      const rows = installmentsByBooking.get(Number(installment.plotBookingId)) || [];
+      const payment = plotPaymentById.get(Number(installment.paymentId));
+      let paymentMetadata = {};
+      try { paymentMetadata = JSON.parse(payment?.metadata || "{}"); } catch (_error) {}
+      const storedStatus = String(installment.status || "PLANNED").toUpperCase();
+      const paymentStatus = String(payment?.status || "").toUpperCase();
+      let effectiveStatus = storedStatus === "LINK_CREATED" ? "PAYMENT_INITIATED" : storedStatus;
+      if (paymentStatus === "SUCCESS" || storedStatus === "PAID") effectiveStatus = "PAID";
+      else if (paymentStatus === "FAILED") effectiveStatus = "FAILED";
+      else if (paymentStatus === "PROCESSING") effectiveStatus = "PROCESSING";
+      else if (effectiveStatus === "PLANNED" && new Date(installment.dueDate) < todayStart) effectiveStatus = "OVERDUE";
+      rows.push({
+        ...installment,
+        amount: Number(installment.amount || 0),
+        status: effectiveStatus,
+        paymentLinkUrl: ["PAYMENT_INITIATED", "PROCESSING"].includes(effectiveStatus) ? paymentMetadata.url || null : null,
+        receiptUrl: effectiveStatus === "PAID" && paymentMetadata.plinkId
+          ? `/api/billing/public/receipt?plinkId=${encodeURIComponent(paymentMetadata.plinkId)}`
+          : null,
+      });
+      installmentsByBooking.set(Number(installment.plotBookingId), rows);
+    }
     const historyByCustomer = new Map();
     for (const event of workflowEvents) {
       const history = historyByCustomer.get(event.contactId) || [];
@@ -3112,6 +4556,22 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         Number(row.contactId) === Number(pickup.contactId)
         && (!assignedPlot?.id || Number(row.plotSiteId) === Number(assignedPlot.id))
       )) || financialBookings[0] || null;
+      const effectiveBillingStatus = workflowStatus.currentStage === "billing"
+        ? billingStatusWithBooking(workflowStatus.currentStatus, booking)
+        : workflowStatus.currentStatus;
+      const effectiveWorkflowStatus = effectiveBillingStatus === workflowStatus.currentStatus
+        ? workflowStatus
+        : {
+            ...workflowStatus,
+            currentStatus: effectiveBillingStatus,
+            workflow: {
+              ...workflowStatus.workflow,
+              billing: {
+                ...workflowStatus.workflow.billing,
+                status: effectiveBillingStatus,
+              },
+            },
+          };
       const selectedPlot = booking ? plotMap.get(Number(booking.plotSiteId)) || null : null;
       const payments = plotPayments.filter((payment) => {
         let metadata = {};
@@ -3119,22 +4579,72 @@ router.get("/customer-pickups", adminOnly, async (req, res) => {
         const matchesBooking = booking && Number(metadata.plotBookingId) === Number(booking.id);
         const matchesInvoice = booking?.invoiceId && Number(payment.invoiceId) === Number(booking.invoiceId);
         return Number(payment.contactId) === Number(pickup.contactId) && (matchesBooking || matchesInvoice);
-      }).map(({ metadata: _metadata, ...payment }) => payment);
+      }).map(({ metadata, ...payment }) => {
+        let paymentMetadata = {};
+        try { paymentMetadata = JSON.parse(metadata || "{}"); } catch (_error) {}
+        const paymentStatus = String(payment.status || "").toUpperCase();
+        const paymentLinkUrl = ["PENDING", "PAYMENT_INITIATED", "LINK_CREATED", "PROCESSING"].includes(paymentStatus)
+          ? paymentMetadata.url || paymentMetadata.sessionUrl || null
+          : null;
+        const receiptUrl = paymentStatus === "SUCCESS" && paymentMetadata.plinkId
+          ? `/api/billing/public/receipt?plinkId=${encodeURIComponent(paymentMetadata.plinkId)}`
+          : null;
+        return { ...payment, paymentLinkUrl, receiptUrl };
+      });
+      const commissions = booking ? commissionsByBooking.get(Number(booking.id)) || [] : [];
+      const commissionRows = commissions.map((commission) => {
+        return {
+          ...commission,
+          ...allocateCommissionAcrossPayments(payments, commission.commissionAmount),
+        };
+      });
       return {
         ...pickup,
         pickupAddress: cleanPickupAddress(pickup.pickupAddress) || pickup.pickupAddress,
-        ...workflowStatus,
+        ...effectiveWorkflowStatus,
         assignedPlot,
         assignedPlots,
         selectedPlot,
         customerAssignedPlotIds: customerBookings.map((row) => Number(row.plotSiteId)).filter((id) => Number.isInteger(id) && id > 0),
         booking,
         payments,
+        commissions: commissionRows,
+        installments: booking ? installmentsByBooking.get(Number(booking.id)) || [] : [],
         workflowHistory: historyByCustomer.get(pickup.contactId) || [],
+      };
+    });
+    const pickupContactIds = new Set(pickups.map((pickup) => Number(pickup.contactId)));
+    const plotOnlyContactIds = [...new Set(bookings
+      .filter((booking) => booking.status !== "CANCELLED")
+      .map((booking) => Number(booking.contactId))
+      .filter((contactId) => Number.isInteger(contactId) && contactId > 0 && !pickupContactIds.has(contactId)))];
+    const plotOnlyContacts = plotOnlyContactIds.length
+      ? await prisma.contact.findMany({
+          where: { tenantId, id: { in: plotOnlyContactIds }, deletedAt: null },
+          select: { id: true, name: true, phone: true, email: true, company: true, status: true, interestedPlotArea: true },
+        })
+      : [];
+    const plotAssignments = plotOnlyContacts.map((contact) => {
+      const customerBookings = bookings.filter((booking) => (
+        Number(booking.contactId) === Number(contact.id) && booking.status !== "CANCELLED"
+      ));
+      const assignedPlots = [...new Set(customerBookings.map((booking) => Number(booking.plotSiteId)))]
+        .map((plotId) => plotMap.get(plotId))
+        .filter(Boolean);
+      return {
+        contactId: contact.id,
+        contact,
+        assignedPlot: assignedPlots[0] || null,
+        assignedPlots,
+        customerAssignedPlotIds: customerBookings.map((booking) => Number(booking.plotSiteId)),
+        booking: customerBookings.find((booking) => booking.status !== "PLOT_ASSIGNED") || null,
       };
     });
     return res.json({
       customers,
+      plotAssignments,
+      pickupLocations,
+      allPlots: plots.filter((plot) => plot.isActive),
       plots: plots.filter((plot) => (
         plot.isActive && String(plot.availability || "").trim().toUpperCase() === "AVAILABLE"
       )),
@@ -3175,10 +4685,22 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
     });
     if (!contact) return res.status(404).json({ error: "Customer not found", code: "CUSTOMER_NOT_FOUND" });
 
-    const existingPickup = await prisma.customerPickup.findUnique({
-      where: { tenantId_contactId: { tenantId, contactId } },
-      select: { id: true },
-    });
+    const [existingPickup, transportPeople] = await Promise.all([
+      prisma.customerPickup.findUnique({
+        where: { tenantId_contactId: { tenantId, contactId } },
+        select: { id: true },
+      }),
+      prisma.transportPerson.findMany({
+        where: { tenantId },
+        select: { customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true },
+      }),
+    ]);
+    if (customerTransportStarted(transportPeople, contactId)) {
+      return res.status(409).json({
+        error: "Pickup location and plot assignments cannot be changed after transport has started.",
+        code: "TRANSPORT_WORKFLOW_LOCKED",
+      });
+    }
 
     const sourceTranscriptId = text(req.body.sourceTranscriptId, 191);
     const sourceExcerpt = text(req.body.sourceExcerpt, 4000);
@@ -3210,7 +4732,12 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
     if (tenant?.vertical === "generic") {
       require("../lib/eventBus").emitEvent(
         existingPickup ? "pickup_point.updated" : "pickup_point.created",
-        { pickupPointId: pickup.id, contactId: pickup.contactId, pickup },
+        {
+          pickupPointId: pickup.id,
+          contactId: pickup.contactId,
+          eventId: `${pickup.id}-${new Date(pickup.updatedAt || Date.now()).getTime()}`,
+          pickup,
+        },
         tenantId,
         req.io,
       ).catch((error) => console.error("[GenericCampaign] pickup point event failed:", error.message));
@@ -3226,7 +4753,7 @@ router.put("/customer-pickups/:contactId", async (req, res) => {
 router.get("/", adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const [pickupLocations, plots] = await Promise.all([
+    const [pickupLocations, plots, customerPickups, plotBookings] = await Promise.all([
       prisma.pickupLocation.findMany({
         where: { tenantId },
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
@@ -3237,7 +4764,38 @@ router.get("/", adminOnly, async (req, res) => {
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
         include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
       }),
+      prisma.customerPickup.findMany({
+        where: { tenantId, contact: { deletedAt: null } },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          contactId: true,
+          contact: { select: { id: true, name: true, phone: true, email: true } },
+        },
+      }),
+      prisma.plotBooking.findMany({
+        where: { tenantId, status: { not: "CANCELLED" } },
+        select: { contactId: true, plotSiteId: true },
+      }),
     ]);
+
+    const pickupByContactId = new Map(customerPickups.map((pickup) => [Number(pickup.contactId), pickup]));
+    const assignedPlotIdsByContact = new Map();
+    const assignedContactsByPlot = new Map();
+    for (const booking of plotBookings) {
+      const contactId = Number(booking.contactId);
+      const plotSiteId = Number(booking.plotSiteId);
+      const pickup = pickupByContactId.get(contactId);
+      if (!pickup || !Number.isInteger(plotSiteId)) continue;
+
+      const contactPlotIds = assignedPlotIdsByContact.get(contactId) || new Set();
+      contactPlotIds.add(plotSiteId);
+      assignedPlotIdsByContact.set(contactId, contactPlotIds);
+
+      const plotContacts = assignedContactsByPlot.get(plotSiteId) || new Map();
+      plotContacts.set(contactId, pickup.contact);
+      assignedContactsByPlot.set(plotSiteId, plotContacts);
+    }
 
     const locationPlotCounts = new Map(pickupLocations.map((location) => [location.id, 0]));
     const serializedPlots = plots.map((plot) => {
@@ -3247,6 +4805,7 @@ router.get("/", adminOnly, async (req, res) => {
       }
       return {
         ...serialized,
+        assignedCustomers: [...(assignedContactsByPlot.get(Number(plot.id))?.values() || [])],
         pickupLocations: serialized.pickupLocationIds
           .map((locationId) => pickupLocations.find((location) => location.id === locationId))
           .filter(Boolean)
@@ -3262,6 +4821,11 @@ router.get("/", adminOnly, async (req, res) => {
     return res.json({
       pickupLocations: locationRows,
       plots: serializedPlots,
+      customers: customerPickups.map((pickup) => ({
+        id: pickup.id,
+        contact: pickup.contact,
+        assignedPlotIds: [...(assignedPlotIdsByContact.get(Number(pickup.contactId)) || [])],
+      })),
       summary: {
         activeLocations: locationRows.filter((location) => location.isActive).length,
         totalPlots: activePlots.length,
@@ -3273,6 +4837,76 @@ router.get("/", adminOnly, async (req, res) => {
   } catch (error) {
     console.error("pickup-plot-inventory GET / error:", error);
     return res.status(500).json({ error: "Failed to load pickup and plot inventory", code: "INVENTORY_LOAD_FAILED" });
+  }
+});
+
+router.post("/locations/import", adminOnly, async (req, res) => {
+  try {
+    const parsed = importRows(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error, code: "INVALID_IMPORT" });
+
+    const prepared = [];
+    const errors = [];
+    const seenNames = new Set();
+    parsed.rows.forEach((row, index) => {
+      const rowNumber = index + 2;
+      const name = text(row.name, 150);
+      const address = text(row.address, 2000);
+      const googleMapsLink = text(row.googleMapsLink, 2000);
+      const maxAssignments = parseMaxAssignments(row.maxAssignments);
+      const isActive = importBoolean(row.isActive);
+      const validationError = firstError(
+        validateName(row.name, "Location name"),
+        validateRequiredText(row.address, "Address", { min: 5, max: 2000 }),
+        validateOptionalText(row.googleMapsLink, "Google Maps link", 2000),
+        validateOptionalText(row.notes, "Notes", 4000),
+        Number.isNaN(maxAssignments) ? "Maximum assignments must be a positive whole number." : null,
+        isActive === INVALID_IMPORT_BOOLEAN ? "Active must be TRUE or FALSE." : null,
+        !isGoogleMapsLink(googleMapsLink) ? "Enter a valid HTTPS Google Maps link." : null,
+      );
+      const key = importKey(name);
+      if (validationError) errors.push({ row: rowNumber, error: validationError });
+      else if (seenNames.has(key)) errors.push({ row: rowNumber, error: "Location name is duplicated in this file." });
+      else {
+        seenNames.add(key);
+        prepared.push({
+          name,
+          address,
+          googleMapsLink,
+          maxAssignments,
+          notes: text(row.notes, 4000),
+          isActive,
+        });
+      }
+    });
+    if (errors.length) {
+      return res.status(400).json({ error: "Fix the invalid spreadsheet rows and import again.", code: "IMPORT_VALIDATION_ERROR", errors });
+    }
+
+    const existingRows = await prisma.pickupLocation.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true },
+    });
+    const existingByName = new Map(existingRows.map((row) => [importKey(row.name), row]));
+    let created = 0;
+    let updated = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const row of prepared) {
+        const existing = existingByName.get(importKey(row.name));
+        if (existing) {
+          await tx.pickupLocation.update({ where: { id: existing.id }, data: row });
+          updated += 1;
+        } else {
+          const added = await tx.pickupLocation.create({ data: { ...row, tenantId: req.user.tenantId } });
+          existingByName.set(importKey(row.name), added);
+          created += 1;
+        }
+      }
+    });
+    return res.json({ total: prepared.length, created, updated });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /locations/import error:", error);
+    return res.status(500).json({ error: "Failed to import pickup locations", code: "LOCATION_IMPORT_FAILED" });
   }
 });
 
@@ -3377,6 +5011,127 @@ async function validatePickupLocationIds(tenantId, input) {
   const ids = await validateTenantIds(prisma.pickupLocation, tenantId, rawIds, "Pickup locations");
   return Array.isArray(ids) ? ids : false;
 }
+
+router.post("/plots/import", adminOnly, async (req, res) => {
+  try {
+    const parsed = importRows(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error, code: "INVALID_IMPORT" });
+
+    const pickupLocations = await prisma.pickupLocation.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true },
+    });
+    const locationsByName = new Map();
+    for (const location of pickupLocations) {
+      const key = importKey(location.name);
+      locationsByName.set(key, [...(locationsByName.get(key) || []), location]);
+    }
+
+    const prepared = [];
+    const errors = [];
+    const seenPlots = new Set();
+    parsed.rows.forEach((row, index) => {
+      const rowNumber = index + 2;
+      const name = text(row.name, 150);
+      const plotNumber = text(row.plotNumber, 100);
+      const availability = String(row.availability || "AVAILABLE").trim().toUpperCase();
+      const areaUnit = String(row.areaUnit || "").trim().toUpperCase().replace(/[ .-]+/g, "_");
+      const facing = String(row.facing || "").trim().toUpperCase().replace(/[ .-]+/g, "_");
+      const propertyType = String(row.propertyType || "").trim().toUpperCase().replace(/[ .-]+/g, "_");
+      const price = parsePrice(row.price);
+      const isActive = importBoolean(row.isActive);
+      const pickupNames = String(row.pickupLocationNames || "")
+        .split(/[|;]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const pickupLocationIds = [];
+      let locationError = null;
+      for (const pickupName of pickupNames) {
+        const matches = locationsByName.get(importKey(pickupName)) || [];
+        if (matches.length === 0) {
+          locationError = `Pickup location "${pickupName}" was not found.`;
+          break;
+        }
+        if (matches.length > 1) {
+          locationError = `Pickup location name "${pickupName}" is ambiguous.`;
+          break;
+        }
+        pickupLocationIds.push(matches[0].id);
+      }
+      const validationError = firstError(
+        validateName(row.name, "Plot or site name"),
+        validateRequiredText(row.plotNumber, "Plot number", { max: 100 }),
+        validateRequiredText(row.block, "Block", { max: 100 }),
+        validateRequiredText(row.address, "Address", { min: 5, max: 2000 }),
+        validateRequiredText(row.area, "Area or size", { max: 100 }),
+        !PLOT_AREA_UNITS.has(areaUnit) ? "Area unit must be SQ_FT or KATHA." : null,
+        validateRequiredText(row.price, "Price", { max: 30 }),
+        validateMoney(row.price),
+        Number.isNaN(price) ? "Enter a valid price." : null,
+        validateRequiredText(row.roadWidth, "Road width", { max: 100 }),
+        facing && !PLOT_FACINGS.has(facing) ? "Select a valid facing." : null,
+        validateRequiredText(row.propertyType, "Residential / Commercial", { max: 30 }),
+        !PLOT_PROPERTY_TYPES.has(propertyType) ? "Property type must be RESIDENTIAL or COMMERCIAL." : null,
+        !AVAILABILITY.has(availability) ? "Select a valid availability." : null,
+        validateOptionalText(row.notes, "Notes", 4000),
+        isActive === INVALID_IMPORT_BOOLEAN ? "Active must be TRUE or FALSE." : null,
+        locationError,
+      );
+      const key = importKey(name, plotNumber);
+      if (validationError) errors.push({ row: rowNumber, error: validationError });
+      else if (seenPlots.has(key)) errors.push({ row: rowNumber, error: "Plot number is duplicated for this plot or site name in the file." });
+      else {
+        seenPlots.add(key);
+        prepared.push({
+          name,
+          plotNumber,
+          block: text(row.block, 100),
+          address: text(row.address, 2000),
+          area: text(row.area, 100),
+          areaUnit,
+          price,
+          availability,
+          roadWidth: text(row.roadWidth, 100),
+          facing: facing || null,
+          propertyType,
+          notes: text(row.notes, 4000),
+          isActive,
+          pickupLocationIdsJson: pickupLocationIds.length ? sanitizeJsonForStringColumn([...new Set(pickupLocationIds)]) : null,
+          pickupLocationId: pickupLocationIds[0] || null,
+        });
+      }
+    });
+    if (errors.length) {
+      return res.status(400).json({ error: "Fix the invalid spreadsheet rows and import again.", code: "IMPORT_VALIDATION_ERROR", errors });
+    }
+
+    const existingRows = await prisma.plotSite.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true, plotNumber: true },
+    });
+    const existingByKey = new Map(existingRows.map((row) => [importKey(row.name, row.plotNumber), row]));
+    let created = 0;
+    let updated = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const row of prepared) {
+        const key = importKey(row.name, row.plotNumber);
+        const existing = existingByKey.get(key);
+        if (existing) {
+          await tx.plotSite.update({ where: { id: existing.id }, data: row });
+          updated += 1;
+        } else {
+          const added = await tx.plotSite.create({ data: { ...row, tenantId: req.user.tenantId } });
+          existingByKey.set(key, added);
+          created += 1;
+        }
+      }
+    });
+    return res.json({ total: prepared.length, created, updated });
+  } catch (error) {
+    console.error("pickup-plot-inventory POST /plots/import error:", error);
+    return res.status(500).json({ error: "Failed to import plots or sites", code: "PLOT_IMPORT_FAILED" });
+  }
+});
 
 router.post("/plots", adminOnly, async (req, res) => {
   try {
@@ -3766,12 +5521,15 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
     if (staffUserId !== undefined && staffUserId !== null && staffUserId !== "") {
       const assignment = await validateAssignableTransportUser(req.user.tenantId, staffUserId);
       if (assignment.error) return res.status(400).json(assignment);
-      person = await prisma.transportPerson.create({
-        data: { ...parsed.data, tenantId: req.user.tenantId, userId: assignment.user.id },
-        include: {
-          pickupLocation: { select: { id: true, name: true, isActive: true } },
-          user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } },
-        },
+      person = await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data));
+        return tx.transportPerson.create({
+          data: { ...parsed.data, tenantId: req.user.tenantId, userId: assignment.user.id },
+          include: {
+            pickupLocation: { select: { id: true, name: true, isActive: true } },
+            user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } },
+          },
+        });
       });
     } else if (email || password) {
       const emailError = !email ? "Work email is required." : validateEmail(email);
@@ -3794,6 +5552,7 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
       }
       const passwordHash = await bcrypt.hash(password, 10);
       person = await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data));
         const user = await tx.user.create({
           data: {
             name: parsed.data.name,
@@ -3820,9 +5579,12 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
     } else {
       // Backward-compatible profile-only path for existing API consumers and
       // legacy data imports. The UI always chooses a staff-account path.
-      person = await prisma.transportPerson.create({
-        data: { ...parsed.data, tenantId: req.user.tenantId },
-        include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
+      person = await prisma.$transaction(async (tx) => {
+        await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data));
+        return tx.transportPerson.create({
+          data: { ...parsed.data, tenantId: req.user.tenantId },
+          include: { pickupLocation: { select: { id: true, name: true, isActive: true } } },
+        });
       });
     }
     await safeNotifyCustomerPickupPlotAssignments({
@@ -3831,6 +5593,7 @@ router.post("/transport-persons", adminOnly, async (req, res) => {
     });
     return res.status(201).json(serializeTransportPerson(person));
   } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory POST /transport-persons error:", error);
     return res.status(500).json({ error: "Failed to create transport person", code: "TRANSPORT_PERSON_CREATE_FAILED" });
   }
@@ -3855,13 +5618,14 @@ router.put("/transport-persons/:id", adminOnly, async (req, res) => {
         user: { select: { id: true, name: true, email: true, phone: true, deactivatedAt: true } },
       },
     });
-    const person = existing.userId ? await prisma.$transaction(async (tx) => {
-      await tx.user.update({
+    const person = await prisma.$transaction(async (tx) => {
+      await lockPlotAssignmentCustomers(tx, req.user.tenantId, assignmentPairs(parsed.data), assignmentPairs(existing));
+      if (existing.userId) await tx.user.update({
         where: { id: existing.userId },
         data: { name: parsed.data.name, phone: parsed.data.phone },
       });
       return updateTransportPerson(tx);
-    }) : await updateTransportPerson(prisma);
+    });
     await safeNotifyCustomerPickupPlotAssignments({
       tenantId: req.user.tenantId,
       person,
@@ -3869,6 +5633,7 @@ router.put("/transport-persons/:id", adminOnly, async (req, res) => {
     });
     return res.json(serializeTransportPerson(person));
   } catch (error) {
+    if (handleClaimError(error, res)) return undefined;
     console.error("pickup-plot-inventory PUT /transport-persons/:id error:", error);
     return res.status(500).json({ error: "Failed to update transport person", code: "TRANSPORT_PERSON_UPDATE_FAILED" });
   }

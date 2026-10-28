@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { FolderKanban, Plus, Trash2, IndianRupee, CheckCircle2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { FolderKanban, Plus, Trash2, IndianRupee, CheckCircle2, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
+import './Projects.css';
 
 const STATUS_CONFIG = {
   Planning:   { color: '#94a3b8', bg: 'rgba(148,163,184,0.15)' },
@@ -67,12 +69,83 @@ const INITIAL_FORM = {
   dealId: '',
 };
 
+function ProjectCreateModal({ form, contacts, deals, nameInputRef, onChange, onSubmit, onClose }) {
+  return createPortal(
+    <div
+      className="projects-modal-backdrop"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section className="projects-create-modal" role="dialog" aria-modal="true" aria-labelledby="projects-modal-title">
+        <header className="projects-modal-header">
+          <h2 id="projects-modal-title"><Plus size={19} color="var(--accent-color)" /> Create Project</h2>
+          <button type="button" className="projects-modal-close" onClick={onClose} aria-label="Close create project dialog">
+            <X size={18} />
+          </button>
+        </header>
+        <form className="projects-form" onSubmit={onSubmit}>
+          <div>
+            <label htmlFor="project-name">Name</label>
+            <input ref={nameInputRef} id="project-name" type="text" className="input-field" required placeholder="Project name" value={form.name} onChange={event => onChange('name', event.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="project-description">Description</label>
+            <textarea id="project-description" className="input-field" rows={3} placeholder="Project description..." value={form.description} onChange={event => onChange('description', event.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="project-priority">Priority</label>
+            <select id="project-priority" className="input-field" value={form.priority} onChange={event => onChange('priority', event.target.value)}>
+              <option value="Low">Low</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High</option>
+              <option value="Critical">Critical</option>
+            </select>
+          </div>
+          <div className="projects-date-fields">
+            <div>
+              <label htmlFor="project-start-date">Start Date</label>
+              <input id="project-start-date" type="date" className="input-field" value={form.startDate} onChange={event => onChange('startDate', event.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="project-end-date">End Date</label>
+              <input id="project-end-date" type="date" className="input-field" value={form.endDate} onChange={event => onChange('endDate', event.target.value)} />
+            </div>
+          </div>
+          <div>
+            <label htmlFor="project-budget">Budget ($)</label>
+            <input id="project-budget" type="number" step="0.01" min="0" className="input-field" placeholder="0.00" value={form.budget} onChange={event => onChange('budget', event.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="project-contact">Contact</label>
+            <select id="project-contact" className="input-field" value={form.contactId} onChange={event => onChange('contactId', event.target.value)}>
+              <option value="">-- Select Contact --</option>
+              {contacts.map(contact => <option key={contact.id} value={contact.id}>{contact.name} ({contact.email})</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="project-deal">Deal (Optional)</label>
+            <select id="project-deal" className="input-field" value={form.dealId} onChange={event => onChange('dealId', event.target.value)}>
+              <option value="">-- No Deal --</option>
+              {deals.map(deal => <option key={deal.id} value={deal.id}>{deal.title} - {formatCurrency(deal.amount)}</option>)}
+            </select>
+          </div>
+          <button type="submit" className="btn-primary projects-modal-submit">Create Project</button>
+        </form>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 export default function Projects() {
   const notify = useNotify();
   const [projects, setProjects] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(INITIAL_FORM);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const projectNameInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   // Server-driven paging: `projects` holds ONLY the current page (full
@@ -84,6 +157,22 @@ export default function Projects() {
   const [statsProjects, setStatsProjects] = useState([]);
   const [countTotal, setCountTotal] = useState(null);
   const pageRequestId = useRef(0);
+
+  useEffect(() => {
+    if (!isCreateModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = event => {
+      if (event.key === 'Escape') setIsCreateModalOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    const focusFrame = window.requestAnimationFrame(() => projectNameInputRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isCreateModalOpen]);
 
   // Form dropdowns + stats-bar source. Runs on mount and after mutations.
   const loadStatic = async () => {
@@ -177,6 +266,7 @@ export default function Projects() {
         }),
       });
       setForm(INITIAL_FORM);
+      setIsCreateModalOpen(false);
       loadData();
     } catch {
       notify.error('Failed to create project');
@@ -206,18 +296,27 @@ export default function Projects() {
   };
 
   return (
-    <div className="projects-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <FolderKanban size={26} color="var(--accent-color)" /> Projects
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Plan, track, and manage projects across your organization.
-        </p>
+    <div className="projects-page" style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="projects-header" style={{ marginBottom: '2rem' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <FolderKanban size={26} color="var(--accent-color)" /> Projects
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Plan, track, and manage projects across your organization.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary projects-create-shortcut"
+          onClick={() => setIsCreateModalOpen(true)}
+        >
+          <Plus size={16} /> New Project
+        </button>
       </header>
 
       {/* Summary Stats */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+      <div className="projects-summary" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
@@ -247,146 +346,24 @@ export default function Projects() {
         </span>
       </div>
 
-      <div className="projects-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
-
-        {/* Create Project Panel */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Create Project
-          </h3>
-          <form onSubmit={createProject} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Name</label>
-              <input
-                type="text"
-                className="input-field"
-                required
-                placeholder="Project name"
-                value={form.name}
-                onChange={e => handleFormChange('name', e.target.value)}
-                aria-label="Project name"
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Description</label>
-              <textarea
-                className="input-field"
-                rows={3}
-                placeholder="Project description..."
-                value={form.description}
-                onChange={e => handleFormChange('description', e.target.value)}
-                style={{ resize: 'vertical' }}
-                aria-label="Project description"
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Priority</label>
-              <select
-                className="input-field"
-                value={form.priority}
-                onChange={e => handleFormChange('priority', e.target.value)}
-                style={{ background: 'var(--input-bg)' }}
-                aria-label="Project priority"
-              >
-                <option value="Low">Low</option>
-                <option value="Medium">Medium</option>
-                <option value="High">High</option>
-                <option value="Critical">Critical</option>
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Start Date</label>
-                <input
-                  type="date"
-                  className="input-field"
-                  value={form.startDate}
-                  onChange={e => handleFormChange('startDate', e.target.value)}
-                  aria-label="Start date"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>End Date</label>
-                <input
-                  type="date"
-                  className="input-field"
-                  value={form.endDate}
-                  onChange={e => handleFormChange('endDate', e.target.value)}
-                  aria-label="End date"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Budget ($)</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                className="input-field"
-                placeholder="0.00"
-                value={form.budget}
-                onChange={e => handleFormChange('budget', e.target.value)}
-                aria-label="Project budget"
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Contact</label>
-              <select
-                className="input-field"
-                value={form.contactId}
-                onChange={e => handleFormChange('contactId', e.target.value)}
-                style={{ background: 'var(--input-bg)' }}
-                aria-label="Contact"
-              >
-                <option value="">-- Select Contact --</option>
-                {contacts.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.email})</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Deal (Optional)</label>
-              <select
-                className="input-field"
-                value={form.dealId}
-                onChange={e => handleFormChange('dealId', e.target.value)}
-                style={{ background: 'var(--input-bg)' }}
-                aria-label="Associated deal"
-              >
-                <option value="">-- No Deal --</option>
-                {deals.map(d => (
-                  <option key={d.id} value={d.id}>{d.title} - {formatCurrency(d.amount)}</option>
-                ))}
-              </select>
-            </div>
-
-            <button type="submit" className="btn-primary" style={{ padding: '1rem', marginTop: '0.5rem' }}>
-              Create Project
-            </button>
-          </form>
-        </div>
-
+      <div className="projects-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1rem' }}>
         {/* Projects Table */}
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card projects-board-card" style={{ padding: '1rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FolderKanban size={20} color="var(--success-color)" /> Project Board
           </h3>
 
           {projects.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+            <div className="projects-empty-state" style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
               <FolderKanban size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No projects yet. Create one to get started.</p>
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }} role="table" aria-label="Projects table">
+            <div className="projects-table-scroll" style={{ overflowX: 'auto' }}>
+              <table className="projects-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }} role="table" aria-label="Projects table">
+                <colgroup>
+                  {Array.from({ length: 8 }, (_, index) => <col key={index} />)}
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                     {['Name', 'Owner', 'Status', 'Priority', 'Budget', 'Tasks', 'Dates', 'Actions'].map(h => (
@@ -482,7 +459,7 @@ export default function Projects() {
             </div>
           )}
           {projects.length > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+            <div className="projects-pagination" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
                 Showing {startItem}-{endItem} of {total} project{total !== 1 ? 's' : ''}
               </p>
@@ -528,6 +505,18 @@ export default function Projects() {
           )}
         </div>
       </div>
+
+      {isCreateModalOpen && (
+        <ProjectCreateModal
+          form={form}
+          contacts={contacts}
+          deals={deals}
+          nameInputRef={projectNameInputRef}
+          onChange={handleFormChange}
+          onSubmit={createProject}
+          onClose={() => setIsCreateModalOpen(false)}
+        />
+      )}
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

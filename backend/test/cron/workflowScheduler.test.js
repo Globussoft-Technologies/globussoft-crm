@@ -32,6 +32,7 @@ const {
   processScheduledRules,
   processDeferredActions,
   processOverdueInvoices,
+  processUpcomingPaymentDueReminders,
   runScheduledRule,
   candidateWhere,
   isDueNow,
@@ -53,6 +54,8 @@ beforeAll(() => {
   prisma.invoice = prisma.invoice || {};
   prisma.invoice.findMany = vi.fn();
   prisma.invoice.updateMany = vi.fn();
+  prisma.campaign = prisma.campaign || {};
+  prisma.campaign.findMany = vi.fn();
   prisma.deal = prisma.deal || {};
   prisma.deal.findMany = vi.fn();
   prisma.contact = prisma.contact || {};
@@ -69,6 +72,7 @@ beforeEach(() => {
   prisma.workflowScheduledAction.update.mockReset().mockResolvedValue({});
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.invoice.updateMany.mockReset().mockResolvedValue({ count: 1 });
+  prisma.campaign.findMany.mockReset().mockResolvedValue([]);
   prisma.deal.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
 
@@ -498,5 +502,38 @@ describe('processOverdueInvoices', () => {
     const result = await processOverdueInvoices(NOW, null);
     errSpy.mockRestore();
     expect(result.emitted).toBe(1);
+  });
+});
+
+describe('processUpcomingPaymentDueReminders', () => {
+  test('emits an invoice payment-due event at each configured pre-due offset', async () => {
+    prisma.campaign.findMany.mockResolvedValue([{
+      scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', triggerEvent: 'payment.due', dueBefore: { amount: 1, unit: 'days' } }),
+    }]);
+    prisma.invoice.findMany.mockResolvedValue([{
+      id: 12, invoiceNum: 'INV-12', amount: 900,
+      dueDate: new Date('2026-08-28T10:00:00'),
+      contactId: 5, dealId: null, tenantId: 42,
+    }]);
+
+    const result = await processUpcomingPaymentDueReminders(NOW, null);
+
+    expect(result).toEqual({ checked: 1, emitted: 1, offsets: 1 });
+    expect(prisma.invoice.findMany.mock.calls[0][0].where).toMatchObject({ status: 'UNPAID' });
+    expect(prisma.invoice.findMany.mock.calls[0][0].where.dueDate.lte).toEqual(new Date('2026-08-28T10:00:00'));
+    expect(eventBus.emitEvent).toHaveBeenCalledWith('invoice.payment_due', expect.objectContaining({
+      invoiceId: 12,
+      dueBeforeMinutes: 1440,
+      contactId: 5,
+    }), 42, null);
+  });
+
+  test('does not scan invoices when no active Generic CRM campaign has a pre-due condition', async () => {
+    prisma.campaign.findMany.mockResolvedValue([{
+      scheduleFilters: JSON.stringify({ automationType: 'generic_channel_event', eventTrigger: 'contact.created' }),
+    }]);
+
+    expect(await processUpcomingPaymentDueReminders(NOW, null)).toEqual({ checked: 0, emitted: 0, offsets: 0 });
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
   });
 });

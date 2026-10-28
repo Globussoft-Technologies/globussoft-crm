@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import BlockRenderer from '../../components/landing-page-renderers/BlockRenderer';
 
-export default function LandingSiteResolver() {
-  const { slug } = useParams();
+export default function LandingSiteResolver({ vertical = 'generic' }) {
+  const { tenantId, slug } = useParams();
   const [page, setPage] = useState(null);
   const [error, setError] = useState(null);
 
@@ -11,7 +11,11 @@ export default function LandingSiteResolver() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/landing-sites/public/${encodeURIComponent(slug || '')}?vertical=generic`, { method: 'GET' });
+        if (!tenantId) {
+          setError('Landing site not found');
+          return;
+        }
+        const res = await fetch(`/api/landing-sites/public/${encodeURIComponent(vertical)}/${encodeURIComponent(tenantId)}/${encodeURIComponent(slug || '')}`, { method: 'GET' });
         if (cancelled) return;
         if (!res.ok) {
           setError('Landing site not found');
@@ -24,7 +28,7 @@ export default function LandingSiteResolver() {
       }
     })();
     return () => { cancelled = true; };
-  }, [slug]);
+  }, [slug, tenantId, vertical]);
 
   if (error) {
     return (

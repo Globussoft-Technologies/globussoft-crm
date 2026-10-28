@@ -70,6 +70,7 @@ const {
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 const {
   buildParticipantImportTemplate,
+  missingParticipantImportHeaders,
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
 } = require("../lib/travelTmcImport");
@@ -1240,6 +1241,15 @@ router.get(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      const firstInstalmentPayments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: trip.id, instalmentIndex: 0 },
+        select: { participantId: true, paidAmount: true },
+      });
+      const participantsWithFirstPayment = new Set(
+        firstInstalmentPayments
+          .filter((payment) => Number(payment.paidAmount) > 0)
+          .map((payment) => Number(payment.participantId)),
+      );
       const pendingParentRows = await prisma.pendingTripRegistration.findMany({
         where: { tenantId: req.travelTenant.id, tripId: trip.id },
         select: { parentEmail: true },
@@ -1256,6 +1266,7 @@ router.get(
       );
       trip.participants = (trip.participants || []).map((participant) => ({
         ...participant,
+        hasFirstPayment: participantsWithFirstPayment.has(Number(participant.id)),
         parentDocuments: (parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [])
           .map(projectStaffParentDocument),
         consentDocument: projectStaffConsentDocument(
@@ -1897,6 +1908,29 @@ router.delete(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      const [paidInvoice, paidInstalment] = await Promise.all([
+        prisma.travelInvoice.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            tripId: id,
+            OR: [{ status: { in: ["Paid", "Partial"] } }, { paidAt: { not: null } }],
+          },
+          select: { id: true },
+        }),
+        prisma.tripInstalmentPayment.findFirst({
+          where: {
+            tripId: id,
+            OR: [{ status: { in: ["paid", "partial"] } }, { paidAmount: { gt: 0 } }],
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (paidInvoice || paidInstalment) {
+        return res.status(409).json({
+          error: "This trip cannot be deleted because a payment has been recorded for it.",
+          code: "TRIP_HAS_PAYMENTS",
+        });
+      }
       await prisma.tmcTrip.delete({ where: { id } });
       res.json({ deleted: true, id });
     } catch (e) {
@@ -2301,7 +2335,7 @@ async function loadStaffParentDocument({ tenantId, tripId, parentEmail, document
 const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
 
 // GET /api/travel/trips/:id/participants/import-template
-// Download a header-only starter file. Keeping the template on the server
+// Download a starter file. Keeping the template on the server
 // means its columns stay aligned with the parser used by the import route.
 router.get(
   "/trips/:id/participants/import-template",
@@ -2385,6 +2419,14 @@ router.post(
       }
 
       const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      const missingHeaders = missingParticipantImportHeaders(parsed.headers);
+      if (missingHeaders.length > 0) {
+        return res.status(400).json({
+          error: `Missing required columns: ${missingHeaders.join(", ")}. Download the participant import template and use its exact headers.`,
+          code: "MISSING_COLUMNS",
+          missingColumns: missingHeaders,
+        });
+      }
       if (rows.length === 0) {
         return res
           .status(400)
@@ -2399,6 +2441,7 @@ router.post(
 
       const seen = new Map();
       const errors = [];
+      const importedRows = [];
       let inserted = 0;
       let updated = 0;
       let skipped = 0;
@@ -2457,22 +2500,25 @@ router.post(
             data,
           });
           updated += 1;
+          importedRows.push({ row: rowNumber, fullName: parsedRow.data.fullName, action: "updated" });
         } else {
           await prisma.tripParticipant.create({
             data: {
-              tenantId: req.travelTenant.id,
               tripId: trip.id,
               ...parsedRow.data,
             },
           });
           inserted += 1;
+          importedRows.push({ row: rowNumber, fullName: parsedRow.data.fullName, action: "imported" });
         }
+
       }
 
       res.status(200).json({
         inserted,
         updated,
         skipped,
+        importedRows,
         errors,
         total: rows.length,
       });

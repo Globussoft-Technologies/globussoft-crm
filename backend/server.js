@@ -152,7 +152,7 @@ const ALLOWED_ORIGINS = buildAllowedOrigins();
 // their CORS preflights for the requesting origin without widening any
 // authenticated API surface.
 app.use((req, res, next) => {
-  const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status)\/?$/.test(req.path);
+  const publicPageRuntimePath = /^\/api\/pages\/[^/]+\/(json|track|submit|registration-draft|registration-documents|payment-order|payment-status|payment-balance)\/?$/.test(req.path);
   const publicLandingPath = req.path.startsWith("/p/")
     || publicPageRuntimePath
     || req.path.startsWith("/api/landing-pages/public/")
@@ -681,6 +681,7 @@ const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
 const settingsRoutes = require("./routes/settings");
+const googleMapsSettingsRoutes = require("./routes/google_maps_settings");
 // G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) — admin surface for per-channel
 // toggles + cooldowns + Meta form-ID → sub-brand routing mappings. Distinct
 // from the generic settings route above (which owns webhook signing creds).
@@ -1069,6 +1070,7 @@ app.use("/api", (req, res, next) => {
     "/terms-and-conditions",
     "/legal",
     "/landing-pages/public",
+    "/pickup-plot-inventory/public",
     // Explore public API intentionally disabled.
     // "/explore",
     "/landing-sites/public",
@@ -1102,7 +1104,10 @@ app.use("/api", (req, res, next) => {
   // Public marketing landing page resolves its hero web form anonymously.
   // Exact-path + GET-only: /access and PUT stay behind the global
   // verifyToken guard + the route's own allowlist check.
-  if (req.method === "GET" && req.path === "/landing-form-config")
+  if (
+    req.method === "GET" &&
+    ["/landing-form-config", "/landing-form-config/embed"].includes(req.path)
+  )
     return next();
   // Billing/self-serve subscription endpoints must stay reachable even when
   // the current subscription is expired, otherwise the admin cannot renew.
@@ -1267,6 +1272,7 @@ app.use("/api/developer", developerRoutes);
 // even though settings.js has no catch-all today; defensive against future
 // surface additions on the generic settings router.
 app.use("/api/settings/lead-capture", leadCaptureSettingsRoutes);
+app.use("/api/settings/google-maps", googleMapsSettingsRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
 // PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the

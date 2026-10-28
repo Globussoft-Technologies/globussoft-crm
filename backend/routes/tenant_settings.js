@@ -78,6 +78,69 @@ function defaultCategoryFor(key) {
 // { ok: true } or { ok: false, code, error } so callers can return 400
 // with a canonical envelope before touching the DB.
 function validateTenantSettingValue(key, rawValue) {
+  if (key === KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES) {
+    let stages;
+    try {
+      stages = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Lifecycle stages must be valid JSON." };
+    }
+    if (!Array.isArray(stages) || stages.length < 1 || stages.length > 20) {
+      return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Lifecycle stages must contain between 1 and 20 stages." };
+    }
+    const stageIds = new Set();
+    const optionIds = new Set();
+    const allowedStatuses = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
+    for (const stage of stages) {
+      const id = String(stage?.id || "").trim();
+      const title = String(stage?.title || "").trim();
+      const options = Array.isArray(stage?.options) ? stage.options : [];
+      if (!id || id.length > 80 || stageIds.has(id) || !title || title.length > 80 || options.length < 1 || options.length > 5) {
+        return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Each lifecycle stage needs a unique id, a title, and between 1 and 5 outcomes." };
+      }
+      stageIds.add(id);
+      for (const option of options) {
+        const optionId = String(option?.id || "").trim();
+        const label = String(option?.label || "").trim();
+        if (!optionId || optionId.length > 80 || optionIds.has(optionId) || !label || label.length > 80 || !allowedStatuses.has(option?.status)) {
+          return { ok: false, code: "INVALID_LIFECYCLE_STAGES", error: "Each lifecycle outcome needs a unique id, a label, and a valid CRM status." };
+        }
+        optionIds.add(optionId);
+      }
+    }
+  }
+  if (key === KEYS.GENERIC_DEAL_TYPES) {
+    let types;
+    try {
+      types = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_DEAL_TYPES", error: "Deal types must be valid JSON." };
+    }
+    if (!Array.isArray(types) || types.length < 1 || types.length > 50) {
+      return { ok: false, code: "INVALID_DEAL_TYPES", error: "Deal types must contain between 1 and 50 types." };
+    }
+    const typeIds = new Set();
+    const typeNames = new Set();
+    for (const type of types) {
+      const id = String(type?.id || "").trim();
+      const name = String(type?.name || "").trim();
+      const stages = Array.isArray(type?.stages) ? type.stages : [];
+      if (!id || id.length > 80 || typeIds.has(id) || !name || name.length > 80 || typeNames.has(name.toLowerCase()) || stages.length < 1 || stages.length > 50) {
+        return { ok: false, code: "INVALID_DEAL_TYPES", error: "Each deal type needs a unique id, a name, and between 1 and 50 stages." };
+      }
+      typeIds.add(id);
+      typeNames.add(name.toLowerCase());
+      const stageIds = new Set();
+      for (const stage of stages) {
+        const stageId = String(stage?.id || "").trim();
+        const stageName = String(stage?.name || "").trim();
+        if (!stageId || stageId.length > 80 || stageIds.has(stageId) || !stageName || stageName.length > 80) {
+          return { ok: false, code: "INVALID_DEAL_TYPES", error: "Each deal type stage needs a unique id and name." };
+        }
+        stageIds.add(stageId);
+      }
+    }
+  }
   if (key === KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES) {
     const n = Number(rawValue);
     if (!Number.isInteger(n) || n < 1 || n > 10) {
@@ -298,6 +361,19 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       });
     }
 
+    if (key === KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      });
+      if (tenant?.vertical !== "generic") {
+        return res.status(404).json({
+          error: "Lifecycle stage customization is available only for Generic CRM",
+          code: "GENERIC_ONLY",
+        });
+      }
+    }
+
     const body = req.body || {};
     if (body.value === undefined || body.value === null || body.value === "") {
       return res.status(400).json({
@@ -322,7 +398,34 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
     });
 
     const category = body.category ? String(body.category) : defaultCategoryFor(key);
-    const updated = await setSetting(tenantId, key, body.value, { category });
+    let updated;
+    if (key === KEYS.GENERIC_DEAL_TYPES) {
+      const oldTypes = JSON.parse(prior?.value || DEFAULTS[key]);
+      const newTypes = JSON.parse(String(body.value));
+      const renames = oldTypes.flatMap((oldType) => {
+        const next = newTypes.find((type) => type.id === oldType.id);
+        return next && next.name !== oldType.name ? [{ oldName: oldType.name, newName: next.name }] : [];
+      });
+      // Prevent sequential renames from capturing another type's rows.
+      if (renames.some(({ oldName, newName }) => oldTypes.some((type) => type.name !== oldName && type.name.toLowerCase() === newName.toLowerCase()))) {
+        return res.status(409).json({ error: 'A deal type with that name already exists.', code: 'DEAL_TYPE_NAME_CONFLICT' });
+      }
+      updated = await prisma.$transaction(async (tx) => {
+        for (const { oldName, newName } of renames) {
+          await tx.deal.updateMany({
+            where: { tenantId, ...(oldName === 'New Business' ? { OR: [{ dealType: oldName }, { dealType: null }] } : { dealType: oldName }) },
+            data: { dealType: newName },
+          });
+        }
+        return tx.tenantSetting.upsert({
+          where: { tenantId_key: { tenantId, key } },
+          create: { tenantId, key, value: String(body.value), category },
+          update: { value: String(body.value), category },
+        });
+      });
+    } else {
+      updated = await setSetting(tenantId, key, body.value, { category });
+    }
 
     await writeAudit(
       "TenantSetting",

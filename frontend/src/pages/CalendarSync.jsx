@@ -1313,7 +1313,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
     setEditFormData({ ...editFormData, attendees: remaining.join(", ") });
   };
 
-  const renderAttendeePicker = (onSelect, pickerKey) => (
+  const renderAttendeePicker = (onSelect, pickerKey, allowNewAttendee = isTravelTenant) => (
     <div style={{ position: "relative", display: "flex", alignItems: "stretch", gap: "0.4rem", marginBottom: "0.5rem", minWidth: 0 }}>
       <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
         <input
@@ -1361,6 +1361,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
       {attendeePickerOpen === pickerKey && (
         <div
           id={`${pickerKey}-attendee-options`}
+          className="calendar-attendee-picker__options"
           role="listbox"
           style={{
             position: "absolute",
@@ -1383,6 +1384,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
           ) : filteredContactOptions.map((contact) => (
             <div
               key={contact.email}
+              className="calendar-attendee-picker__option"
               role="option"
               aria-label={`${contact.name} (${contact.email})`}
               tabIndex={0}
@@ -1411,7 +1413,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
         </div>
       )}
       </div>
-      <button
+      {allowNewAttendee && <button
         type="button"
         aria-label={newAttendeeOpen === pickerKey ? "Close new attendee input" : "Add a new attendee"}
         title={newAttendeeOpen === pickerKey ? "Close new attendee input" : "Add a new attendee"}
@@ -1419,34 +1421,8 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
         style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--surface-hover)", color: "var(--text-primary)", fontSize: "1.2rem", cursor: "pointer" }}
       >
         {newAttendeeOpen === pickerKey ? "×" : "+"}
-      </button>
+      </button>}
     </div>
-  );
-
-  const renderLegacyAttendeeSelect = (onSelect) => (
-    <select
-      value=""
-      aria-label="Add attendee from contacts"
-      onChange={(event) => {
-        if (event.target.value) onSelect(event.target.value);
-      }}
-      style={{
-        width: "100%",
-        padding: "0.7rem",
-        marginBottom: "0.5rem",
-        border: "1px solid var(--border-color)",
-        borderRadius: "8px",
-        background: "var(--input-bg)",
-        color: "var(--text-primary)",
-      }}
-    >
-      <option value="">+ Add from contacts…</option>
-      {contactOptions.map((contact) => (
-        <option key={contact.id || contact.email} value={contact.email}>
-          {contact.name} ({contact.email})
-        </option>
-      ))}
-    </select>
   );
 
   const handleCreateEvent = async (e) => {
@@ -2841,6 +2817,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
           <button
             key={card.key}
             type="button"
+            className="calendar-summary-card"
             onClick={() => handleSummaryCardClick(card.key)}
             style={{
               textAlign: "left",
@@ -4036,9 +4013,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
                       Attendees
                     </label>
                     {contactOptions.length > 0 && (
-                      isTravelTenant
-                        ? renderAttendeePicker(addEditAttendeeEmail, "edit")
-                        : renderLegacyAttendeeSelect(addEditAttendeeEmail)
+                      renderAttendeePicker(addEditAttendeeEmail, "edit", isTravelTenant)
                     )}
                     {editFormData.attendees && (
                       <div
@@ -4643,9 +4618,7 @@ function TenantCalendarSync({ tenantVertical, storageScope }) {
                   Attendees
                 </label>
                 {contactOptions.length > 0 && (
-                  isTravelTenant
-                    ? renderAttendeePicker(addAttendeeEmail, "create")
-                    : renderLegacyAttendeeSelect(addAttendeeEmail)
+                  renderAttendeePicker(addAttendeeEmail, "create", isTravelTenant)
                 )}
                 {formData.attendees && (
                   <div

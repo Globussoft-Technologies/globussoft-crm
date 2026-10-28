@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Building2, Check, Eye, EyeOff, RefreshCw, Save, Search, ShieldCheck } from "lucide-react";
+import { Building2, Check, Eye, EyeOff, RefreshCw, Save, Search, ShieldCheck, X } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
 import "./super-admin.css";
 
@@ -171,55 +171,73 @@ export default function SuperAdminPageVisibility() {
   };
 
   return (
-    <div className="super-admin-page-visibility" style={{ display: "grid", gap: "1rem", color: "var(--text-primary, #f8fafc)" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap" }}>
+    <div className="super-admin-page-visibility">
+      <header className="super-admin-page-visibility__title-row">
         <div>
-          <h1 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.6rem" }}>
-            <Eye size={25} color="var(--accent-color, #8aa8ff)" /> Organization Page Visibility
+          <h1 className="super-admin-page-visibility__title">
+            <Eye size={23} color="var(--accent-color, #8aa8ff)" /> Organization Page Visibility
           </h1>
-          <p style={{ margin: "0.45rem 0 0", color: "var(--text-secondary, #aab5ca)", maxWidth: 760 }}>
+          <p className="super-admin-page-visibility__description">
             Choose which CRM pages each organization can use. Hidden pages are removed from navigation, global page search, and tenant role-permission mapping for every user in that organization.
           </p>
         </div>
-        <button type="button" className="btn-secondary" onClick={() => { loadTenants(); if (tenantId) loadVisibility(tenantId); }} disabled={loadingTenants || loadingVisibility}>
-          <RefreshCw size={15} /> Refresh
+        <button type="button" className="btn-secondary super-admin-page-visibility__refresh" onClick={() => { loadTenants(); if (tenantId) loadVisibility(tenantId); }} disabled={loadingTenants || loadingVisibility}>
+          <RefreshCw size={14} /> Refresh
         </button>
       </header>
 
       {message && (
-        <div style={{ ...surfaceStyle, padding: "0.85rem 1rem", color: /failed|error/i.test(message) ? "#fca5a5" : "#86efac" }} role="status">
+        <div className="super-admin-page-visibility__message" style={{ ...surfaceStyle, color: /failed|error/i.test(message) ? "#fca5a5" : "#86efac" }} role="status">
           {message}
         </div>
       )}
 
-      <section style={{ ...surfaceStyle, padding: "1rem", display: "grid", gap: "0.85rem" }}>
-        <label style={{ display: "grid", gap: "0.4rem", maxWidth: 520 }}>
-          <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-secondary, #aab5ca)" }}>Organization</span>
-          <span style={{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
+      <section className="super-admin-page-visibility__controls" style={surfaceStyle}>
+        <label className="super-admin-page-visibility__organization">
+          <span>Organization</span>
+          <span className="super-admin-page-visibility__select-wrap">
             <Building2 size={17} color="var(--accent-color, #8aa8ff)" aria-hidden="true" />
-            <select className="input-field" value={tenantId} onChange={(event) => setTenantId(event.target.value)} disabled={saving || loadingTenants || !tenants.length} style={{ flex: 1 }}>
+            <select className="input-field" value={tenantId} onChange={(event) => setTenantId(event.target.value)} disabled={saving || loadingTenants || !tenants.length}>
               {!tenants.length && <option value="">No organizations found</option>}
               {tenants.map((tenant) => <option key={tenant.tenantId} value={tenant.tenantId}>{tenant.organization} · {verticalLabel(tenant.vertical)}</option>)}
             </select>
           </span>
         </label>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ color: "var(--text-secondary, #aab5ca)", fontSize: "0.84rem" }}>
-            {visibility ? <><strong style={{ color: "var(--text-primary)" }}>{enabledCount}</strong> of {pages.length} pages enabled for {visibility.tenant?.name || selectedTenant?.organization}.</> : "Select an organization to configure its pages."}
+        <div className="super-admin-page-visibility__summary">
+          <div className="super-admin-page-visibility__count">
+            {visibility ? <><strong>{enabledCount}</strong> of {pages.length} pages enabled for {visibility.tenant?.name || selectedTenant?.organization}.</> : "Select an organization to configure its pages."}
           </div>
-          <button type="button" className="btn-primary" onClick={save} disabled={!visibility || String(visibility?.tenant?.id) !== String(tenantId) || loadingVisibility || saving}>
-            <Save size={15} /> {saving ? "Saving..." : "Save visibility"}
+          <button type="button" className="btn-primary super-admin-page-visibility__save" onClick={save} disabled={!visibility || String(visibility?.tenant?.id) !== String(tenantId) || loadingVisibility || saving}>
+            <Save size={14} /> {saving ? "Saving..." : "Save visibility"}
           </button>
         </div>
       </section>
 
       {visibility && (
-        <section style={{ ...surfaceStyle, padding: "1rem", display: "grid", gap: "1rem" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", maxWidth: 560 }}>
-            <Search size={17} color="var(--text-secondary)" aria-hidden="true" />
-            <input className="input-field" placeholder="Search pages by name, path, or category..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ flex: 1 }} />
+        <section className="super-admin-page-visibility__catalog" style={surfaceStyle}>
+          <div className="super-admin-page-visibility__search-toolbar">
+            <div className="super-admin-page-visibility__search-copy">
+              <strong>Find pages</strong>
+              <span>{search.trim() ? `${filteredPages.length} matching ${filteredPages.length === 1 ? "page" : "pages"}` : `${pages.length} available pages`}</span>
+            </div>
+            <div className="super-admin-page-visibility__search-control">
+              <Search size={16} aria-hidden="true" />
+              <input
+                className="input-field"
+                aria-label="Search pages by name, path, or category"
+                placeholder="Search by name, path, or category"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              {search && (
+                <button type="button" className="super-admin-page-visibility__clear-search" onClick={() => setSearch("")} aria-label="Clear page search" title="Clear search">
+                  <X size={15} />
+                </button>
+              )}
+            </div>
           </div>
 
+          <div className="super-admin-page-visibility__catalog-scroll">
           {loadingVisibility ? <div style={{ color: "var(--text-secondary)" }}>Loading page catalog...</div> : Object.keys(groups).length === 0 ? <div style={{ color: "var(--text-secondary)" }}>No pages match this search.</div> : Object.entries(groups).map(([category, categoryPages]) => {
             const allEnabled = categoryPages.every((page) => !hiddenPaths.has(page.path));
             return (
@@ -272,6 +290,7 @@ export default function SuperAdminPageVisibility() {
               </div>
             );
           })}
+          </div>
         </section>
       )}
     </div>

@@ -335,6 +335,14 @@ describe('emitEvent — synchronous bus.emit', () => {
 // imported prisma singleton; both the SUT and the test see the same
 // patched object because vitest.config.js inlines backend/lib/ + backend/cron/.
 
+describe('generic lifecycle-stage events', () => {
+  test('recognises lifecycle-stage and legacy status changes', () => {
+    expect(sut.shouldDispatchStatusChanged({ changedFields: ['lifecycleStageKey'] })).toBe(true);
+    expect(sut.shouldDispatchStatusChanged({ changedFields: ['status'] })).toBe(true);
+    expect(sut.shouldDispatchStatusChanged({ changedFields: ['assignedToId'] })).toBe(false);
+  });
+});
+
 beforeAll(() => {
   prisma.automationRule = { findMany: vi.fn() };
   prisma.notification = { create: vi.fn() };
@@ -402,6 +410,19 @@ beforeEach(() => {
 });
 
 describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', () => {
+  test('waits for asynchronous in-process listeners before resolving', async () => {
+    let completed = false;
+    bus.once('test.bus.event.awaited', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completed = true;
+    });
+
+    await emitEvent('test.bus.event.awaited', { x: 1 }, 42);
+
+    expect(completed).toBe(true);
+    expect(bus.listenerCount('test.bus.event.awaited')).toBe(0);
+  });
+
   test('queries automationRule scoped to tenant + eventName + isActive=true', async () => {
     await emitEvent('contact.created', { contactId: 1 }, 42);
     expect(prisma.automationRule.findMany).toHaveBeenCalledWith({

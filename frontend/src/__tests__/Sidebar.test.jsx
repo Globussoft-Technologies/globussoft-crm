@@ -226,6 +226,7 @@ function renderSidebar({
   userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
   hiddenPagePaths = [],
   expandTravelGroups = true, // legacy fixture convenience; production defaults collapsed
+  expandGenericGroups = true,
 } = {}) {
   // Capture the catalog into a closure variable read by the default
   // mock impl set in beforeEach. This lets per-test overrides (e.g.
@@ -279,6 +280,11 @@ function renderSidebar({
   );
   if (vertical === 'travel' && expandTravelGroups) {
     rendered.container.querySelectorAll('.travel-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
+      fireEvent.click(button);
+    });
+  }
+  if (vertical === 'generic' && expandGenericGroups) {
+    rendered.container.querySelectorAll('.generic-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
       fireEvent.click(button);
     });
   }
@@ -340,11 +346,32 @@ describe('Sidebar — load-bearing render surface', () => {
       // Core links visible to all roles — pin a representative few.
       expect(screen.getByText('Dashboard')).toBeTruthy();
       expect(screen.getByText('Contacts')).toBeTruthy();
-      expect(screen.getByText('Deals and Pipeline')).toBeTruthy();
+      expect(screen.getByText('Deals')).toBeTruthy();
       // "Leads" label appears as both the nav label and possibly badge text;
       // accept either by checking we have at least one match.
       expect(screen.getAllByText('Leads').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Tickets')).toBeTruthy();
+    });
+
+    it('uses the shared navigation font size for integration buttons and links', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+
+      const dashboard = screen.getByText('Dashboard').closest('a');
+      const adsGpt = screen.getByRole('button', { name: 'Open AdsGPT' });
+      const callified = screen.getByRole('button', { name: 'Open Callified dashboard' });
+
+      const sharedSize = 'var(--sidebar-nav-font-size, 0.85rem)';
+      expect(dashboard).toHaveStyle({ fontSize: sharedSize });
+      expect(adsGpt).toHaveStyle({ fontSize: sharedSize });
+      expect(callified).toHaveStyle({ fontSize: sharedSize });
+    });
+
+    it('keeps the Dashboard date filter when its active sidebar link is selected again', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', path: '/dashboard?from=2026-10-16&to=2026-10-22' });
+      const dashboardLink = screen.getByText('Dashboard').closest('a');
+      expect(dashboardLink).toHaveAttribute('href', '/dashboard?from=2026-10-16&to=2026-10-22');
+      fireEvent.click(dashboardLink);
+      expect(dashboardLink).toHaveAttribute('href', '/dashboard?from=2026-10-16&to=2026-10-22');
     });
 
     it('renders the Web Forms nav entry with href /forms for ADMIN', () => {
@@ -352,6 +379,31 @@ describe('Sidebar — load-bearing render surface', () => {
       const link = screen.getByText('Web Forms').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/forms');
+    });
+
+    it('does not render Estimates in Generic CRM navigation', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      expect(screen.queryByText('Estimates')).toBeNull();
+    });
+
+    it('hides the missing pages and external launchers when disabled for a Generic tenant', async () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', hiddenPagePaths: [
+        '/reports', '/pickup-work-assignments', '/integrations/adsgpt', '/integrations/callified',
+      ] });
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Open AdsGPT' })).toBeNull());
+      expect(screen.queryByRole('button', { name: 'Open Callified dashboard' })).toBeNull();
+      expect(screen.queryByText('Reports')).toBeNull();
+      expect(screen.queryByText('Assign Staff Work')).toBeNull();
+      expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['/integrations/adsgpt', 'Open AdsGPT', 'Open Callified dashboard'],
+      ['/integrations/callified', 'Open Callified dashboard', 'Open AdsGPT'],
+    ])('hides %s without hiding the other integration', async (path, hidden, visible) => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', hiddenPagePaths: [path] });
+      await waitFor(() => expect(screen.queryByRole('button', { name: hidden })).toBeNull());
+      expect(screen.getByRole('button', { name: visible })).toBeInTheDocument();
     });
 
     it('hides legacy generic links when the tenant disables their page path', async () => {
@@ -366,7 +418,7 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows Pickup & Plot as its own module only to generic CRM admins', () => {
-      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const generic = renderSidebar({ vertical: 'generic', role: 'ADMIN', expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       const link = screen.getByText('Plot Inventory').closest('a');
       expect(link).toBeTruthy();
@@ -380,7 +432,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Billing Persons').closest('a').getAttribute('href')).toBe('/billing-persons');
       expect(screen.getByText('Transport Work').closest('a')).toHaveAttribute('href', '/transport-workspace');
       expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
-      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/billing-workspace');
+      expect(screen.queryByText('Billing Queue')).toBeNull();
       expect(screen.queryByText('Customer Status')).toBeNull();
       generic.unmount();
 
@@ -389,7 +441,7 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows transport work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['RENAMED_FIELD_TEAM'], permissions: ['transport_workspace.read'] });
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['RENAMED_FIELD_TEAM'], permissions: ['transport_workspace.read'], expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       expect(screen.getByText('Transport Work').closest('a')).toHaveAttribute('href', '/transport-workspace');
       expect(screen.queryByText('Site Visits')).toBeNull();
@@ -397,17 +449,10 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows site-visit work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['broker_workspace.read'] });
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['broker_workspace.read'], expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
       expect(screen.queryByText('Transport Work')).toBeNull();
-    });
-
-    it('shows billing work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['ACCOUNTS_TEAM'], permissions: ['billing_workspace.read'] });
-      fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
-      expect(screen.getByText('Billing Queue').closest('a')).toHaveAttribute('href', '/billing-workspace');
-      expect(screen.queryByText('Site Visits')).toBeNull();
     });
 
     it('hides a workspace when its permission is removed, even when the role name matches the work type', () => {
@@ -436,7 +481,7 @@ describe('Sidebar — load-bearing render surface', () => {
       const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       const nav = container.querySelector('#app-sidebar nav');
       const groups = Array.from(
-        nav.querySelectorAll('button[aria-controls^="wellness-nav-"]'),
+        nav.querySelectorAll('button[aria-controls^="generic-nav-"]'),
         (button) => button.textContent.trim(),
       );
       expect(groups).toEqual([
@@ -456,8 +501,8 @@ describe('Sidebar — load-bearing render surface', () => {
       ]);
     });
 
-    it('keeps only one generic submenu open at a time', () => {
-      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+    it('allows generic submenus to be opened independently', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN', expandGenericGroups: false });
       const sales = screen.getByRole('button', { name: 'Sales' });
       const communication = screen.getByRole('button', { name: 'Communication' });
 
@@ -466,7 +511,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(communication).toHaveAttribute('aria-expanded', 'false');
 
       fireEvent.click(communication);
-      expect(sales).toHaveAttribute('aria-expanded', 'false');
+      expect(sales).toHaveAttribute('aria-expanded', 'true');
       expect(communication).toHaveAttribute('aria-expanded', 'true');
     });
 
@@ -937,17 +982,34 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Quotas')).toBeNull();
       // USER's configured analytics.read grant is authoritative for this page,
       // even though the legacy sidebar entry was managerOnly.
-      expect(screen.getByText('Win/Loss')).toBeTruthy();
+      expect(screen.queryByText('Win/Loss')).toBeNull();
     });
 
     it('shows manager-only items for MANAGER role but still hides admin-only', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      // Manager sees manager items.
-      expect(screen.getByText('Forecasting')).toBeTruthy();
-      expect(screen.getByText('Quotas')).toBeTruthy();
+      // Requested Generic CRM navigation entries stay hidden for all roles.
+      expect(screen.queryByText('Forecasting')).toBeNull();
+      expect(screen.queryByText('Quotas')).toBeNull();
       // Manager does NOT see admin-only.
       expect(screen.queryByText('Audit Log')).toBeNull();
       expect(screen.queryByText('Sandbox')).toBeNull();
+    });
+
+    it('keeps requested product pages out of the Generic CRM sidebar but shows Landing Sites', () => {
+      const hiddenLabels = [
+        'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
+        'Lead Scoring', 'Approvals', 'Workflows', 'Knowledge Base',
+        'Sequences', 'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
+      ];
+
+      for (const role of ['ADMIN', 'MANAGER']) {
+        const { unmount } = renderSidebar({ vertical: 'generic', role });
+        for (const label of hiddenLabels) {
+          expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
+        }
+        expect(screen.getByText('Landing Sites')).toBeTruthy();
+        unmount();
+      }
     });
 
     it('hides clinical-role-gated wellness items (Patients) for USER w/o wellnessRole', () => {
@@ -1623,26 +1685,24 @@ describe('Sidebar — load-bearing render surface', () => {
   // ── Third-extension cases (10+ new) ────────────────────────────────
   // Cover the still-uncovered surface in the 1553-LOC SUT — Reports cluster
   // sub-items, Tickets visibility for non-admin support staff, sequences /
-  // marketing / lead routing manager-gated cluster, marketplace integration
+  // marketing manager-gated cluster, marketplace integration
   // links, settings sub-items per role, counter-polling setInterval contract,
   // socket event-handler registration, and sub-brand active-pill state.
   //
   // Adapted from the prompt: Workflows is NOT in the Sidebar SUT (only in
-  // App.jsx routes), so we substitute Sequences + Marketing + Lead Routing
-  // for cases 4-5 which are the equivalent "automation cluster" navs.
+  // App.jsx routes), so we substitute Sequences + Marketing for cases 4-5
+  // which are the equivalent "automation cluster" navs.
 
   describe('Generic Reports cluster sub-items', () => {
-    it('renders all five Reports cluster items for MANAGER (Reports / Agent Reports / Dashboards / Custom Reports / Funnel)', () => {
-      // The five report-style navs all live under `managerOnly` in
-      // renderGenericNav. MANAGER role should see every one of them.
+    it('renders remaining Reports cluster items for MANAGER while custom shortcuts stay hidden', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       // "Reports" appears twice (the bare label + potential section header
       // duplication via segmentMatches). getAllByText handles both.
       expect(screen.getAllByText('Reports').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Agent Reports')).toBeTruthy();
-      expect(screen.getByText('Dashboards')).toBeTruthy();
-      expect(screen.getByText('Custom Reports')).toBeTruthy();
-      expect(screen.getByText('Funnel')).toBeTruthy();
+      expect(screen.queryByText('Dashboards')).toBeNull();
+      expect(screen.queryByText('Custom Reports')).toBeNull();
+      expect(screen.queryByText('Funnel')).toBeNull();
     });
 
     it('shows only the Reports cluster items granted to USER under generic', () => {
@@ -1652,8 +1712,8 @@ describe('Sidebar — load-bearing render surface', () => {
       // dashboards.read.
       expect(screen.getByText('Agent Reports')).toBeTruthy();
       expect(screen.queryByText('Dashboards')).toBeNull();
-      expect(screen.getByText('Custom Reports')).toBeTruthy();
-      expect(screen.getByText('Funnel')).toBeTruthy();
+      expect(screen.queryByText('Custom Reports')).toBeNull();
+      expect(screen.queryByText('Funnel')).toBeNull();
       expect(screen.getByText('Reports')).toBeTruthy();
     });
   });
@@ -1670,26 +1730,24 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 
-  describe('Generic Sequences + Marketing + Lead Routing manager cluster', () => {
-    it('renders Sequences / Marketing / Lead Routing for MANAGER under generic', () => {
-      // These three are the "automation cluster" navs (Sidebar has no
-      // "Workflows" nav; the closest equivalent is Sequences).
+  describe('Generic Sequences + Marketing manager cluster', () => {
+    it('renders Marketing for MANAGER while Sequences and Lead Routing stay hidden under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.getByText('Sequences')).toBeTruthy();
+      expect(screen.queryByText('Sequences')).toBeNull();
       const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
       expect(marketingCampaignLink).toBeTruthy();
       expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');
       expect(screen.queryByText('Marketing')).toBeNull();
-      expect(screen.getByText('Lead Routing')).toBeTruthy();
+      expect(screen.queryByText('Lead Routing')).toBeNull();
       // Territories is the sibling routing nav.
       expect(screen.getByText('Territories')).toBeTruthy();
     });
 
-    it('uses the configured permission for Lead Routing while hiding ungranted automation pages', () => {
+    it('keeps Lead Routing hidden even when the user has its former leads permission', () => {
       renderSidebar({ vertical: 'generic', role: 'USER' });
       expect(screen.queryByText('Sequences')).toBeNull();
       expect(screen.queryByText('Marketing Campaign')).toBeNull();
-      expect(screen.getByText('Lead Routing')).toBeTruthy();
+      expect(screen.queryByText('Lead Routing')).toBeNull();
       expect(screen.queryByText('Territories')).toBeNull();
     });
   });

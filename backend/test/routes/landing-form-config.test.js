@@ -35,11 +35,13 @@ authMw.verifyToken = (_req, _res, next) => next();
 prisma.user = prisma.user || {};
 prisma.tenant = prisma.tenant || {};
 prisma.webForm = prisma.webForm || {};
+prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
 prisma.tenantSetting = prisma.tenantSetting || {};
 
 prisma.user.findUnique = vi.fn();
 prisma.tenant.findFirst = vi.fn();
 prisma.webForm.findFirst = vi.fn();
+prisma.leadCustomFieldDefinition.findMany = vi.fn();
 prisma.tenantSetting.findUnique = vi.fn();
 prisma.tenantSetting.findFirst = vi.fn();
 prisma.tenantSetting.updateMany = vi.fn();
@@ -76,6 +78,7 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.tenant.findFirst.mockReset().mockResolvedValue({ id: TENANT_ID });
   prisma.webForm.findFirst.mockReset();
+  prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
   prisma.tenantSetting.findUnique.mockReset();
   prisma.tenantSetting.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenantSetting.updateMany.mockReset().mockResolvedValue({ count: 0 });
@@ -106,6 +109,29 @@ describe('GET /api/landing-form-config (public)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ webFormId: 9, webFormName: 'Landing Page' });
     expect(JSON.stringify(res.body)).not.toContain('owner@example.com');
+  });
+
+  test('serves the complete form document with bootstrapped data', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ webFormId: 9 }),
+    });
+    prisma.webForm.findFirst.mockResolvedValue(ACTIVE_GENERIC_FORM);
+
+    const res = await request(makeApp(OTHER_USER_ID))
+      .get('/api/landing-form-config/embed');
+
+    expect(res.status).toBe(200);
+    expect(res.type).toBe('text/html');
+    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+    expect(res.text).toContain('window.__GBS_INITIAL_FORM__=');
+    expect(res.text).toContain('window.__GBS_INITIAL_FORM_ID__=9');
+    expect(res.text).toContain('classList.add("landing-embed")');
+    expect(res.text).toContain('"name":"Landing Page"');
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID },
+      select: { fieldKey: true, options: true },
+    });
   });
 
   test('missing PUBLIC_LEAD_TENANT_SLUG → 503 LANDING_FORM_NOT_CONFIGURED', async () => {

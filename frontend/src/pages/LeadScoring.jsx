@@ -95,7 +95,7 @@ export default function LeadScoring() {
     : 0;
 
   return (
-    <div className="lead-intelligence-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="lead-intelligence-page" style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       {/* Header */}
       <header className="lead-intelligence-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
         <div>

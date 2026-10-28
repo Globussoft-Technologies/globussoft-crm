@@ -452,8 +452,8 @@ export default function TallyExportPreviewPage() {
         </ol>
       </div>
       {showSyncGuidelines && <TallySyncGuidelines onClose={() => setShowSyncGuidelines(false)} />}
-      <div className="tally-export-trip-filters" style={filterBar}>
-        <label htmlFor="tally-trip-search" style={searchControl}>
+      <div className="tally-export-filter-bar" style={filterBar}>
+        <label className="tally-export-search-control" htmlFor="tally-trip-search" style={searchControl}>
           <Search size={15} aria-hidden="true" />
           <input
             id="tally-trip-search"
@@ -465,12 +465,12 @@ export default function TallyExportPreviewPage() {
             style={tripSearchInput}
           />
         </label>
-        <label htmlFor="tally-sub-brand-filter" style={filterLabel}>Sub-brand</label>
-        <select id="tally-sub-brand-filter" value={subBrandFilter} onChange={(event) => updateSubBrandFilter(event.target.value)} style={filterSelect}>
+        <label className="tally-export-filter-label" htmlFor="tally-sub-brand-filter" style={filterLabel}>Sub-brand</label>
+        <select className="tally-export-filter-select" id="tally-sub-brand-filter" value={subBrandFilter} onChange={(event) => updateSubBrandFilter(event.target.value)} style={filterSelect}>
           {SUB_BRAND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
-        <label htmlFor="tally-sync-status-filter" style={filterLabel}>Tally Sync Status</label>
-        <select id="tally-sync-status-filter" value={tallySyncFilter} onChange={(event) => updateTallySyncFilter(event.target.value)} style={filterSelect}>
+        <label className="tally-export-filter-label" htmlFor="tally-sync-status-filter" style={filterLabel}>Tally Sync Status</label>
+        <select className="tally-export-filter-select" id="tally-sync-status-filter" value={tallySyncFilter} onChange={(event) => updateTallySyncFilter(event.target.value)} style={filterSelect}>
           <option value="all">All statuses</option>
           <option value="SYNCED">Synced</option>
           <option value="NEW_VOUCHERS">New vouchers pending</option>
@@ -676,7 +676,7 @@ const connectorSetupSteps = { margin: "5px 0 0", paddingLeft: 20 };
 const smallButton = { ...button, minHeight: 34, padding: "6px 10px", fontSize: 12 };
 const guidelinesPanel = { margin: "12px 0", padding: 14, border: "1px solid rgba(245,158,11,.45)", borderRadius: 10, background: "rgba(245,158,11,.08)", fontSize: 13 };
 const guidelinesList = { margin: "8px 0 0", paddingLeft: 20, color: "var(--text-secondary)", lineHeight: 1.6 };
-const filterBar = { display: "flex", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: 10, margin: "12px 0" };
+const filterBar = { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, margin: "12px 0" };
 const searchControl = { display: "flex", alignItems: "center", gap: 8, flex: "1 1 240px", minWidth: 180, padding: "8px 10px", border: "1px solid var(--border-color, rgba(148,163,184,.25))", borderRadius: 8, color: "var(--text-secondary)", background: "var(--input-bg, #0f172a)" };
 const tripSearchInput = { width: "100%", minWidth: 0, border: 0, outline: 0, background: "transparent", color: "var(--text-primary, #f8fafc)", font: "inherit" };
 const filterLabel = { color: "var(--text-secondary)", fontSize: 12, fontWeight: 700 };

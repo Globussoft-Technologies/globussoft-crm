@@ -36,7 +36,7 @@
  *   concept (e.g. /me, /health) simply never call the helpers.
  */
 const prisma = require("../lib/prisma");
-const { installSubBrandHelpers } = require("../lib/apiKeyAuth");
+const { installSubBrandHelpers, isPlotInventoryReadKey } = require("../lib/apiKeyAuth");
 
 module.exports = async function externalAuth(req, res, next) {
   try {
@@ -70,6 +70,14 @@ module.exports = async function externalAuth(req, res, next) {
     }
     if (!apiKey.tenant?.isActive) {
       return res.status(403).json({ error: "Tenant is not active" });
+    }
+
+    // This key can reach externalAuth through more than the partner router
+    // (e.g. the flight plugin), so enforce its scope at authentication too.
+    const requestPath = String(req.originalUrl || "").split("?")[0];
+    if (isPlotInventoryReadKey(apiKey) &&
+        (req.method !== "GET" || !/^\/api\/v1\/external\/plot-inventory\/?$/.test(requestPath))) {
+      return res.status(403).json({ error: "API key is restricted to plot inventory reads", code: "WRONG_KEY_PURPOSE" });
     }
 
     // Best-effort lastUsed update — don't block the request on this.

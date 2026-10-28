@@ -108,15 +108,18 @@ describe("generic product tours", () => {
   });
 
   it("registers every generic sidebar destination, including hard-coded omissions", () => {
-    expect(GENERIC_FEATURE_TOURS).toHaveLength(101);
-    expect(GENERIC_FEATURE_TOURS.map((tour) => tour.id)).toEqual(
+    expect(GENERIC_FEATURE_TOURS).toHaveLength(95);
+    const tourIds = GENERIC_FEATURE_TOURS.map((tour) => tour.id);
+    expect(tourIds).toEqual(
       expect.arrayContaining([
         "adsgpt", "callified", "whatsapp", "lead-reports", "workflows",
         "pickup-plot-inventory", "transport-persons", "plot-brokers",
         "billing-persons", "pickup-customers",
-        "transport-workspace", "sales-workspace", "billing-workspace", "pickup-work-assignments",
+        "transport-workspace", "sales-workspace", "pickup-work-assignments",
       ]),
     );
+    expect(tourIds).not.toContain("lead-routing");
+    expect(tourIds).not.toContain("estimates");
   });
 
   it("has a detailed capability profile for every module beyond the four hand-authored tours", () => {

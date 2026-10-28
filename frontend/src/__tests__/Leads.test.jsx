@@ -49,14 +49,16 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifyInfo = vi.fn();
 const notifySuccess = vi.fn();
+const notifyConfirm = vi.fn();
+const notifyPrompt = vi.fn();
 const navigateMock = vi.fn();
 vi.mock('../utils/notify', () => ({
   useNotify: () => ({
     error: notifyError,
     info: notifyInfo,
     success: notifySuccess,
-    confirm: () => Promise.resolve(true),
-    prompt: () => Promise.resolve(''),
+    confirm: notifyConfirm,
+    prompt: notifyPrompt,
   }),
 }));
 
@@ -69,6 +71,8 @@ beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('external lookup disabled in unit tests')));
+  notifyPrompt.mockReset().mockResolvedValue('');
+  notifyConfirm.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -299,6 +303,9 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
 
     // No error toast on the happy path
     expect(notifyError).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith('Lead created successfully');
+    });
   });
 
   it('blocks a separate Generic lead when the email already belongs to a lead', async () => {
@@ -387,6 +394,76 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(screen.getByPlaceholderText('Email Address')).toBeInTheDocument();
     // Close button is rendered inside the drawer.
     expect(screen.getByRole('button', { name: /Close/i })).toBeInTheDocument();
+  });
+
+  it('applies the responsive modal layout only to generic CRM', async () => {
+    const genericAuth = {
+      user: { userId: 1, role: 'ADMIN' },
+      tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+      loading: false,
+    };
+    const { unmount } = renderLeads(genericAuth);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const genericDialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(genericDialog).toHaveClass('create-lead-backdrop--generic');
+    expect(genericDialog.querySelector('.create-lead-modal--generic')).toBeInTheDocument();
+    expect(genericDialog.querySelector('.create-lead-form--generic')).toBeInTheDocument();
+    unmount();
+
+    fetchApiMock.mockClear();
+    renderLeads({
+      ...genericAuth,
+      tenant: { id: 2, vertical: 'wellness', name: 'Wellness CRM' },
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const wellnessDialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(wellnessDialog).not.toHaveClass('create-lead-backdrop--generic');
+    expect(wellnessDialog.querySelector('.create-lead-modal--generic')).toBeNull();
+    expect(wellnessDialog.querySelector('.create-lead-form--generic')).toBeNull();
+  });
+
+  it('shows only the six standard sections in the generic Create Lead modal', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/lead-custom-fields') {
+        return Promise.resolve([
+          {
+            id: 201,
+            fieldKey: 'priority',
+            label: 'Priority',
+            fieldType: 'text',
+            placeholder: 'Priority level',
+            isRequired: true,
+          },
+        ]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderLeads({
+      user: { userId: 1, role: 'ADMIN' },
+      tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+      loading: false,
+    });
+    await waitFor(() =>
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/lead-custom-fields',
+        { silent: true },
+      ),
+    );
+    openDrawer();
+
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Full Name')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Email Address')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Company')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText(/Phone \(/)).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('Organic')).toBeInTheDocument();
+    expect(within(dialog).queryByPlaceholderText('Priority level')).toBeNull();
   });
 });
 
@@ -479,6 +556,34 @@ describe('Leads Freshsales-style list UI affordances', () => {
           }],
         });
       }
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && opts?.silent) {
+        return Promise.resolve({
+          plots: [
+            { id: 31, name: 'North Avenue', plotNumber: '25', block: 'B', availability: 'AVAILABLE', isActive: true },
+            { id: 32, name: 'North Avenue', plotNumber: '107', block: 'C', availability: 'AVAILABLE', isActive: true },
+          ],
+          allPlots: [
+            { id: 30, name: 'North Avenue', plotNumber: '24', block: 'B', availability: 'RESERVED', isActive: true },
+            { id: 31, name: 'North Avenue', plotNumber: '25', block: 'B', availability: 'AVAILABLE', isActive: true },
+            { id: 32, name: 'North Avenue', plotNumber: '107', block: 'C', availability: 'AVAILABLE', isActive: true },
+            { id: 33, name: 'North Avenue', plotNumber: '108', block: 'C', availability: 'SOLD', isActive: true },
+            { id: 34, name: 'South Avenue', plotNumber: '9', block: 'A', availability: 'AVAILABLE', isActive: true },
+          ],
+          customers: [
+            {
+              id: 501,
+              contact: { id: 101, name: 'Alice Lead' },
+              assignedPlots: [
+                { id: 30, name: 'North Avenue', plotNumber: '24', block: 'B', availability: 'RESERVED', isActive: true },
+              ],
+              customerAssignedPlotIds: [30],
+            },
+          ],
+        });
+      }
+      if (url === '/api/pickup-plot-inventory/customer-pickups/101/plots' && opts?.method === 'POST') {
+        return Promise.resolve({ bookingsCreated: 2, assignedPlotIds: [30, 31, 32] });
+      }
       if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/tags')) {
         return Promise.resolve({
           values: [
@@ -510,7 +615,271 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('hides both header and body cells for deselected workflow columns', async () => {
+  it('replaces a persisted web-form filter when opened from View in Leads', async () => {
+    window.sessionStorage.setItem(
+      'globuscrm.leads.filters.v1.1.1',
+      JSON.stringify([
+        { field: 'webForm', operator: 'contains', values: ['Previous Form'] },
+        { field: 'source', operator: 'contains', values: ['Website'] },
+      ]),
+    );
+
+    renderLeads(authValue, ['/leads?webForm=EmpMonitor%20Demo']);
+    await screen.findByText('Alice Lead');
+
+    await waitFor(() => {
+      const matchingRequest = fetchApiMock.mock.calls
+        .map(([url]) => url)
+        .filter((url) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead'))
+        .map((url) => new URL(url, 'http://localhost'))
+        .map((url) => JSON.parse(url.searchParams.get('filters') || '[]'))
+        .find((filters) => filters.some((filter) =>
+          filter.field === 'webForm' && filter.values.includes('EmpMonitor Demo')));
+
+      expect(matchingRequest).toEqual([
+        { field: 'source', operator: 'contains', values: ['Website'] },
+        { field: 'webForm', operator: 'contains', values: ['EmpMonitor Demo'] },
+      ]);
+    });
+  });
+
+  it('shows Plot Assign as a default generic column and reuses the customer assignment workflow', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [
+            { id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE' },
+            { id: 32, name: 'North Avenue', plotNumber: '107', availability: 'AVAILABLE' },
+          ],
+          customers: [{
+            contact: { id: 102, name: 'Bob Lead' },
+            assignedPlots: [],
+            customerAssignedPlotIds: [],
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups',
+      { silent: true },
+    );
+    expect(screen.getByRole('columnheader', { name: 'Plot Assign column' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Assign plot to Bob Lead' }));
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    expect(within(dialog).getByRole('combobox', { name: 'Plot or site name' })).toHaveValue('North Avenue');
+    expect(within(dialog).queryByRole('checkbox', { name: /Plot 24/ })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 25/ }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 107/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Assign 2 plots' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/102/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [31, 32] }) },
+    ));
+  });
+
+  it('shows only View plot in the table after a plot is assigned', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const viewButton = screen.getByRole('button', { name: 'View plots for Alice Lead' });
+    const cell = viewButton.closest('td');
+    expect(cell).toHaveTextContent('View plot');
+    expect(cell).not.toHaveTextContent('North Avenue');
+    expect(cell).not.toHaveTextContent('Assign plot');
+    expect(cell).not.toHaveTextContent('Change');
+
+    fireEvent.click(viewButton);
+    const dialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    expect(within(dialog).getByText('North Avenue')).toBeInTheDocument();
+    expect(within(dialog).getByText('Plot 24')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Change plot 24 for Alice Lead' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'View selected plot 24 for Alice Lead' })).toBeInTheDocument();
+  });
+
+  it('shows a purchased plot as read-only with View selected plot instead of Change', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [],
+          customers: [{
+            contact: { id: 101, name: 'Alice Lead' },
+            assignedPlots: [{
+              id: 30,
+              name: 'North Avenue',
+              plotNumber: '24',
+              block: 'B',
+              address: '24 North Avenue, Bengaluru',
+              availability: 'SOLD',
+            }],
+            customerAssignedPlotIds: [30],
+            booking: { plotSiteId: 30, status: 'TRANSACTION_COMPLETED' },
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    expect(within(dialog).queryByRole('button', { name: /Change plot/ })).not.toBeInTheDocument();
+    const viewSelected = within(dialog).getByRole('button', {
+      name: 'View selected plot 24 for Alice Lead',
+    });
+    expect(viewSelected).toHaveTextContent('View selected plot');
+
+    fireEvent.click(viewSelected);
+    const details = within(dialog).getByRole('region', { name: 'Selected plot details' });
+    expect(details).toHaveTextContent('North Avenue');
+    expect(details).toHaveTextContent('Plot number: 24');
+    expect(details).toHaveTextContent('Block: B');
+    expect(details).toHaveTextContent('24 North Avenue, Bengaluru');
+  });
+
+  it('allows opening plot assignment before transport when no plots are currently available', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [],
+          customers: [{
+            contact: { id: 102, name: 'Bob Lead' },
+            assignedPlots: [],
+            customerAssignedPlotIds: [],
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+
+    renderLeads(authValue);
+
+    await screen.findByText('Bob Lead');
+    const assignButton = screen.getByRole('button', { name: 'Assign plot to Bob Lead' });
+    expect(assignButton).toBeEnabled();
+    fireEvent.click(assignButton);
+
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    expect(within(dialog).getByText('No available plot numbers')).toBeInTheDocument();
+  });
+
+  it('uses one site-filtered list to add and deselect plots for an existing lead assignment', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')) {
+        return Promise.resolve({ pickupLocations: [], customers: [] });
+      }
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
+    const assignedPlotsDialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    fireEvent.click(within(assignedPlotsDialog).getByRole('button', { name: 'Edit assigned plots for Alice Lead' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit assigned plots' });
+    expect(within(dialog).getByRole('combobox', { name: 'Edit plot or site name' })).toHaveValue('North Avenue');
+    const plotList = within(dialog).getByRole('group', { name: 'Assigned and available plots' });
+    expect(within(plotList).getByRole('checkbox', { name: /Plot 24/ })).toBeChecked();
+    fireEvent.click(within(plotList).getByRole('checkbox', { name: /Plot 24/ }));
+    const plot25 = within(plotList).getByRole('checkbox', { name: /Plot 25/ });
+    const plot107 = within(plotList).getByRole('checkbox', { name: /Plot 107/ });
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 108/ })).toBeNull();
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 9/ })).toBeNull();
+
+    fireEvent.click(plot25);
+    fireEvent.click(plot107);
+    expect(plot25).toBeChecked();
+    expect(plot107).toBeChecked();
+    const saveChanges = within(dialog).getByRole('button', { name: 'Save changes' });
+    expect(saveChanges).toBeEnabled();
+    fireEvent.click(saveChanges);
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith({
+      title: 'Confirm plot assignments',
+      message: "Are you sure you want to update Alice Lead's North Avenue plots? Assign Plot 25, Plot 107. Deselect Plot 24.",
+      confirmText: 'Save changes',
+      cancelText: 'Edit',
+    }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots/30',
+      { method: 'DELETE' },
+    ));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots',
+      {
+        method: 'POST',
+        body: JSON.stringify({ plotSiteIds: [31, 32] }),
+      },
+    ));
+  });
+
+  it('removes the old Plot or Site assignment when a lead changes plot type', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (typeof url === 'string' && url.startsWith('/api/pickup-plot-inventory/lead-status')) {
+        return Promise.resolve({ pickupLocations: [], customers: [] });
+      }
+      if (url === '/api/pickup-plot-inventory/customer-pickups' && options?.silent) {
+        return Promise.resolve({
+          plots: [
+            { id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE' },
+            { id: 34, name: 'South Avenue', plotNumber: '9', availability: 'AVAILABLE' },
+          ],
+          allPlots: [
+            { id: 30, name: 'North Avenue', plotNumber: '24', availability: 'RESERVED' },
+            { id: 31, name: 'North Avenue', plotNumber: '25', availability: 'AVAILABLE' },
+            { id: 34, name: 'South Avenue', plotNumber: '9', availability: 'AVAILABLE' },
+          ],
+          customers: [{
+            contact: { id: 101, name: 'Alice Lead' },
+            assignedPlots: [{ id: 30, name: 'North Avenue', plotNumber: '24', availability: 'RESERVED' }],
+            customerAssignedPlotIds: [30],
+          }],
+        });
+      }
+      return originalFetch(url, options);
+    });
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Alice Lead' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Assigned plots' })).getByRole('button', { name: 'Edit assigned plots for Alice Lead' }));
+
+    const editor = screen.getByRole('dialog', { name: 'Edit assigned plots' });
+    fireEvent.change(within(editor).getByRole('combobox', { name: 'Edit plot or site name' }), { target: { value: 'South Avenue' } });
+    const plotList = within(editor).getByRole('group', { name: 'Assigned and available plots' });
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 24/ })).toBeNull();
+    fireEvent.click(within(plotList).getByRole('checkbox', { name: /Plot 9/ }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith({
+      title: 'Confirm plot assignments',
+      message: "Are you sure you want to update Alice Lead's South Avenue plots? Assign Plot 9. Deselect Plot 24.",
+      confirmText: 'Save changes',
+      cancelText: 'Edit',
+    }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots/30',
+      { method: 'DELETE' },
+    ));
+    expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [34] }) },
+    );
+  });
+
+  it('hides all three deselected pickup and plot workflow columns', async () => {
     const originalFetch = fetchApiMock.getMockImplementation();
     fetchApiMock.mockImplementation((url, options) => {
       if (url === '/api/table-column-prefs/leads' && !options) return Promise.resolve({
@@ -522,9 +891,32 @@ describe('Leads Freshsales-style list UI affordances', () => {
     await screen.findByText('Alice Lead');
     await waitFor(() => expect(screen.queryByText('Interested plot area')).not.toBeInTheDocument());
     expect(screen.queryByText('Pickup location')).not.toBeInTheDocument();
-    expect(screen.queryByText('Overall status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Plot Assign column' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Overall status column' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit pickup location for Alice Lead' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View plots for Alice Lead' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View all status for Alice Lead' })).not.toBeInTheDocument();
+  });
+
+  it('shows all three pickup and plot workflow columns when selected', async () => {
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/table-column-prefs/leads' && !options) return Promise.resolve({
+        visible: ['name', 'pickupLocation', 'plotAssign', 'overallPickupStatus', 'actions'],
+        availableColumns: [],
+      });
+      return originalFetch(url, options);
+    });
+
+    renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+
+    expect(screen.getByText('Pickup location')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Plot Assign column' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Overall status column' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pickup location for Alice Lead' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View plots for Alice Lead' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View all status for Alice Lead' })).toBeInTheDocument();
   });
 
   it('centers the empty state in the visible table area for Generic CRM only', async () => {
@@ -562,14 +954,57 @@ describe('Leads Freshsales-style list UI affordances', () => {
     );
   });
 
-  it('keeps a fixed Generic table viewport when only a few leads are shown', async () => {
+  it('uses a natural compact height when Generic CRM has fewer than 10 leads', async () => {
     const { container } = renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     const tableShell = container.querySelector('.leads-split-table');
-    expect(tableShell).toHaveClass('leads-split-table--sparse');
+    expect(container.querySelector('.leads-page-root')).toHaveClass('leads-page-root--generic');
+    expect(tableShell).toHaveClass('leads-split-table--no-topbar');
+    expect(tableShell).toHaveClass('leads-split-table--compact-count');
+    expect(tableShell).not.toHaveClass('leads-split-table--sparse');
     expect(tableShell).not.toHaveClass('leads-split-table--empty');
-    expect(tableShell).toHaveStyle({ flex: '1 1 auto' });
+    expect(tableShell).toHaveStyle({ flex: '0 0 auto' });
+  });
+
+  it('collapses 10 displayed Generic CRM leads only in Compact density', async () => {
+    const tenLeads = Array.from({ length: 10 }, (_, index) => ({
+      ...leadRows[index % leadRows.length],
+      id: 200 + index,
+      name: `Lead ${index + 1}`,
+      email: `lead${index + 1}@example.com`,
+    }));
+    const originalFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve({
+          data: tenLeads,
+          total: 30,
+          page: 1,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return originalFetch(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Lead 10');
+
+    const tableShell = container.querySelector('.leads-split-table');
+    expect(tableShell).not.toHaveClass(
+      'leads-split-table--compact-count',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Table density: comfortable/i }));
+    fireEvent.click(
+      within(screen.getByRole('menu', { name: 'Table density' })).getByRole(
+        'menuitemradio',
+        { name: 'Compact' },
+      ),
+    );
+
+    expect(tableShell).toHaveClass('leads-split-table--compact-count');
   });
 
   it('keeps secondary lead actions available in the mobile disclosure', async () => {
@@ -611,7 +1046,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     fireEvent.click(within(densityMenu).getByRole('menuitemradio', { name: 'Compact' }));
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
-    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--sparse');
+    expect(document.querySelector('.leads-split-table')).not.toHaveClass('leads-split-table--sparse');
     expect(window.localStorage.getItem('globuscrm.leads.tableDensity.v1')).toBe('compact');
     await waitFor(() => {
       const bodyRows = Array.from(document.querySelectorAll('.leads-split-table tbody tr'));
@@ -653,7 +1088,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     ).toBeNull();
   });
 
-  it('shows a saved pickup address and only offers the selector to leads without one', async () => {
+  it('locks pickup and plot changes after transport starts while keeping unstarted leads editable', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -676,10 +1111,16 @@ describe('Leads Freshsales-style list UI affordances', () => {
     const overallStatus = screen.getByText('Sales Executive: Plot shown');
     expect(overallStatus).toBeInTheDocument();
     expect(overallStatus.closest('td')).toHaveStyle({ paddingLeft: '1.5rem' });
+    expect(overallStatus.closest('td').querySelector('.generic-overall-status-date')).toBeNull();
     expect(screen.getByText('Overall status').closest('th')).toHaveStyle({ paddingLeft: '1.5rem' });
 
-    expect(screen.getByText('42 Lake View Road, Bengaluru')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Pickup location for Alice Lead' })).not.toBeInTheDocument();
+    const alicePickupInput = screen.getByRole('button', { name: 'Pickup location for Alice Lead' });
+    expect(alicePickupInput).toHaveTextContent('42 Lake View Road, Bengaluru');
+    expect(alicePickupInput).toBeDisabled();
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/101',
+      expect.objectContaining({ method: 'PUT' }),
+    );
 
     const pickupInput = screen.getByRole('button', { name: 'Pickup location for Bob Lead' });
     expect(pickupInput).toHaveTextContent('Select pickup location');
@@ -693,12 +1134,31 @@ describe('Leads Freshsales-style list UI affordances', () => {
         body: expect.stringContaining('55 New Pickup Road, Bengaluru'),
       }),
     ));
-    await screen.findByText('55 New Pickup Road, Bengaluru');
-    expect(screen.queryByRole('button', { name: 'Pickup location for Bob Lead' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pickup location for Bob Lead' })).toHaveTextContent(
+      '55 New Pickup Road, Bengaluru',
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'View all status for Alice Lead' }));
     expect(screen.getByRole('dialog', { name: 'All customer statuses' })).toBeInTheDocument();
     expect(screen.getByTestId('workflow-timeline')).toBeInTheDocument();
+  });
+
+  it('allows assigning a plot before a pickup location is selected', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Bob Lead');
+    const assignButton = screen.getByRole('button', { name: 'Assign plot to Bob Lead' });
+    expect(assignButton).toBeEnabled();
+    fireEvent.click(assignButton);
+
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 25/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Assign 1 plot' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/102/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [31] }) },
+    ));
   });
 
   it('renders the Name column as a profile link instead of an inline edit trigger', async () => {
@@ -905,7 +1365,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.getByText('Open full detail')).toBeInTheDocument();
   });
 
-  it('keeps the Name column fixed for generic CRM and renders saved visible columns in order', async () => {
+  it('keeps Name and Actions fixed and hides unchecked Callified columns', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -931,7 +1391,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
         th.textContent.replace(/\s+/g, ' ').trim(),
       );
-      expect(headers.slice(0, 13)).toEqual([
+      expect(headers).toEqual([
         'Name',
         'Phone',
         'Company',
@@ -940,10 +1400,6 @@ describe('Leads Freshsales-style list UI affordances', () => {
         'Created',
         'Source',
         'Lead Score',
-        'Callified Campaign',
-        'Call Status',
-        'Callified AI call',
-        'Callified Score',
         'Actions',
       ]);
     });
@@ -958,8 +1414,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
-    // Generic CRM mirrors Freshsales with one sticky scrollbar at the bottom
-    // of the records and no duplicate scrollbar above the header.
+    // Generic CRM keeps the horizontal scrollbar at the bottom of the grid.
     expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
     const topScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top');
     const stickyBottom = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__sticky-bottom');
@@ -979,6 +1434,89 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.queryByRole('button', { name: 'Go back' })).toBeNull();
   });
 
+  it('renders the generic reset layout in its requested column order', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: [
+            'name', 'phone', 'email', 'campaign', 'callStatus', 'callifiedAi',
+            'callifiedScore', 'source', 'webForm', 'createdAt', 'lastUpdated',
+            'actions',
+          ],
+          availableColumns: [
+            { key: 'name', label: 'Name', lockedVisible: true },
+            { key: 'phone', label: 'Phone' },
+            { key: 'email', label: 'Email' },
+            { key: 'campaign', label: 'Callified Campaign' },
+            { key: 'callStatus', label: 'Call Status' },
+            { key: 'callifiedAi', label: 'Callified AI call' },
+            { key: 'callifiedScore', label: 'Callified Score' },
+            { key: 'source', label: 'Source' },
+            { key: 'webForm', label: 'Web Form' },
+            { key: 'createdAt', label: 'Created' },
+            { key: 'lastUpdated', label: 'Last Updated' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Smith');
+
+    await waitFor(() => {
+      const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
+        th.textContent.replace(/\s+/g, ' ').trim(),
+      );
+      expect(headers).toEqual([
+        'Name', 'Phone', 'Email', 'Callified Campaign', 'Call Status',
+        'Callified AI call', 'Callified Score', 'Source', 'Web Form',
+        'Created', 'Last Updated', 'Actions',
+      ]);
+    });
+  });
+
+  it('keeps vertical wheel and touchpad gestures from becoming horizontal at grid boundaries', async () => {
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Lead');
+
+    const grid = container.querySelector('.leads-split-table--no-topbar');
+    const scrollbar = grid.querySelector('.top-scroll-sync__sticky-bottom');
+    Object.defineProperties(scrollbar, {
+      clientWidth: { configurable: true, value: 400 },
+      scrollWidth: { configurable: true, value: 1200 },
+    });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+
+    fireEvent.wheel(grid, { deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(0);
+
+    Object.defineProperty(grid, 'scrollHeight', { configurable: true, value: 900 });
+    Object.defineProperty(grid, 'scrollTop', { configurable: true, value: 300, writable: true });
+    fireEvent.wheel(grid, { deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(0);
+
+    grid.scrollTop = 0;
+    fireEvent.wheel(grid, { deltaY: -80 });
+    expect(scrollbar.scrollLeft).toBe(0);
+
+    grid.scrollTop = 300;
+    fireEvent.wheel(grid, { deltaX: 20, deltaY: 80 });
+    expect(scrollbar.scrollLeft).toBe(0);
+
+    fireEvent.wheel(grid, { deltaX: 40, deltaY: 10 });
+    expect(scrollbar.scrollLeft).toBe(40);
+    fireEvent.scroll(scrollbar);
+    expect(grid.querySelector('.top-scroll-sync__bottom').firstElementChild.style.left).toBe('-40px');
+
+    fireEvent.wheel(grid, { deltaY: 80, shiftKey: true });
+    expect(scrollbar.scrollLeft).toBe(120);
+  });
+
   it('persists dragged column widths for the Leads table layout', async () => {
     renderLeads(authValue);
 
@@ -993,6 +1531,30 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
       expect(saved.widths.email).toBe(300);
       expect(saved.collapsed.email).toBe(false);
+    });
+  });
+
+  it.each([
+    ['Pickup location', 'pickupLocation', 270],
+    ['Callified Campaign', 'campaign', 190],
+  ])('resizes the visible %s column instead of a different reordered column', async (label, key, initialWidth) => {
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const header = screen.getByRole('columnheader', { name: `${label} column` });
+    const columns = container.querySelectorAll('.leads-table--scrollable colgroup col');
+    expect(columns[header.cellIndex].style.width).toBe(`${initialWidth}px`);
+
+    fireEvent.mouseDown(screen.getByRole('separator', { name: `Resize ${label} column` }), {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: 280 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
+      expect(saved.widths[key]).toBe(initialWidth + 80);
+      expect(columns[header.cellIndex].style.width).toBe(`${initialWidth + 80}px`);
     });
   });
 
@@ -1164,7 +1726,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         this.closest?.('tbody') &&
         this.closest?.('.leads-table-frozen-pane')
       ) {
-        return makeRect(42, 240);
+        return makeRect(this.dataset.leadRowId === '102' ? 75 : 42, 240);
       }
       if (
         this?.tagName === 'TR' &&
@@ -1174,6 +1736,12 @@ describe('Leads Freshsales-style list UI affordances', () => {
         return makeRect(66, 920);
       }
       return makeRect(0, 0);
+    });
+    const heightMock = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function () {
+      if (this?.tagName !== 'TR' || !this.closest?.('tbody')) return 0;
+      if (this.closest('.leads-table-frozen-pane')) return this.dataset.leadRowId === '102' ? 75 : 42;
+      if (this.closest('.leads-table-scroll-pane')) return 66;
+      return 0;
     });
 
     try {
@@ -1194,9 +1762,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
         expect(scrollBody).toBeTruthy();
         expect(within(frozenPane).getByText('Name')).toBeInTheDocument();
         expect(within(container.querySelector('.leads-table-scroll-pane')).queryByText('Name')).toBeNull();
+        expect(frozenBody.style.height).toBe('66px');
+        expect(scrollBody.style.height).toBe('66px');
+        expect(frozenPane.querySelector('tr[data-lead-row-id="102"]').style.height).toBe('75px');
+        expect(container.querySelector('.leads-table-scroll-pane tr[data-lead-row-id="102"]').style.height).toBe('75px');
       });
     } finally {
       rectMock.mockRestore();
+      heightMock.mockRestore();
     }
   });
 });
@@ -1236,6 +1809,9 @@ describe('Leads  vertical-aware form schema (#600)', () => {
     const phone = screen.getByPlaceholderText(/Phone \(10-digit/i);
     expect(phone).toBeInTheDocument();
     expect(phone).toHaveAttribute('required');
+    expect(document.querySelector('label[for="create-lead-name"] .required-mark')).toBeInTheDocument();
+    expect(document.querySelector('label[for="create-lead-phone"] .required-mark')).toBeInTheDocument();
+    expect(document.querySelector('label[for="create-lead-email"] .required-mark')).toBeNull();
 
     // WhatsApp option present in the Source dropdown.
     const sourceSelect = screen.getByDisplayValue('Walk-in');
@@ -1336,6 +1912,8 @@ describe('Leads  vertical-aware form schema (#600)', () => {
     openDrawer();
 
     expect(screen.queryByPlaceholderText(/Phone \(10-digit/i)).toBeNull();
+    expect(document.querySelector('label[for="create-lead-name"] .required-mark')).toBeInTheDocument();
+    expect(document.querySelector('label[for="create-lead-email"] .required-mark')).toBeInTheDocument();
 
     const sourceSelect = screen.getByDisplayValue('Organic');
     expect(sourceSelect).toBeInTheDocument();
@@ -1349,6 +1927,28 @@ describe('Leads  vertical-aware form schema (#600)', () => {
       o => o.value === 'LinkedIn',
     );
     expect(linkedinOpt).toBeDefined();
+
+    const countryCode = screen.getByRole('combobox', { name: 'Country code' });
+    fireEvent.mouseDown(countryCode);
+    const countryOptions = within(await screen.findByRole('listbox', { name: 'Country code' })).getAllByRole('option');
+    expect(countryOptions).toHaveLength(15);
+    fireEvent.click(screen.getByRole('option', { name: '+91' }));
+    expect(countryCode).toHaveValue('+91');
+
+    fireEvent.mouseDown(countryCode);
+    const countryList = await screen.findByRole('listbox', { name: 'Country code' });
+    expect(within(countryList).getAllByRole('option')).toHaveLength(15);
+    fireEvent.change(countryCode, { target: { value: '+9abc' } });
+    expect(countryCode).toHaveValue('+9');
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91', '+971']);
+    fireEvent.change(countryCode, { target: { value: '91' } });
+    expect(countryCode).toHaveValue('91');
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91']);
+    fireEvent.change(countryCode, { target: { value: '+91' } });
+    expect(countryCode).toHaveValue('+91');
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91']);
+    fireEvent.change(countryCode, { target: { value: '+6' } });
+    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+61', '+65', '+60']);
   });
 });
 
@@ -1385,7 +1985,7 @@ function leadsFetchMock(url, opts) {
         .some((value) => String(value || '').toLowerCase().includes(query)))
       : SAMPLE_LEADS;
     const page = Number(params.get('page') || 1);
-    const limit = Number(params.get('limit') || 25);
+    const limit = Number(params.get('limit') || 10);
     return Promise.resolve({
       data: rows.slice((page - 1) * limit, page * limit),
       total: rows.length,
@@ -1396,7 +1996,11 @@ function leadsFetchMock(url, opts) {
   }
   if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
     return Promise.resolve({
-      visible: ['name', 'email', 'company', 'phone', 'aiScore', 'source', 'status', 'tags', 'assignedTo', 'createdAt'],
+      visible: [
+        'name', 'email', 'company', 'phone', 'aiScore', 'source', 'status',
+        'tags', 'assignedTo', 'createdAt', 'campaign', 'callStatus',
+        'callifiedAi', 'callifiedScore',
+      ],
       availableColumns: [
         { key: 'name', label: 'Name' },
         { key: 'email', label: 'Email' },
@@ -1408,6 +2012,10 @@ function leadsFetchMock(url, opts) {
         { key: 'tags', label: 'Tags' },
         { key: 'assignedTo', label: 'Assigned To' },
         { key: 'createdAt', label: 'Created' },
+        { key: 'campaign', label: 'Callified Campaign' },
+        { key: 'callStatus', label: 'Call Status' },
+        { key: 'callifiedAi', label: 'Callified AI call' },
+        { key: 'callifiedScore', label: 'Callified Score' },
       ],
     });
   }
@@ -1468,6 +2076,19 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     notifySuccess.mockReset();
   });
 
+  it('defaults Generic CRM Leads to 10 rows per page', async () => {
+    renderLeads(ADMIN_AUTH);
+
+    await screen.findByText('Alice Smith');
+
+    expect(screen.getByLabelText('Rows per page')).toHaveValue('10');
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+        && url.startsWith('/api/contacts?status=Lead')
+        && url.includes('limit=10'),
+    )).toBe(true);
+  });
+
   it('renders seeded leads with name + email + company + lead-score badge', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
@@ -1487,6 +2108,23 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     // Header counter  "3 leads in pipeline"
     expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
+  });
+
+  it('filters to and highlights only the requested lead Callified AI cell', async () => {
+    const { container } = renderLeads(
+      ADMIN_AUTH,
+      ['/leads?callifiedLeadId=11&leadSearch=alice%40acme.test'],
+    );
+
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) => (
+      typeof url === 'string' && url.includes('/api/contacts?status=Lead') && url.includes('q=alice%40acme.test')
+    ))).toBe(true);
+
+    const highlighted = container.querySelector('[data-callified-ai-highlighted="true"]');
+    expect(highlighted).toHaveAttribute('data-callified-ai-lead-id', '11');
+    expect(highlighted).toHaveAttribute('aria-label', 'Callified AI call for Alice Smith');
+    expect(container.querySelectorAll('[data-callified-ai-highlighted="true"]')).toHaveLength(1);
   });
 
   it('renders source badges with theme tokens so dark mode stays readable', async () => {
@@ -1550,7 +2188,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -1606,7 +2244,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const restoredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -1638,7 +2276,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -1801,7 +2439,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -2020,7 +2658,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       right: 'auto',
     });
     await waitFor(() => {
-      expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
+      expect(within(menu).getByText(/3 selected/i)).toBeInTheDocument();
     });
     const checkboxes = screen.getAllByRole('checkbox');
     expect(checkboxes).toHaveLength(4);
@@ -2030,7 +2668,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     const rubixCheckbox = screen.getAllByRole('checkbox')[2];
     fireEvent.click(rubixCheckbox);
     await waitFor(() => {
-      expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+      expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
     });
 
     fireEvent.click(bulkActionsButton);
@@ -2122,7 +2760,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         const filters = JSON.parse(params.get('filters') || '[]');
         const missingEmail = filters.some((filter) => filter.field === 'email' && filter.operator === 'is_empty');
         const rows = missingEmail ? assistantRows.filter((lead) => !lead.email) : assistantRows;
-        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 25, totalPages: 1 });
+        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 10, totalPages: 1 });
       }
       return leadsFetchMock(url, opts);
     });
@@ -2136,7 +2774,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     await waitFor(() => {
       const filteredCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead&page=1&limit=25') && !opts && url.includes('filters='),
+        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts?status=Lead&page=1&limit=10') && !opts && url.includes('filters='),
       );
       expect(filteredCall).toBeDefined();
       expect(JSON.parse(new URL(filteredCall[0], 'http://crm.test').searchParams.get('filters'))).toEqual([
@@ -2156,7 +2794,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
         const params = new URL(url, 'http://crm.test').searchParams;
         const rows = params.get('nameStartsWith') === 'D' ? [diana] : [diana, unrelated];
-        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 25, totalPages: 1 });
+        return Promise.resolve({ data: rows, total: rows.length, page: 1, limit: 10, totalPages: 1 });
       }
       return leadsFetchMock(url, opts);
     });
@@ -2285,7 +2923,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           data: [{ ...SAMPLE_LEADS[0], id: page }],
           total: query ? 1 : 30,
           page,
-          limit: 25,
+          limit: 10,
           totalPages: query ? 1 : 2,
         });
       }
@@ -2415,12 +3053,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
     expect(screen.getByText('High')).toBeInTheDocument();
   });
-  it('row checkbox selection reveals the bulk-assign bar; Clear hides it (#334)', async () => {
+  it('keeps generic lead selection actions inside the Bulk actions menu (#334)', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    // Bulk bar is not yet rendered (nothing selected).
-    expect(screen.queryByText(/lead.*selected/i)).toBeNull();
 
     // Tick the first row's checkbox (the first checkbox is the header
     // select-all; pick a body row checkbox).
@@ -2428,14 +3063,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(checkboxes.length).toBe(4); // 1 header + 3 rows
     fireEvent.click(checkboxes[1]); // Alice
 
-    await waitFor(() => {
-      expect(screen.getByText(/1 lead selected/i)).toBeInTheDocument();
-    });
+    expect(screen.queryByRole('button', { name: /^Assign$/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    expect(within(menu).getByText(/1 selected/i)).toBeInTheDocument();
 
-    // Clear button drops selection + hides the bar.
-    fireEvent.click(screen.getByRole('button', { name: /^Clear$/i }));
+    fireEvent.click(within(menu).getByRole('button', { name: /Clear selection/i }));
     await waitFor(() => {
-      expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
     });
   });
 
@@ -2449,22 +3084,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(checkboxes[1]); // Alice (id=11)
     fireEvent.click(checkboxes[2]); // Bob (id=12)
 
-    await waitFor(() => {
-      expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
 
-    // The bulk-assign bar has its own dropdown. Find it by its "Unassign"
-    // first option (the per-row dropdowns start with "Unassigned"  note
-    // the trailing 'ed'; the bulk dropdown reads "Unassign" without it).
-    const allSelects = screen.getAllByRole('combobox');
-    const bulkSelect = allSelects.find(el =>
-      Array.from(el.querySelectorAll('option')).some(o => o.textContent === 'Unassign'),
-    );
-    expect(bulkSelect).toBeDefined();
+    const bulkSelect = within(menu).getByLabelText(/Bulk assign staff/i);
     fireEvent.change(bulkSelect, { target: { value: '8' } });
 
-    // Click the bulk-bar Assign button (distinguish from per-row Convert).
-    const assignBtn = screen.getByRole('button', { name: /^Assign$/i });
+    const assignBtn = within(menu).getByRole('button', { name: /Assign to staff/i });
     fireEvent.click(assignBtn);
 
     await waitFor(() => {
@@ -2477,9 +3104,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       expect(body.assignedToId).toBe('8');
     });
 
-    // After bulk-assign, selection is cleared and the bar collapses.
+    // After bulk-assign, selection is cleared and the menu closes.
     await waitFor(() => {
-      expect(screen.queryByText(/leads? selected/i)).toBeNull();
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
     });
   });
 
@@ -2495,15 +3122,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     fireEvent.click(headerCheckbox);
     await waitFor(() => {
-      // The "3 leads selected" bar should appear
-      expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Bulk actions/i })).toHaveTextContent('3');
     });
 
     // Click again ?? ? deselect all
     const refreshed = screen.getAllByRole('checkbox');
     fireEvent.click(refreshed[0]);
     await waitFor(() => {
-      expect(screen.queryByText(/lead.*selected/i)).toBeNull();
+      expect(screen.getByRole('button', { name: /Bulk actions/i })).not.toHaveTextContent('3');
     });
   });
 
@@ -2515,7 +3141,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           data: [{ ...SAMPLE_LEADS[0], id: page, name: `Lead page ${page}` }],
           total: 30,
           page,
-          limit: 25,
+          limit: 10,
           totalPages: 2,
         });
       }
@@ -2540,7 +3166,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(pageTwoHeaderCheckbox);
     expect(pageTwoHeaderCheckbox).toBeChecked();
     expect(pageTwoRowCheckbox).toBeChecked();
-    expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bulk actions/i })).toHaveTextContent('2');
   });
 
   it('Escape key closes the Create Lead drawer (#892)', async () => {
@@ -3089,17 +3715,30 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     });
   });
 
-  it('opens the selected-leads campaign menu to the right in Generic CRM', async () => {
-    const { container } = renderLeads(ADMIN_AUTH);
+  it('assigns a selected campaign from the Generic CRM Bulk actions menu', async () => {
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select Alice Smith' })[0]);
-    fireEvent.click(screen.getByRole('button', { name: /Assign Campaign \(1\)/i }));
+    expect(screen.queryByRole('button', { name: /Assign Campaign \(1\)/i })).toBeNull();
 
-    const campaignMenu = container.querySelector('.leads-bulk-campaign-menu');
-    expect(campaignMenu).toBeInTheDocument();
-    expect(campaignMenu).toHaveStyle({ left: '0px', right: 'auto' });
-    expect(within(campaignMenu).getByText(/Globussoft outbound/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    const campaignSelect = within(menu).getByLabelText(/Bulk assign campaign/i);
+    expect(campaignSelect).toHaveTextContent('Globussoft outbound');
+    fireEvent.change(campaignSelect, { target: { value: '102' } });
+    fireEvent.click(within(menu).getByRole('button', { name: /Assign campaign/i }));
+
+    await waitFor(() => {
+      const assignCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/bulk-assign-campaign' && opts?.method === 'PUT',
+      );
+      expect(assignCall).toBeDefined();
+      expect(JSON.parse(assignCall[1].body)).toEqual({
+        contactIds: [11],
+        callifiedCampaignId: 102,
+      });
+    });
   });
 
   it('persists selected dial campaigns until the final campaign is removed', async () => {
@@ -3672,7 +4311,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
       const filteredCall = fetchApiMock.mock.calls.find(
         ([url, opts]) =>
           typeof url === 'string' &&
-          url.startsWith('/api/contacts?status=Lead&page=1&limit=25') &&
+          url.startsWith('/api/contacts?status=Lead&page=1&limit=10') &&
           !opts &&
           url.includes('filters='),
       );
@@ -3779,11 +4418,12 @@ describe('Leads extended Freshsales-parity columns', () => {
     company: 'Acme',
     phone: '+91 98000 12345',
     status: 'Lead',
+    lifecycleStageKey: 'interested',
     title: 'Chief Executive',
     website: 'acme.test',
     linkedin: 'linkedin.com/in/aarav',
     industry: 'Logistics',
-    companySize: '51-200',
+    companySize: '-688',
     description: 'Met at expo',
     stateCode: 'IN-KA',
     firstTouchSource: 'Web',
@@ -3797,7 +4437,7 @@ describe('Leads extended Freshsales-parity columns', () => {
   };
 
   const EXTENDED_KEYS = [
-    'name', 'email', 'status', 'title', 'firstName', 'lastName', 'website',
+    'name', 'email', 'lifecycleStage', 'status', 'title', 'firstName', 'lastName', 'website',
     'linkedin', 'industry', 'companySize', 'description', 'stateCode',
     'firstTouchSource', 'lastTouchSource',
   ];
@@ -3813,6 +4453,7 @@ describe('Leads extended Freshsales-parity columns', () => {
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'email', label: 'Email' },
+            { key: 'lifecycleStage', label: 'Lifecycle Stage', filterField: 'lifecycleStageKey', filterKind: 'enum' },
             { key: 'status', label: 'Status' },
             { key: 'title', label: 'Job Title' },
             { key: 'firstName', label: 'First Name' },
@@ -3828,6 +4469,14 @@ describe('Leads extended Freshsales-parity columns', () => {
           ],
         });
       }
+      if (url === '/api/tenant-settings/generic.contactLifecycleStages' && opts?.silent === true) {
+        return Promise.resolve({
+          value: JSON.stringify([
+            { id: 'new', title: 'New', options: [{ id: 'new', label: 'New', status: 'Lead' }] },
+            { id: 'interest', title: 'Interest', options: [{ id: 'interested', label: 'Interested', status: 'Prospect' }] },
+          ]),
+        });
+      }
       return leadsFetchMock(url, opts);
     });
 
@@ -3835,7 +4484,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     await screen.findByText('Aarav Sharma');
 
     // Headers for every extended column.
-    for (const h of ['Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
+    for (const h of ['Lifecycle Stage', 'Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
       expect(screen.getByText(h)).toBeInTheDocument();
     }
 
@@ -3843,12 +4492,74 @@ describe('Leads extended Freshsales-parity columns', () => {
     expect(screen.getByText('Aarav')).toBeInTheDocument();
     expect(screen.getByText('Sharma')).toBeInTheDocument();
     expect(screen.getByText('Chief Executive')).toBeInTheDocument();
+    expect(await screen.findByText('Interested')).toBeInTheDocument();
     expect(screen.getByText('Logistics')).toBeInTheDocument();
-    expect(screen.getByText('51-200')).toBeInTheDocument();
+    expect(screen.getByText('Invalid employee count', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Met at expo')).toBeInTheDocument();
     expect(screen.getByText('IN-KA')).toBeInTheDocument();
     const websiteLink = screen.getByRole('link', { name: 'acme.test' });
     expect(websiteLink.getAttribute('href')).toBe('https://acme.test');
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit No Of Employee for Aarav Sharma' }));
+    const employeeInput = screen.getByRole('textbox', { name: 'Edit No Of Employee for Aarav Sharma' });
+    fireEvent.change(employeeInput, { target: { value: '-89' } });
+    fireEvent.blur(employeeInput);
+    await waitFor(() => expect(notifyError).toHaveBeenCalledWith('Number of employees cannot be negative'));
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/201',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
+  it('keeps a lifecycle edit in the same lead list and asks for a negative-condition reason', async () => {
+    notifyPrompt.mockResolvedValue('No valid requirement');
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve([EXTENDED_LEAD]);
+      }
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'lifecycleStage'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'lifecycleStage', label: 'Lifecycle Stage' },
+          ],
+        });
+      }
+      if (url === '/api/tenant-settings/generic.contactLifecycleStages' && opts?.silent === true) {
+        return Promise.resolve({
+          value: JSON.stringify([
+            { id: 'interest', title: 'Interested / Unqualified', options: [
+              { id: 'interested', label: 'Interested', status: 'Prospect', negative: false },
+              { id: 'unqualified', label: 'Unqualified', status: 'Prospect', negative: false },
+            ] },
+          ]),
+        });
+      }
+      if (url === '/api/contacts/201' && opts?.method === 'PATCH') {
+        return Promise.resolve({ ...EXTENDED_LEAD, lifecycleStageKey: 'unqualified' });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(genericAuth);
+    await screen.findByText('Interested');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Lifecycle Stage for Aarav Sharma' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Edit Lifecycle Stage for Aarav Sharma' }), {
+      target: { value: 'Unqualified' },
+    });
+
+    await waitFor(() => expect(notifyPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Reason required',
+      message: 'Tell us why Unqualified was selected.',
+    })));
+    const patchCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/201' && opts?.method === 'PATCH');
+    expect(JSON.parse(patchCall[1].body)).toEqual({
+      lifecycleStageKey: 'unqualified',
+      lifecycleTransitionReason: 'No valid requirement',
+    });
+    expect(JSON.parse(patchCall[1].body)).not.toHaveProperty('status');
   });
 });
 

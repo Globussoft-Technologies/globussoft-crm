@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { Send, Plus, Trash2, Edit2, Play, X, ToggleLeft, ToggleRight, Filter, Loader2 } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
@@ -117,11 +117,13 @@ function formatConditions(conds) {
 
 export default function LeadRouting() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
+  const vertical = tenant?.vertical || user?.tenant?.vertical || 'generic';
+  const isGenericTenant = vertical === 'generic';
   // subBrand is a travel-vertical concept (TRAVEL_CRM_PRD §4.1) — hide the
   // condition field entirely for wellness/generic tenants so their rule
   // builder is unchanged.
-  const isTravelTenant = user?.tenant?.vertical === 'travel';
+  const isTravelTenant = vertical === 'travel';
   const fieldOptions = isTravelTenant ? FIELD_OPTIONS : FIELD_OPTIONS.filter(f => f !== 'subBrand');
   const [rules, setRules] = useState([]);
   const [users, setUsers] = useState([]);
@@ -303,7 +305,10 @@ export default function LeadRouting() {
   };
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div
+      className={`lead-routing-page${isGenericTenant ? ' lead-routing-page--generic' : ''}`}
+      style={{ padding: '2rem', animation: isGenericTenant ? 'none' : 'fadeIn 0.5s ease-out' }}
+    >
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
           <div style={{
@@ -332,7 +337,10 @@ export default function LeadRouting() {
         </div>
       </header>
 
-      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+      <div
+        className={`card lead-routing-table-card${isGenericTenant ? ' lead-routing-table-card--generic' : ''}`}
+        style={{ padding: 0, overflow: isGenericTenant ? 'hidden' : 'visible' }}
+      >
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading rules...</div>
         ) : rules.length === 0 ? (
@@ -342,7 +350,7 @@ export default function LeadRouting() {
             <button onClick={openNew} className="btn-primary"><Plus size={16} /> Create First Rule</button>
           </div>
         ) : (
-          <TopScrollSync>
+          <TopScrollSync hideTopBar={isGenericTenant} verticalOverflow={isGenericTenant ? 'auto' : 'visible'}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>

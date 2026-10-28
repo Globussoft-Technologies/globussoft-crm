@@ -306,6 +306,164 @@ beforeEach(() => {
 });
 
 describe('<WhatsAppThreads /> — current Meta inbox contract', () => {
+  it('hides the duplicate Templates button from the Generic CRM thread list', async () => {
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'ADMIN' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'WhatsApp Threads' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Templates' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /New/i })).toBeInTheDocument();
+  });
+
+  it('shows an opaque Generic CRM new-message modal with required-field markers', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'ADMIN' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /New/i }));
+    const heading = screen.getByRole('heading', { name: 'New WhatsApp Message' });
+    const modal = heading.closest('.glass-card');
+    expect(modal).toHaveStyle({ background: 'var(--modal-bg, #fff)', backdropFilter: 'none' });
+    expect(screen.getByLabelText(/Phone or pick contacts/i).parentElement).toHaveTextContent('Phone or pick contacts *');
+    expect(screen.getByPlaceholderText(/Just checking in/i).closest('label')).toHaveTextContent('Message *');
+  });
+
+  it('returns to the conversation list after opening a thread', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'USER' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    const inbox = await screen.findByText('WhatsApp Threads');
+    expect(inbox.closest('.whatsapp-inbox')).not.toHaveClass('whatsapp-inbox--selected');
+
+    await user.click(await screen.findByText('Rishu Goyal'));
+    expect(await screen.findByRole('button', { name: 'Back to conversations' })).toBeInTheDocument();
+    expect(inbox.closest('.whatsapp-inbox')).toHaveClass('whatsapp-inbox--selected');
+
+    await user.click(screen.getByRole('button', { name: 'Back to conversations' }));
+    expect(inbox.closest('.whatsapp-inbox')).not.toHaveClass('whatsapp-inbox--selected');
+    expect(screen.getByText('Rishu Goyal')).toBeInTheDocument();
+  });
+
+  it('selects and sends to multiple Generic CRM leads', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?limit=200') {
+        return Promise.resolve({
+          contacts: [
+            { id: 31, name: 'Asha Rao', phone: '+919811111111' },
+            { id: 32, name: 'Ben Shah', phone: '+919822222222' },
+          ],
+        });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'ADMIN' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /New/i }));
+    const picker = screen.getByPlaceholderText(/Type a name or phone/i);
+    await user.click(picker);
+    await user.click(await screen.findByRole('option', { name: /Asha Rao/i }));
+    expect(await screen.findByLabelText('Selected recipients')).toHaveTextContent('Asha Rao (+919811111111)');
+    await user.click(await screen.findByRole('option', { name: /Ben Shah/i }));
+
+    expect(screen.getByLabelText('Selected recipients')).toHaveTextContent('Asha Rao (+919811111111)');
+    expect(screen.getByLabelText('Selected recipients')).toHaveTextContent('Ben Shah (+919822222222)');
+    await user.type(screen.getByPlaceholderText(/Just checking in/i), 'Hello from Globussoft');
+    await user.click(screen.getByRole('button', { name: /^Send$/i }));
+
+    await waitFor(() => {
+      const sends = fetchApiMock.mock.calls.filter(
+        ([url, options]) => url === '/api/whatsapp/send' && options?.method === 'POST',
+      );
+      expect(sends).toHaveLength(2);
+      expect(sends.map(([, options]) => JSON.parse(options.body))).toEqual([
+        { to: '+919811111111', body: 'Hello from Globussoft' },
+        { to: '+919822222222', body: 'Hello from Globussoft' },
+      ]);
+      expect(notifyObj.info).toHaveBeenCalledWith('Message sent to 2 recipients.');
+    });
+  });
+
+  it('sends a Generic CRM approved template without manual variable inputs', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?limit=200') {
+        return Promise.resolve({
+          contacts: [{ id: 22, name: 'Kanchan Gupta', phone: '+919876543210' }],
+        });
+      }
+      if (url === '/api/whatsapp/templates') {
+        return Promise.resolve([{
+          id: 903,
+          name: 'generic_new_lead_pickup_plot',
+          body: 'Hi {{1}}, choose your pickup location here: {{7}}',
+          status: 'APPROVED',
+          category: 'UTILITY',
+          language: 'en_US',
+        }]);
+      }
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'ADMIN' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /New/i }));
+    const phone = screen.getByPlaceholderText(/Type a name or phone/i);
+    await user.type(phone, '+919876543210');
+    await user.click(screen.getByRole('checkbox', { name: /Use Template/i }));
+    const modal = screen.getByRole('heading', { name: 'New WhatsApp Message' }).closest('.glass-card');
+    await user.selectOptions(
+      within(modal).getByRole('combobox'),
+      'generic_new_lead_pickup_plot',
+    );
+
+    expect(screen.queryByText(/Variable \{\{1\}\}/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Variable \{\{7\}\}/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Send$/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/whatsapp/send' && options?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse(call[1].body)).toEqual({
+        to: '+919876543210',
+        templateName: 'generic_new_lead_pickup_plot',
+        language: 'en_US',
+        contactId: 22,
+      });
+    });
+  });
+
   it('follows the canonical thread id returned after a Generic CRM reply', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/whatsapp/send' && opts?.method === 'POST') {

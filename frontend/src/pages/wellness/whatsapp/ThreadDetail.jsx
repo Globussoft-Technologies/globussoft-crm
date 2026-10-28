@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   MessageCircle,
+  ArrowLeft,
   CheckCheck,
   Clock,
   UserCheck,
@@ -29,6 +30,7 @@ export default function ThreadDetail() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const {
     selectedId,
+    setSelectedId,
     detail,
     loadingDetail,
     hasMoreMessages,
@@ -98,7 +100,7 @@ export default function ThreadDetail() {
   }, [detail?.messages]);
 
   return (
-    <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+    <main className="whatsapp-thread-detail" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
       {!selectedId ? (
         <div style={{
           flex: 1, display: 'flex', flexDirection: 'column',
@@ -116,10 +118,18 @@ export default function ThreadDetail() {
         <>
           {/* Header — two rows so the Status pill never overlaps the
               contact name + the action buttons sit on their own line. */}
-          <header style={{
+          <header className="whatsapp-thread-detail-header" style={{
             padding: '0.9rem 1.5rem', borderBottom: '1px solid var(--border-color)',
             display: 'flex', flexDirection: 'column', gap: 8,
           }}>
+            <button
+              type="button"
+              className="whatsapp-thread-back btn-secondary"
+              onClick={() => setSelectedId(null)}
+              aria-label="Back to conversations"
+            >
+              <ArrowLeft size={18} /> Conversations
+            </button>
             {/* Row 1 — name (or phone) + Edit pencil + Status pill on the right */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
               <ThreadAvatar
@@ -287,11 +297,11 @@ export default function ThreadDetail() {
                   <Sparkles size={14} /> {syncingLead ? 'Syncing…' : 'Sync Lead'}
                 </button>
               )}
-              <button onClick={snoozeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Clock size={14} /> Snooze
+              <button onClick={snoozeThread} className="btn-secondary" title="Snooze" aria-label="Snooze" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Clock size={14} />
               </button>
-              <button onClick={closeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <CheckCheck size={14} /> Close
+              <button onClick={closeThread} className="btn-secondary" title="Close conversation" aria-label="Close conversation" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <CheckCheck size={14} />
               </button>
               {!detail.optedOut ? (
                 <button
@@ -300,7 +310,7 @@ export default function ThreadDetail() {
                   title="Block this number (blocks both inbound + outbound)"
                   style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
                 >
-                  <Ban size={14} /> Block
+                  <Ban size={14} />
                 </button>
               ) : isAdmin && (
                 <button
@@ -319,7 +329,7 @@ export default function ThreadDetail() {
                   title="Delete this conversation (removes all messages from the CRM)"
                   style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}
                 >
-                  <Trash2 size={14} /> Delete chat
+                  <Trash2 size={14} />
                 </button>
               )}
             </div>

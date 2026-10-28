@@ -45,6 +45,17 @@ import {
   VALID_THEME_VALUES,
   resolveThemePreference,
 } from "./utils/themePreference";
+// Layout owns the route-content Suspense boundary, so page chunks can load
+// independently without unmounting the navigation shell.
+const PickupPlotInventory = lazy(() => import("./pages/PickupPlotInventory"));
+const PickupInventory = lazy(() => import("./pages/PickupInventory"));
+const TransportPersons = lazy(() => import("./pages/TransportPersons"));
+const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
+const BillingPersons = lazy(() => import("./pages/BillingPersons"));
+const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
+const PickupPlotWorkAssignments = lazy(() => import("./pages/PickupPlotWorkAssignments"));
+const TransportDriverWorkspace = lazy(() => import("./components/TransportDriverWorkspace"));
+const BrokerCustomerWorkspace = lazy(() => import("./components/BrokerCustomerWorkspace"));
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
 
 const Landing = lazy(() => import("./pages/Landing"));
@@ -198,6 +209,7 @@ const ItineraryPaymentSuccess = lazy(
 );
 // Public flyer share/embed viewer  /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
+const GenericPickupPlotSelection = lazy(() => import("./pages/public/GenericPickupPlotSelection"));
 // Public marketing landing page entry point  /trips. Resolves the
 // admin-selected featured LandingPage via /api/landing-pages/public/
 // featured-full and renders it in place. When no page is featured yet,
@@ -301,16 +313,6 @@ const CommissionData = lazy(() => import("./pages/CommissionData"));
 const RevenueGoals = lazy(() => import("./pages/RevenueGoals"));
 const LeadRouting = lazy(() => import("./pages/LeadRouting"));
 const Territories = lazy(() => import("./pages/Territories"));
-const PickupPlotInventory = lazy(() => import("./pages/PickupPlotInventory"));
-const PickupInventory = lazy(() => import("./pages/PickupInventory"));
-const TransportPersons = lazy(() => import("./pages/TransportPersons"));
-const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
-const BillingPersons = lazy(() => import("./pages/BillingPersons"));
-const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
-const PickupPlotWorkAssignments = lazy(() => import("./pages/PickupPlotWorkAssignments"));
-const TransportDriverWorkspace = lazy(() => import("./components/TransportDriverWorkspace"));
-const BrokerCustomerWorkspace = lazy(() => import("./components/BrokerCustomerWorkspace"));
-const BillingWorkspace = lazy(() => import("./components/BillingWorkspace"));
 const Quotas = lazy(() => import("./pages/Quotas"));
 const WinLoss = lazy(() => import("./pages/WinLoss"));
 const AbTests = lazy(() => import("./pages/AbTests"));
@@ -906,6 +908,28 @@ function GenericOnly({ children }) {
 function GenericOrWellnessOnly({ children }) {
   const { tenant, user } = useContext(AuthContext);
   if (tenant?.vertical === "travel") {
+    return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  return children;
+}
+
+// Lead Routing is intentionally disabled for Generic CRM only. The component,
+// backend routes, and non-generic behavior remain intact so this does not alter
+// Callified's independent "Assigning Staff" configuration.
+function NonGenericLeadRoutingOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (!tenant?.vertical || tenant.vertical === "generic") {
+    return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  return children;
+}
+
+// Estimates is intentionally disabled for Generic CRM only. Keep the page and
+// its non-generic behavior intact so it can be re-enabled without restoring
+// deleted implementation.
+function NonGenericEstimatesOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (!tenant?.vertical || tenant.vertical === "generic") {
     return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
@@ -1602,6 +1626,7 @@ export default function App() {
                     <Route path="/pricing" element={<Pricing />} />
                     {/* Public status page  no auth (PRD_STATUS_PAGE.md). */}
                     <Route path="/status" element={<StatusPage />} />
+                    <Route path="/pickup-plot-selection/:token" element={<GenericPickupPlotSelection />} />
                     <Route
                       path="/payment-success"
                       element={<PaymentSuccess />}
@@ -1737,6 +1762,14 @@ export default function App() {
                     {/* <Route path="/explore" element={<ExplorePage />} /> */}
                     <Route path="/trips" element={<TripsResolver />} />
                     <Route path="/trips/:tripRef" element={<TripsShareResolver />} />
+                    <Route
+                      path="/landing-sites/:tenantId/:slug"
+                      element={<LandingSiteResolver vertical="generic" />}
+                    />
+                    <Route
+                      path="/wellness/landing-sites/:tenantId/:slug"
+                      element={<LandingSiteResolver vertical="wellness" />}
+                    />
                     <Route
                       path="/landing-sites/:slug"
                       element={<LandingSiteResolver />}
@@ -2264,7 +2297,14 @@ export default function App() {
                         dropped from the shared page in 3f3ff602; wellness has run
                         rail-less since and stays that way, so only this mount opts in. */}
                       <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" showThreadList />} />
-                      <Route path="whatsapp/templates" element={<WellnessWhatsAppTemplates />} />
+                      <Route
+                        path="whatsapp/templates"
+                        element={(
+                          <GenericOnly>
+                            <Navigate to="/marketing?tab=templates&templateChannel=WHATSAPP" replace />
+                          </GenericOnly>
+                        )}
+                      />
                       <Route
                         path="wellness/reports"
                         element={
@@ -2787,7 +2827,12 @@ export default function App() {
                           </GenericOnly>
                         }
                       />
-                      <Route path="estimates" element={<Estimates />} />
+                      {/* Generic CRM Estimates page intentionally disabled;
+                          retain its route and implementation for other verticals. */}
+                      <Route
+                        path="estimates"
+                        element={<NonGenericEstimatesOnly><Estimates /></NonGenericEstimatesOnly>}
+                      />
                       <Route path="invoices" element={<Invoices />} />
                       <Route path="tickets" element={<Tickets />} />
                       <Route path="tasks" element={<Tasks />} />
@@ -3131,7 +3176,12 @@ export default function App() {
                           </GenericAccessGuard>
                         }
                       />
-                      <Route path="lead-routing" element={<LeadRouting />} />
+                      {/* Generic CRM Lead Routing page intentionally disabled;
+                          retain its route for other verticals. */}
+                      <Route
+                        path="lead-routing"
+                        element={<NonGenericLeadRoutingOnly><LeadRouting /></NonGenericLeadRoutingOnly>}
+                      />
                       <Route path="territories" element={<Territories />} />
                       <Route
                         path="pickup-plot-inventory"
@@ -3185,7 +3235,13 @@ export default function App() {
                       />
                       <Route
                         path="pickup-customers"
-                        element={<GenericOnly><RoleGuard allow={["ADMIN"]}><PickupCustomers /></RoleGuard></GenericOnly>}
+                        element={
+                          <GenericOnly>
+                            <RoleGuard requiredPermission={{ module: "billing_workspace", action: "read" }}>
+                              <PickupCustomers />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
                       />
                       <Route
                         path="pickup-work-assignments"
@@ -3207,16 +3263,6 @@ export default function App() {
                           <GenericOnly>
                             <RoleGuard requiredPermission={{ module: "broker_workspace", action: "read" }}>
                               <BrokerCustomerWorkspace />
-                            </RoleGuard>
-                          </GenericOnly>
-                        }
-                      />
-                      <Route
-                        path="billing-workspace"
-                        element={
-                          <GenericOnly>
-                            <RoleGuard requiredPermission={{ module: "billing_workspace", action: "read" }}>
-                              <BillingWorkspace />
                             </RoleGuard>
                           </GenericOnly>
                         }

@@ -117,7 +117,7 @@ function isCardishWellnessBlock(block) {
 
 function normalizeWellnessCampaignBlocks(blocks) {
   const next = cloneBlocks(blocks);
-  const page = next.find((block) => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
+  const page = next.find((block) => block?.type === 'columns' && ['wellness-campaign-page', 'generic-campaign-page'].includes(block.props?.variant));
   if (!page) return next;
 
   const findRow = (variant) => (page.props?.columns || [])
@@ -232,16 +232,26 @@ export default function BlockRenderer({ landingPage = {} }) {
   const rawBlocks = Array.isArray(landingPage.content)
     ? landingPage.content
     : [];
+  const hasGenericCampaignRoot = rawBlocks.some((block) => block?.type === 'columns' && block.props?.variant === 'generic-campaign-page');
   const isWellnessLandingPage = isWellnessPage(landingPage, rawBlocks);
-  const blocks = isWellnessLandingPage ? normalizeWellnessCampaignBlocks(rawBlocks) : rawBlocks;
+  // Generic campaigns intentionally reuse the wellness design system, not
+  // its tenant data contract. Both roots render through the same responsive
+  // CSS while remaining distinguishable at the page-data boundary.
+  const isCampaignLandingPage = isWellnessLandingPage || hasGenericCampaignRoot;
+  const blocks = isCampaignLandingPage ? normalizeWellnessCampaignBlocks(rawBlocks) : rawBlocks;
 
   const slug = landingPage.slug || '';
   const publicSubmit = !!landingPage.publicSubmit;
   const pageId = publicSubmit ? null : (landingPage.id || null);
-  const submitEndpoint = publicSubmit && slug ? `/api/pages/${slug}/submit` : '';
+  const publicVertical = String(landingPage.vertical || '').toLowerCase();
+  const publicTenantId = landingPage.tenantId != null ? String(landingPage.tenantId) : '';
+  const scopedPublicPath = publicSubmit && slug && publicTenantId && ['generic', 'wellness'].includes(publicVertical)
+    ? `/api/landing-sites/public/${encodeURIComponent(publicVertical)}/${encodeURIComponent(publicTenantId)}/${encodeURIComponent(slug)}`
+    : '';
+  const submitEndpoint = scopedPublicPath ? `${scopedPublicPath}/submit` : (publicSubmit && slug ? `/api/pages/${slug}/submit` : '');
   const tmcParentRegistrationUrl = landingPage.tmcParentRegistrationUrl || '';
-  const wellnessRoot = blocks.find((block) => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
-  const wellnessTheme = isWellnessLandingPage
+  const wellnessRoot = blocks.find((block) => block?.type === 'columns' && ['wellness-campaign-page', 'generic-campaign-page'].includes(block.props?.variant));
+  const wellnessTheme = isCampaignLandingPage
     ? resolveWellnessLandingTheme(wellnessRoot?.props?.themeId || DEFAULT_WELLNESS_LANDING_THEME, wellnessRoot?.props?.customColors)
     : null;
   const wellnessLayoutId = wellnessRoot?.props?.layoutId || 'editorial';
@@ -262,14 +272,15 @@ export default function BlockRenderer({ landingPage = {} }) {
   // Track analytics (page view)
   React.useEffect(() => {
     if (slug) {
-      new Image().src = `/api/pages/${slug}/track?event=VISIT`;
+      const trackEndpoint = scopedPublicPath ? `${scopedPublicPath}/track?event=VISIT` : `/api/pages/${slug}/track?event=VISIT`;
+      new Image().src = trackEndpoint;
     }
-  }, [slug]);
+  }, [scopedPublicPath, slug]);
 
   const renderBlockWithContext = (block) => renderBlock(block, slug, pageId, renderBlockWithContext, submitEndpoint, tmcParentRegistrationUrl);
 
   return (
-    <main className={`landing-page block-renderer${isWellnessLandingPage ? ` wellness-page wellness-campaign-page--${String(wellnessLayoutId).replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}` : ''}`}>
+    <main className={`landing-page block-renderer${isCampaignLandingPage ? ` wellness-page wellness-campaign-page--${String(wellnessLayoutId).replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}` : ''}`}>
       <style>{`
         .landing-page {
           margin: 0;

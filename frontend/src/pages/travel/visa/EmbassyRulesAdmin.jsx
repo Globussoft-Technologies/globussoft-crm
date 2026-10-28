@@ -624,7 +624,7 @@ export default function EmbassyRulesAdmin() {
                   <col />
                   <col style={{ width: '110px' }} />
                   <col style={{ width: '90px' }} />
-                  {isAdmin && <col style={{ width: '150px' }} />}
+                  {isAdmin && <col style={{ width: '190px' }} />}
                 </colgroup>
                 <thead>
                   <tr>
@@ -649,8 +649,8 @@ export default function EmbassyRulesAdmin() {
                       {r.isActive ? 'Yes' : <span style={{ color: 'var(--text-secondary)' }}>No</span>}
                     </td>
                     {isAdmin && (
-                      <td style={td}>
-                        <div style={{ display: 'flex', gap: 6 }}>
+                      <td style={{ ...td, overflow: 'visible', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', gap: 6, whiteSpace: 'nowrap' }}>
                           <button
                             type="button"
                             onClick={() => openEdit(r)}

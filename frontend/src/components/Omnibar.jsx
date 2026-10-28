@@ -275,7 +275,7 @@ const ENTITY_SECTIONS = [
   },
   {
     key: "deals",
-    label: "Pipeline",
+    label: "Deals and Pipeline",
     icon: Briefcase,
     color: "#10b981",
     bg: "rgba(16, 185, 129, 0.12)",
@@ -503,8 +503,7 @@ function scorePageMatch(page, q, allowFuzzy = false) {
       page.description,
       page.parent,
       page.category,
-      page.path,
-      page.route,
+      ...(page.searchPath === false ? [] : [page.path, page.route]),
       ...(Array.isArray(page.aliases) ? page.aliases : [page.aliases]),
     ];
     let best = null;
@@ -536,8 +535,10 @@ function scorePageMatch(page, q, allowFuzzy = false) {
     ...((Array.isArray(page.aliases) ? page.aliases : [page.aliases])
       .map((value) => ({ value, weight: 400, fieldRank: 3 }))),
     { value: page.category, weight: 500, fieldRank: 4 },
-    { value: page.path, weight: 550, fieldRank: 5 },
-    { value: page.route, weight: 550, fieldRank: 5 },
+    ...(page.searchPath === false ? [] : [
+      { value: page.path, weight: 550, fieldRank: 5 },
+      { value: page.route, weight: 550, fieldRank: 5 },
+    ]),
   ];
   let best = null;
   for (const { value, weight, fieldRank } of fields) {
@@ -807,8 +808,14 @@ export default function Omnibar() {
   // Merge pages (client) + backend results into a single resultSet that the
   // section table iterates over.
   const resultSet = useMemo(
-    () => ({ pages: pageMatches, ...results }),
-    [pageMatches, results],
+    () => ({
+      pages: pageMatches,
+      ...results,
+      // Generic CRM intentionally hides the Estimates page. Suppress record
+      // matches too, otherwise backend search could still expose the page.
+      ...((tenant?.vertical === "generic" || !tenant?.vertical) ? { estimates: [] } : {}),
+    }),
+    [pageMatches, results, tenant?.vertical],
   );
 
   const totalResultCount = useMemo(() => {
@@ -998,6 +1005,7 @@ export default function Omnibar() {
 
       {showDropdown && (
         <div
+          className="travel-search-results"
           id="omnibar-results"
           role="listbox"
           aria-label="Search results"
@@ -1091,6 +1099,7 @@ export default function Omnibar() {
                       const RowIcon = r.icon || Icon;
                       return (
                         <button
+                          className="travel-search-option"
                           key={optionKey}
                           id={`omnibar-option-${optionKey}`}
                           ref={(node) => {
@@ -1128,6 +1137,7 @@ export default function Omnibar() {
                           }}
                         >
                           <div
+                            className="travel-search-option-icon"
                             style={{
                               background: section.bg,
                               padding: 7,
@@ -1143,6 +1153,7 @@ export default function Omnibar() {
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div
+                              className="travel-search-option-primary"
                               style={{
                                 fontWeight: 500,
                                 fontSize: "0.9rem",
@@ -1154,6 +1165,7 @@ export default function Omnibar() {
                               {r.primary}
                               {r.badge && (
                                 <span
+                                  className="travel-search-option-badge"
                                   style={{
                                     fontSize: "0.65rem",
                                     padding: "0.1rem 0.4rem",
@@ -1173,6 +1185,7 @@ export default function Omnibar() {
                             </div>
                             {r.secondary && (
                               <div
+                                className="travel-search-option-secondary"
                                 style={{
                                   fontSize: "0.78rem",
                                   color: "var(--text-secondary)",

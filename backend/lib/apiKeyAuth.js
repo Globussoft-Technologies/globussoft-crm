@@ -76,4 +76,10 @@ function installSubBrandHelpers(req, apiKey) {
   };
 }
 
-module.exports = { installSubBrandHelpers };
+const PLOT_INVENTORY_READ_PURPOSE = 'plot-inventory-read';
+
+function isPlotInventoryReadKey(apiKey) {
+  return apiKey?.purpose === PLOT_INVENTORY_READ_PURPOSE;
+}
+
+module.exports = { installSubBrandHelpers, isPlotInventoryReadKey, PLOT_INVENTORY_READ_PURPOSE };

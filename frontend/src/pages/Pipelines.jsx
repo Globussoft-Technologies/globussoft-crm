@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, ExternalLink, Star, X } from 'lucide-react';
+import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, Star, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -40,9 +40,9 @@ const Pipelines = () => {
     setStages([]);
     setAvailableStages([]);
     setOriginalStages([]);
-    setLoadingStages(false);
+    setLoadingStages(true);
     setEditingStageId(null);
-    fetchApi('/api/pipeline_stages?reusable=true').then((data) => setAvailableStages(Array.isArray(data) ? data : [])).catch(() => setAvailableStages([]));
+    fetchApi('/api/pipeline_stages?reusable=true').then((data) => setAvailableStages(Array.isArray(data) ? data : [])).catch(() => setAvailableStages([])).finally(() => setLoadingStages(false));
     setForm(emptyForm);
     setError('');
     setShowModal(true);
@@ -87,8 +87,8 @@ const Pipelines = () => {
   const addExistingStage = (event) => {
     const stageId = Number(event.target.value);
     event.target.value = '';
-    if (!stageId || stages.some((stage) => stage.id === stageId)) return;
-    const selected = availableStages.find((stage) => stage.id === stageId);
+    if (!stageId || stages.some((stage) => String(stage.id) === String(stageId))) return;
+    const selected = availableStages.find((stage) => String(stage.id) === String(stageId));
     if (!selected) return;
     setStages((current) => [...current, { ...selected, isExisting: true }]);
   };
@@ -222,6 +222,14 @@ const Pipelines = () => {
     }
   };
 
+  const unselectedStages = availableStages.filter((stage) => !stages.some((selected) => String(selected.id) === String(stage.id)));
+  const stageSelectDisabled = loadingStages || unselectedStages.length === 0;
+  const stageSelectHint = loadingStages
+    ? 'Loading existing stages...'
+    : availableStages.length > 0
+      ? 'All existing stages are already selected.'
+      : 'No existing stages are available.';
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
       {/* Header */}
@@ -315,20 +323,6 @@ const Pipelines = () => {
               </div>
 
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '0.875rem' }}>
-                <a
-                  href={`/pipeline?pipelineId=${p.id}`}
-                  className="btn-primary"
-                  style={{
-                    padding: '0.4rem 0.75rem',
-                    fontSize: '0.8rem',
-                    textDecoration: 'none',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.3rem',
-                  }}
-                >
-                  <ExternalLink size={13} /> View Pipeline
-                </a>
                 <button
                   onClick={() => openEdit(p)}
                   title="Edit"
@@ -435,12 +429,14 @@ const Pipelines = () => {
                 <div className="pipelines-stage-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                   <label style={labelStyle}>Stages *</label>
                   <div className="pipelines-stage-controls" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <select aria-label="Select Existing Stage" defaultValue="" onChange={addExistingStage} style={{ ...iconBtn, maxWidth: '180px' }}>
-                      <option value="">Select Existing Stage</option>
-                      {availableStages.filter((stage) => !stages.some((selected) => selected.id === stage.id)).map((stage) => (
-                        <option key={stage.id} value={stage.id}>{stage.name}</option>
-                      ))}
-                    </select>
+                    <span title={stageSelectDisabled ? stageSelectHint : undefined} style={{ display: 'inline-flex', cursor: stageSelectDisabled ? 'not-allowed' : 'pointer' }}>
+                      <select aria-label="Select Existing Stage" title={stageSelectDisabled ? stageSelectHint : undefined} defaultValue="" onChange={addExistingStage} disabled={stageSelectDisabled} style={{ ...iconBtn, maxWidth: '180px', cursor: 'inherit', pointerEvents: stageSelectDisabled ? 'none' : 'auto' }}>
+                        <option value="">Select Existing Stage</option>
+                        {unselectedStages.map((stage) => (
+                          <option key={stage.id} value={stage.id}>{stage.name}</option>
+                        ))}
+                      </select>
+                    </span>
                     <button type="button" onClick={addStage} style={iconBtn}><Plus size={13} /> Add Stage</button>
                   </div>
                 </div>

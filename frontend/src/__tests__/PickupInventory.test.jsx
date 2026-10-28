@@ -4,8 +4,10 @@ import PickupInventory from '../pages/PickupInventory';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
 const geocodeSuggestMock = vi.fn();
+const googleAddressSuggestMock = vi.fn();
 vi.mock('../lib/geocoder', () => ({
   geocodeSuggest: (...args) => geocodeSuggestMock(...args),
+  googleAddressSuggest: (...args) => googleAddressSuggestMock(...args),
 }));
 const notify = { success: vi.fn(), error: vi.fn() };
 vi.mock('../utils/notify', () => ({ useNotify: () => notify }));
@@ -32,6 +34,8 @@ beforeEach(() => {
   notify.error.mockReset();
   geocodeSuggestMock.mockReset();
   geocodeSuggestMock.mockResolvedValue([]);
+  googleAddressSuggestMock.mockReset();
+  googleAddressSuggestMock.mockResolvedValue([]);
   window.localStorage.removeItem('pickup-inventory-column-widths');
 });
 
@@ -79,10 +83,10 @@ describe('<PickupInventory />', () => {
   });
 
   it('saves the selected address coordinates as an exact Google Maps link', async () => {
-    geocodeSuggestMock.mockResolvedValueOnce([{
-      lat: 12.9352,
-      lng: 77.6245,
-      display_name: 'CA-17, Koramangala, Bengaluru, India',
+    googleAddressSuggestMock.mockResolvedValueOnce([{
+      place_id: 'ChIJ-koramangala',
+      display_name: 'CA-17, Koramangala, Bengaluru, Karnataka 560034, India',
+      provider: 'google',
     }]);
     fetchApi.mockResolvedValueOnce(payload).mockResolvedValueOnce({ id: 5 }).mockResolvedValueOnce(payload);
     render(<PickupInventory />);
@@ -102,7 +106,7 @@ describe('<PickupInventory />', () => {
       url === '/api/pickup-plot-inventory/locations' && options?.method === 'POST'
     ));
     expect(JSON.parse(createCall[1].body).googleMapsLink).toBe(
-      'https://www.google.com/maps/search/?api=1&query=12.9352%2C77.6245',
+      'https://www.google.com/maps/search/?api=1&query=CA-17%2C%20Koramangala%2C%20Bengaluru%2C%20Karnataka%20560034%2C%20India&query_place_id=ChIJ-koramangala',
     );
   });
 
@@ -122,12 +126,12 @@ describe('<PickupInventory />', () => {
     expect(screen.getByDisplayValue('10')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Created at' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Updated at' })).toBeInTheDocument();
-    expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveClass('pickup-plot-table-scroll');
+    expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveStyle({ overflowX: 'auto', overflowY: 'auto', minHeight: '0' });
     expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1265px', minWidth: '100%' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', tableLayout: 'fixed' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Pickup location' })).toHaveStyle({ position: 'sticky', top: '0px', color: 'var(--text-secondary)', background: '#f3f4f6' });
+    expect(screen.getByRole('columnheader', { name: 'Pickup location' })).toHaveStyle({ position: 'sticky', top: '0px', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' });
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open North Gate in Google Maps' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open pickup address for North Gate in Google Maps' })).toHaveClass('pickup-inventory-address-link');
@@ -280,5 +284,71 @@ describe('<PickupInventory />', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search pickup inventory' }), { target: { value: 'North' } });
     expect(screen.queryByText('Closed Gate')).not.toBeInTheDocument();
     expect(screen.getByText('No pickup locations found.')).toBeInTheDocument();
+  });
+
+  it('imports pickup locations from the CSV/Excel dialog and reloads the inventory', async () => {
+    fetchApi.mockResolvedValueOnce(payload)
+      .mockResolvedValueOnce({ total: 1, created: 1, updated: 0 })
+      .mockResolvedValueOnce(payload);
+    render(<PickupInventory />);
+    await screen.findByText('North Gate');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
+    expect(screen.getByRole('dialog', { name: 'Import pickup locations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CSV template' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Excel template' })).toBeInTheDocument();
+    const csv = 'Location name,Address,Google Maps link,Maximum assignments\nSouth Gate,"18 Residency Road, Bengaluru",,12\n';
+    fireEvent.change(screen.getByLabelText('CSV or Excel file'), {
+      target: { files: [new File([csv], 'pickup-locations.csv', { type: 'text/csv' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Import data' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/locations/import',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const importCall = fetchApi.mock.calls.find(([url]) => url.endsWith('/locations/import'));
+    expect(JSON.parse(importCall[1].body).rows[0]).toMatchObject({
+      name: 'South Gate', address: '18 Residency Road, Bengaluru', maxAssignments: '12',
+    });
+    expect(JSON.parse(importCall[1].body).rows[0]).not.toHaveProperty('notes');
+    expect(JSON.parse(importCall[1].body).rows[0]).not.toHaveProperty('isActive');
+    await waitFor(() => expect(notify.success).toHaveBeenCalledWith('Import complete: 1 created, 0 updated.'));
+    expect(screen.queryByRole('dialog', { name: 'Import pickup locations' })).not.toBeInTheDocument();
+  });
+
+  it('downloads the pickup template without Notes, Active, or TRUE/FALSE columns', async () => {
+    fetchApi.mockResolvedValueOnce(payload);
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn(() => 'blob:pickup-template');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    try {
+      render(<PickupInventory />);
+      await screen.findByText('North Gate');
+      fireEvent.click(screen.getByRole('button', { name: 'Import CSV/Excel' }));
+      fireEvent.click(screen.getByRole('button', { name: 'CSV template' }));
+
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      const csv = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(createObjectURL.mock.calls[0][0]);
+      });
+      const [headers, example] = String(csv).trim().split(/\r?\n/);
+      expect(headers).toBe('Location name,Address,Google Maps link,Maximum assignments');
+      expect(headers).not.toMatch(/Notes|Active/);
+      expect(example).not.toMatch(/TRUE|FALSE/);
+    } finally {
+      anchorClick.mockRestore();
+      if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
+      else delete URL.createObjectURL;
+      if (originalRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL });
+      else delete URL.revokeObjectURL;
+    }
   });
 });

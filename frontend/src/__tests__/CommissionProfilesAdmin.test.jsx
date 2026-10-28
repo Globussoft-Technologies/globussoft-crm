@@ -331,6 +331,52 @@ describe('<CommissionProfilesAdmin /> — filter', () => {
 });
 
 describe('<CommissionProfilesAdmin /> — create modal', () => {
+  it('opens the calendar from either validity field and blocks manual date entry', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByRole('button', { name: /New profile/i }));
+
+    for (const label of ['Valid from', 'Valid to']) {
+      const input = screen.getByLabelText(label);
+      const showPicker = vi.fn();
+      Object.defineProperty(input, 'showPicker', { value: showPicker, configurable: true });
+
+      fireEvent.click(input);
+      expect(showPicker).toHaveBeenCalledTimes(1);
+      expect(fireEvent.keyDown(input, { key: '2', cancelable: true })).toBe(false);
+      expect(fireEvent.keyDown(input, { key: 'Tab', cancelable: true })).toBe(true);
+      expect(fireEvent.paste(input, { cancelable: true })).toBe(false);
+      expect(fireEvent.drop(input, { cancelable: true })).toBe(false);
+      fireEvent.keyDown(input, { key: 'Enter', cancelable: true });
+      expect(showPicker).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('requires Valid to after Valid from and clears an end date when the start moves past it', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByRole('button', { name: /New profile/i }));
+    const from = screen.getByLabelText('Valid from');
+    const to = screen.getByLabelText('Valid to');
+
+    fireEvent.change(from, { target: { value: '2026-09-05' } });
+    expect(to).toHaveAttribute('min', '2026-09-06');
+    fireEvent.change(to, { target: { value: '2026-09-08' } });
+    fireEvent.change(from, { target: { value: '2026-09-08' } });
+    expect(to).toHaveValue('');
+    expect(to).toHaveAttribute('min', '2026-09-09');
+
+    fireEvent.change(screen.getByLabelText(/Profile name/i), { target: { value: 'Date check' } });
+    fireEvent.change(screen.getByLabelText(/Commission percent/i), { target: { value: '5' } });
+    fireEvent.change(to, { target: { value: '2026-09-08' } });
+    fetchApiMock.mockClear();
+    fireEvent.submit(screen.getByTestId('commission-profile-form'));
+    expect(notifyError).toHaveBeenCalledWith('Valid to must be after Valid from');
+    expect(fetchApiMock.mock.calls.some(([url, options]) =>
+      url === '/api/travel/commission-profiles' && options?.method === 'POST',
+    )).toBe(false);
+  });
+
   it('clicking "+ New Profile" reveals the form', async () => {
     renderPage();
     await screen.findByText('Flat 5% TMC');

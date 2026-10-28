@@ -107,6 +107,8 @@ prisma.task = prisma.task || {};
 prisma.task.findMany = vi.fn().mockResolvedValue([]);
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.currency = prisma.currency || {};
+prisma.currency.findMany = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.auditLog = {
@@ -124,6 +126,7 @@ prisma.fieldPermission = {
 prisma.pipelineStage = {
   findMany: vi.fn().mockResolvedValue([]),
 };
+prisma.tenantSetting = { findUnique: vi.fn() };
 
 import express from 'express';
 import request from 'supertest';
@@ -149,11 +152,13 @@ beforeEach(() => {
   prisma.activity.findMany.mockReset();
   prisma.activity.count.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.currency.findMany.mockReset();
   prisma.auditLog.findFirst.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.fieldPermission.findMany.mockReset();
   prisma.fieldPermission.findMany.mockResolvedValue([]);
   prisma.pipelineStage.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.pipelineStage.findMany.mockResolvedValue([]);
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
@@ -162,6 +167,7 @@ beforeEach(() => {
   prisma.activity.findMany.mockResolvedValue([]);
   prisma.activity.count.mockResolvedValue(0);
   prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
+  prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }]);
   prisma.user.findUnique.mockReset();
   prisma.user.findUnique.mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   eventBus.emitEvent.mockClear();
@@ -170,6 +176,28 @@ beforeEach(() => {
 // ─── GET / — list with tenant + soft-delete + USER-role scoping ─────
 
 describe('GET /api/deals — list with tenant + soft-delete + role scoping', () => {
+  test.each(['/api/deals?dealType=Sales', '/api/deals/stats?dealType=Sales'])('includes untyped deals for the renamed New Business type in %s', async (url) => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales', isDefault: false, stages: [{ name: 'Review' }] },
+      { id: 'renew', name: 'Renew', isDefault: true, stages: [{ name: 'Review' }] },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get(url);
+    expect(res.status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+      tenantId: 1, AND: [{ OR: [{ dealType: 'Sales' }, { dealType: null }] }],
+    }));
+  });
+
+  test('does not assign untyped deals to a different selected type', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales' }, { id: 'renew', name: 'Renew', isDefault: true },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/deals?dealType=Renew');
+    expect(res.status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].where.dealType).toBe('Renew');
+  });
   test('happy path: list returns rows scoped to tenant, soft-deletes excluded by default', async () => {
     prisma.deal.findMany.mockResolvedValue([
       { id: 1, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1, contact: null, owner: null },
@@ -342,6 +370,12 @@ describe('GET /api/deals/:id/activities — paginated activity feed', () => {
 // ─── POST / — create deal (validation contract) ─────────────────────
 
 describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
+  test('accepts default deal type stages before the setting is saved', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.deal.create.mockResolvedValue({ id: 11, title: 'Deal', stage: 'new-lead', tenantId: 1 });
+    const res = await request(makeApp()).post('/api/deals').send({ title: 'Deal', dealType: 'New Business', stage: 'new-lead' });
+    expect(res.status).toBe(201);
+  });
   test('happy path: defaults currency from tenant, stage→lead, probability→50', async () => {
     prisma.deal.create.mockResolvedValue({
       id: 11, title: 'New Deal', amount: 250, probability: 50,
@@ -474,6 +508,47 @@ describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
 // ─── PUT /:id — update + terminal-stage guard (#173) ─────────────────
 
 describe('PUT /api/deals/:id — terminal-stage guard (#173)', () => {
+  test('validates a stage-only update using the stored deal type', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ name: 'Renew', stages: [{ name: 'Review' }, { name: 'Approved' }] }]) });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: 'Renew', stage: 'review' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, dealType: 'Renew', stage: 'approved' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'approved' });
+    expect(res.status).toBe(200);
+    const invalid = await request(makeApp()).put('/api/deals/7').send({ stage: 'proposal' });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('INVALID_STAGE');
+  });
+  test('legacy untyped deals use the default New Business stages on update', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, stage: 'contracted' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'contracted' });
+    expect(res.status).toBe(200);
+  });
+  test('legacy untyped deals retain legacy stage transitions', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, stage: 'proposal' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'proposal' });
+    expect(res.status).toBe(200);
+    expect(res.body.stage).toBe('proposal');
+  });
+  test('explicitly assigning a type does not allow unrelated legacy stages', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ dealType: 'New Business', stage: 'proposal' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_STAGE');
+  });
+  test('legacy untyped deals validate using the renamed type stages', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([{ id: 'new-business', name: 'Sales', stages: [{ name: 'Review' }] }]) });
+    prisma.deal.findFirst.mockResolvedValue({ id: 7, tenantId: 1, dealType: null, stage: 'lead' });
+    prisma.deal.update.mockResolvedValue({ id: 7, tenantId: 1, stage: 'review' });
+    const res = await request(makeApp()).put('/api/deals/7').send({ stage: 'review' });
+    expect(res.status).toBe(200);
+  });
   test('happy path: updates non-stage fields', async () => {
     prisma.deal.findFirst.mockResolvedValue({
       id: 7, title: 'Old', stage: 'lead', amount: 100, tenantId: 1,
@@ -603,6 +678,16 @@ describe('DELETE /api/deals/:id — soft delete (#167)', () => {
 // ─── GET /stats — pipeline aggregate envelope (#567 #588) ───────────
 
 describe('GET /api/deals/stats — aggregate envelope (#567 #588)', () => {
+  test('passes the selected creation-date range to the aggregate query', async () => {
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/deals/stats?from=2026-10-15&to=2026-10-20T23:59:59.999Z');
+    expect(res.status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].where.createdAt).toEqual({
+      gte: new Date('2026-10-15'),
+      lte: new Date('2026-10-20T23:59:59.999Z'),
+    });
+  });
+
   test('returns full additive envelope with byStage + closed counts', async () => {
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     prisma.deal.findMany.mockResolvedValue([
@@ -624,15 +709,80 @@ describe('GET /api/deals/stats — aggregate envelope (#567 #588)', () => {
     expect(res.body.wonValue).toBe(10000);
     expect(res.body.lostCount).toBe(1);
     expect(res.body.lostValue).toBe(2000);
-    // expectedValue = 1000*0.1 + 5000*0.7 + 10000*1.0 + 2000*0 = 13600
-    expect(res.body.expectedValue).toBe(13600);
+    // Expected Revenue includes only the open lead and proposal deals.
+    expect(res.body.expectedValue).toBe(3600);
     // closedThisMonth = won + lost rows with createdAt >= monthStart → 2
     expect(res.body.closedThisMonth).toBe(2);
     // byStage groups all four stages
     expect(res.body.byStage).toHaveLength(4);
-    const wonGroup = res.body.byStage.find((s) => s.stage === 'won');
+    const wonGroup = res.body.byStage.find((s) => s.stage === 'closed-won');
     expect(wonGroup.count).toBe(1);
     expect(wonGroup.value).toBe(10000);
+  });
+
+  test('excludes closed-won deals from expected revenue', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'closed-won', amount: 10000, createdAt: new Date('2025-01-01') },
+      { id: 2, stage: 'proposal-sent', amount: 1000, createdAt: new Date('2025-01-01') },
+    ]);
+    const res = await request(makeApp()).get('/api/deals/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.wonValue).toBe(10000);
+    expect(res.body.expectedValue).toBe(700);
+  });
+
+  test('uses saved probability for open negotiation and custom stages', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'negotiation', amount: 10000, probability: 80, createdAt: new Date('2025-01-01') },
+      { id: 2, stage: 'qualified', amount: 2000, probability: 50, createdAt: new Date('2025-01-01') },
+      { id: 3, stage: 'proposal-sent', amount: 5000, probability: 0, createdAt: new Date('2025-01-01') },
+      { id: 4, stage: 'closed-won', amount: 3000, probability: 100, createdAt: new Date('2025-01-01') },
+    ]);
+    const res = await request(makeApp()).get('/api/deals/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.expectedValue).toBe(9000);
+    expect(res.body.wonValue).toBe(3000);
+    expect(res.body.byStage.find((stage) => stage.stage === 'negotiation').expectedValue).toBe(8000);
+    expect(res.body.byStage.find((stage) => stage.stage === 'closed-won').expectedValue).toBe(0);
+  });
+
+  test('converts each deal into the reporting currency before adding revenue', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+    prisma.currency.findMany.mockResolvedValue([
+      { code: 'USD', exchangeRate: 1 },
+      { code: 'INR', exchangeRate: 80 },
+    ]);
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'closed-won', amount: 100, currency: 'USD', probability: 100, createdAt: new Date('2025-01-01') },
+      { id: 2, stage: 'negotiation', amount: 4000, currency: 'INR', probability: 50, createdAt: new Date('2025-01-01') },
+      { id: 3, stage: 'proposal-sent', amount: 50, currency: 'USD', probability: 60, createdAt: new Date('2025-01-01') },
+    ]);
+    const res = await request(makeApp()).get('/api/deals/stats?currency=INR');
+    expect(res.status).toBe(200);
+    expect(res.body.currency).toBe('INR');
+    expect(res.body.totalValue).toBe(16000);
+    expect(res.body.wonValue).toBe(8000);
+    expect(res.body.expectedValue).toBe(4400);
+    expect(res.body.byStage.reduce((sum, stage) => sum + stage.value, 0)).toBe(res.body.totalValue);
+    expect(res.body.byStage.reduce((sum, stage) => sum + stage.expectedValue, 0)).toBe(res.body.expectedValue);
+    expect(res.body.fx.missingRateCount).toBe(0);
+  });
+
+  test('marks money totals unavailable when a needed exchange rate is missing', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD', exchangeRate: 1 }]);
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 1, stage: 'closed-won', amount: 100, currency: 'USD', createdAt: new Date('2025-01-01') },
+      { id: 2, stage: 'negotiation', amount: 1000, currency: 'EUR', probability: 50, createdAt: new Date('2025-01-01') },
+    ]);
+    const res = await request(makeApp()).get('/api/deals/stats?currency=USD');
+    expect(res.status).toBe(200);
+    expect(res.body.fx.missingRateCount).toBe(1);
+    expect(res.body.totalValue).toBeNull();
+    expect(res.body.avgDealSize).toBeNull();
+    expect(res.body.wonValue).toBe(100);
+    expect(res.body.expectedValue).toBeNull();
+    expect(res.body.byStage.find((stage) => stage.stage === 'negotiation').value).toBeNull();
+    expect(res.body.byStage.find((stage) => stage.stage === 'negotiation').expectedValue).toBeNull();
   });
 
   test('USER role: stats are scoped to caller (#588 own-deals)', async () => {

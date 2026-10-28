@@ -1,0 +1,34 @@
+/* The shared Signatures page is also used by wellness. Keep this layout fix
+   limited to the generic CRM surface requested here. */
+body[data-vertical="generic"] .signatures-page .signatures-requests-card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+body[data-vertical="generic"] .signatures-page .signatures-requests-card::before {
+  display: none;
+}
+
+body[data-vertical="generic"] .signatures-page .signatures-empty-state,
+body[data-vertical="generic"] .signatures-page .top-scroll-sync__bottom {
+  height: 320px;
+  box-sizing: border-box;
+}
+
+body[data-vertical="generic"] .signatures-page .top-scroll-sync__bottom {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .signatures-page .signatures-requests-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #17191f;
+  box-shadow: 0 1px 0 var(--border-color);
+}
+
+[data-theme="light"] body[data-vertical="generic"] .signatures-page .signatures-requests-table thead th {
+  background: #f8f9fb;
+}

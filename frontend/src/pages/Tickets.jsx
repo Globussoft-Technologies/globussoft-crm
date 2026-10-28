@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
-import { Ticket, Plus, Trash2, AlertTriangle } from 'lucide-react';
+import { Ticket, Plus, Trash2, AlertTriangle, X } from 'lucide-react';
+import './Tickets.css';
 
 const PRIORITY_CONFIG = {
   Urgent:  { color: '#ef4444', bg: 'rgba(239,68,68,0.08)' },
@@ -48,6 +49,7 @@ export default function Tickets() {
   const [totalTickets, setTotalTickets] = useState(0);
   const [openCount, setOpenCount] = useState(0);
   const [urgentCount, setUrgentCount] = useState(0);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   const loadData = useCallback(async (targetPage = 1, targetPageSize = pageSize) => {
     try {
@@ -74,6 +76,19 @@ export default function Tickets() {
 
   useEffect(() => { loadData(page, pageSize); }, [page, pageSize, loadData]);
 
+  useEffect(() => {
+    if (!isCreateModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const mainContent = document.querySelector('.app-main > main');
+    const previousMainOverflow = mainContent?.style.overflow;
+    document.body.style.overflow = 'hidden';
+    if (mainContent) mainContent.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (mainContent) mainContent.style.overflow = previousMainOverflow;
+    };
+  }, [isCreateModalOpen]);
+
   const createTicket = async (e) => {
     e.preventDefault();
     try {
@@ -87,6 +102,7 @@ export default function Tickets() {
       }
       await fetchApi('/api/tickets', { method: 'POST', body: JSON.stringify(payload) });
       setForm(EMPTY_FORM);
+      setIsCreateModalOpen(false);
       if (page === 1) {
         await loadData(1);
       } else {
@@ -151,13 +167,22 @@ export default function Tickets() {
 
   return (
     <div className="tickets-page" style={{ padding: '2rem', minHeight: '100%', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Ticket size={26} color="var(--accent-color)" /> Support Tickets
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Track and resolve customer support requests.
-        </p>
+      <header className="tickets-page-header" style={{ marginBottom: '2rem' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <Ticket size={26} color="var(--accent-color)" /> Support Tickets
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Track and resolve customer support requests.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary tickets-create-button"
+          onClick={() => setIsCreateModalOpen(true)}
+        >
+          <Plus size={17} /> Create Ticket
+        </button>
       </header>
 
       {/* Stats bar */}
@@ -187,13 +212,24 @@ export default function Tickets() {
         </div>
       )}
 
-      <div className="tickets-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem', alignItems: 'start' }}>
-
-        {/* Create Ticket Panel */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Create Ticket
-          </h3>
+      {isCreateModalOpen && (
+        <div className="tickets-modal-backdrop" role="presentation" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setIsCreateModalOpen(false);
+        }}>
+          <div className="card tickets-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-ticket-title">
+            <div className="tickets-modal-header">
+              <h2 id="create-ticket-title">
+                <Plus size={20} color="var(--accent-color)" /> Create Ticket
+              </h2>
+              <button
+                type="button"
+                className="tickets-modal-close"
+                aria-label="Close create ticket dialog"
+                onClick={() => setIsCreateModalOpen(false)}
+              >
+                <X size={20} />
+              </button>
+            </div>
           <form onSubmit={createTicket} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Subject</label>
@@ -243,7 +279,11 @@ export default function Tickets() {
               Submit Ticket
             </button>
           </form>
+          </div>
         </div>
+      )}
+
+      <div className="tickets-grid" style={{ display: 'block' }}>
 
         {/* Tickets Table */}
         <div className="card" style={{ padding: '2rem', overflow: 'hidden' }}>
@@ -258,9 +298,18 @@ export default function Tickets() {
               No tickets found. Create one to get started.
             </p>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <div className="tickets-table-scroll" style={{ overflowX: 'auto' }}>
               {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
-              <table className="stable-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+              <table className="stable-table tickets-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <colgroup>
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '25%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '12%' }} />
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                     {['ID', 'Subject', 'Status', 'Priority', 'Assignee', 'Created', 'Actions'].map(h => (
@@ -278,7 +327,7 @@ export default function Tickets() {
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>#{ticket.id}</td>
-                      <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{ticket.subject}</td>
+                      <td title={ticket.subject} style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{ticket.subject}</td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <select
                           value={ticket.status}

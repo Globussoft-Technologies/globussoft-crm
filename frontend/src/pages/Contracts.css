@@ -1,0 +1,310 @@
+.contracts-page {
+  container-type: inline-size;
+}
+
+.contracts-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.contracts-create-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Keep the compact summary controls in one row. Their typography, padding,
+   icon size, and spacing scale continuously with the available page width. */
+.contracts-stats {
+  flex-wrap: nowrap !important;
+  gap: clamp(0.35rem, 0.75vw, 0.75rem) !important;
+  overflow: hidden;
+}
+
+.contracts-stats > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: clamp(0.28rem, 0.4vw, 0.4rem) clamp(0.55rem, 1vw, 1rem) !important;
+  font-size: clamp(0.65rem, 0.8vw, 0.8rem) !important;
+  gap: clamp(0.2rem, 0.3vw, 0.3rem) !important;
+  white-space: nowrap;
+}
+
+.contracts-stats > span svg {
+  width: clamp(11px, 1vw, 14px) !important;
+  height: clamp(11px, 1vw, 14px) !important;
+  flex-shrink: 0;
+}
+
+.contracts-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1rem;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(3px);
+}
+
+.contracts-create-modal {
+  box-sizing: border-box;
+  width: min(100%, 620px);
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden;
+  overscroll-behavior: auto;
+  margin: 1rem auto;
+  padding: 1.25rem !important;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+}
+
+.contracts-create-modal form {
+  max-height: none;
+  overflow: hidden;
+}
+
+.contracts-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.contracts-modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.contracts-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.contracts-modal-close:hover {
+  background: var(--subtle-bg-2);
+  color: var(--text-primary);
+}
+
+.contracts-grid {
+  grid-template-columns: clamp(260px, 27%, 310px) minmax(0, 1fr) !important;
+  gap: 1rem !important;
+}
+
+.contracts-grid > .card,
+.contracts-date-fields > div {
+  min-width: 0;
+}
+
+.contracts-page .contracts-grid > .card {
+  padding: 1rem !important;
+}
+
+.contracts-grid > .card > h3 {
+  font-size: 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+.contracts-form {
+  gap: 0.8rem !important;
+}
+
+.contracts-form label {
+  font-size: 0.72rem !important;
+  margin-bottom: 0.3rem !important;
+}
+
+.contracts-form :is(input, select, textarea) {
+  min-width: 0;
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 0.35rem 0.55rem !important;
+  font-size: 0.75rem !important;
+  box-sizing: border-box;
+}
+
+.contracts-form textarea.input-field {
+  height: 58px;
+  min-height: 58px;
+  resize: vertical;
+}
+
+body[data-vertical="generic"] .app-main > main.generic-page-content > .contracts-page .contracts-grid .contracts-form .input-field {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0.35rem 0.55rem !important;
+  font-size: 0.72rem !important;
+}
+
+body[data-vertical="generic"] .app-main > main.generic-page-content > .contracts-page .contracts-grid .contracts-form textarea.input-field {
+  height: 58px !important;
+  min-height: 58px !important;
+}
+
+.contracts-date-fields {
+  gap: 0.5rem !important;
+}
+
+.contracts-form > button {
+  padding: 0.7rem !important;
+  font-size: 0.75rem !important;
+}
+
+.contracts-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  max-width: 100%;
+}
+
+.contracts-table-scroll {
+  min-width: 0;
+  width: 100%;
+  overflow-x: auto;
+}
+
+/* Keep the generic CRM Contracts panel at a stable height. Additional rows
+   scroll inside the data viewport while the heading and pagination stay put. */
+body[data-vertical="generic"] .contracts-page .contracts-table-scroll {
+  height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .contracts-page .contracts-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #17191f;
+  box-shadow: 0 1px 0 var(--border-color);
+}
+
+[data-theme="light"] body[data-vertical="generic"] .contracts-page .contracts-table thead th {
+  background: #f8f9fb;
+}
+
+@container (max-width: 1250px) {
+  .contracts-table-scroll {
+    overflow-x: clip;
+  }
+
+  .contracts-page .contracts-grid > .card {
+    padding: 0.75rem !important;
+  }
+
+  .contracts-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .contracts-table col:nth-child(1) { width: 18%; }
+  .contracts-table col:nth-child(2) { width: 12%; }
+  .contracts-table col:nth-child(3) { width: 16%; }
+  .contracts-table col:nth-child(4) { width: 13%; }
+  .contracts-table col:nth-child(5) { width: 9%; }
+  .contracts-table col:nth-child(6) { width: 10%; }
+  .contracts-table col:nth-child(7) { width: 10%; }
+  .contracts-table col:nth-child(8) { width: 12%; }
+
+  .contracts-table :is(th, td),
+  body[data-vertical="generic"] main.generic-page-content .contracts-page table.contracts-table :is(th, td) {
+    padding: 0.45rem 0.2rem !important;
+    font-size: 0.64rem !important;
+    line-height: 1.25;
+  }
+
+  .contracts-table td:nth-child(-n + 3) {
+    overflow-wrap: anywhere;
+  }
+
+  .contracts-table td:nth-child(n + 4) {
+    white-space: nowrap;
+  }
+
+  .contracts-table td:nth-child(6),
+  .contracts-table td:nth-child(7),
+  body[data-vertical="generic"] main.generic-page-content .contracts-page table.contracts-table td:nth-child(6),
+  body[data-vertical="generic"] main.generic-page-content .contracts-page table.contracts-table td:nth-child(7) {
+    font-size: 0.6rem !important;
+  }
+
+  .contracts-table td:nth-child(5) span {
+    padding: 0.1rem 0.3rem !important;
+    font-size: 0.6rem !important;
+  }
+
+  .contracts-row-actions {
+    gap: 0.125rem !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .contracts-row-actions button,
+  body[data-vertical="generic"] .app-main > main.generic-page-content > .contracts-page .contracts-grid .contracts-table .contracts-row-actions button.btn-secondary {
+    width: 21px !important;
+    min-width: 21px !important;
+    height: 24px;
+    padding: 0 !important;
+    justify-content: center;
+    flex: 0 0 21px !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main.generic-page-content > .contracts-page .contracts-grid .contracts-table .contracts-row-actions button > svg {
+    width: 12px !important;
+    height: 12px !important;
+  }
+
+  .contracts-action-label {
+    display: none;
+  }
+}
+
+@container (max-width: 850px) {
+  .contracts-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .contracts-form-card {
+    max-width: 360px;
+  }
+}
+
+@media (max-width: 768px) {
+  .contracts-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .contracts-create-button {
+    justify-content: center;
+  }
+}
+
+@container (max-width: 700px) {
+  .contracts-table-scroll {
+    overflow-x: auto;
+  }
+
+  .contracts-table {
+    min-width: 700px;
+  }
+}

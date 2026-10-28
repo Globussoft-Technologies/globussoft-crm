@@ -260,8 +260,8 @@ test.describe("Travel trips API — participants", () => {
     expect(csv.status()).toBe(200);
     expect(csv.headers()["content-type"]).toMatch(/text\/csv/);
     expect(csv.headers()["content-disposition"]).toContain("travel-participants-template.csv");
-    expect((await csv.text()).replace(/^\uFEFF/, "").trim()).toContain(
-      "fullName,parentName,parentPhone,parentEmail,applicationStatus",
+    expect((await csv.text()).replace(/^\uFEFF/, "").trim()).toBe(
+      "fullName,parentName,parentPhone,parentEmail",
     );
 
     const xlsx = await get(request, token, `/api/travel/trips/${tripId}/participants/import-template?format=xlsx`);

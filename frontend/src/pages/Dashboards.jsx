@@ -146,12 +146,12 @@ function RevenueTrendChart({ data }) {
 }
 
 function LeadsSourceChart({ data }) {
-  const rows = Array.isArray(data) ? data : [];
+  const rows = (Array.isArray(data) ? data : []).map((row) => ({
+    ...row,
+    source: String(row?.source || '').trim() || 'Unknown',
+    count: Math.max(0, Number(row?.count) || 0),
+  }));
   const total = rows.reduce((sum, row) => sum + Number(row?.count || 0), 0);
-  const pieLabel = ({ name, percent = 0 }) => {
-    if (percent < 0.06) return '';
-    return `${truncateLeadSourceLabel(name)} ${Math.round(percent * 100)}%`;
-  };
   return (
     <div style={{ padding: '0.75rem', height: '100%' }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -166,7 +166,10 @@ function LeadsSourceChart({ data }) {
             outerRadius="72%"
             paddingAngle={rows.length > 1 ? 2 : 0}
             labelLine={false}
-            label={pieLabel}
+            // Put source labels and percentages in one legend instead of
+            // drawing long text around slices where the responsive widget
+            // can clip or overlap it.
+            label={false}
           >
             {rows.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
           </Pie>
@@ -175,12 +178,12 @@ function LeadsSourceChart({ data }) {
             layout="vertical"
             align="right"
             verticalAlign="middle"
-            wrapperStyle={{ fontSize: 11, paddingLeft: 12 }}
-            formatter={(value, _entry, index) => {
-              const row = rows[index] || null;
+            wrapperStyle={{ fontSize: 11, paddingLeft: 12, maxWidth: '42%', overflow: 'hidden' }}
+            formatter={(value) => {
+              const row = rows.find((item) => item.source === String(value)) || null;
               const count = Number(row?.count || 0);
               const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-              return `${truncateLeadSourceLabel(value, 22)}${total > 0 ? ` (${pct}%)` : ''}`;
+              return `${truncateLeadSourceLabel(value, 18)}${total > 0 ? ` (${pct}%)` : ''}`;
             }}
           />
         </PieChart>

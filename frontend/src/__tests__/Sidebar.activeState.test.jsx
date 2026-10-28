@@ -46,6 +46,9 @@ function renderSidebarAt(path, role = 'MANAGER', vertical = 'generic') {
       </AuthContext.Provider>
     </MemoryRouter>,
   );
+  document.querySelectorAll('.generic-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
+    button.click();
+  });
 }
 
 async function findLinkByLabel(label) {
@@ -58,6 +61,14 @@ beforeEach(() => {
 });
 
 describe('Sidebar active-state - #631', () => {
+  it('carries a dashboard date range into Deals and Reports navigation', async () => {
+    renderSidebarAt('/dashboard?from=2026-10-15&to=2026-10-20');
+    const deals = await findLinkByLabel('Deals');
+    const reports = await findLinkByLabel('Reports');
+    expect(deals.getAttribute('href')).toBe('/pipeline?from=2026-10-15&to=2026-10-20');
+    expect(reports.getAttribute('href')).toBe('/reports?from=2026-10-15&to=2026-10-20');
+  });
+
   it('marks Deal Insights nav link as active when on /deal-insights', async () => {
     renderSidebarAt('/deal-insights');
     await waitFor(() => expect(fetchApi).toHaveBeenCalled());

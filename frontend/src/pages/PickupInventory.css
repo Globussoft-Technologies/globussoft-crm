@@ -128,7 +128,7 @@
   box-shadow: 0 3px 8px rgba(5, 150, 105, 0.12);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .pickup-inventory-action {
     width: 32px;
     padding: 0;

@@ -16,6 +16,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { probeMicrophone } from '../utils/callified';
 import CallifiedManualCallPanel from './CallifiedManualCallPanel';
+import './CallifiedCallDialog.css';
 
 /**
  * "Call Customer" dialog — pick AI or human, then place the call.
@@ -48,6 +49,7 @@ export default function CallifiedCallDialog({
   onClose,
   onCalled,
   allowedModes = { ai: true, manual: true },
+  historyHref = '/wellness/call-history',
 }) {
   const notify = useNotify();
   const placingRef = useRef(false);
@@ -215,6 +217,7 @@ export default function CallifiedCallDialog({
   // ModalShell.jsx portals.
   return createPortal(
     <div
+      className="callified-dialog-overlay"
       role="dialog"
       aria-modal="true"
       aria-label={`Call ${displayName}`}
@@ -224,40 +227,12 @@ export default function CallifiedCallDialog({
         // click on the backdrop.
         if (e.target === e.currentTarget && !manualCall) onClose();
       }}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.65)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1002,
-        padding: '1rem',
-      }}
     >
       <div
-        className="glass"
+        className="callified-dialog-panel"
         onClick={(e) => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: 480,
-          maxHeight: '90vh',
-          overflowY: 'auto',
-          borderRadius: 12,
-          padding: '1.5rem',
-        }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            gap: '1rem',
-            marginBottom: '0.75rem',
-          }}
-        >
+        <div className="callified-dialog-header">
           <div style={{ minWidth: 0 }}>
             <h3
               style={{
@@ -293,12 +268,7 @@ export default function CallifiedCallDialog({
             onClick={onClose}
             aria-label="Close"
             data-testid="callified-call-dialog-close"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-secondary)',
-            }}
+            className="callified-dialog-close"
           >
             <X size={20} />
           </button>
@@ -319,18 +289,34 @@ export default function CallifiedCallDialog({
             Loading campaigns…
           </div>
         ) : loadError ? (
-          <div style={{ ...loaderRow, color: '#ef4444' }} role="alert">
-            <AlertCircle size={18} /> {loadError}
+          <div className="callified-dialog-notice callified-dialog-notice--danger" role="alert">
+            <span className="callified-dialog-notice-icon" aria-hidden="true">
+              <AlertCircle size={18} />
+            </span>
+            <span className="callified-dialog-notice-content">
+              <strong>Unable to connect to Callified</strong>
+              <span>{loadError}</span>
+            </span>
           </div>
         ) : !phoneValid ? (
-          <div style={{ ...loaderRow, color: '#f59e0b' }} role="alert" data-testid="callified-call-dialog-no-phone">
-            <AlertCircle size={18} />
-            This customer has no valid phone number on file, so they cannot be called.
+          <div className="callified-dialog-notice callified-dialog-notice--warning" role="alert" data-testid="callified-call-dialog-no-phone">
+            <span className="callified-dialog-notice-icon" aria-hidden="true">
+              <AlertCircle size={18} />
+            </span>
+            <span className="callified-dialog-notice-content">
+              <strong>Phone number unavailable</strong>
+              <span>This customer has no valid phone number on file, so they cannot be called.</span>
+            </span>
           </div>
         ) : campaigns.length === 0 ? (
-          <div style={{ ...loaderRow, color: 'var(--text-secondary)' }}>
-            <AlertCircle size={18} />
-            No Callified campaigns found. Create one in Callified before placing calls.
+          <div className="callified-dialog-notice callified-dialog-notice--info">
+            <span className="callified-dialog-notice-icon" aria-hidden="true">
+              <AlertCircle size={18} />
+            </span>
+            <span className="callified-dialog-notice-content">
+              <strong>No Callified campaigns found</strong>
+              <span>Create a campaign in Callified before placing calls.</span>
+            </span>
           </div>
         ) : (
           <>
@@ -413,18 +399,7 @@ export default function CallifiedCallDialog({
               <div
                 role="status"
                 data-testid="callified-call-dialog-result"
-                style={{
-                  padding: '0.75rem 0.9rem',
-                  borderRadius: 8,
-                  marginTop: '0.9rem',
-                  fontSize: '0.85rem',
-                  display: 'flex',
-                  gap: '0.5rem',
-                  alignItems: 'flex-start',
-                  background: result.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                  border: `1px solid ${result.ok ? '#10b981' : '#ef4444'}`,
-                  color: result.ok ? '#10b981' : '#ef4444',
-                }}
+                className={`callified-dialog-result callified-dialog-result--${result.ok ? 'success' : 'danger'}`}
               >
                 {result.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
                 <span>
@@ -442,18 +417,11 @@ export default function CallifiedCallDialog({
             Hidden mid-manual-call: navigating away unmounts the live panel,
             whose cleanup hangs up — a one-click accidental hang-up. */}
         <div
-          style={{
-            display: 'flex',
-            justifyContent: manualCall ? 'flex-end' : 'space-between',
-            alignItems: 'center',
-            gap: '0.75rem',
-            marginTop: '1.1rem',
-            flexWrap: 'wrap',
-          }}
+          className={`callified-dialog-footer${manualCall ? ' callified-dialog-footer--end' : ''}`}
         >
           {!manualCall && (
             <Link
-              to="/wellness/call-history"
+              to={historyHref}
               onClick={onClose}
               data-testid="callified-call-dialog-history-link"
               style={{

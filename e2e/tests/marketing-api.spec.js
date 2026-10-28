@@ -566,3 +566,21 @@ test.describe('Marketing API — auth', () => {
     expect([401, 403]).toContain(res.status());
   });
 });
+
+test.describe('Marketing API - Generic sequence ordering', () => {
+  test('PUT /campaigns/reorder validates the sequence channel', async ({ request }) => {
+    const res = await authPut(request, '/api/marketing/campaigns/reorder', {
+      channel: 'PUSH',
+      orderedIds: [1, 2],
+    });
+    expect(res.status()).toBe(400);
+    expect(await res.json()).toMatchObject({ code: 'INVALID_CHANNEL' });
+  });
+
+  test('PUT /campaigns/reorder without token returns an auth error', async ({ request }) => {
+    const res = await request.put(`${BASE_URL}/api/marketing/campaigns/reorder`, {
+      data: { channel: 'EMAIL', orderedIds: [1, 2] },
+    });
+    expect([401, 403]).toContain(res.status());
+  });
+});

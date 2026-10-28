@@ -2,9 +2,9 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'r
 import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Mail, Phone, MessageSquare, StickyNote, CheckSquare,
-  Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronLeft, ChevronRight,
+  Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap,
-  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search,
+  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -14,7 +14,7 @@ import { AuthContext } from '../appContexts';
 import { usePermissions } from '../hooks/usePermissions';
 import { PROFILE_TABS, SOCIAL_NETWORKS, buildOverviewSections, normalizeSocialUrl } from '../components/contact/contactProfileConfig';
 import CustomizeFieldsDrawer, { ALL_OVERVIEW_FIELDS, DEFAULT_VISIBLE_FIELD_KEYS, normalizeVisibleKeys } from '../components/contact/CustomizeFieldsDrawer';
-import { assignOwner, fetchActivities, fetchStaff, patchContact, postActivity } from '../components/contact/contactActions';
+import { assignOwner, fetchActivities, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
 import { InlineField, Stars, Modal } from '../components/contact/ProfileWidgets';
 import {
   ActivityModal, CallModal, DealModal, EmailModal, MeetingModal, SmsModal, TaskModal, WhatsappModal,
@@ -26,6 +26,7 @@ import ContactDetailsDrawer, { GENERIC_TAG_COLORS, dedupeTags, fallbackTagColor,
 import CallifiedCallDialog from '../components/CallifiedCallDialog';
 import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 import Contacts from './Contacts';
+import Leads from './Leads';
 import '../components/contact/ContactProfile.css';
 import RichTextNotePreview from '../components/contact/RichTextNotePreview';
 
@@ -33,39 +34,93 @@ const EDITABLE_TYPES = new Set(['text', 'email', 'phone', 'url', 'number', 'date
 
 const PIPELINE_SEGS = [
   {
+    id: 'new',
     title: 'New',
     options: [
-      { label: 'New', backend: 'Lead', negative: false },
+      { id: 'new', label: 'New', backend: 'Lead', negative: false },
     ],
   },
   {
+    id: 'contacted',
     title: 'Contacted',
     options: [
-      { label: 'Contacted', backend: 'Prospect', negative: false },
+      { id: 'contacted', label: 'Contacted', backend: 'Prospect', negative: false },
     ],
   },
   {
+    id: 'interested-unqualified',
     title: 'Interested / Unqualified',
     options: [
-      { label: 'Interested', backend: 'Prospect', negative: false },
-      { label: 'Unqualified', backend: 'Junk', negative: true },
+      { id: 'interested', label: 'Interested', backend: 'Prospect', negative: false },
+      { id: 'unqualified', label: 'Unqualified', backend: 'Junk', negative: true },
     ],
   },
   {
+    id: 'qualified-lost',
     title: 'Qualified / Lost',
     options: [
-      { label: 'Qualified', backend: 'Customer', negative: false },
-      { label: 'Lost', backend: 'Churned', negative: true },
+      { id: 'qualified', label: 'Qualified', backend: 'Customer', negative: false },
+      { id: 'lost', label: 'Lost', backend: 'Churned', negative: true },
     ],
   },
   {
+    id: 'won-churned',
     title: 'Won / Churned',
     options: [
-      { label: 'Won', backend: 'Customer', negative: false },
-      { label: 'Churned', backend: 'Churned', negative: true },
+      { id: 'won', label: 'Won', backend: 'Customer', negative: false },
+      { id: 'churned', label: 'Churned', backend: 'Churned', negative: true },
     ],
   },
 ];
+
+const GENERIC_LIFECYCLE_SETTING_KEY = 'generic.contactLifecycleStages';
+const GENERIC_LIFECYCLE_DRAFT_PREFIX = 'crm:generic-lifecycle-draft:v1';
+const cloneLifecycleSegments = (segments) => segments.map((segment) => ({
+  ...segment,
+  options: segment.options.map((option) => ({ ...option })),
+}));
+
+const readLifecycleDraft = (storageKey) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (!Array.isArray(parsed) || !parsed.length) return null;
+    const draft = parsed.map((segment) => ({
+      id: String(segment?.id || ''),
+      title: String(segment?.title ?? ''),
+      options: (Array.isArray(segment?.options) ? segment.options : []).map((option, optionIndex) => ({
+        id: String(option?.id || ''),
+        label: String(option?.label ?? ''),
+        backend: ['Lead', 'Prospect', 'Customer', 'Junk', 'Churned'].includes(option?.backend)
+          ? option.backend
+          : 'Lead',
+        negative: optionIndex > 0 || Boolean(option?.negative),
+      })).filter((option) => option.id),
+    })).filter((segment) => segment.id && segment.options.length);
+    return draft.length ? draft : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const normalizeLifecycleSegments = (raw) => {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed) || !parsed.length) return cloneLifecycleSegments(PIPELINE_SEGS);
+    const normalized = parsed.map((segment) => ({
+      id: String(segment.id || ''),
+      title: String(segment.title || '').trim(),
+      options: (Array.isArray(segment.options) ? segment.options : []).map((option, optionIndex) => ({
+        id: String(option.id || ''),
+        label: String(option.label || '').trim(),
+        backend: option.status || option.backend,
+        negative: optionIndex > 0 || Boolean(option.negative),
+      })),
+    })).filter((segment) => segment.id && segment.title && segment.options.length);
+    return normalized.length ? normalized : cloneLifecycleSegments(PIPELINE_SEGS);
+  } catch (_error) {
+    return cloneLifecycleSegments(PIPELINE_SEGS);
+  }
+};
 
 const WELLNESS_PIPELINE_SEGS = [
   { title: 'New', options: [{ label: 'New', backend: 'Lead', negative: false }] },
@@ -90,6 +145,19 @@ const segOption = (label, segments = PIPELINE_SEGS) => {
     if (found) return found;
   }
   return null;
+};
+
+const segOptionById = (id, segments = PIPELINE_SEGS) => {
+  for (const seg of segments) {
+    const found = seg.options.find((option) => option.id === id);
+    if (found) return found;
+  }
+  return null;
+};
+
+const segmentDisplayTitle = (segment) => {
+  if (!Array.isArray(segment?.options) || segment.options.length < 2) return segment?.title || '';
+  return segment.options.map((option) => option.label).filter(Boolean).join(' / ');
 };
 
 const segIndexOf = (label, segments = PIPELINE_SEGS) => segments.findIndex((seg) => seg.options.some((o) => o.label === label));
@@ -223,7 +291,15 @@ export default function ContactDetail() {
   const canAssignOwner = permissionsReady &&
     (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const isGeneric = !isWellness && !isTravel;
-  const lifecycleSegments = isWellness ? WELLNESS_PIPELINE_SEGS : isTravel ? TRAVEL_PIPELINE_SEGS : PIPELINE_SEGS;
+  const showGenericLeadsBackdrop = isGeneric && location.pathname.startsWith('/leads/');
+  const lifecycleDraftStorageKey = `${GENERIC_LIFECYCLE_DRAFT_PREFIX}:${tenant?.id || user?.tenantId || 'generic'}:${user?.id || user?.userId || 'current'}`;
+  const [genericLifecycleSegments, setGenericLifecycleSegments] = useState(() => cloneLifecycleSegments(PIPELINE_SEGS));
+  const [lifecycleDraft, setLifecycleDraft] = useState(() => cloneLifecycleSegments(PIPELINE_SEGS));
+  const [lifecycleDraftReady, setLifecycleDraftReady] = useState(false);
+  const skipLifecycleDraftPersistRef = useRef(false);
+  const lifecycleStageListRef = useRef(null);
+  const pendingLifecycleStageIdRef = useRef(null);
+  const lifecycleSegments = isWellness ? WELLNESS_PIPELINE_SEGS : isTravel ? TRAVEL_PIPELINE_SEGS : genericLifecycleSegments;
   const defaultListPath = location.pathname.startsWith('/leads/') ? '/leads' : '/contacts';
   const requestedBackTo = location.state?.returnTo || location.state?.backTo;
   const closePath = typeof requestedBackTo === 'string'
@@ -249,8 +325,10 @@ export default function ContactDetail() {
   const [noteDraft, setNoteDraft] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteComposerOpen, setNoteComposerOpen] = useState(false);
+  const [editingNote, setEditingNote] = useState(null);
   const [noteFormatting, setNoteFormatting] = useState({});
   const noteComposerRef = useRef(null);
+  const genericNoteInitialValueRef = useRef('');
   const [tagDraft, setTagDraft] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -267,17 +345,24 @@ export default function ContactDetail() {
   const [modal, setModal] = useState(null);
   const [genericCallLead, setGenericCallLead] = useState(null);
   const [activitiesRefreshKey, setActivitiesRefreshKey] = useState(0);
+  const [conversationRefreshKey, setConversationRefreshKey] = useState(0);
   const [wellnessCallTarget, setWellnessCallTarget] = useState(null);
   const [activityPreset, setActivityPreset] = useState('Note');
   const [dealModal, setDealModal] = useState({ open: false, deal: null });
   const [stageSel, setStageSel] = useState(null);
   const [openSeg, setOpenSeg] = useState(null);
+  const [pendingStageTransition, setPendingStageTransition] = useState(null);
   const [prefs, setPrefs] = useState(loadPrefs);
   const [isCustomizing, setIsCustomizing] = useState(false);
   const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
   const [overviewEditOpen, setOverviewEditOpen] = useState(false);
   const [overviewEdit, setOverviewEdit] = useState({ lifecycle: 'Lead', status: 'Lead' });
   const [overviewEditSaving, setOverviewEditSaving] = useState(false);
+  const [defaultStagesWarningOpen, setDefaultStagesWarningOpen] = useState(false);
+  const [lifecycleHistoryOpen, setLifecycleHistoryOpen] = useState(false);
+  const [lifecycleHistoryLoading, setLifecycleHistoryLoading] = useState(false);
+  const [lifecycleHistory, setLifecycleHistory] = useState([]);
+  const [lifecycleStageSelections, setLifecycleStageSelections] = useState({});
   const [moreOpen, setMoreOpen] = useState(false);
   const [seqPicker, setSeqPicker] = useState(false);
   const [sequences, setSequences] = useState([]);
@@ -289,6 +374,86 @@ export default function ContactDetail() {
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
   const contactTagManagerEnabled = isGeneric;
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    setLifecycleDraftReady(false);
+    fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_LIFECYCLE_SETTING_KEY)}`, { silent: true })
+      .then((setting) => {
+        if (!active) return;
+        const next = normalizeLifecycleSegments(setting?.value);
+        setGenericLifecycleSegments(next);
+        skipLifecycleDraftPersistRef.current = true;
+        setLifecycleDraft(readLifecycleDraft(lifecycleDraftStorageKey) || cloneLifecycleSegments(next));
+        setLifecycleDraftReady(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        const stored = readLifecycleDraft(lifecycleDraftStorageKey);
+        if (stored) {
+          skipLifecycleDraftPersistRef.current = true;
+          setLifecycleDraft(stored);
+        }
+        setLifecycleDraftReady(true);
+      });
+    return () => { active = false; };
+  }, [isGeneric, lifecycleDraftStorageKey]);
+
+  useEffect(() => {
+    if (!isGeneric || !lifecycleDraftReady) return;
+    if (skipLifecycleDraftPersistRef.current) {
+      skipLifecycleDraftPersistRef.current = false;
+      return;
+    }
+    try {
+      localStorage.setItem(lifecycleDraftStorageKey, JSON.stringify(lifecycleDraft));
+    } catch (_error) {
+      // A storage quota/privacy failure must not interrupt lifecycle editing.
+    }
+  }, [isGeneric, lifecycleDraft, lifecycleDraftReady, lifecycleDraftStorageKey]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi(`/api/contacts/${id}/lifecycle-history`, { silent: true })
+      .then((result) => {
+        if (!active) return;
+        const history = Array.isArray(result?.data) ? result.data : [];
+        const selections = {};
+        for (const entry of history) {
+          const stageKey = entry?.to?.stageKey;
+          const segment = genericLifecycleSegments.find((item) => item.options.some((option) => option.id === stageKey));
+          if (segment && !selections[segment.id]) selections[segment.id] = stageKey;
+        }
+        setLifecycleHistory(history);
+        setLifecycleStageSelections(selections);
+      })
+      .catch(() => {
+        if (active) setLifecycleStageSelections({});
+      });
+    return () => { active = false; };
+  }, [genericLifecycleSegments, id, isGeneric]);
+
+  useEffect(() => {
+    if (!isGeneric || !contact?.lifecycleStageKey) return;
+    const segment = genericLifecycleSegments.find((item) => item.options.some((option) => option.id === contact.lifecycleStageKey));
+    if (!segment) return;
+    setLifecycleStageSelections((current) => ({ ...current, [segment.id]: contact.lifecycleStageKey }));
+  }, [contact?.lifecycleStageKey, genericLifecycleSegments, isGeneric]);
+
+  useEffect(() => {
+    const pendingId = pendingLifecycleStageIdRef.current;
+    if (!pendingId || !overviewEditOpen) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const row = Array.from(lifecycleStageListRef.current?.querySelectorAll('[data-stage-id]') || [])
+        .find((element) => element.dataset.stageId === pendingId);
+      row?.scrollIntoView?.({ behavior: 'smooth', block: 'end' });
+      row?.querySelector('input')?.focus();
+      pendingLifecycleStageIdRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [lifecycleDraft, overviewEditOpen]);
 
   useEffect(() => {
     if (!contactTagManagerEnabled) return undefined;
@@ -333,6 +498,8 @@ export default function ContactDetail() {
     setTagDraft('');
     setMoreOpen(false);
     setSeqPicker(false);
+    setLifecycleHistoryOpen(false);
+    setLifecycleHistory([]);
     setConfirmAction(null);
     loadContact();
   }, [id, location.search, loadContact]);
@@ -354,7 +521,9 @@ export default function ContactDetail() {
     if (!overviewContactId) return undefined;
     let cancelled = false;
     setOverviewActivitiesLoading(true);
-    fetchActivities(overviewContactId, overviewActivityPage, 5)
+    const overviewPage = isGeneric ? 1 : overviewActivityPage;
+    const overviewLimit = isGeneric ? 100 : 5;
+    fetchActivities(overviewContactId, overviewPage, overviewLimit)
       .then((result) => {
         if (cancelled) return;
         setOverviewActivities(result.data);
@@ -369,7 +538,7 @@ export default function ContactDetail() {
       })
       .finally(() => { if (!cancelled) setOverviewActivitiesLoading(false); });
     return () => { cancelled = true; };
-  }, [overviewContactId, overviewActivityRefreshId, overviewActivityPage]);
+  }, [overviewContactId, overviewActivityRefreshId, overviewActivityPage, isGeneric]);
 
   useEffect(() => {
     if (!moreOpen) return undefined;
@@ -390,11 +559,29 @@ export default function ContactDetail() {
   }, []);
 
   useEffect(() => {
-    if (modal || dealModal.open || seqPicker || confirmAction || isCustomizing) return undefined;
+    if (modal || dealModal.open || seqPicker || confirmAction || isCustomizing || overviewEditOpen || lifecycleHistoryOpen) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') navigate(closePath); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [modal, dealModal.open, seqPicker, confirmAction, isCustomizing, navigate, closePath]);
+  }, [modal, dealModal.open, seqPicker, confirmAction, isCustomizing, overviewEditOpen, lifecycleHistoryOpen, navigate, closePath]);
+
+  useEffect(() => {
+    if (!overviewEditOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape' && !overviewEditSaving && !defaultStagesWarningOpen) setOverviewEditOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [defaultStagesWarningOpen, overviewEditOpen, overviewEditSaving]);
+
+  useEffect(() => {
+    if (!lifecycleHistoryOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setLifecycleHistoryOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lifecycleHistoryOpen]);
 
   useEffect(() => {
     if (!isCustomizing) { setFieldPickerOpen(false); }
@@ -420,17 +607,32 @@ export default function ContactDetail() {
     }
   }, [contact, id, loadContact, notify]);
 
-  const changeStatus = async (status) => {
-    if (!contact || contact.status === status) return;
-    const prev = contact.status;
-    setContact({ ...contact, status });
+  const changeStatus = async (status, lifecycleStageKey, lifecycleTransitionReason = '') => {
+    if (!contact || (isGeneric ? contact.lifecycleStageKey === lifecycleStageKey : contact.status === status)) return;
+    const prev = contact;
+    const prevLifecycleStageSelections = lifecycleStageSelections;
+    const selectedSegment = isGeneric
+      ? lifecycleSegments.find((segment) => segment.options.some((option) => option.id === lifecycleStageKey))
+      : null;
+    const payload = {
+      ...(!isGeneric ? { status } : {}),
+      ...(isGeneric && lifecycleStageKey ? { lifecycleStageKey } : {}),
+      ...(isGeneric && lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
+    };
+    setContact({ ...contact, ...payload });
+    if (selectedSegment) {
+      setLifecycleStageSelections((current) => ({ ...current, [selectedSegment.id]: lifecycleStageKey }));
+    }
     try {
-      const updated = await patchContact(id, { status });
+      const updated = await patchContact(id, payload);
       setContact(updated);
       await loadContact();
-      notify.success(`Status changed to ${status}.`);
+      notify.success(isGeneric
+        ? `Lifecycle stage changed to ${selectedSegment?.options.find((option) => option.id === lifecycleStageKey)?.label || lifecycleStageKey}.`
+        : `Status changed to ${status}.`);
     } catch {
-      setContact({ ...contact, status: prev });
+      setContact(prev);
+      setLifecycleStageSelections(prevLifecycleStageSelections);
       notify.error('Could not update status.');
     }
   };
@@ -450,11 +652,34 @@ export default function ContactDetail() {
     }
   };
 
-  const pickStage = (label) => {
+  const pickStage = (stageIdOrLabel) => {
     setOpenSeg(null);
-    setStageSel(label);
-    const opt = segOption(label, lifecycleSegments);
-    if (opt) changeStatus(opt.backend);
+    const opt = segOptionById(stageIdOrLabel, lifecycleSegments) || segOption(stageIdOrLabel, lifecycleSegments);
+    if (!opt) return;
+    const nextStageIndex = lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === opt.id));
+    const currentStageIndex = contact?.lifecycleStageKey
+      ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
+      : segIndexOf(defaultStageFor(contact?.status, isWellness, isTravel), lifecycleSegments);
+    const isBackward = isGeneric && currentStageIndex >= 0 && nextStageIndex >= 0 && nextStageIndex < currentStageIndex;
+    if (isGeneric && (opt.negative || isBackward)) {
+      setPendingStageTransition({ option: opt, isBackward, reason: '' });
+      return;
+    }
+    setStageSel(opt.id || opt.label);
+    changeStatus(opt.backend, opt.id);
+  };
+
+  const confirmStageTransition = async () => {
+    const pending = pendingStageTransition;
+    if (!pending) return;
+    const reason = pending.reason.trim();
+    if (pending.option.negative && !reason) {
+      notify.error('Enter a reason for selecting this negative stage.');
+      return;
+    }
+    setPendingStageTransition(null);
+    setStageSel(pending.option.id || pending.option.label);
+    await changeStatus(pending.option.backend, pending.option.id, reason);
   };
 
   const persistPrefs = (next) => {
@@ -487,17 +712,21 @@ export default function ContactDetail() {
 
   const goNeighbor = async (dir) => {
     try {
-      const list = await fetchApi('/api/contacts?limit=200', { silent: true });
+      const list = await fetchApi(
+        showGenericLeadsBackdrop ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
+        { silent: true },
+      );
       const arr = Array.isArray(list) ? list : list?.data || [];
       const idx = arr.findIndex((c) => String(c.id) === String(id));
       const target = idx >= 0 ? arr[idx + dir] : null;
       if (target) {
-        navigate(`/contacts/${target.id}`, { state: location.state });
+        navigate(`${showGenericLeadsBackdrop ? '/leads' : '/contacts'}/${target.id}`, { state: location.state });
       } else {
-        notify.info(dir > 0 ? 'This is the last contact.' : 'This is the first contact.');
+        const recordLabel = showGenericLeadsBackdrop ? 'lead' : 'contact';
+        notify.info(dir > 0 ? `This is the last ${recordLabel}.` : `This is the first ${recordLabel}.`);
       }
     } catch {
-      notify.error('Could not load contacts.');
+      notify.error(`Could not load ${showGenericLeadsBackdrop ? 'leads' : 'contacts'}.`);
     }
   };
 
@@ -565,7 +794,9 @@ export default function ContactDetail() {
     setConfirmAction({
       key: 'delete',
       title: `Delete ${contact.name}?`,
-      body: 'The contact will be moved to trash. You can restore it later from the contacts list.',
+      body: isGeneric
+        ? 'Do you want to delete this contact permanently? This action cannot be undone.'
+        : 'The contact will be moved to trash. You can restore it later from the contacts list.',
       confirmLabel: 'Delete',
     });
   };
@@ -654,7 +885,11 @@ export default function ContactDetail() {
       setGenericCallLead(contact);
       return;
     }
-    if ((kind === 'call' || kind === 'sms' || kind === 'whatsapp') && !contact.phone) {
+    if (kind === 'whatsapp' && !(contact.whatsappPhone || contact.phone)) {
+      notify.error('Add a WhatsApp or phone number first.');
+      return;
+    }
+    if ((kind === 'call' || kind === 'sms') && !contact.phone) {
       notify.error('Add a phone number first.');
       return;
     }
@@ -725,9 +960,42 @@ export default function ContactDetail() {
   };
 
   const focusNotes = () => {
+    setEditingNote(null);
+    if (isGeneric) {
+      genericNoteInitialValueRef.current = noteDraft;
+      setNoteComposerOpen(true);
+      return;
+    }
     setNoteComposerOpen(true);
-    setTimeout(() => noteComposerRef.current?.focus(), 60);
+    setTimeout(() => {
+      if (!noteComposerRef.current) return;
+      noteComposerRef.current.textContent = '';
+      noteComposerRef.current.focus();
+    }, 60);
   };
+
+  const openNoteEditor = (activity) => {
+    setEditingNote(activity);
+    if (isGeneric) {
+      genericNoteInitialValueRef.current = activity.description || '';
+      setNoteComposerOpen(true);
+      return;
+    }
+    setNoteComposerOpen(true);
+    setTimeout(() => {
+      if (!noteComposerRef.current) return;
+      noteComposerRef.current.textContent = activity.description || '';
+      noteComposerRef.current.focus();
+    }, 60);
+  };
+
+  useEffect(() => {
+    if (!isGeneric || !noteComposerOpen || !noteComposerRef.current) return;
+    // Initialise immediately after the generic composer mounts. The previous
+    // delayed callback could clear characters entered during its 60 ms window.
+    noteComposerRef.current.textContent = genericNoteInitialValueRef.current;
+    noteComposerRef.current.focus();
+  }, [isGeneric, noteComposerOpen, editingNote]);
 
   const saveContactDetailsField = useCallback(async (field, value) => {
     if (field.custom) {
@@ -787,15 +1055,29 @@ export default function ContactDetail() {
     if (!body) return;
     setNoteSaving(true);
     try {
-      const activity = await postActivity(id, { type: 'Note', description: body });
-      notify.success('Note added.');
+      const activity = editingNote
+        ? await patchActivity(id, editingNote.id, { description: body })
+        : await postActivity(id, { type: 'Note', description: body });
+      notify.success(editingNote ? 'Note updated.' : 'Note added.');
       setNoteComposerOpen(false);
+      setEditingNote(null);
+      setNoteDraft('');
       if (noteComposerRef.current) noteComposerRef.current.innerHTML = '';
-      setContact((current) => current
-        ? { ...current, activities: [activity, ...(current.activities || [])] }
-        : current);
+      setOverviewActivities((current) => editingNote
+        ? current.map((item) => (item.id === activity.id ? activity : item))
+        : [activity, ...current]);
+      setContact((current) => {
+        if (!current) return current;
+        const activities = current.activities || [];
+        return {
+          ...current,
+          activities: editingNote
+            ? activities.map((item) => (item.id === activity.id ? activity : item))
+            : [activity, ...activities],
+        };
+      });
     } catch {
-      notify.error('Failed to add note.');
+      notify.error(editingNote ? 'Failed to update note.' : 'Failed to add note.');
     } finally {
       setNoteSaving(false);
     }
@@ -897,7 +1179,7 @@ export default function ContactDetail() {
 
   const shell = (content) => (
     <div className="cp-slide-root">
-      <div className="cp-slide-bg"><Contacts /></div>
+      <div className="cp-slide-bg">{showGenericLeadsBackdrop ? <Leads /> : <Contacts />}</div>
       <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
       <aside className="cp-slide-panel" aria-label="Contact profile">
         <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
@@ -935,13 +1217,19 @@ export default function ContactDetail() {
       await patchField({ [network.key]: clean });
     } catch { /* patchField surfaces the error toast */ }
   };
-  const activeStage = stageSel && (isTravel || segOption(stageSel, lifecycleSegments)?.backend === contact.status)
-    ? stageSel
-    : defaultStageFor(contact.status, isWellness, isTravel);
+  const selectedStageOption = (stageSel && (segOptionById(stageSel, lifecycleSegments) || segOption(stageSel, lifecycleSegments)))
+    || (isGeneric && contact.lifecycleStageKey ? segOptionById(contact.lifecycleStageKey, lifecycleSegments) : null);
+  const fallbackStageOption = lifecycleSegments.flatMap((segment) => segment.options).find((option) => option.backend === contact.status);
+  const activeStage = selectedStageOption && (isGeneric || isTravel || selectedStageOption.backend === contact.status)
+    ? selectedStageOption.label
+    : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
   const activeSeg = segIndexOf(activeStage, lifecycleSegments);
   const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
-
   const openOverviewEditor = () => {
+    if (isGeneric) {
+      setOverviewEditOpen(true);
+      return;
+    }
     const lifecycle = isWellness
       ? defaultStageFor(contact.status, true)
       : isTravel
@@ -958,6 +1246,38 @@ export default function ContactDetail() {
   const saveOverviewEditor = async () => {
     setOverviewEditSaving(true);
     try {
+      if (isGeneric) {
+        const cleaned = lifecycleDraft.map((segment) => ({
+          id: segment.id,
+          title: segmentDisplayTitle(segment).trim(),
+          options: segment.options.map((option, optionIndex) => ({
+            id: option.id,
+            label: option.label.trim(),
+            status: option.backend,
+            negative: optionIndex > 0 || Boolean(option.negative),
+          })),
+        }));
+        if (cleaned.some((segment) => !segment.title || segment.options.some((option) => !option.label))) {
+          notify.error('Every stage and condition needs a name.');
+          return;
+        }
+        await fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_LIFECYCLE_SETTING_KEY)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ value: JSON.stringify(cleaned), category: 'lifecycle' }),
+        });
+        const next = normalizeLifecycleSegments(cleaned);
+        setGenericLifecycleSegments(next);
+        try {
+          localStorage.removeItem(lifecycleDraftStorageKey);
+        } catch (_error) {
+          // Saving succeeded; unavailable browser storage needs no recovery.
+        }
+        skipLifecycleDraftPersistRef.current = true;
+        setLifecycleDraft(cloneLifecycleSegments(next));
+        setOverviewEditOpen(false);
+        notify.success('Lifecycle stages updated everywhere they are linked.');
+        return;
+      }
       const updated = await patchContact(id, { status: overviewEdit.status });
       setContact(updated);
       await loadContact();
@@ -971,6 +1291,73 @@ export default function ContactDetail() {
     } finally {
       setOverviewEditSaving(false);
     }
+  };
+
+  const addLifecycleStage = () => {
+    const idValue = `custom-${Date.now()}-${lifecycleDraft.length}`;
+    pendingLifecycleStageIdRef.current = idValue;
+    setLifecycleDraft((current) => [...current, {
+      id: idValue,
+      title: 'New stage',
+      options: [{ id: idValue, label: 'New stage', backend: 'Lead', negative: false }],
+    }]);
+  };
+
+  const showDefaultLifecycleStages = () => {
+    setDefaultStagesWarningOpen(true);
+  };
+
+  const applyDefaultLifecycleStages = () => {
+    pendingLifecycleStageIdRef.current = PIPELINE_SEGS[0].id;
+    setLifecycleDraft(cloneLifecycleSegments(PIPELINE_SEGS));
+    setDefaultStagesWarningOpen(false);
+  };
+
+  const addLifecycleCondition = (stageIndex) => {
+    setLifecycleDraft((current) => current.map((segment, index) => {
+      if (index !== stageIndex || segment.options.length >= 2) return segment;
+      const conditionId = `${segment.id}-condition-${Date.now()}`;
+      return {
+        ...segment,
+        options: [...segment.options, {
+          id: conditionId,
+          label: 'New condition',
+          backend: 'Lead',
+          negative: true,
+        }],
+      };
+    }));
+  };
+
+  const removeLifecycleCondition = (stageIndex, conditionIndex) => {
+    setLifecycleDraft((current) => current.map((segment, index) => {
+      if (index !== stageIndex || segment.options.length <= 1) return segment;
+      const options = segment.options.filter((_, optionIndex) => optionIndex !== conditionIndex);
+      return { ...segment, title: options[0]?.label || segment.title, options };
+    }));
+  };
+
+  const openLifecycleHistory = async () => {
+    setLifecycleHistoryOpen(true);
+    setLifecycleHistoryLoading(true);
+    try {
+      const result = await fetchApi(`/api/contacts/${id}/lifecycle-history`, { silent: true });
+      setLifecycleHistory(Array.isArray(result?.data) ? result.data : []);
+    } catch {
+      setLifecycleHistory([]);
+      notify.error('Could not load lifecycle history.');
+    } finally {
+      setLifecycleHistoryLoading(false);
+    }
+  };
+
+  const moveLifecycleStageTo = (index, target) => {
+    setLifecycleDraft((current) => {
+      if (!Number.isInteger(target) || target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   };
 
   const renderField = (f) => {
@@ -1209,32 +1596,46 @@ export default function ContactDetail() {
         <div className="cp-header-right">
           <button type="button" className="cp-action-btn" onClick={() => setActiveTab('details')}><FileText size={13} /> See all details</button>
           <div className="cp-nav-btns">
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title="Previous contact" aria-label="Previous contact"><ChevronLeft size={14} /></button>
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title="Next contact" aria-label="Next contact"><ChevronRight size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`} aria-label={`Previous ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title={`Next ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`} aria-label={`Next ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`}><ChevronRight size={14} /></button>
           </div>
         </div>
       </div>
 
       <div className="cp-actions-bar">
-        {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
-        {!isTravel && (isGeneric || contact.phone) && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
-        <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
-        <button type="button" className="cp-action-btn" onClick={() => (isWellness ? navigate('/tasks') : openAction('task'))}><CheckSquare size={13} /> Task</button>
-        <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
-        <button type="button" className="cp-action-btn" onClick={() => { setActivityPreset('Call'); setModal('activity'); }}><TrendingUp size={13} /> {isWellness ? 'Care activities' : 'Sales activities'}</button>
-        <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
-        {!isWellness && !isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('sms')}><MessageSquare size={13} /> SMS</button>}
+        {isGeneric ? (
+          <>
+            {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
+            {contact.phone && <button type="button" className="cp-action-btn" onClick={() => openAction('sms')}><MessageSquare size={13} /> SMS</button>}
+            {(contact.whatsappPhone || contact.phone) && <button type="button" className="cp-action-btn" onClick={() => openAction('whatsapp')}><MessageSquare size={13} /> WhatsApp</button>}
+            <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>
+            <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
+            <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
+            <button type="button" className="cp-action-btn" onClick={() => openAction('task')}><CheckSquare size={13} /> Task</button>
+            <button type="button" className="cp-action-btn" onClick={openContactDeal}><Plus size={13} /> Add deal</button>
+          </>
+        ) : (
+          <>
+            {contact.email && <button type="button" className="cp-action-btn" onClick={() => openAction('email')}><Mail size={13} /> Email</button>}
+            {!isTravel && contact.phone && <button type="button" className="cp-action-btn" onClick={openContactCall}><Phone size={13} /> Call</button>}
+            <button type="button" className="cp-action-btn" onClick={focusNotes}><StickyNote size={13} /> Note</button>
+            <button type="button" className="cp-action-btn" onClick={() => (isWellness ? navigate('/tasks') : openAction('task'))}><CheckSquare size={13} /> Task</button>
+            <button type="button" className="cp-action-btn" onClick={() => openAction('meeting')}><Video size={13} /> Meeting</button>
+            <button type="button" className="cp-action-btn" onClick={() => { setActivityPreset('Call'); setModal('activity'); }}><TrendingUp size={13} /> {isWellness ? 'Care activities' : 'Sales activities'}</button>
+            <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
+          </>
+        )}
         <div className="cp-more-wrap" ref={moreRef}>
           <button type="button" className="cp-action-btn" onClick={() => setMoreOpen((o) => !o)} title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen}><MoreHorizontal size={13} /></button>
           {moreOpen && (
             <div className="cp-more-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>
-              <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>
+              {!isGeneric && <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>}
+              {!isGeneric && <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>}
               <button type="button" role="menuitem" className="neg" onClick={askDelete}><Trash2 size={13} /> Delete</button>
-              {!isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
+              {!isGeneric && !isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
               <button type="button" role="menuitem" onClick={handleExport}><Download size={13} /> Export</button>
-              {!isTravel && <button type="button" role="menuitem" onClick={handleUnsubscribe}><BellOff size={13} /> Unsubscribe</button>}
-              <button type="button" role="menuitem" className="neg" onClick={askForget}><UserX size={13} /> Forget</button>
+              {!isGeneric && !isTravel && <button type="button" role="menuitem" onClick={handleUnsubscribe}><BellOff size={13} /> Unsubscribe</button>}
+              {!isGeneric && <button type="button" role="menuitem" className="neg" onClick={askForget}><UserX size={13} /> Forget</button>}
             </div>
           )}
         </div>
@@ -1280,6 +1681,72 @@ export default function ContactDetail() {
                 </div>
               </div>
               {overviewEditOpen && (
+                isGeneric ? (
+                <div className="cp-overlay" onClick={() => { if (!overviewEditSaving) setOverviewEditOpen(false); }}>
+                  <div className="cp-modal cp-lifecycle-modal cp-stage-manager" role="dialog" aria-modal="true" aria-label="Manage lifecycle stages" onClick={(event) => event.stopPropagation()}>
+                    <div className="cp-stage-manager-head">
+                      <div className="cp-stage-manager-title">
+                        <span className="cp-stage-manager-title-icon" aria-hidden="true"><ListChecks size={18} /></span>
+                        <div><strong>Manage lifecycle stages</strong><p>Add stages or change their sequence. Updates apply anywhere this lifecycle is shown.</p></div>
+                      </div>
+                      <div className="cp-stage-manager-actions">
+                        <button type="button" className="cp-action-btn" onClick={showDefaultLifecycleStages}><ListChecks size={13} /> Default stages</button>
+                        <button type="button" className="cp-action-btn" onClick={addLifecycleStage}><Plus size={13} /> Add stage</button>
+                        <button type="button" className="cp-icon-btn" onClick={() => setOverviewEditOpen(false)} disabled={overviewEditSaving} aria-label="Close lifecycle stage editor"><X size={16} /></button>
+                      </div>
+                    </div>
+                    <div className="cp-stage-manager-list" ref={lifecycleStageListRef}>
+                      {lifecycleDraft.map((segment, index) => (
+                        <div className="cp-stage-manager-row" key={segment.id} data-stage-id={segment.id}>
+                          <div className="cp-stage-manager-order">
+                            <span className="cp-stage-manager-number" aria-hidden="true">{index + 1}</span>
+                            <div className="cp-stage-manager-move">
+                              <button type="button" className="cp-icon-btn" aria-label={`Move ${segment.title} up`} title="Move up" disabled={index === 0} onClick={() => moveLifecycleStageTo(index, index - 1)}><ChevronUp size={14} /></button>
+                              <button type="button" className="cp-icon-btn" aria-label={`Move ${segment.title} down`} title="Move down" disabled={index === lifecycleDraft.length - 1} onClick={() => moveLifecycleStageTo(index, index + 1)}><ChevronDown size={14} /></button>
+                            </div>
+                          </div>
+                          <div className="cp-stage-manager-fields">
+                            {segment.options.length === 1 && <label className="cp-stage-manager-field">
+                              <span>Stage name</span>
+                              <input
+                                className="cp-input"
+                                aria-label={`Stage ${index + 1} name`}
+                                value={segment.title}
+                                onChange={(event) => setLifecycleDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value, options: item.options.length === 1 ? [{ ...item.options[0], label: event.target.value }] : item.options } : item))}
+                              />
+                            </label>}
+                            {segment.options.map((option, optionIndex) => (
+                              <div className="cp-stage-manager-outcome" key={option.id}>
+                                {segment.options.length > 1 && <label className="cp-stage-manager-field"><span>Condition {optionIndex + 1}</span><input className="cp-input" aria-label={`${segment.title} condition ${optionIndex + 1}`} value={option.label} onChange={(event) => setLifecycleDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: item.options.map((value, valueIndex) => valueIndex === optionIndex ? { ...value, label: event.target.value } : value) } : item))} /></label>}
+                                <label className="cp-stage-manager-field">
+                                  <span>CRM status</span>
+                                  <select className="cp-input" aria-label={`${option.label} CRM status`} value={option.backend} onChange={(event) => setLifecycleDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, options: item.options.map((value, valueIndex) => valueIndex === optionIndex ? { ...value, backend: event.target.value, negative: valueIndex > 0 || ['Junk', 'Churned'].includes(event.target.value) } : value) } : item))}>
+                                    {['Lead', 'Prospect', 'Customer', 'Junk', 'Churned'].map((status) => <option key={status} value={status}>{status}</option>)}
+                                  </select>
+                                </label>
+                                {segment.options.length > 1 && (
+                                  <button type="button" className="cp-icon-btn cp-stage-manager-remove-condition" onClick={() => removeLifecycleCondition(index, optionIndex)} aria-label={`Remove condition ${optionIndex + 1} from ${segment.title}`} title="Remove condition"><X size={14} /></button>
+                                )}
+                              </div>
+                            ))}
+                            {segment.options.length < 2 && (
+                              <button type="button" className="cp-stage-manager-add-condition" onClick={() => addLifecycleCondition(index)}><Plus size={13} /> Add condition</button>
+                            )}
+                          </div>
+                          <button type="button" className="cp-icon-btn cp-stage-manager-delete" title="Delete stage" aria-label={`Delete ${segment.title}`} disabled={lifecycleDraft.length === 1} onClick={() => setLifecycleDraft((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="cp-stage-manager-footer">
+                      <span>{lifecycleDraft.length} {lifecycleDraft.length === 1 ? 'stage' : 'stages'} in this lifecycle</span>
+                      <div className="cp-btn-row">
+                        <button type="button" className="cp-action-btn" onClick={() => setOverviewEditOpen(false)} disabled={overviewEditSaving}>Cancel</button>
+                        <button type="button" className="cp-action-btn cp-action-primary" onClick={saveOverviewEditor} disabled={overviewEditSaving}>{overviewEditSaving ? 'Saving…' : 'Save stages'}</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                ) : (
                 <div className="cp-overview-editor" role="dialog" aria-label="Edit overview">
                   <label className="cp-form-row">
                     <span className="cp-form-label">Lifecycle stage</span>
@@ -1352,6 +1819,7 @@ export default function ContactDetail() {
                     <button type="button" className="cp-action-btn cp-action-primary" onClick={saveOverviewEditor} disabled={overviewEditSaving}>{overviewEditSaving ? 'Saving…' : 'Save'}</button>
                   </div>
                 </div>
+                )
               )}
               {isCustomizing ? (
                 <div className="cp-custom-box" aria-label="Lifecycle stage customization">
@@ -1362,44 +1830,59 @@ export default function ContactDetail() {
                   <div className="cp-custom-skel cp-custom-skel-bar" aria-hidden="true" />
                 </div>
               ) : prefs.showLifecycle ? (
-              <div className="cp-lifecycle-row">
+              <div className={`cp-lifecycle-row${isGeneric ? ' cp-lifecycle-row--generic' : ''}`}>
                 <div className="cp-lifecycle-left">
                   <div className="cp-lifecycle-label">
-                    <div className="cp-label">Lifecycle stage</div>
-                    <button type="button" className="cp-action-btn cp-lifecycle-edit" onClick={openOverviewEditor} aria-label="Edit lifecycle stage and status" title="Edit lifecycle stage and status"><Pencil size={13} /></button>
+                    <div className="cp-lifecycle-label-main">
+                      <div className="cp-label">Lifecycle stage</div>
+                      <button type="button" className="cp-action-btn cp-lifecycle-edit" onClick={openOverviewEditor} aria-label="Edit lifecycle stage and status" title="Edit lifecycle stage and status"><Pencil size={13} /></button>
+                    </div>
+                    {isGeneric && (
+                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
+                    )}
                   </div>
                   <div className="cp-lifecycle-current">{activeStage}</div>
                 </div>
                 <div className="cp-lifecycle-right">
-                  <div className="cp-label">Status</div>
+                  <div className="cp-lifecycle-status-head">
+                    <div className="cp-label">Status</div>
+                  </div>
                   <div className="cp-pipeline" role="group" aria-label="Lifecycle stage">
-                    {lifecycleSegments.map((seg, i) => (
-                      <div className="cp-chev-wrap" key={seg.title}>
+                    {lifecycleSegments.map((seg) => {
+                      const i = lifecycleSegments.indexOf(seg);
+                      const selectedSegmentOption = isGeneric
+                        ? seg.options.find((option) => option.id === lifecycleStageSelections[seg.id])
+                        : null;
+                      const displayTitle = selectedSegmentOption?.label || segmentDisplayTitle(seg);
+                      const selectedSegmentIsNegative = Boolean(selectedSegmentOption?.negative);
+                      return (
+                      <div className="cp-chev-wrap" key={seg.id || seg.title}>
                         {seg.options.length === 1 ? (
                           <button
                             type="button"
-                            title={`Move to ${seg.title}`}
-                            onClick={() => pickStage(seg.options[0].label)}
-                            className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}`}
-                          >{seg.title}</button>
+                            title={`Move to ${displayTitle}`}
+                            onClick={() => pickStage(seg.options[0].id || seg.options[0].label)}
+                            className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative ? ' lost' : ''}`}
+                          ><span className="cp-chev-label">{displayTitle}</span></button>
                         ) : (
                           <>
                             <button
                               type="button"
-                              onClick={() => setOpenSeg(openSeg === i ? null : i)}
-                              className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${i === activeSeg && activeNegative ? ' lost' : ''}`}
-                            >{seg.title} <ChevronDown size={12} /></button>
-                            {openSeg === i && (
+                              onClick={() => setOpenSeg(openSeg === seg.id ? null : seg.id)}
+                              className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative || (i === activeSeg && activeNegative) ? ' lost' : ''}`}
+                            ><span className="cp-chev-label">{displayTitle}</span> <ChevronDown size={12} /></button>
+                            {openSeg === seg.id && (
                               <div className="cp-chev-menu">
                                 {seg.options.map((o) => (
-                                  <button key={o.label} type="button" className={o.negative ? 'neg' : ''} onClick={() => pickStage(o.label)}>{o.label}</button>
+                                  <button key={o.id || o.label} type="button" className={o.negative ? 'neg' : ''} onClick={() => pickStage(o.id || o.label)}>{o.label}</button>
                                 ))}
                               </div>
                             )}
                           </>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1576,7 +2059,7 @@ export default function ContactDetail() {
                           <span className="cp-block-icon blue"><Zap size={16} /></span>
                           <div>
                             <p>{contact.name} is not part of any sales sequence.</p>
-                            <Link to="/sequences" className="cp-link-btn"><Plus size={12} /> Add to a sequence</Link>
+                            <Link to="/marketing?tab=campaigns" className="cp-link-btn"><Plus size={12} /> Add to a sequence</Link>
                           </div>
                         </div>
                       )}
@@ -1611,14 +2094,19 @@ export default function ContactDetail() {
                             {a.type}{a.description ? ' / ' : ''}
                             {a.description && isGeneric && ['Email', 'Note'].includes(a.type) ? <RichTextNotePreview value={a.description} /> : a.description || null}
                           </div>
-                          <div className="cp-timeline-meta"><Pencil size={11} /> {authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}</div>
+                          <div className="cp-timeline-meta">
+                            {isGeneric && a.type === 'Note' ? (
+                              <button type="button" className="cp-note-edit" onClick={() => openNoteEditor(a)} aria-label={`Edit note ${a.description || a.id}`} title="Edit note"><Pencil size={11} /></button>
+                            ) : <Pencil size={11} />}
+                            {authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}
+                          </div>
                         </div>
                       ))}
                       {!overviewActivitiesLoading && overviewNoteActivities.length === 0 && (
                         <div className="cp-empty">No activity yet.</div>
                       )}
                     </div>
-                    {overviewNoteActivities.length > 0 && overviewActivityTotal > 0 && (
+                    {!isGeneric && overviewNoteActivities.length > 0 && overviewActivityTotal > 0 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.65rem' }}>
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem' }}>
                           Showing {((overviewActivityPage - 1) * 5) + 1} - {Math.min(overviewActivityPage * 5, overviewActivityTotal)} of {overviewActivityTotal}
@@ -1635,11 +2123,11 @@ export default function ContactDetail() {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
-          {activeTab === 'conversations' && <ConversationsTab contact={contact} contactId={id} hideSms={isTravel || isWellness} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} lifecycleStageLabel={isGeneric ? activeStage : ''} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'conversations' && <ConversationsTab key={`conversation-${conversationRefreshKey}`} contact={contact} contactId={id} hideSms={isTravel || isWellness} showWhatsapp={isGeneric} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
-          {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
+          {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} isGeneric={!isWellness && !isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
           {activeTab === 'ai-insights' && <InsightsTab contactId={id} />}
           {activeTab === 'files' && <FilesTab contactId={id} />}
         </div>
@@ -1671,21 +2159,57 @@ export default function ContactDetail() {
         />
       )}
       {modal === 'sms' && <SmsModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
-      {modal === 'whatsapp' && <WhatsappModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
+      {modal === 'whatsapp' && <WhatsappModal contact={contact} onClose={() => setModal(null)} onDone={() => { setConversationRefreshKey((current) => current + 1); refresh(); }} />}
       {modal === 'task' && <TaskModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'meeting' && <MeetingModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'activity' && <ActivityModal contact={contact} presetType={activityPreset} onClose={() => setModal(null)} onDone={refresh} />}
+      {lifecycleHistoryOpen && (
+        <div className="cp-overlay" onClick={() => setLifecycleHistoryOpen(false)}>
+          <div className="cp-modal cp-lifecycle-history-modal" role="dialog" aria-modal="true" aria-label="Lifecycle history" onClick={(event) => event.stopPropagation()}>
+            <div className="cp-modal-head">
+              <div className="cp-lifecycle-history-title"><span><History size={17} /></span><div><h3>Lifecycle history</h3><p>Every recorded stage and status change for {contact.name}.</p></div></div>
+              <button type="button" className="cp-icon-btn" onClick={() => setLifecycleHistoryOpen(false)} aria-label="Close lifecycle history"><X size={16} /></button>
+            </div>
+            <div className="cp-modal-body cp-lifecycle-history-body">
+              {lifecycleHistoryLoading ? (
+                <div className="cp-lifecycle-history-empty">Loading history…</div>
+              ) : lifecycleHistory.length === 0 ? (
+                <div className="cp-lifecycle-history-empty"><History size={24} /><strong>No lifecycle changes yet</strong><span>Changes will appear here after a stage or status is updated.</span></div>
+              ) : (
+                <div className="cp-lifecycle-history-list">
+                  {lifecycleHistory.map((entry) => (
+                    <article className="cp-lifecycle-history-item" key={entry.id}>
+                      <span className="cp-lifecycle-history-dot" aria-hidden="true" />
+                      <div className="cp-lifecycle-history-meta">
+                        <strong>{entry.changedBy?.name || entry.changedBy?.email || 'System'}</strong>
+                        <time dateTime={entry.changedAt}>{formatDateTime(entry.changedAt)}</time>
+                      </div>
+                      <div className="cp-lifecycle-history-change">
+                        <div><span>From</span><strong>{entry.from?.stage || '(not set)'}</strong>{entry.from?.status && <small>CRM status: {entry.from.status}</small>}</div>
+                        <ArrowRight size={18} aria-hidden="true" />
+                        <div><span>To</span><strong>{entry.to?.stage || '(not set)'}</strong>{entry.to?.status && <small>CRM status: {entry.to.status}</small>}</div>
+                      </div>
+                      {entry.reason && <div className="cp-lifecycle-history-reason"><strong>Reason:</strong> {entry.reason}</div>}
+                      {entry.changedBy?.email && <div className="cp-lifecycle-history-email">{entry.changedBy.email}</div>}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {noteComposerOpen && (
-        <div className="cp-overlay cp-note-overlay" onClick={() => setNoteComposerOpen(false)} role="dialog" aria-modal="true" aria-label="Add note">
+        <div className="cp-overlay cp-note-overlay" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }} role="dialog" aria-modal="true" aria-label={editingNote ? 'Edit note' : 'Add note'}>
           <div className="cp-note-composer" onClick={(e) => e.stopPropagation()}>
             <div className="cp-modal-head">
-              <h3>Add note</h3>
-              <button type="button" className="cp-icon-btn" onClick={() => setNoteComposerOpen(false)} aria-label="Close"><X size={16} /></button>
+              <h3>{editingNote ? 'Edit note' : 'Add note'}</h3>
+              <button type="button" className="cp-icon-btn" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }} aria-label="Close"><X size={16} /></button>
             </div>
             <div className="cp-note-related">Contact: <strong>{contact.name}</strong></div>
             <div
               ref={noteComposerRef}
-              className="cp-note-editor"
+              className={`cp-note-editor${isGeneric ? ' cp-note-editor--generic' : ''}`}
               contentEditable
               suppressContentEditableWarning
               data-placeholder="Start typing your note..."
@@ -1705,7 +2229,7 @@ export default function ContactDetail() {
               <button type="button" className={noteFormatting.justifyCenter ? 'active' : ''} onClick={() => formatNote('justifyCenter')} aria-label="Align center" aria-pressed={Boolean(noteFormatting.justifyCenter)}>☰</button>
             </div>
             <div className="cp-btn-row">
-              <button type="button" className="cp-action-btn" onClick={() => setNoteComposerOpen(false)}>Cancel</button>
+              <button type="button" className="cp-action-btn" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }}>Cancel</button>
               <button type="button" className="cp-action-btn cp-action-primary" onClick={handleRichNoteSave} disabled={noteSaving}>{noteSaving ? 'Saving…' : 'Done'}</button>
             </div>
           </div>
@@ -1743,6 +2267,49 @@ export default function ContactDetail() {
           <div className="cp-btn-row">
             <button type="button" className="cp-action-btn" onClick={() => setConfirmAction(null)}>Cancel</button>
             <button type="button" className="cp-action-btn cp-action-primary" onClick={runConfirmAction}>{confirmAction.confirmLabel}</button>
+          </div>
+        </Modal>
+      )}
+      {defaultStagesWarningOpen && (
+        <Modal title="Reset to default stages?" onClose={() => setDefaultStagesWarningOpen(false)}>
+          <div className="cp-stage-reset-warning" role="alert">
+            This will replace the current lifecycle draft with the five default stages. Custom stages and unsaved stage changes will be removed.
+          </div>
+          <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0.75rem 0 1rem' }}>
+            The Overview will not change until you click Save stages.
+          </p>
+          <div className="cp-btn-row">
+            <button type="button" className="cp-action-btn" onClick={() => setDefaultStagesWarningOpen(false)}>Cancel</button>
+            <button type="button" className="cp-action-btn cp-action-primary" onClick={applyDefaultLifecycleStages}>Use default stages</button>
+          </div>
+        </Modal>
+      )}
+      {pendingStageTransition && (
+        <Modal title={pendingStageTransition.option.negative ? 'Reason required' : 'Go back to a previous stage?'} onClose={() => setPendingStageTransition(null)}>
+          <p style={{ fontSize: '0.85rem', margin: '0 0 1rem' }}>
+            {pendingStageTransition.isBackward
+              ? `Are you sure you want to move back to ${pendingStageTransition.option.label}?`
+              : `Tell us why ${pendingStageTransition.option.label} was selected.`}
+          </p>
+          {pendingStageTransition.option.negative && (
+            <label className="cp-form-row">
+              <span className="cp-form-label">Reason</span>
+              <textarea
+                className="cp-input"
+                rows={3}
+                autoFocus
+                value={pendingStageTransition.reason}
+                onChange={(event) => setPendingStageTransition((current) => ({ ...current, reason: event.target.value }))}
+                placeholder="Enter the reason for this negative stage"
+                aria-label="Negative stage reason"
+              />
+            </label>
+          )}
+          <div className="cp-btn-row">
+            <button type="button" className="cp-action-btn" onClick={() => setPendingStageTransition(null)}>Cancel</button>
+            <button type="button" className="cp-action-btn cp-action-primary" onClick={confirmStageTransition}>
+              {pendingStageTransition.isBackward ? 'Yes, go back' : 'Confirm stage'}
+            </button>
           </div>
         </Modal>
       )}

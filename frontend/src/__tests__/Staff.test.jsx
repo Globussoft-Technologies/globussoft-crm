@@ -209,6 +209,36 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(screen.queryByRole('menu', { name: 'Actions for Rishu Agarwal' })).not.toBeInTheDocument();
   });
 
+  it('opens the generic actions menu above a bottom row and below a top row', async () => {
+    const originalRect = Element.prototype.getBoundingClientRect;
+    const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this.getAttribute('role') === 'menu') return { width: 160, height: 220 };
+      if (this.dataset.testid === 'staff-action-more-2') {
+        return { top: window.innerHeight - 40, bottom: window.innerHeight - 16, left: 100 };
+      }
+      if (this.dataset.testid === 'staff-action-more-1') {
+        return { top: 20, bottom: 44, left: 100 };
+      }
+      return originalRect.call(this);
+    });
+
+    try {
+      renderStaff('ADMIN', {}, 'generic');
+      await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByTestId('staff-action-more-2'));
+      const bottomMenu = screen.getByRole('menu', { name: 'Actions for Dr. Harsh Kumar' });
+      expect(bottomMenu.style.top).toBe(`${window.innerHeight - 264}px`);
+      expect(screen.getByTestId('staff-action-delete-2')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('staff-action-more-1'));
+      const topMenu = screen.getByRole('menu', { name: 'Actions for Rishu Agarwal' });
+      expect(topMenu.style.top).toBe('48px');
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it('expands the visible slice and scrolls a highlighted row into view even near the bottom', async () => {
     const scrollSpy = vi.spyOn(window.Element.prototype, 'scrollIntoView').mockImplementation(() => {});
     const longStaffList = Array.from({ length: 20 }, (_, idx) => {
@@ -310,7 +340,7 @@ describe('<Staff /> — list rendering + stats bar', () => {
     expect(screen.getByText('aman@enhancedwellness.in')).toBeInTheDocument();
   });
 
-  it('scrolls the wellness staff list to reveal later rows', async () => {
+  it.each(['wellness', 'generic', 'travel'])('scrolls the %s staff list to reveal later rows', async (vertical) => {
     const rows = Array.from({ length: 20 }, (_, index) => ({
       id: index + 1,
       name: `Staff ${index + 1}`,
@@ -320,13 +350,14 @@ describe('<Staff /> — list rendering + stats bar', () => {
       createdAt: '2026-01-01T00:00:00Z',
       deactivatedAt: null,
     }));
-    renderStaff('ADMIN', {}, 'wellness', '/staff', rows);
+    renderStaff('ADMIN', {}, vertical, '/staff', rows);
 
     await waitFor(() => expect(screen.getByText('Staff 12')).toBeInTheDocument());
     expect(screen.queryByText('Staff 13')).not.toBeInTheDocument();
 
     const scrollContainer = screen.getByRole('table').parentElement;
     expect(scrollContainer).toHaveStyle({ overflowY: 'auto' });
+    expect(scrollContainer).toHaveStyle({ maxHeight: 'min(60dvh, 560px)' });
     Object.defineProperties(scrollContainer, {
       scrollTop: { configurable: true, value: 300 },
       scrollHeight: { configurable: true, value: 600 },

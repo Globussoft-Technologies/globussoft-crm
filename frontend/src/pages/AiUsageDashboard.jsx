@@ -47,7 +47,7 @@ export default function AiUsageDashboard() {
   const barColor = usagePercent >= 95 ? "#ef4444" : usagePercent >= 75 ? "#f59e0b" : "#10b981";
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(1rem, 3vw, 2rem)" }}>
+    <div style={{ width: "100%", minWidth: 0, boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "0.75rem" }}>
         <button
           type="button"

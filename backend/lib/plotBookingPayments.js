@@ -1,4 +1,6 @@
 const prisma = require('./prisma');
+const { syncPlotBookingInvoice } = require('./plotBookingInvoice');
+const { syncPlotCommission } = require('./genericPlotCommission');
 
 // Payment.metadata is a TEXT column. Extract exact JSON values in MySQL,
 // rather than matching an ID prefix (12 must never match 123).
@@ -33,7 +35,44 @@ async function reconcilePlotBookingPayment(payment) {
       where: { id: booking.id },
       data: { amountPaid, balance, paymentStatus: balance === 0 ? 'PAID' : 'PARTIAL' },
     });
-    return { ...updated, totalAmount: total, balance };
+    await syncPlotCommission(tx, payment, { ...booking, ...updated });
+    const installmentId = Number(metadata.installmentId);
+    if (Number.isInteger(installmentId) && installmentId > 0) {
+      const paymentStatus = String(payment.status || '').toUpperCase();
+      const installmentStatus = paymentStatus === 'SUCCESS'
+        ? 'PAID'
+        : paymentStatus === 'FAILED'
+          ? 'FAILED'
+          : paymentStatus === 'PROCESSING'
+            ? 'PROCESSING'
+            : paymentStatus === 'REFUNDED'
+              ? 'PLANNED'
+              : 'PAYMENT_INITIATED';
+      await tx.plotInstallment.updateMany({
+        where: { id: installmentId, tenantId: payment.tenantId, plotBookingId: booking.id, ...(paymentStatus === 'SUCCESS' ? {} : { paymentId: payment.id }), ...(['PROCESSING', 'FAILED', 'PENDING'].includes(paymentStatus) ? { status: { not: 'PAID' } } : {}) },
+        data: {
+          status: installmentStatus,
+          paymentId: paymentStatus === 'REFUNDED' ? null : payment.id,
+        },
+      });
+    }
+    const reconciled = {
+      ...booking,
+      ...updated,
+      totalAmount: total,
+      amountPaid,
+      balance,
+    };
+    await syncPlotBookingInvoice(tx, {
+      tenantId: payment.tenantId,
+      booking: reconciled,
+      paymentId: payment.id,
+      amountPaid: reconciled.amountPaid,
+      balance: reconciled.balance,
+      paymentMode: payment.gateway,
+      paidAt: payment.paidAt || new Date(),
+    });
+    return reconciled;
   });
 }
 

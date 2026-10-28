@@ -5,8 +5,9 @@ import {
   LineChart, Line, PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import {
-  Activity, AlertTriangle, BarChart3, CalendarCheck, GitBranch,
-  MapPin, Plus, RefreshCw, Save, Target, Trash2, TrendingUp, X,
+  BarChart3, Filter, GitBranch,
+  ChartBarBig, ChartColumn, ChartPie, ChartSpline, CircleDot,
+  Plus, RefreshCw, Save, Trash2, X,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
@@ -34,14 +35,32 @@ const TOOLTIP_STYLE = {
 // Tab order mirrors the lead lifecycle: what the team did → how good the
 // leads were → what still needs chasing → where they came from → where they
 // are → who we are meeting → who visited and didn't buy.
-const TABS = [
-  { key: 'productivity', label: 'Productivity', icon: Activity },
-  { key: 'quality', label: 'Lead Quality', icon: Target },
-  { key: 'followups', label: 'Follow-Ups', icon: AlertTriangle },
-  { key: 'sources', label: 'Source Analysis', icon: TrendingUp },
-  { key: 'funnel', label: 'Lead Funnel', icon: GitBranch },
-  { key: 'visits', label: 'Meetings & Visits', icon: CalendarCheck },
-  { key: 'notbooked', label: 'Visited · Not Booked', icon: MapPin },
+const OVERVIEW_METRICS = [
+  { value: 'leadsCreated', label: 'Current leads created', color: '#3b82f6' },
+  { value: 'bySource', label: 'Lead by source', color: '#a855f7' },
+  { value: 'byLifecycleStage', label: 'Lead by lifecycle stage', color: '#6366f1' },
+  { value: 'meetings', label: 'Meeting', color: '#f59e0b' },
+  { value: 'sms', label: 'SMS', color: '#14b8a6' },
+  { value: 'emails', label: 'Email', color: '#ec4899' },
+  { value: 'whatsapp', label: 'WhatsApp', color: '#10b981' },
+];
+
+const OVERVIEW_CHART_TYPES = [
+  { value: 'bar', label: 'Vertical bar chart', icon: ChartColumn },
+  { value: 'line', label: 'Line chart', icon: ChartSpline },
+  { value: 'horizontalBar', label: 'Horizontal bar chart', icon: ChartBarBig },
+  { value: 'pie', label: 'Pie chart', icon: ChartPie },
+  { value: 'donut', label: 'Donut chart', icon: CircleDot },
+];
+
+const OVERVIEW_RANGES = [
+  { value: 'all_time', label: 'All time' },
+  { value: 'last_7_days', label: 'Last 7 days' },
+  { value: 'last_30_days', label: 'Last 30 days' },
+  { value: 'last_90_days', label: 'Last 90 days' },
+  { value: 'this_month', label: 'This month' },
+  { value: 'this_year', label: 'This year' },
+  { value: 'custom', label: 'Custom range…' },
 ];
 
 const PERIODS = [
@@ -121,6 +140,12 @@ function Chart({ height = 300, children }) {
       </ResponsiveContainer>
     </div>
   );
+}
+
+function formatReportRangeDate(value) {
+  if (!value) return '—';
+  const dateOnly = String(value).slice(0, 10);
+  return formatDateMedium(`${dateOnly}T00:00:00`);
 }
 
 // Rows per page across every report table. Small on purpose: it keeps each
@@ -246,12 +271,15 @@ export default function LeadReports() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
 
-  const [tab, setTab] = useState('productivity');
+  const tab = 'overview';
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [overviewMetric, setOverviewMetric] = useState('leadsCreated');
+  const [overviewRange, setOverviewRange] = useState('last_30_days');
   const [period, setPeriod] = useState('daily');
   const [visitScope, setVisitScope] = useState('today');
   const [ownerId, setOwnerId] = useState('');
+  const [overviewRefresh, setOverviewRefresh] = useState(0);
 
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
@@ -264,11 +292,11 @@ export default function LeadReports() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [savingStages, setSavingStages] = useState(false);
 
-  const qs = useCallback((extra = {}) => {
+  const qs = useCallback((extra = {}, { includeOwner = true } = {}) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    if (ownerId) params.set('ownerId', ownerId);
+    if (includeOwner && ownerId) params.set('ownerId', ownerId);
     Object.entries(extra).forEach(([k, v]) => { if (v) params.set(k, v); });
     const s = params.toString();
     return s ? `?${s}` : '';
@@ -276,6 +304,7 @@ export default function LeadReports() {
 
   const endpoint = useMemo(() => {
     switch (tab) {
+      case 'overview': return `/api/lead-reports/overview${qs({ range: overviewRange }, { includeOwner: false })}`;
       case 'productivity': return `/api/lead-reports/productivity${qs({ period })}`;
       case 'quality': return `/api/lead-reports/lead-quality${qs()}`;
       case 'followups': return `/api/lead-reports/follow-up-tracking${qs()}`;
@@ -285,7 +314,7 @@ export default function LeadReports() {
       case 'notbooked': return `/api/lead-reports/visit-done-not-booked${qs()}`;
       default: return null;
     }
-  }, [tab, qs, period, visitScope]);
+  }, [tab, qs, period, visitScope, overviewRange]);
 
   // Cache is keyed by the full endpoint URL, not by tab: switching back to a
   // tab you've already viewed under the same filters renders instantly from
@@ -305,7 +334,7 @@ export default function LeadReports() {
       .then((res) => {
         if (cancelled) return;
         setData((prev) => ({ ...prev, [endpoint]: res }));
-        if (tab === 'productivity' && Array.isArray(res?.users)) setOwners(res.users);
+        if ((tab === 'overview' || tab === 'productivity') && Array.isArray(res?.users)) setOwners(res.users);
         setLoading(false);
       })
       .catch((err) => {
@@ -317,7 +346,23 @@ export default function LeadReports() {
     // `data` is deliberately not a dep — including it would re-run the fetch
     // on every cache write and loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpoint, tab]);
+  }, [endpoint, tab, overviewRefresh]);
+
+  // Lead data may be edited in another tab/window. Revalidate the Overview
+  // when this page regains focus and periodically while it remains open so
+  // every metric follows the current Leads-page data without a hard refresh.
+  useEffect(() => {
+    if (tab !== 'overview') return undefined;
+    const refresh = () => {
+      if (document.visibilityState !== 'hidden') setOverviewRefresh((value) => value + 1);
+    };
+    window.addEventListener('focus', refresh);
+    const intervalId = window.setInterval(refresh, 30000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.clearInterval(intervalId);
+    };
+  }, [tab]);
 
   // Stage config is only needed by the Funnel tab's builder.
   useEffect(() => {
@@ -369,12 +414,28 @@ export default function LeadReports() {
           <div style={{ minWidth: 0 }}>
             <h1 style={{ fontSize: '1.75rem', fontWeight: 700, margin: 0 }}>Lead Reports</h1>
             <p className="lead-reports-page__panel-sub">
-              Productivity, lead quality, follow-ups, sources, funnel stages, and visit outcomes.
+              Lead creation, lifecycle, meetings, and communication activity in one view.
             </p>
           </div>
         </div>
 
         <div className="lead-reports-page__filters">
+          {tab === 'overview' && (
+            <select
+              className="input-field"
+              aria-label="Overview date range"
+              value={overviewRange}
+              onChange={(e) => {
+                setOverviewRange(e.target.value);
+                if (e.target.value !== 'custom') {
+                  setFrom('');
+                  setTo('');
+                }
+              }}
+            >
+              {OVERVIEW_RANGES.map((range) => <option key={range.value} value={range.value}>{range.label}</option>)}
+            </select>
+          )}
           {tab === 'productivity' && (
             <select className="input-field" aria-label="Reporting period" value={period} onChange={(e) => setPeriod(e.target.value)}>
               {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -385,7 +446,7 @@ export default function LeadReports() {
               {VISIT_SCOPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
           )}
-          {owners.length > 0 && (
+          {tab !== 'overview' && owners.length > 0 && (
             <select className="input-field" aria-label="Owner filter" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
               <option value="">All staff</option>
               {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -396,7 +457,7 @@ export default function LeadReports() {
               an inverted range is unreachable from the UI (the backend still
               rejects one, for direct API callers). Double-clicking a day picks
               a single-day range, i.e. from === to. */}
-          <CalendarRangePicker
+          {(tab !== 'overview' || overviewRange === 'custom') && <CalendarRangePicker
             label="Date range"
             // Right-anchored: this pill is the last control in a right-aligned
             // toolbar, so a left-anchored popover runs off the viewport.
@@ -406,27 +467,9 @@ export default function LeadReports() {
               setFrom(next?.from || '');
               setTo(next?.to || '');
             }}
-          />
+          />}
         </div>
       </header>
-
-      <div className="lead-reports-page__tabs">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              aria-pressed={active}
-              className={`lead-reports-page__tab${active ? ' lead-reports-page__tab--active' : ''}`}
-            >
-              <Icon size={15} /> {t.label}
-            </button>
-          );
-        })}
-      </div>
 
       {loading && <p className="lead-reports-page__status">Loading report…</p>}
       {!loading && error && <p className="report-error-text" style={{ margin: 0 }}>{error}</p>}
@@ -438,6 +481,9 @@ export default function LeadReports() {
 
       {!loading && !error && current && (
         <>
+          {tab === 'overview' && (
+            <OverviewTab d={current} metric={overviewMetric} onMetricChange={setOverviewMetric} />
+          )}
           {tab === 'productivity' && <ProductivityTab d={current} period={period} />}
           {tab === 'quality' && <QualityTab d={current} />}
           {tab === 'followups' && <FollowUpsTab d={current} />}
@@ -468,6 +514,166 @@ export default function LeadReports() {
 }
 
 // ─── 5. Daily / Weekly / Monthly productivity ────────────────────────
+
+function OverviewTab({ d, metric, onMetricChange }) {
+  const [chartType, setChartType] = useState('bar');
+  const totals = d.totals || {};
+  const selected = OVERVIEW_METRICS.find((item) => item.value === metric) || OVERVIEW_METRICS[0];
+  const isBreakdown = metric === 'bySource' || metric === 'byLifecycleStage';
+  const isCommunication = ['sms', 'emails', 'whatsapp'].includes(metric);
+  const communicationTotalLabel = {
+    sms: 'SMS messages in selected range',
+    emails: 'Email messages in selected range',
+    whatsapp: 'WhatsApp messages in selected range',
+  }[metric];
+  const supportsCircularCharts = isBreakdown;
+  const availableChartTypes = supportsCircularCharts
+    ? OVERVIEW_CHART_TYPES
+    : OVERVIEW_CHART_TYPES.filter((type) => type.value !== 'pie' && type.value !== 'donut');
+  const chartData = metric === 'bySource'
+    ? d.bySource || []
+    : metric === 'byLifecycleStage'
+      ? d.byLifecycleStage || []
+      : d.series || [];
+  const aggregateTotal = isBreakdown
+    ? chartData.reduce((sum, row) => sum + (Number(row.value) || 0), 0)
+    : Number(totals[metric]) || 0;
+  const displayData = chartData.map((row) => ({
+    ...row,
+    value: Number(isBreakdown ? row.value : row[metric]) || 0,
+  }));
+
+  const chartToolbar = (
+    <div className="lead-reports-page__chart-toolbar" role="group" aria-label="Chart type">
+      {availableChartTypes.map((type) => {
+        const Icon = type.icon;
+        return (
+          <button
+            key={type.value}
+            type="button"
+            className={`lead-reports-page__chart-type${chartType === type.value ? ' lead-reports-page__chart-type--active' : ''}`}
+            aria-label={type.label}
+            aria-pressed={chartType === type.value}
+            title={type.label}
+            onClick={() => setChartType(type.value)}
+          >
+            <Icon size={16} aria-hidden="true" />
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const cartesianGrid = <CartesianGrid strokeDasharray="3 3" stroke={GRID} vertical={false} />;
+  const cartesianTooltip = <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'var(--subtle-bg)' }} />;
+  let graph;
+  if (chartType === 'line') {
+    graph = (
+      <LineChart data={displayData} margin={{ top: 10, right: 24, left: 0, bottom: 8 }}>
+        {cartesianGrid}
+        <XAxis dataKey="label" stroke={AXIS} tickLine={false} axisLine={false} fontSize={11} />
+        <YAxis stroke={AXIS} tickLine={false} axisLine={false} domain={[0, 'auto']} fontSize={11} width={40} allowDecimals={false} />
+        {cartesianTooltip}
+        <Line type="monotone" dataKey="value" name={selected.label} stroke={selected.color} strokeWidth={2.5} dot={false} isAnimationActive={false} />
+      </LineChart>
+    );
+  } else if (chartType === 'horizontalBar') {
+    graph = (
+      <BarChart data={displayData} layout="vertical" margin={{ top: 10, right: 24, left: 12, bottom: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID} horizontal={false} />
+        <XAxis type="number" stroke={AXIS} tickLine={false} axisLine={false} allowDecimals={false} />
+        <YAxis type="category" dataKey="label" stroke={AXIS} tickLine={false} axisLine={false} fontSize={11} width={110} />
+        {cartesianTooltip}
+        <Bar dataKey="value" name={selected.label} fill={selected.color} radius={[0, 5, 5, 0]} isAnimationActive={false} />
+      </BarChart>
+    );
+  } else if (chartType === 'pie' || chartType === 'donut') {
+    graph = (
+      <PieChart>
+        <Tooltip contentStyle={TOOLTIP_STYLE} />
+        <Legend verticalAlign="bottom" iconType="circle" />
+        <Pie
+          data={displayData}
+          dataKey="value"
+          nameKey="label"
+          cx="50%"
+          cy="45%"
+          outerRadius="72%"
+          innerRadius={chartType === 'donut' ? '42%' : 0}
+          paddingAngle={displayData.length > 1 ? 2 : 0}
+          isAnimationActive={false}
+        >
+          {displayData.map((row, index) => (
+            <Cell key={row.key || row.label || index} fill={COLORS[index % COLORS.length]} />
+          ))}
+        </Pie>
+      </PieChart>
+    );
+  } else {
+    graph = (
+      <BarChart data={displayData} margin={{ top: 10, right: 24, left: 0, bottom: 8 }}>
+        {cartesianGrid}
+        <XAxis dataKey="label" stroke={AXIS} tickLine={false} axisLine={false} fontSize={11} />
+        <YAxis stroke={AXIS} tickLine={false} axisLine={false} domain={[0, 'auto']} fontSize={11} width={40} allowDecimals={false} />
+        {cartesianTooltip}
+        <Bar dataKey="value" name={selected.label} fill={selected.color} radius={[5, 5, 0, 0]} isAnimationActive={false} />
+      </BarChart>
+    );
+  }
+
+  return (
+    <div className="lead-reports-page__sections">
+      <div className="lead-reports-page__overview-workspace">
+        <aside className="card lead-reports-page__query-builder" aria-label="Lead report query builder">
+          <h3 className="lead-reports-page__query-title"><Filter size={18} /> Query Builder</h3>
+          <p className="lead-reports-page__panel-sub">Lead metrics include contacts created in the selected period that are still leads. Converted leads are excluded; these are not historical acquisition totals.</p>
+          <p className="lead-reports-page__query-label">Select metric</p>
+          <div className="lead-reports-page__metric-list">
+            {OVERVIEW_METRICS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                aria-pressed={metric === item.value}
+                className={`lead-reports-page__metric-button${metric === item.value ? ' lead-reports-page__metric-button--active' : ''}`}
+                onClick={() => {
+                  if (!['bySource', 'byLifecycleStage'].includes(item.value)
+                    && (chartType === 'pie' || chartType === 'donut')) {
+                    setChartType('bar');
+                  }
+                  onMetricChange(item.value);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="lead-reports-page__aggregate">
+            <span>{communicationTotalLabel || 'Aggregate total'}</span>
+            <strong>{num(aggregateTotal)}</strong>
+            {isCommunication && d.from && d.to ? (
+              <small>{formatReportRangeDate(d.from)} – {formatReportRangeDate(d.to)}</small>
+            ) : null}
+          </div>
+        </aside>
+
+        <Panel
+          title={selected.label}
+          subtitle={isBreakdown
+            ? 'Distribution across the selected date range.'
+            : isCommunication
+              ? 'Inbound and outbound messages in the selected date range.'
+              : 'Activity trend across the selected date range.'}
+          actions={chartToolbar}
+        >
+          <Chart height={560}>
+            {graph}
+          </Chart>
+        </Panel>
+      </div>
+
+    </div>
+  );
+}
 
 function ProductivityTab({ d, period }) {
   const t = d.totals || {};
@@ -775,12 +981,11 @@ function FollowUpsTab({ d }) {
 
 function SourcesTab({ d }) {
   const t = d.totals || {};
-  const pie = (d.sources || []).slice(0, 8).map((s) => ({ name: s.source, value: s.leads }));
+  const pie = (d.sources || []).slice(0, 8).map((s) => ({
+    name: String(s.source || '').trim() || 'Unknown',
+    value: Math.max(0, Number(s.leads) || 0),
+  }));
   const pieTotal = pie.reduce((sum, slice) => sum + Number(slice?.value || 0), 0);
-  const pieLabel = ({ name, percent = 0 }) => {
-    if (percent < 0.06) return '';
-    return `${truncateSourceLabel(name)} ${Math.round(percent * 100)}%`;
-  };
   return (
     <div className="lead-reports-page__sections">
       <StatRow>
@@ -809,7 +1014,10 @@ function SourcesTab({ d }) {
                   cy="50%"
                   paddingAngle={3}
                   stroke="none"
-                  label={pieLabel}
+                  // Keep source labels in the legend, where they can wrap
+                  // safely. Outside slice labels collide and get clipped in
+                  // this responsive panel.
+                  label={false}
                   labelLine={false}
                 >
                   {pie.map((entry, i) => <Cell key={entry.name} fill={COLORS[i % COLORS.length]} />)}
@@ -819,12 +1027,12 @@ function SourcesTab({ d }) {
                   layout="vertical"
                   align="right"
                   verticalAlign="middle"
-                  wrapperStyle={{ fontSize: '0.75rem', paddingLeft: 12 }}
-                  formatter={(value, _entry, index) => {
-                    const slice = pie[index] || null;
+                  wrapperStyle={{ fontSize: '0.75rem', paddingLeft: 12, maxWidth: '42%', overflow: 'hidden' }}
+                  formatter={(value) => {
+                    const slice = pie.find((item) => item.name === String(value)) || null;
                     const count = Number(slice?.value || 0);
                     const percent = pieTotal > 0 ? Math.round((count / pieTotal) * 100) : 0;
-                    return `${truncateSourceLabel(value, 22)}${pieTotal > 0 ? ` (${percent}%)` : ''}`;
+                    return `${truncateSourceLabel(value, 18)}${pieTotal > 0 ? ` (${percent}%)` : ''}`;
                   }}
                 />
               </PieChart>

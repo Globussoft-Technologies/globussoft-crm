@@ -258,6 +258,12 @@ prisma.user = prisma.user || {};
 prisma.user.findMany = vi.fn();
 prisma.location = prisma.location || {};
 prisma.location.findMany = vi.fn();
+prisma.plotSite = prisma.plotSite || {};
+prisma.plotSite.count = vi.fn();
+prisma.plotSite.findMany = vi.fn();
+prisma.$queryRaw = vi.fn();
+prisma.pickupLocation = prisma.pickupLocation || {};
+prisma.pickupLocation.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
 prisma.visit.create = vi.fn();
@@ -304,6 +310,10 @@ beforeEach(() => {
   prisma.service.findMany.mockReset();
   prisma.user.findMany.mockReset();
   prisma.location.findMany.mockReset();
+  prisma.plotSite.count.mockReset();
+  prisma.plotSite.findMany.mockReset();
+  prisma.$queryRaw.mockReset().mockResolvedValue([]);
+  prisma.pickupLocation.findMany.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.visit.create.mockReset();
   prisma.tenant.findUnique
@@ -1413,6 +1423,160 @@ describe("GET /api/v1/external/services + appointments — catalog shape", () =>
     expect(args.where.tenantId).toBe(7);
     expect(args.where.visitDate.gte).toEqual(new Date("2026-06-01T00:00:00Z"));
     expect(args.where.visitDate.lte).toEqual(new Date("2026-06-30T23:59:59Z"));
+  });
+});
+
+describe("GET /api/v1/external/plot-inventory — generic read-only projection", () => {
+  function useGenericTenant() {
+    externalAuthState.tenant = {
+      ...externalAuthState.tenant,
+      vertical: "generic",
+      defaultCurrency: "INR",
+    };
+    externalAuthState.apiKey = {
+      ...externalAuthState.apiKey,
+      purpose: null,
+    };
+  }
+
+  test("wellness tenants cannot access the generic inventory projection", async () => {
+    const app = makeApp();
+    const res = await request(app).get("/api/v1/external/plot-inventory");
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("PLOT_INVENTORY_NOT_AVAILABLE");
+    expect(prisma.plotSite.count).not.toHaveBeenCalled();
+    expect(prisma.plotSite.findMany).not.toHaveBeenCalled();
+  });
+
+  test("returns paginated tenant-scoped inventory without internal fields", async () => {
+    useGenericTenant();
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 101 }, { id: 102 }]);
+    prisma.plotSite.count.mockResolvedValueOnce(2);
+    prisma.plotSite.findMany.mockResolvedValueOnce([{
+      id: 101,
+      name: "Green Valley Site A",
+      plotNumber: "A-102",
+      block: "A",
+      address: "Sarjapur Road, Bengaluru, Karnataka",
+      referenceCode: "GV-A102",
+      area: "1350",
+      areaUnit: "SQ_FT",
+      roadWidth: "30 ft",
+      facing: "EAST",
+      propertyType: "RESIDENTIAL",
+      price: { toString: () => "2850000.00" },
+      availability: "RESERVED",
+      pickupLocationId: 7,
+      pickupLocationIdsJson: "[7]",
+      updatedAt: new Date("2026-10-20T10:00:00Z"),
+      notes: "Internal broker note — must not leave CRM",
+      boundaryJson: "{\"secret\":true}",
+      tenantId: 999,
+    }]);
+    prisma.pickupLocation.findMany.mockResolvedValueOnce([{
+      id: 7,
+      name: "Green Valley Gate",
+      address: "Sarjapur Road, Bengaluru",
+      googleMapsLink: "https://maps.google.com/?q=12.9,77.6",
+      notes: "Internal location note",
+    }]);
+
+    const app = makeApp();
+    const res = await request(app)
+      .get("/api/v1/external/plot-inventory")
+      .query({ q: "Green Valley", availability: "reserved", pickupLocationId: "7", limit: "1", offset: "0" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 2,
+      limit: 1,
+      offset: 0,
+      hasMore: true,
+      meta: { vertical: "generic", currency: "INR" },
+    });
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({
+      id: 101,
+      name: "Green Valley Site A",
+      price: 2850000,
+      availability: "RESERVED",
+      pickupLocations: [{
+        id: 7,
+        name: "Green Valley Gate",
+        address: "Sarjapur Road, Bengaluru",
+        googleMapsLink: "https://maps.google.com/?q=12.9,77.6",
+      }],
+    });
+    expect(res.body.data[0]).not.toHaveProperty("notes");
+    expect(res.body.data[0]).not.toHaveProperty("boundary");
+    expect(res.body.data[0]).not.toHaveProperty("tenantId");
+    expect(res.body.data[0]).not.toHaveProperty("pickupLocationIdsJson");
+
+    const countArgs = prisma.plotSite.count.mock.calls[0][0];
+    const listArgs = prisma.plotSite.findMany.mock.calls[0][0];
+    expect(countArgs.where).toEqual(listArgs.where);
+    expect(listArgs.where.tenantId).toBe(7);
+    expect(listArgs.where.isActive).toBe(true);
+    expect(listArgs.where.availability).toBe("RESERVED");
+    expect(listArgs.where.OR).toEqual([
+      { pickupLocationId: 7 },
+      { id: { in: [101, 102] } },
+    ]);
+    const [sql, ...parameters] = prisma.$queryRaw.mock.calls[0];
+    expect(sql.join('?')).toContain('JSON_VALID');
+    expect(sql.join('?')).toContain('JSON_CONTAINS');
+    expect(parameters).toEqual([7, '7', '"7"']);
+    expect(listArgs.skip).toBe(0);
+    expect(listArgs.take).toBe(1);
+    expect(prisma.pickupLocation.findMany.mock.calls[0][0].where).toEqual({
+      tenantId: 7,
+      id: { in: [7] },
+      isActive: true,
+    });
+  });
+
+  test("a key scoped for another purpose cannot access plot inventory", async () => {
+    useGenericTenant();
+    externalAuthState.apiKey.purpose = "flight-plugin";
+    const app = makeApp();
+
+    const res = await request(app).get("/api/v1/external/plot-inventory");
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("WRONG_KEY_PURPOSE");
+    expect(prisma.plotSite.count).not.toHaveBeenCalled();
+  });
+
+  test("inventory keys cannot read or mutate other external resources", async () => {
+    useGenericTenant();
+    externalAuthState.apiKey.purpose = "plot-inventory-read";
+    const app = makeApp();
+    for (const path of ["/contacts", "/leads", "/me"]) {
+      const res = await request(app).get(`/api/v1/external${path}`);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("WRONG_KEY_PURPOSE");
+    }
+    const res = await request(app).post("/api/v1/external/leads").send({ name: "Blocked" });
+    expect(res.status).toBe(403);
+  });
+
+  test("rejects invalid pagination and availability before querying Prisma", async () => {
+    useGenericTenant();
+    const app = makeApp();
+
+    const badLimit = await request(app)
+      .get("/api/v1/external/plot-inventory")
+      .query({ limit: "0" });
+    expect(badLimit.status).toBe(400);
+    expect(badLimit.body.code).toBe("INVALID_LIMIT");
+
+    const badAvailability = await request(app)
+      .get("/api/v1/external/plot-inventory")
+      .query({ availability: "NOT_A_STATUS" });
+    expect(badAvailability.status).toBe(400);
+    expect(badAvailability.body.code).toBe("INVALID_AVAILABILITY");
+    expect(prisma.plotSite.count).not.toHaveBeenCalled();
   });
 });
 

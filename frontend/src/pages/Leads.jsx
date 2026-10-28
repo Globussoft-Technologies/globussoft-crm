@@ -12,6 +12,8 @@ import {
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
+import IntlTelInput from "@intl-tel-input/react";
+import "intl-tel-input/styles";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import ReturnToBanner from "../components/ReturnToBanner";
 import {
@@ -46,6 +48,7 @@ import ColumnPicker from "../components/ColumnPicker";
 import FilterPanel from "../components/FilterPanel";
 import InlineCellEditor from "../components/InlineCellEditor";
 import ScrollableSelect from "../components/ScrollableSelect";
+import SearchableSelect from "../components/ui/SearchableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import {
   SUB_BRAND_IDS,
@@ -69,10 +72,11 @@ import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
+import "./Leads.css";
+import "./generic-list-laptop.css";
 import {
   PICKUP_STAGE_LABELS,
   formatPickupStatus,
-  formatPickupStatusDate,
 } from "../utils/pickupCustomerStatus";
 
 const SOURCE_OPTIONS = [
@@ -84,6 +88,19 @@ const SOURCE_OPTIONS = [
   "Event",
   "Other",
 ];
+
+// Generic CRM stores this field as text because web forms may submit values
+// such as "11-50". A negative plain numeric value is invalid for a headcount;
+// normalize only that display case without changing stored lead data or other
+// verticals.
+function formatGenericEmployeeCount(value) {
+  const displayValue = String(value ?? "").trim();
+  if (!displayValue) return "";
+  const numericValue = Number(displayValue);
+  return Number.isFinite(numericValue) && numericValue < 0
+    ? "Invalid employee count"
+    : displayValue;
+}
 
 // Built-in lead columns available for auto-campaign assignment rules.
 const BUILTIN_RULE_COLUMNS = [
@@ -167,7 +184,7 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const GENERIC_LEADS_PAGE_SIZE = 25;
+const GENERIC_LEADS_PAGE_SIZE = 10;
 const LEAD_CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
   { value: "textarea", label: "Text area" },
@@ -217,6 +234,52 @@ const LEAD_CHECKBOX_STYLE = {
 const LEADS_HEADER_MENU_WIDTH = 300;
 const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
 const LEADS_HEADER_MENU_GAP = 6;
+const PURCHASED_PLOT_STATUSES = new Set([
+  "PLOT_SOLD",
+  "TRANSACTION_COMPLETED",
+]);
+const isPurchasedCustomerPlot = (plot, customer, pickupStatus) => {
+  if (String(plot?.availability || "").trim().toUpperCase() === "SOLD") {
+    return true;
+  }
+  const booking = customer?.booking;
+  if (
+    Number(booking?.plotSiteId) === Number(plot?.id) &&
+    PURCHASED_PLOT_STATUSES.has(
+      String(booking?.status || "").trim().toUpperCase(),
+    )
+  ) {
+    return true;
+  }
+  const selectedPlotId =
+    pickupStatus?.selectedPlot?.id || pickupStatus?.assignedPlot?.id;
+  return (
+    Number(selectedPlotId) === Number(plot?.id) &&
+    PURCHASED_PLOT_STATUSES.has(
+      String(
+        pickupStatus?.currentStatus ||
+          pickupStatus?.workflow?.billing?.status ||
+          pickupStatus?.status ||
+          "",
+      )
+        .trim()
+        .toUpperCase(),
+    )
+  );
+};
+const isTransportWorkflowLocked = (pickupStatus) => {
+  if (!pickupStatus) return false;
+  const stage = String(pickupStatus.currentStage || "").trim().toLowerCase();
+  if (["broker", "billing"].includes(stage)) return true;
+  if (stage !== "transport") return false;
+  const status = String(
+    pickupStatus.currentStatus ||
+      pickupStatus.workflow?.transport?.status ||
+      pickupStatus.status ||
+      "",
+  ).trim().toUpperCase();
+  return Boolean(status && status !== "PICKUP_LOCATION_CAPTURED");
+};
 const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "name",
   "email",
@@ -225,10 +288,13 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "whatsappPhone",
   "aiScore",
   "source",
+  "lifecycleStage",
   "webForm",
   "medium",
   "location",
   "pickupLocation",
+  "plotAssign",
+  "overallPickupStatus",
   "subBrand",
   "tags",
   "assignedTo",
@@ -238,6 +304,50 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "callifiedAi",
   "callifiedScore",
 ];
+const CALLIFIED_LEAD_COLUMN_KEYS = new Set([
+  "campaign",
+  "callStatus",
+  "callifiedAi",
+  "callifiedScore",
+]);
+const ensureGenericPlotAssignCatalog = (columns) => {
+  if (!Array.isArray(columns)) return columns;
+  const withoutPlotAssign = columns.filter(
+    (column) => column?.key !== "plotAssign",
+  );
+  const pickupLocationIndex = withoutPlotAssign.findIndex(
+    (column) => column?.key === "pickupLocation",
+  );
+  withoutPlotAssign.splice(
+    pickupLocationIndex >= 0 ? pickupLocationIndex + 1 : withoutPlotAssign.length,
+    0,
+    { key: "plotAssign", label: "Plot Assign" },
+  );
+  return withoutPlotAssign;
+};
+const ensureGenericOverallStatusCatalog = (columns) => {
+  if (!Array.isArray(columns)) return columns;
+  const withoutOverallStatus = columns.filter(
+    (column) => column?.key !== "overallPickupStatus",
+  );
+  const plotAssignIndex = withoutOverallStatus.findIndex(
+    (column) => column?.key === "plotAssign",
+  );
+  const pickupLocationIndex = withoutOverallStatus.findIndex(
+    (column) => column?.key === "pickupLocation",
+  );
+  const insertAfter =
+    plotAssignIndex >= 0 ? plotAssignIndex : pickupLocationIndex;
+  withoutOverallStatus.splice(
+    insertAfter >= 0 ? insertAfter + 1 : withoutOverallStatus.length,
+    0,
+    {
+      key: "overallPickupStatus",
+      label: "Overall Status",
+    },
+  );
+  return withoutOverallStatus;
+};
 // Travel Leads intentionally exposes only the vertical's core lead columns.
 // Generic's extended Contact fields (for example touch attribution, billing
 // state, Job Title, Website, and LinkedIn) must not appear even if a stale
@@ -260,6 +370,7 @@ const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set(["referrerUrl"]);
 // destinations. The remaining Customize Table catalog entries are valid CRM
 // field choices for generic lead imports.
 const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
+  "lifecycleStage",
   "pageUrl",
   "pageTitle",
   "pageSource",
@@ -337,6 +448,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   callifiedScore: 128,
   interestedPlotArea: 190,
   pickupLocation: 270,
+  plotAssign: 230,
   overallPickupStatus: 250,
   subBrand: 130,
   amount: 130,
@@ -409,6 +521,18 @@ const sourceBadgeStyle = {
   backgroundColor: "var(--source-badge-bg, rgba(139, 92, 246, 0.16))",
   color: "var(--source-badge-text, var(--text-primary))",
   border: "1px solid var(--border-color)",
+};
+
+const createLeadFieldLabelStyle = {
+  display: "block",
+  marginBottom: "0.3rem",
+  color: "var(--text-secondary)",
+  fontSize: "0.78rem",
+};
+const requiredMarkStyle = {
+  color: "var(--danger-color, #ef4444)",
+  marginLeft: "0.2rem",
+  fontWeight: 700,
 };
 
 const compactToolbarButtonStyle = {
@@ -1566,7 +1690,8 @@ function BuiltInInlineCellEditor({
     }
     setSaving(true);
     try {
-      await onSave(lead, field, normalized);
+      const saved = await onSave(lead, field, normalized);
+      if (saved === false) return;
       setEditing(false);
     } finally {
       setSaving(false);
@@ -2074,6 +2199,13 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  const [drillParams, setDrillParams] = useSearchParams();
+  const focusedCallifiedLeadId = isGeneric
+    ? Number(drillParams.get("callifiedLeadId"))
+    : 0;
+  const focusedLeadSearch = isGeneric
+    ? String(drillParams.get("leadSearch") || "").trim()
+    : "";
   const [leadTableDensity, setLeadTableDensity] = useState(() => {
     if (!isGeneric || typeof window === "undefined") return "comfortable";
     try {
@@ -2091,8 +2223,8 @@ const Leads = () => {
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
-  // The Freshsales-style generic grid keeps horizontal movement at the bottom
-  // of the records. Other verticals retain their existing top scrollbar.
+  // The Generic CRM grid keeps horizontal movement at the bottom of the
+  // records. Other verticals retain their existing top scrollbar.
   const showLeadsTopScrollbar = !isGeneric;
   // Assignment/deletion UI is driven by the effective Leads grants. Travel
   // non-admins can still use the separate owner-scoped assignment flow below.
@@ -2120,10 +2252,83 @@ const Leads = () => {
   // expose a button that opens requests a Leads permission cannot authorize.
   const canManageCallSettings = isAdmin;
   const [leads, setLeads] = useState([]);
+  const [genericLifecycleOptions, setGenericLifecycleOptions] = useState([]);
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi('/api/tenant-settings/generic.contactLifecycleStages', { silent: true })
+      .then((setting) => {
+        if (!active) return;
+        try {
+          const stages = JSON.parse(setting?.value || '[]');
+          setGenericLifecycleOptions((Array.isArray(stages) ? stages : []).flatMap((stage) => (
+            Array.isArray(stage?.options) ? stage.options.map((option, optionIndex) => ({
+              id: String(option.id || ''),
+              label: String(option.label || ''),
+              status: option.status,
+              negative: optionIndex > 0 || option.negative === true,
+            })) : []
+          )).filter((option) => option.id && option.label && option.status));
+        } catch (_error) {
+          setGenericLifecycleOptions([]);
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [isGeneric]);
   const [pickupPlotStatusByContact, setPickupPlotStatusByContact] = useState(
     () => new Map(),
   );
   const [pickupLocationOptions, setPickupLocationOptions] = useState([]);
+  const [plotAssignmentInventory, setPlotAssignmentInventory] = useState({
+    plots: [],
+    allPlots: [],
+    customers: [],
+  });
+  const [assigningPlotLead, setAssigningPlotLead] = useState(null);
+  const [assigningPlotName, setAssigningPlotName] = useState("");
+  const [assigningPlotIds, setAssigningPlotIds] = useState([]);
+  const [assigningPlots, setAssigningPlots] = useState(false);
+  const [viewingLeadPlots, setViewingLeadPlots] = useState(null);
+  const [changingPlotAssignment, setChangingPlotAssignment] = useState(null);
+  const [editingLeadPlotName, setEditingLeadPlotName] = useState("");
+  const [originalEditingLeadPlotName, setOriginalEditingLeadPlotName] = useState("");
+  const [leadReplacementPlotIds, setLeadReplacementPlotIds] = useState([]);
+  const [changingPlotNumber, setChangingPlotNumber] = useState(false);
+  const loadPlotAssignmentInventory = useCallback(async () => {
+    if (!isGeneric || !isAdmin) {
+      setPlotAssignmentInventory({ plots: [], allPlots: [], customers: [] });
+      return { plots: [], allPlots: [], customers: [] };
+    }
+    try {
+      // Use the same projection as Customer Workflow so both entry points
+      // share identical plot availability and assignment semantics.
+      const response = await fetchApi(
+        "/api/pickup-plot-inventory/customer-pickups",
+        { silent: true },
+      );
+      const next = {
+        plots: Array.isArray(response?.plots) ? response.plots : [],
+        allPlots: Array.isArray(response?.allPlots)
+          ? response.allPlots
+          : Array.isArray(response?.plots)
+            ? response.plots
+            : [],
+        customers: [
+          ...(Array.isArray(response?.customers) ? response.customers : []),
+          ...(Array.isArray(response?.plotAssignments) ? response.plotAssignments : []),
+        ],
+      };
+      setPlotAssignmentInventory(next);
+      return next;
+    } catch (_error) {
+      setPlotAssignmentInventory({ plots: [], allPlots: [], customers: [] });
+      return { plots: [], allPlots: [], customers: [] };
+    }
+  }, [isAdmin, isGeneric]);
+  useEffect(() => {
+    void loadPlotAssignmentInventory();
+  }, [loadPlotAssignmentInventory]);
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
@@ -2133,7 +2338,7 @@ const Leads = () => {
   const [services, setServices] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState(focusedLeadSearch);
   const leadRequestSequenceRef = useRef(0);
   const genericPhoneCountryUserChangedRef = useRef(false);
   const genericPhoneCountryDetectionRunRef = useRef(false);
@@ -2194,9 +2399,7 @@ const Leads = () => {
   const leadsScrollableTableRef = useRef(null);
   const leadsHorizontalTouchRef = useRef(null);
   const [bulkAgent, setBulkAgent] = useState("");
-  const [, setBulkCampaignId] = useState("");
-  const [bulkCampaignDropdownOpen, setBulkCampaignDropdownOpen] =
-    useState(false);
+  const [bulkCampaignId, setBulkCampaignId] = useState("");
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
   // Wellness Callified calling — the AI / Manual chooser used by Appointments
@@ -2277,6 +2480,14 @@ const Leads = () => {
   const [stageFilter, setStageFilter] = useState("");
 
   useEffect(() => {
+    if (drillParams.get("create") !== "1") return;
+    setCreating(true);
+    const next = new URLSearchParams(drillParams);
+    next.delete("create");
+    setDrillParams(next, { replace: true });
+  }, [drillParams, setDrillParams]);
+
+  useEffect(() => {
     if (isTravel) setSubBrandFilter(activeSubBrand || "");
   }, [activeSubBrand, isTravel]);
   const [previewLead, setPreviewLead] = useState(null);
@@ -2295,13 +2506,16 @@ const Leads = () => {
   // ?filters=<JSON> (backend/routes/contacts.js FILTERABLE_FIELDS) so it
   // isn't bounded by the same ?limit=500 cap fetchLeads already applies.
   const leadFiltersStorageKey = `${LEADS_FILTERS_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const webFormFromUrl = isGeneric
+    ? String(drillParams.get("webForm") || "").trim()
+    : "";
   const [advancedFilters, setAdvancedFilters] = useState(() => {
     if (!isGeneric || typeof window === "undefined") return [];
     try {
       const saved = JSON.parse(
         window.sessionStorage.getItem(leadFiltersStorageKey) || "[]",
       );
-      return Array.isArray(saved)
+      const restored = Array.isArray(saved)
         ? saved.filter(
             (filter) =>
               filter &&
@@ -2310,8 +2524,16 @@ const Leads = () => {
               Array.isArray(filter.values),
           )
         : [];
+      return webFormFromUrl
+        ? [
+            ...restored.filter((filter) => filter?.field !== "webForm"),
+            { field: "webForm", operator: "contains", values: [webFormFromUrl] },
+          ]
+        : restored;
     } catch (_err) {
-      return [];
+      return webFormFromUrl
+        ? [{ field: "webForm", operator: "contains", values: [webFormFromUrl] }]
+        : [];
     }
   });
 
@@ -2403,7 +2625,6 @@ const Leads = () => {
   // Seeding the existing filter state (rather than adding a parallel filter
   // path) means the dropdowns visibly reflect what's applied and the user can
   // widen or clear it from the normal controls.
-  const [drillParams, setDrillParams] = useSearchParams();
   useEffect(() => {
     const callStatus = drillParams.get("callStatus");
     const source = drillParams.get("source");
@@ -2413,14 +2634,26 @@ const Leads = () => {
     if (source) setSourceFilter(source);
     if (assignee) setAssigneeFilter(assignee);
     if (webForm) {
-      setAdvancedFilters((prev) =>
-        prev.some((f) => f?.field === "webForm")
-          ? prev
-          : [
-              ...prev,
-              { field: "webForm", operator: "contains", values: [webForm] },
-            ],
-      );
+      // A Web Forms modal opens Leads as a deep link. Replace a previously
+      // persisted web-form filter so the link always represents the form the
+      // user just selected; unrelated advanced filters remain active.
+      setAdvancedFilters((prev) => {
+        const currentWebFormFilters = prev.filter(
+          (filter) => filter?.field === "webForm",
+        );
+        if (
+          currentWebFormFilters.length === 1 &&
+          currentWebFormFilters[0].operator === "contains" &&
+          currentWebFormFilters[0].values?.length === 1 &&
+          String(currentWebFormFilters[0].values[0]) === webForm
+        ) {
+          return prev;
+        }
+        return [
+          ...prev.filter((filter) => filter?.field !== "webForm"),
+          { field: "webForm", operator: "contains", values: [webForm] },
+        ];
+      });
     }
     // Read once per URL — re-running on every render would fight the user's
     // own changes to the dropdowns.
@@ -2658,6 +2891,48 @@ const Leads = () => {
     preferredPractitionerId: "",
     customFields: {},
   });
+  const [travelPhoneValid, setTravelPhoneValid] = useState(false);
+  const travelPhoneInputRef = useRef(null);
+  const createLeadModalRef = useRef(null);
+  const travelModalScrollBeforePickerRef = useRef(0);
+  const [travelCountryOpen, setTravelCountryOpen] = useState(false);
+  const handleTravelCountryOpen = useCallback(() => {
+    const modal = createLeadModalRef.current;
+    travelModalScrollBeforePickerRef.current = modal?.scrollTop ?? 0;
+    setTravelCountryOpen(true);
+  }, []);
+  const handleTravelCountryClose = useCallback(() => {
+    setTravelCountryOpen(false);
+    window.requestAnimationFrame(() => {
+      const modal = createLeadModalRef.current;
+      if (modal) modal.scrollTop = travelModalScrollBeforePickerRef.current;
+    });
+  }, []);
+  useLayoutEffect(() => {
+    if (!travelCountryOpen) return;
+    const modal = createLeadModalRef.current;
+    const input = travelPhoneInputRef.current?.getInput();
+    const selector = input?.closest(".iti")?.querySelector(".iti__country-selector");
+    const phoneField = input?.closest(".create-lead-travel-phone");
+    if (!modal || !selector || !phoneField) return;
+
+    // The library positions its menu absolutely. Reserve its measured height
+    // in the form so the source field and actions follow directly beneath it.
+    const reserveMenuSpace = () => {
+      const menuHeight = selector.getBoundingClientRect().height;
+      // The form already has a 14px row gap; subtract it so this reservation
+      // leaves only a small visual gap after the menu.
+      if (menuHeight > 0) phoneField.style.marginBottom = `${Math.max(0, menuHeight - 6)}px`;
+    };
+    const frame = window.requestAnimationFrame(reserveMenuSpace);
+    const countryList = selector.querySelector(".iti__country-list");
+    if (countryList) countryList.scrollTop = 0;
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      phoneField.style.marginBottom = "";
+    };
+  }, [travelCountryOpen]);
   const [createFieldErrors, setCreateFieldErrors] = useState({
     name: "",
     phone: "",
@@ -3009,6 +3284,7 @@ const Leads = () => {
         );
         return next;
       });
+      await loadPlotAssignmentInventory();
       notify.success("Pickup location updated.");
     } catch (error) {
       notify.error(
@@ -3018,6 +3294,260 @@ const Leads = () => {
       );
     } finally {
       setSavingPickupLocationId(null);
+    }
+  };
+
+  const getPlotAssignmentCustomer = (contactId) =>
+    plotAssignmentInventory.customers.find(
+      (customer) => Number(customer.contact?.id) === Number(contactId),
+    ) || null;
+  const getAssignedPlotsForLead = (lead, pickupStatus) => {
+    const customer = getPlotAssignmentCustomer(lead.id);
+    if (customer) {
+      if (Array.isArray(customer.assignedPlots)) {
+        return customer.assignedPlots;
+      }
+      const assignedIds = new Set(
+        (customer.customerAssignedPlotIds || customer.assignedPlotIds || []).map(
+          Number,
+        ),
+      );
+      return plotAssignmentInventory.plots.filter((plot) =>
+        assignedIds.has(Number(plot.id)),
+      );
+    }
+    return Array.isArray(pickupStatus?.assignedPlots)
+      ? pickupStatus.assignedPlots
+      : pickupStatus?.assignedPlot
+        ? [pickupStatus.assignedPlot]
+        : [];
+  };
+  const availablePlotAssignmentOptions = plotAssignmentInventory.plots.filter(
+    (plot) =>
+      String(plot.availability || "").trim().toUpperCase() === "AVAILABLE" &&
+      String(plot.plotNumber || "").trim(),
+  );
+  const availablePlotAssignmentNames = [
+    ...new Map(
+      availablePlotAssignmentOptions.map((plot) => [
+        String(plot.name || "").trim().toLowerCase(),
+        String(plot.name || "").trim(),
+      ]),
+    ).values(),
+  ].filter(Boolean);
+  const assigningPlotCustomer = assigningPlotLead
+    ? getPlotAssignmentCustomer(assigningPlotLead.id)
+    : null;
+  const alreadyAssignedPlotIds = new Set(
+    (
+      assigningPlotCustomer?.customerAssignedPlotIds ||
+      assigningPlotCustomer?.assignedPlotIds ||
+      []
+    ).map(Number),
+  );
+  const assigningPlotOptions = availablePlotAssignmentOptions.filter(
+    (plot) =>
+      String(plot.name || "").trim().toLowerCase() ===
+      assigningPlotName.trim().toLowerCase(),
+  );
+  const getDefaultPlotAssignmentName = (leadId, inventory) => {
+    const customer = inventory.customers.find(
+      (item) => Number(item?.contact?.id ?? item?.contactId) === Number(leadId),
+    );
+    const assignedName = String(customer?.assignedPlots?.[0]?.name || "").trim();
+    const availableNames = [
+      ...new Map(
+        inventory.plots
+          .filter(
+            (plot) =>
+              String(plot.availability || "").trim().toUpperCase() ===
+                "AVAILABLE" && String(plot.plotNumber || "").trim(),
+          )
+          .map((plot) => [
+            String(plot.name || "").trim().toLowerCase(),
+            String(plot.name || "").trim(),
+          ]),
+      ).values(),
+    ].filter(Boolean);
+    return availableNames.some(
+      (name) => name.toLowerCase() === assignedName.toLowerCase(),
+    )
+      ? assignedName
+      : availableNames[0] || "";
+  };
+  const openLeadPlotAssignment = async (lead) => {
+    if (isTransportWorkflowLocked(pickupPlotStatusByContact.get(Number(lead.id)))) {
+      notify.info("Plot assignments cannot be changed after transport has started.");
+      return;
+    }
+    setAssigningPlotLead(lead);
+    setAssigningPlotName(
+      getDefaultPlotAssignmentName(lead.id, plotAssignmentInventory),
+    );
+    setAssigningPlotIds([]);
+    const latestInventory = await loadPlotAssignmentInventory();
+    setAssigningPlotName(
+      getDefaultPlotAssignmentName(lead.id, latestInventory),
+    );
+  };
+  const closeLeadPlotAssignment = () => {
+    if (assigningPlots) return;
+    setAssigningPlotLead(null);
+    setAssigningPlotName("");
+    setAssigningPlotIds([]);
+  };
+  const replacementPlotCustomer = changingPlotAssignment
+    ? getPlotAssignmentCustomer(changingPlotAssignment.lead.id)
+    : null;
+  const replacementAssignedPlotIds = new Set(
+    (
+      replacementPlotCustomer?.customerAssignedPlotIds ||
+      replacementPlotCustomer?.assignedPlotIds ||
+      []
+    ).map(Number),
+  );
+  const editingLeadPlotNameOptions = [...new Map([
+    ...(changingPlotAssignment?.plots || []),
+    ...(plotAssignmentInventory.plots || []),
+  ].map((plot) => [String(plot.name || "").trim().toLowerCase(), String(plot.name || "").trim()])).values()].filter(Boolean);
+  const replacementPlotOptions = changingPlotAssignment
+    ? [...new Map((plotAssignmentInventory.plots || [])
+        .filter((plot) => (
+          plot?.id
+          && !replacementAssignedPlotIds.has(Number(plot.id))
+          && String(plot.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase()
+        ))
+        .map((plot) => [`${String(plot.name || "").trim().toLowerCase()}::${String(plot.plotNumber || "").trim().toLowerCase()}`, plot])).values()]
+        .sort((left, right) => String(left.plotNumber || "").localeCompare(
+          String(right.plotNumber || ""),
+          undefined,
+          { numeric: true, sensitivity: "base" },
+        ))
+    : [];
+  const replacementPlotChoices = replacementPlotOptions.map((plot) => {
+    return {
+      plot,
+      canSelect: String(plot.availability || "").trim().toUpperCase() === "AVAILABLE",
+    };
+  });
+  const editingLeadAssignedPlotIds = (changingPlotAssignment?.plots || [])
+    .filter((plot) => String(plot.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase())
+    .map((plot) => Number(plot.id));
+  const editingLeadComparisonIds = editingLeadPlotName.trim().toLowerCase() !== originalEditingLeadPlotName.trim().toLowerCase()
+    ? (changingPlotAssignment?.plots || []).map((plot) => Number(plot.id))
+    : editingLeadAssignedPlotIds;
+  const hasLeadPlotChanges = editingLeadComparisonIds.length !== leadReplacementPlotIds.length
+    || editingLeadComparisonIds.some((id) => !leadReplacementPlotIds.includes(id));
+  const openLeadPlotReplacement = async () => {
+    const viewState = viewingLeadPlots;
+    if (isTransportWorkflowLocked(viewState.pickupStatus)) {
+      notify.info("Plot assignments cannot be changed after transport has started.");
+      return;
+    }
+    setViewingLeadPlots(null);
+    setChangingPlotAssignment(viewState);
+    const firstEditablePlot = viewState.plots.find((plot) => (
+      plot.id && !isPurchasedCustomerPlot(plot, viewState.customer, viewState.pickupStatus)
+    ));
+    const firstPlotName = String(firstEditablePlot?.name || viewState.plots[0]?.name || "").trim();
+    setEditingLeadPlotName(firstPlotName);
+    setOriginalEditingLeadPlotName(firstPlotName);
+    setLeadReplacementPlotIds(viewState.plots.filter((plot) => String(plot.name || "").trim().toLowerCase() === firstPlotName.toLowerCase()).map((plot) => Number(plot.id)));
+    await loadPlotAssignmentInventory();
+  };
+  const closeLeadPlotReplacement = () => {
+    if (changingPlotNumber) return;
+    setChangingPlotAssignment(null);
+    setEditingLeadPlotName("");
+    setOriginalEditingLeadPlotName("");
+    setLeadReplacementPlotIds([]);
+  };
+  const toggleLeadReplacementPlot = (plotId, checked) => {
+    const numericId = Number(plotId);
+    setLeadReplacementPlotIds((current) => (
+      checked ? [...current, numericId] : current.filter((id) => id !== numericId)
+    ));
+  };
+  const replaceLeadPlot = async (event) => {
+    event.preventDefault();
+    const allAssignedPlots = changingPlotAssignment?.plots || [];
+    const changingPlotType = editingLeadPlotName.trim().toLowerCase() !== originalEditingLeadPlotName.trim().toLowerCase();
+    const selectedTypeAssignedPlots = allAssignedPlots.filter((plot) => (
+      String(plot.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase()
+    ));
+    const assignedIds = selectedTypeAssignedPlots.map((plot) => Number(plot.id));
+    const additionalPlots = replacementPlotChoices
+      .filter(({ plot }) => leadReplacementPlotIds.includes(Number(plot.id)) && !assignedIds.includes(Number(plot.id)))
+      .map(({ plot }) => plot);
+    const removedPlots = (changingPlotType ? allAssignedPlots : selectedTypeAssignedPlots)
+      .filter((plot) => !leadReplacementPlotIds.includes(Number(plot.id)));
+    if (!changingPlotAssignment?.lead?.id || (!additionalPlots.length && !removedPlots.length)) return;
+    const addedNumbers = additionalPlots.map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`).join(", ");
+    const removedNumbers = removedPlots.map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`).join(", ");
+    const confirmed = await notify.confirm({
+      title: "Confirm plot assignments",
+      message: `Are you sure you want to update ${(changingPlotAssignment.lead.name || "this lead")}'s ${editingLeadPlotName} plots?${addedNumbers ? ` Assign ${addedNumbers}.` : ""}${removedNumbers ? ` Deselect ${removedNumbers}.` : ""}`,
+      confirmText: "Save changes",
+      cancelText: "Edit",
+    });
+    if (!confirmed) return;
+    setChangingPlotNumber(true);
+    try {
+      for (const plot of removedPlots) {
+        await fetchApi(
+          `/api/pickup-plot-inventory/customer-pickups/${changingPlotAssignment.lead.id}/plots/${plot.id}`,
+          { method: "DELETE" },
+        );
+      }
+      const plotsBySite = new Map();
+      additionalPlots.forEach((plot) => {
+        const key = String(plot.name || "").trim().toLowerCase();
+        plotsBySite.set(key, [...(plotsBySite.get(key) || []), Number(plot.id)]);
+      });
+      for (const plotSiteIds of plotsBySite.values()) {
+        await fetchApi(
+          `/api/pickup-plot-inventory/customer-pickups/${changingPlotAssignment.lead.id}/plots`,
+          {
+            method: "POST",
+            body: JSON.stringify({ plotSiteIds }),
+          },
+        );
+      }
+      notify.success("Plot assignments updated.");
+      setChangingPlotAssignment(null);
+      setEditingLeadPlotName("");
+      setOriginalEditingLeadPlotName("");
+      setLeadReplacementPlotIds([]);
+      await loadPlotAssignmentInventory();
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || "Could not assign the selected plots.");
+    } finally {
+      setChangingPlotNumber(false);
+    }
+  };
+  const assignLeadPlots = async (event) => {
+    event.preventDefault();
+    if (!assigningPlotLead?.id || !assigningPlotIds.length) return;
+    setAssigningPlots(true);
+    try {
+      await fetchApi(
+        `/api/pickup-plot-inventory/customer-pickups/${assigningPlotLead.id}/plots`,
+        {
+          method: "POST",
+          body: JSON.stringify({ plotSiteIds: assigningPlotIds }),
+        },
+      );
+      notify.success(
+        `${assigningPlotIds.length} plot${assigningPlotIds.length === 1 ? "" : "s"} assigned.`,
+      );
+      setAssigningPlotLead(null);
+      setAssigningPlotName("");
+      setAssigningPlotIds([]);
+      await loadPlotAssignmentInventory();
+    } catch (error) {
+      notify.error(error?.message || "Could not assign the selected plots.");
+    } finally {
+      setAssigningPlots(false);
     }
   };
 
@@ -3846,18 +4376,20 @@ const Leads = () => {
   const openCreate = () => {
     genericPhoneCountryUserChangedRef.current = false;
     genericPhoneCountryDetectionRunRef.current = false;
+    setTravelCountryOpen(false);
     setCreateFieldErrors({ name: "", phone: "" });
     setCreating(true);
   };
   const closeCreate = () => {
     setCreating(false);
+    setTravelCountryOpen(false);
     setLeadDuplicate(null);
     genericPhoneCountryDetectionRunRef.current = false;
     setCreateFieldErrors({ name: "", phone: "" });
   };
 
   const createSeparateProductLead = async () => {
-    const phoneOut = isWellness
+    const phoneOut = isWellness || isTravel
       ? String(newLead.phone || "").trim()
       : newLead.phone
         ? `${newLead.countryCode} ${newLead.phone}`
@@ -4029,6 +4561,15 @@ const Leads = () => {
         return;
       }
       phone = phoneClean;
+    } else if (isTravel && phone) {
+      const phoneInstance = travelPhoneInputRef.current?.getInstance();
+      const phoneType = phoneInstance?.getNumberType();
+      const isMobileType =
+        phoneType === "MOBILE" || phoneType === "FIXED_LINE_OR_MOBILE";
+      if (!travelPhoneValid || !phoneInstance?.isValidNumber() || !isMobileType) {
+        notify.error("Enter a valid mobile number");
+        return;
+      }
     }
 
     // Generic CRM uses targeted feedback because this form disables native
@@ -4051,79 +4592,6 @@ const Leads = () => {
         return;
       }
     }
-    for (const definition of isGeneric ? customFieldDefs : []) {
-      const value = newLead.customFields?.[definition.fieldKey];
-      const empty = Array.isArray(value)
-        ? value.length === 0
-        : String(value ?? "").trim() === "";
-      if (
-        definition.isRequired &&
-        (definition.fieldType === "checkbox" ? value !== true : empty)
-      ) {
-        notify.error(`${definition.label} is required`);
-        return;
-      }
-      if (
-        value === undefined ||
-        value === null ||
-        value === "" ||
-        (Array.isArray(value) && value.length === 0)
-      )
-        continue;
-      if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
-        notify.error(`${definition.label} contains invalid control characters`);
-        return;
-      }
-      if (
-        definition.fieldType === "number" &&
-        !Number.isFinite(Number(value))
-      ) {
-        notify.error(`${definition.label} must be a valid number`);
-        return;
-      }
-      if (
-        definition.fieldType === "date" &&
-        !/^\d{4}-\d{2}-\d{2}$/.test(String(value))
-      ) {
-        notify.error(`${definition.label} must be a valid date`);
-        return;
-      }
-      if (definition.fieldType === "url") {
-        try {
-          const parsed = new URL(String(value));
-          if (!["http:", "https:"].includes(parsed.protocol))
-            throw new Error("invalid protocol");
-        } catch (_error) {
-          notify.error(`${definition.label} must be a valid URL`);
-          return;
-        }
-      }
-      if (
-        ["dropdown", "radio"].includes(definition.fieldType) &&
-        !(definition.options || []).includes(value)
-      ) {
-        notify.error(`Please select a valid ${definition.label}`);
-        return;
-      }
-      if (definition.fieldType === "multiselect") {
-        const selected = Array.isArray(value) ? value : [value];
-        if (
-          selected.some(
-            (option) => !(definition.options || []).includes(option),
-          )
-        ) {
-          notify.error(`Please select valid values for ${definition.label}`);
-          return;
-        }
-      }
-      if (typeof value === "string" && value.length > 2000) {
-        notify.error(
-          `${definition.label} is too long (maximum 2000 characters)`,
-        );
-        return;
-      }
-    }
-
     // #315: refetch leads after a successful create so the "All Leads" pipeline
     // counter chip in the header (which reads `leads.length`) refreshes
     // immediately. Pre-fix the await on the create call could throw and skip
@@ -4134,7 +4602,7 @@ const Leads = () => {
       // Generic CRM: prepend the picker's country code (the input field
       // is the local-part). Wellness: phone is already canonicalised by
       // the +91-optional regex above  store as-is.
-      const phoneOut = isWellness
+      const phoneOut = isWellness || isTravel
         ? phone
         : newLead.phone
           ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
@@ -4155,7 +4623,7 @@ const Leads = () => {
         email: "",
         company: "",
         title: "",
-        countryCode: "+1",
+        countryCode: isTravel ? "+91" : "+1",
         phone: "",
         source: "Organic",
         status: "Lead",
@@ -4164,6 +4632,7 @@ const Leads = () => {
       // #892  close the drawer on successful create; the list refresh
       // below puts the new row at the top so the user sees the result.
       closeCreate();
+      if (isGeneric) notify.success("Lead created successfully");
     } catch (err) {
       if (err?.body?.code === "DUPLICATE_CONTACT") {
         setLeadDuplicate({
@@ -4339,7 +4808,6 @@ const Leads = () => {
       );
       setSelectedLeads([]);
       setBulkAgent("");
-      setBulkCampaignDropdownOpen(false);
       fetchLeads({ background: true });
     } catch (err) {
       notify.error(
@@ -4373,7 +4841,6 @@ const Leads = () => {
         `Campaign assigned to ${res?.updated || selectedLeads.length} lead${selectedLeads.length === 1 ? "" : "s"}`,
       );
       setBulkCampaignId("");
-      setBulkCampaignDropdownOpen(false);
       setSelectedLeads([]);
       await fetchLeads({ background: true });
       loadCallifiedCampaigns();
@@ -4854,7 +5321,9 @@ const Leads = () => {
             ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
           ];
       return isGeneric
-        ? preferred.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+        ? preferred.filter(
+            (key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key),
+          )
         : preferred;
     },
     [customFieldDefs, isGeneric, visibleColumns],
@@ -4979,6 +5448,7 @@ const Leads = () => {
         (key === "whatsappPhone" && isGeneric) ||
         key === "aiScore" ||
         key === "source" ||
+        (key === "lifecycleStage" && isGeneric) ||
         key === "medium" ||
         // Web Form is generic-CRM only (wellness/travel never see it).
         (key === "webForm" && isGeneric) ||
@@ -5045,6 +5515,7 @@ const Leads = () => {
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
+      if (key === "lifecycleStage") return { key, label: "Lifecycle Stage" };
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
@@ -5110,6 +5581,7 @@ const Leads = () => {
       ? [
           { key: "interestedPlotArea", label: "Interested plot area" },
           { key: "pickupLocation", label: "Pickup location" },
+          { key: "plotAssign", label: "Plot Assign" },
           { key: "overallPickupStatus", label: "Overall status" },
           { key: "campaign", label: "Callified Campaign" },
           { key: "callStatus", label: "Call Status" },
@@ -5124,14 +5596,30 @@ const Leads = () => {
         ]
       : []),
   ].filter(
-    (column) =>
-      !isGeneric ||
-      !["interestedPlotArea", "pickupLocation", "overallPickupStatus"].includes(
-        column.key,
-      ) ||
-      !Array.isArray(visibleColumns) ||
-      visibleColumns.includes(column.key),
+    (column) => {
+      if (!isGeneric) return true;
+      if (CALLIFIED_LEAD_COLUMN_KEYS.has(column.key)) {
+        return preferredVisibleColumns.includes(column.key);
+      }
+      if (["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(column.key)) {
+        return !Array.isArray(visibleColumns) || visibleColumns.includes(column.key);
+      }
+      return true;
+    },
   );
+  const firstCallifiedColumnIndex = preferredVisibleColumns.findIndex((key) =>
+    CALLIFIED_LEAD_COLUMN_KEYS.has(key),
+  );
+  const leadUserColumnsBeforeCallified = firstCallifiedColumnIndex < 0
+    ? leadUserColumnDefs
+    : leadUserColumnDefs.filter(
+        (column) => preferredVisibleColumns.indexOf(column.key) < firstCallifiedColumnIndex,
+      );
+  const leadUserColumnsAfterCallified = firstCallifiedColumnIndex < 0
+    ? []
+    : leadUserColumnDefs.filter(
+        (column) => preferredVisibleColumns.indexOf(column.key) > firstCallifiedColumnIndex,
+      );
   const isLeadFixedColumnVisible = (key) =>
     leadFixedExtraColumnDefs.some((column) => column.key === key);
   const getCustomFieldFilterKind = (fieldType) => {
@@ -5170,6 +5658,12 @@ const Leads = () => {
         };
       case "source":
         return { fieldKey: "source", label: "Source", kind: "text" };
+      case "lifecycleStage":
+        return {
+          fieldKey: "lifecycleStageKey",
+          label: "Lifecycle Stage",
+          kind: "enum",
+        };
       case "medium":
         return { fieldKey: "medium", label: "Medium", kind: "text" };
       case "webForm":
@@ -5542,12 +6036,31 @@ const Leads = () => {
       </button>
     );
   };
-  const tableColumnDefs = [
-    { key: "name", label: "Name" },
-    ...leadUserColumnDefs,
-    ...leadFixedExtraColumnDefs,
-    { key: "actions", label: "Actions", locked: true },
-  ];
+  const genericWorkflowColumnDefs = leadFixedExtraColumnDefs.filter(
+    (column) => !CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  const genericCallifiedColumnDefs = leadFixedExtraColumnDefs.filter((column) =>
+    CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  // Keep this definition order identical to the Generic header/body render
+  // order below. The fixed-layout table applies <col> widths by position, so
+  // using the unsplit leadUserColumnDefs order here makes every column after
+  // Email resize a different column when Callified fields are interleaved.
+  const tableColumnDefs = isGeneric
+    ? [
+        { key: "name", label: "Name" },
+        ...leadUserColumnsBeforeCallified,
+        ...genericWorkflowColumnDefs,
+        ...genericCallifiedColumnDefs,
+        ...leadUserColumnsAfterCallified,
+        { key: "actions", label: "Actions", locked: true },
+      ]
+    : [
+        { key: "name", label: "Name" },
+        ...leadUserColumnDefs,
+        ...leadFixedExtraColumnDefs,
+        { key: "actions", label: "Actions", locked: true },
+      ];
   // Generic CRM keeps the complete lead name visible while the remaining
   // columns move horizontally. Other verticals retain their existing table.
   const leadsFrozenColumnDefs = isGeneric
@@ -5694,35 +6207,32 @@ const Leads = () => {
       ".leads-split-table--density-compact, .leads-split-table--density-comfortable",
     );
     if (densityTable) {
-      // Measure every density-controlled row without a previously assigned
-      // height, then use one bounded shared height for both panes. Unbounded
-      // measurements can feed expanded flex-table rows back into the next
-      // layout pass and progressively inflate comfortable rows.
+      // Each lead is rendered in two separate tables. Measure its two halves
+      // without their previous inline heights, then give both the height the
+      // taller half actually needs. A fixed upper limit left their borders
+      // out of line whenever one cell needed more than that limit.
       rowPairs.forEach(([frozenRow, scrollRow]) => {
         frozenRow.style.height = "";
         scrollRow.style.height = "";
       });
-      const measuredHeight = Math.max(
-        ...rowPairs.flatMap(([frozenRow, scrollRow]) => [
-          Math.ceil(frozenRow.getBoundingClientRect().height),
-          Math.ceil(scrollRow.getBoundingClientRect().height),
-        ]),
-      );
       const isCompact = densityTable.classList.contains(
         "leads-split-table--density-compact",
       );
-      const minimumHeight = isCompact
-        ? densityTable.classList.contains("leads-split-table--sparse")
-          ? 48
-          : 40
-        : 52;
-      const maximumHeight = isCompact ? 48 : 64;
-      const uniformHeight = Math.min(
-        maximumHeight,
-        Math.max(minimumHeight, measuredHeight),
+      const minimumHeight = isCompact ? 40 : 52;
+      const fallbackMaximumHeight = isCompact ? 48 : 64;
+      const naturalHeight = (row) => Math.max(
+        row.offsetHeight,
+        Math.min(Math.ceil(row.getBoundingClientRect().height), fallbackMaximumHeight),
       );
-      const nextHeight = `${uniformHeight}px`;
-      rowPairs.forEach(([frozenRow, scrollRow]) => {
+      const rowHeights = rowPairs.map(([frozenRow, scrollRow]) =>
+        Math.max(
+          minimumHeight,
+          naturalHeight(frozenRow),
+          naturalHeight(scrollRow),
+        ),
+      );
+      rowPairs.forEach(([frozenRow, scrollRow], index) => {
+        const nextHeight = `${rowHeights[index]}px`;
         frozenRow.style.height = nextHeight;
         scrollRow.style.height = nextHeight;
       });
@@ -5804,6 +6314,13 @@ const Leads = () => {
     ) {
       notify.error("Phone number can contain digits only (7-15 digits)");
       throw new Error("Invalid phone number");
+    }
+    if (isGeneric && field === "companySize") {
+      const employeeCount = Number(value);
+      if (String(value).trim() !== "" && Number.isFinite(employeeCount) && employeeCount < 0) {
+        notify.error("Number of employees cannot be negative");
+        return false;
+      }
     }
     if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
       notify.error(`${field} contains invalid control characters`);
@@ -6117,6 +6634,15 @@ const Leads = () => {
         currentLeadsPage * leadsPageSize,
         currentLeadsPage * leadsPageSize + leadsPageSize,
       );
+  useEffect(() => {
+    if (!isGeneric || !Number.isInteger(focusedCallifiedLeadId) || focusedCallifiedLeadId <= 0 || loading) return;
+    const cell = document.querySelector(
+      `[data-callified-ai-lead-id="${focusedCallifiedLeadId}"]`,
+    );
+    if (typeof cell?.scrollIntoView === "function") {
+      cell.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }
+  }, [focusedCallifiedLeadId, isGeneric, loading, paginatedLeads]);
   const visibleSelectedLeadCount = paginatedLeads.reduce(
     (count, lead) => count + (selectedLeads.includes(lead.id) ? 1 : 0),
     0,
@@ -6248,8 +6774,10 @@ const Leads = () => {
       const value = values?.[f.fieldKey] ?? "";
       const handle = (v) => onChange(f.fieldKey, v);
       const label = f.label;
-      const placeholder =
-        f.placeholder || (f.isRequired ? label : `${label} (optional)`);
+      const placeholder = f.isRequired
+        ? `${f.placeholder || label} *`
+        : (f.placeholder || `${label} (optional)`);
+      const fieldLabel = <>{label}{f.isRequired && <span aria-hidden="true" className="required-mark" style={{ color: "var(--danger-color, #ef4444)", marginLeft: "0.2rem" }}>*</span>}</>;
       const titleAttr = f.tooltip ? { title: f.tooltip } : {};
 
       if (f.fieldType === "checkbox") {
@@ -6265,7 +6793,7 @@ const Leads = () => {
               required={f.isRequired}
               onChange={(e) => handle(e.target.checked)}
             />
-            {label}
+            {fieldLabel}
           </label>
         );
       }
@@ -6298,7 +6826,7 @@ const Leads = () => {
             style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}
             {...titleAttr}
           >
-            {label}
+            {fieldLabel}
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
               {(f.options || []).map((opt) => (
                 <label
@@ -6814,8 +7342,52 @@ const Leads = () => {
             {formatDate(lead.createdAt)}
           </td>
         );
-      case "status": {
+      case "lifecycleStage": {
+        const configuredStage = isGeneric
+          ? genericLifecycleOptions.find((option) => option.id === lead.lifecycleStageKey)
+          : null;
+        const lifecycleOptions = isGeneric && genericLifecycleOptions.length
+          ? genericLifecycleOptions
+          : ["Lead", "Prospect", "Customer", "Churned", "Junk"].map((status) => ({ id: status, label: status, status }));
         // Lifecycle stage — inline-editable dropdown, pill display.
+        return renderBuiltInLeadCell({
+          lead,
+          field: "status",
+          label: "Lifecycle Stage",
+          value: configuredStage?.label || lead.status || "Lead",
+          type: "select",
+          options: lifecycleOptions.map((option) => option.label),
+          renderValue: (displayValue) => (
+            <span style={sourceBadgeStyle}>{displayValue || ""}</span>
+          ),
+          onSave: async (row, _field, selectedLabel) => {
+            const option = lifecycleOptions.find((item) => item.label === selectedLabel);
+            if (!option) return;
+            let lifecycleTransitionReason = '';
+            if (isGeneric && option.negative) {
+              const reason = await notify.prompt({
+                title: 'Reason required',
+                message: `Tell us why ${option.label} was selected.`,
+                placeholder: 'Enter the reason for this negative stage',
+                confirmText: 'Confirm stage',
+              });
+              lifecycleTransitionReason = String(reason || '').trim();
+              if (!lifecycleTransitionReason) return false;
+            }
+            const updated = await fetchApi(`/api/contacts/${row.id}`, {
+              method: "PATCH",
+              body: JSON.stringify(isGeneric && genericLifecycleOptions.length
+                ? {
+                    lifecycleStageKey: option.id,
+                    ...(lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
+                  }
+                : { status: option.status }),
+            });
+            setLeads((current) => current.map((item) => item.id === row.id ? { ...item, ...updated } : item));
+          },
+        });
+      }
+      case "status":
         return renderBuiltInLeadCell({
           lead,
           field: "status",
@@ -6827,7 +7399,6 @@ const Leads = () => {
             <span style={sourceBadgeStyle}>{displayValue || ""}</span>
           ),
         });
-      }
       case "title":
         return renderBuiltInLeadCell({
           lead,
@@ -7005,8 +7576,7 @@ const Leads = () => {
             label: "No Of Employee",
             value: lead.companySize,
             extraStyle: { color: "var(--text-secondary)" },
-            renderValue: (displayValue) =>
-              displayValue ? String(displayValue) : "",
+            renderValue: formatGenericEmployeeCount,
           });
         }
         const value =
@@ -8276,24 +8846,52 @@ const Leads = () => {
                           </div>
                         )}
                         {isGeneric && canLeadUpdate && callifiedConfigured && (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => {
-                              setLeadBulkActionsOpen(false);
-                              setBulkCampaignDropdownOpen(true);
-                            }}
-                            disabled={bulkCampaignSaving}
+                          <div
                             style={{
-                              display: "inline-flex",
+                              display: "flex",
                               alignItems: "center",
-                              justifyContent: "center",
-                              gap: "0.35rem",
-                              fontSize: "0.85rem",
+                              gap: "0.5rem",
+                              flexWrap: "wrap",
                             }}
                           >
-                            <Filter size={14} /> Assign campaign
-                          </button>
+                            <select
+                              className="input-field"
+                              value={bulkCampaignId}
+                              onChange={(e) => setBulkCampaignId(e.target.value)}
+                              disabled={bulkCampaignSaving}
+                              style={{
+                                flex: 1,
+                                minWidth: 180,
+                                padding: "0.5rem",
+                              }}
+                              aria-label="Bulk assign campaign"
+                            >
+                              <option value="">No campaign</option>
+                              {callifiedCampaigns.map((campaign) => (
+                                <option key={campaign.id} value={campaign.id}>
+                                  {campaign.name || `Campaign ${campaign.id}`}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => {
+                                setLeadBulkActionsOpen(false);
+                                handleBulkAssignCampaign(bulkCampaignId || null);
+                              }}
+                              disabled={bulkCampaignSaving}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "0.35rem",
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              <Filter size={14} /> Assign campaign
+                            </button>
+                          </div>
                         )}
                         {canLeadDelete && (
                           <button
@@ -8319,7 +8917,7 @@ const Leads = () => {
                           onClick={() => {
                             setSelectedLeads([]);
                             setBulkAgent("");
-                            setBulkCampaignDropdownOpen(false);
+                            setBulkCampaignId("");
                             setLeadBulkActionsOpen(false);
                           }}
                           style={{
@@ -8368,101 +8966,6 @@ const Leads = () => {
                 </>
               )}
             </button>
-          )}
-
-          {isGeneric && selectedLeads.length > 0 && callifiedConfigured && (
-            <div style={{ position: "relative" }}>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setBulkCampaignDropdownOpen((o) => !o)}
-                disabled={bulkCampaignSaving}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.85rem",
-                  padding: "0.42rem 0.7rem",
-                }}
-              >
-                <Filter size={14} />
-                {bulkCampaignDropdownOpen ? (
-                  <ChevronUp size={14} />
-                ) : (
-                  <ChevronDown size={14} />
-                )}
-                Assign Campaign ({selectedLeads.length})
-              </button>
-              {bulkCampaignDropdownOpen && (
-                <>
-                  <div
-                    style={{ position: "fixed", inset: 0, zIndex: 50 }}
-                    onClick={() => setBulkCampaignDropdownOpen(false)}
-                  />
-                  <div
-                    className="card leads-bulk-campaign-menu"
-                    style={{
-                      position: "absolute",
-                      top: "calc(100% + 4px)",
-                      left: 0,
-                      right: "auto",
-                      zIndex: 51,
-                      minWidth: 260,
-                      maxHeight: 320,
-                      overflowY: "auto",
-                      padding: "0.5rem",
-                      background: "var(--bg-color)",
-                      border: "1px solid var(--border-color)",
-                      boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
-                    }}
-                  >
-                    {callifiedCampaigns.length === 0 ? (
-                      <div
-                        style={{
-                          padding: "0.5rem",
-                          fontSize: "0.85rem",
-                          color: "var(--text-secondary)",
-                        }}
-                      >
-                        No campaigns
-                      </div>
-                    ) : (
-                      <>
-                        <div
-                          style={{
-                            padding: "0.4rem 0.5rem",
-                            fontSize: "0.85rem",
-                            cursor: "pointer",
-                            borderRadius: 6,
-                            color: "var(--text-secondary)",
-                          }}
-                          className="table-row-hover"
-                          onClick={() => handleBulkAssignCampaign(null)}
-                        >
-                          No campaign
-                        </div>
-                        {callifiedCampaigns.map((c) => (
-                          <div
-                            key={c.id}
-                            style={{
-                              padding: "0.4rem 0.5rem",
-                              fontSize: "0.85rem",
-                              cursor: "pointer",
-                              borderRadius: 6,
-                            }}
-                            className="table-row-hover"
-                            onClick={() => handleBulkAssignCampaign(c.id)}
-                          >
-                            {c.name || `Campaign ${c.id}`}{" "}
-                            {c.product_name ? `— ${c.product_name}` : ""}
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
           )}
 
           {/* Lead Fields lives in the header for generic (see above); the
@@ -8698,15 +9201,12 @@ const Leads = () => {
               flex: "1 1 520px",
             }}
           >
-            <div style={{ position: "relative", width: "min(100%, 300px)" }}>
+            <div className="search-with-leading-icon" style={{ width: "min(100%, 300px)" }}>
               <Search
                 size={18}
                 style={{
-                  position: "absolute",
-                  left: "1rem",
-                  top: "50%",
-                  transform: "translateY(-50%)",
                   color: "var(--text-secondary)",
+                  flex: "0 0 auto",
                 }}
               />
               <input
@@ -8719,7 +9219,6 @@ const Leads = () => {
                   setSearchTerm(e.target.value);
                 }}
                 style={{
-                  paddingLeft: "2.5rem",
                   backgroundColor: "var(--surface-hover)",
                   height: 38,
                   fontSize: "0.85rem",
@@ -9638,10 +10137,16 @@ const Leads = () => {
               <ColumnPicker
                 tableKey="leads"
                 onColumnsChange={(columns) => setVisibleColumns(isGeneric
-                  ? columns.filter((column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column))
+                  ? columns.filter(
+                      (column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
+                    )
                   : columns)}
                 onAvailableColumnsChange={(columns) => setLeadColumnCatalog(isGeneric
-                  ? columns.filter((column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key))
+                  ? ensureGenericOverallStatusCatalog(
+                      ensureGenericPlotAssignCatalog(columns),
+                    ).filter(
+                      (column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
+                    )
                   : columns)}
                 deletableColumns={
                   isGeneric && isAdmin
@@ -9662,7 +10167,7 @@ const Leads = () => {
                 }}
               />
             )}
-            {canLeadUpdate && selectedLeads.length > 0 && (
+            {!isGeneric && canLeadUpdate && selectedLeads.length > 0 && (
               <>
                 <span
                   style={{
@@ -9736,7 +10241,24 @@ const Leads = () => {
           )}
         </div>
         <div
-          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${filteredLeads.length > 0 && filteredLeads.length <= 10 ? " leads-split-table--sparse" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          onWheel={isGeneric ? (event) => {
+            const grid = event.currentTarget;
+            const scrollbar = grid.querySelector(".top-scroll-sync__sticky-bottom");
+            if (!scrollbar || scrollbar.scrollWidth <= scrollbar.clientWidth) return;
+
+            // Keep vertical wheel/touchpad gestures vertical, including when
+            // the grid is already at its top or bottom. Only an intentional
+            // horizontal gesture (or Shift+wheel) should move across columns.
+            const horizontalDelta = event.shiftKey
+              ? event.deltaY
+              : Math.abs(event.deltaX) > Math.abs(event.deltaY)
+                ? event.deltaX
+                : 0;
+            if (!horizontalDelta) return;
+            const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? grid.clientWidth : 1;
+            scrollbar.scrollLeft += horizontalDelta * multiplier;
+          } : undefined}
           onTouchStart={isGeneric ? (event) => {
             const touch = event.touches[0];
             const scrollbar = event.currentTarget.querySelector(".top-scroll-sync__sticky-bottom");
@@ -9765,11 +10287,9 @@ const Leads = () => {
                   border: "1px solid var(--border-color)",
                   borderRadius: "16px",
                   background: "var(--surface-color)",
-                  flex: "1 1 auto",
-                  // Let the complete generic table establish its natural
-                  // height so the horizontal scrollbar sits at the table's
-                  // actual bottom, not at the bottom of a nested viewport.
-                  // The inner TopScrollSync wrapper owns horizontal overflow.
+                  flex: "0 0 auto",
+                  // CSS bounds this Generic CRM table viewport so only the
+                  // records move beneath the sticky column headers.
                   // Generic order: toolbar (1) → table (2) → pagination (3).
                   order: 2,
                 }
@@ -9970,9 +10490,8 @@ const Leads = () => {
               stickyTopOffset={0}
               hideTopBar={isGeneric}
               stickyBottom={isGeneric}
-              // Generic CRM mirrors Freshsales: one scrollbar stays at the
-              // bottom of the record viewport while the header stays fixed.
-              // Other verticals retain their existing native table scroll.
+              // Generic CRM retains its bottom scrollbar; other verticals
+              // retain their existing native table scroll.
               hideBottomScrollbar={isGeneric}
               verticalOverflow="visible"
             >
@@ -10025,7 +10544,7 @@ const Leads = () => {
                           />
                         ) : null,
                       )}
-                    {leadUserColumnDefs.map((column) => (
+                    {leadUserColumnsBeforeCallified.map((column) => (
                       <Fragment key={column.key}>
                         {renderLeadUserHeaderCell(column)}
                       </Fragment>
@@ -10038,6 +10557,7 @@ const Leads = () => {
                           "Pickup location",
                           { paddingRight: "1.5rem" },
                         ],
+                        ["plotAssign", "Plot Assign"],
                         [
                           "overallPickupStatus",
                           "Overall status",
@@ -10097,6 +10617,11 @@ const Leads = () => {
                           label: "Callified Score",
                         }),
                       )}
+                    {leadUserColumnsAfterCallified.map((column) => (
+                      <Fragment key={column.key}>
+                        {renderLeadUserHeaderCell(column)}
+                      </Fragment>
+                    ))}
                     {isTravel &&
                       renderColumnHeaderCell(
                         "subBrand",
@@ -10239,7 +10764,7 @@ const Leads = () => {
                             </div>
                           </td>
                         )}
-                        {leadUserColumnDefs.map((column) => (
+                        {leadUserColumnsBeforeCallified.map((column) => (
                           <Fragment key={column.key}>
                             {renderLeadUserBodyCell(lead, column)}
                           </Fragment>
@@ -10254,6 +10779,24 @@ const Leads = () => {
                               : "Not started";
                             const pickupAddress =
                               pickupStatus?.pickupAddress?.trim();
+                            const selectedPickupLocation = pickupLocationOptions.find(
+                              (location) => String(location.address || "").trim() === pickupAddress,
+                            );
+                            const currentPickupOption = pickupAddress && !selectedPickupLocation
+                              ? {
+                                  id: `current-${lead.id}`,
+                                  name: "Current pickup",
+                                  address: pickupAddress,
+                                }
+                              : null;
+                            const plotAssignmentCustomer =
+                              getPlotAssignmentCustomer(lead.id);
+                            const assignedPlots = getAssignedPlotsForLead(
+                              lead,
+                              pickupStatus,
+                            );
+                            const transportWorkflowLocked =
+                              isTransportWorkflowLocked(pickupStatus);
                             return (
                               <>
                                 {isLeadFixedColumnVisible(
@@ -10304,38 +10847,26 @@ const Leads = () => {
                                       }}
                                     >
                                       <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                                        {pickupAddress ? (
-                                          <span
-                                            title={pickupAddress}
-                                            style={{
-                                              display: "block",
-                                              overflowWrap: "anywhere",
-                                              lineHeight: 1.35,
-                                              fontWeight: 600,
-                                            }}
-                                          >
-                                            {pickupAddress}
-                                          </span>
-                                        ) : (
-                                          <PickupLocationSelect
-                                            compact
-                                            ariaLabel={`Pickup location for ${lead.name || "lead"}`}
-                                            value=""
-                                            disabled={
-                                              pickupLocationOptions.length === 0 ||
-                                              savingPickupLocationId ===
-                                                Number(lead.id)
-                                            }
-                                            onChange={(locationId) =>
-                                              saveLeadPickupLocation(
-                                                lead,
-                                                pickupStatus,
-                                                locationId,
-                                              )
-                                            }
-                                            options={pickupLocationOptions}
-                                          />
-                                        )}
+                                        <PickupLocationSelect
+                                          compact
+                                          ariaLabel={`Pickup location for ${lead.name || "lead"}`}
+                                          value={selectedPickupLocation?.id || currentPickupOption?.id || ""}
+                                          disabled={
+                                            pickupLocationOptions.length === 0 ||
+                                            savingPickupLocationId === Number(lead.id) ||
+                                            transportWorkflowLocked
+                                          }
+                                          onChange={(locationId) =>
+                                            saveLeadPickupLocation(
+                                              lead,
+                                              pickupStatus,
+                                              locationId,
+                                            )
+                                          }
+                                          options={currentPickupOption
+                                            ? [currentPickupOption, ...pickupLocationOptions]
+                                            : pickupLocationOptions}
+                                        />
                                       </div>
                                       {pickupAddress && (
                                         <a
@@ -10363,6 +10894,67 @@ const Leads = () => {
                                     </div>
                                   </td>
                                 )}
+                                {isLeadFixedColumnVisible("plotAssign") && (
+                                  <td
+                                    className="generic-plot-assign-cell"
+                                    style={getBodyCellStyle("plotAssign", {
+                                      whiteSpace: "normal",
+                                      overflow: "visible",
+                                    })}
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    <div>
+                                      {isAdmin && assignedPlots.length > 0 && (
+                                        <button
+                                          type="button"
+                                          className="btn-secondary"
+                                          aria-label={`View plots for ${lead.name || "lead"}`}
+                                          onClick={() => setViewingLeadPlots({
+                                            lead,
+                                            plots: assignedPlots,
+                                            customer: plotAssignmentCustomer,
+                                            pickupStatus,
+                                            selectedPlot: null,
+                                          })}
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 5,
+                                            width: "fit-content",
+                                            padding: ".35rem .55rem",
+                                            fontSize: ".72rem",
+                                          }}
+                                        >
+                                          <Eye size={13} /> View plot
+                                        </button>
+                                      )}
+                                      {isAdmin && assignedPlots.length === 0 && (
+                                        <button
+                                          type="button"
+                                          className="btn-secondary"
+                                          aria-label={`Assign plot to ${lead.name || "lead"}`}
+                                          title={transportWorkflowLocked
+                                            ? "Plot assignments are locked because transport has started"
+                                            : "Assign plots"}
+                                          onClick={() => openLeadPlotAssignment(lead)}
+                                          disabled={transportWorkflowLocked}
+                                          style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 5,
+                                            width: "fit-content",
+                                            padding: ".35rem .55rem",
+                                            fontSize: ".72rem",
+                                          }}
+                                        >
+                                          <Plus size={13} /> Assign plot
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                )}
                                 {isLeadFixedColumnVisible(
                                   "overallPickupStatus",
                                 ) && (
@@ -10380,21 +10972,6 @@ const Leads = () => {
                                   >
                                     <div className="generic-overall-status-content">
                                       <strong>{overallStatus}</strong>
-                                      {pickupStatus && (
-                                        <div
-                                          className="generic-overall-status-date"
-                                          style={{
-                                            marginTop: 3,
-                                            color: "var(--text-secondary)",
-                                            fontSize: ".72rem",
-                                          }}
-                                        >
-                                          {formatPickupStatusDate(
-                                            pickupStatus.currentStatusUpdatedAt ||
-                                              pickupStatus.statusUpdatedAt,
-                                          )}
-                                        </div>
-                                      )}
                                       {pickupStatus && (
                                         <button
                                           type="button"
@@ -10584,7 +11161,20 @@ const Leads = () => {
                         )}
                         {isLeadFixedColumnVisible("callifiedAi") && (
                           <td
-                            style={getBodyCellStyle("callifiedAi")}
+                            data-callified-ai-lead-id={String(lead.id)}
+                            data-callified-ai-highlighted={
+                              Number(lead.id) === focusedCallifiedLeadId ? "true" : undefined
+                            }
+                            aria-label={`Callified AI call for ${lead.name || "lead"}`}
+                            style={getBodyCellStyle(
+                              "callifiedAi",
+                              Number(lead.id) === focusedCallifiedLeadId
+                                ? {
+                                    background: "color-mix(in srgb, var(--primary-color, var(--accent-color)) 18%, transparent)",
+                                    boxShadow: "inset 0 0 0 2px var(--primary-color, var(--accent-color))",
+                                  }
+                                : {},
+                            )}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <button
@@ -10737,6 +11327,11 @@ const Leads = () => {
                             })()}
                           </td>
                         )}
+                        {leadUserColumnsAfterCallified.map((column) => (
+                          <Fragment key={column.key}>
+                            {renderLeadUserBodyCell(lead, column)}
+                          </Fragment>
+                        ))}
                         {isTravel && (
                           <td
                             style={getBodyCellStyle("subBrand", {
@@ -10885,6 +11480,386 @@ const Leads = () => {
             customer={viewingPickupStatus}
             onClose={() => setViewingPickupStatus(null)}
           />
+        )}
+        {isGeneric && assigningPlotLead && (
+          <div
+            role="presentation"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              background: "rgba(15,23,42,.55)",
+            }}
+          >
+            <form
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lead-assign-plots-title"
+              className="card"
+              onSubmit={assignLeadPlots}
+              style={{
+                width: "min(620px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                padding: "1.5rem",
+                background: "var(--modal-bg, var(--surface-color))",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  gap: 12,
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <h2 id="lead-assign-plots-title" style={{ margin: 0 }}>
+                    Assign plots
+                  </h2>
+                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                    {assigningPlotLead.name || "Lead"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Close assign plots"
+                  onClick={closeLeadPlotAssignment}
+                  disabled={assigningPlots}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <p style={{ color: "var(--text-secondary)", fontSize: ".84rem" }}>
+                Choose one Plot / Site name, then select one or more available plot numbers. Reserved and sold plots are hidden.
+              </p>
+              <label style={{ display: "grid", gap: 6, fontWeight: 700, fontSize: ".8rem" }}>
+                Plot / Site
+                <select
+                  className="input-field"
+                  aria-label="Plot or site name"
+                  value={assigningPlotName}
+                  disabled={assigningPlots}
+                  onChange={(event) => {
+                    setAssigningPlotName(event.target.value);
+                    setAssigningPlotIds([]);
+                  }}
+                >
+                  {availablePlotAssignmentNames.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              <div
+                role="group"
+                aria-label="Plots to assign"
+                style={{ display: "grid", gap: 8, maxHeight: 340, overflowY: "auto", marginTop: 14 }}
+              >
+                {assigningPlotOptions.map((plotOption) => {
+                  const alreadyAssigned = alreadyAssignedPlotIds.has(Number(plotOption.id));
+                  const checked = assigningPlotIds.includes(Number(plotOption.id));
+                  return (
+                    <label
+                      key={plotOption.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: ".75rem",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 10,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={alreadyAssigned || checked}
+                        disabled={alreadyAssigned || assigningPlots}
+                        onChange={(event) =>
+                          setAssigningPlotIds((current) =>
+                            event.target.checked
+                              ? [...current, Number(plotOption.id)]
+                              : current.filter((id) => id !== Number(plotOption.id)),
+                          )
+                        }
+                      />
+                      <span>
+                        <strong>Plot {plotOption.plotNumber}</strong>
+                        <small style={{ display: "block", marginTop: 2, color: "var(--text-secondary)" }}>
+                          {plotOption.name}
+                          {plotOption.block ? ` · Block ${plotOption.block}` : ""}
+                          {alreadyAssigned ? " · Already assigned" : ""}
+                        </small>
+                      </span>
+                    </label>
+                  );
+                })}
+                {!assigningPlotOptions.length && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 6,
+                      padding: "1rem",
+                      border: "1px dashed var(--border-color)",
+                      borderRadius: 10,
+                      color: "var(--text-secondary)",
+                      fontSize: ".8rem",
+                    }}
+                  >
+                    <strong style={{ color: "var(--text-primary)" }}>
+                      No available plot numbers
+                    </strong>
+                    <span>
+                      All plot numbers for this Plot / Site are reserved, sold,
+                      inactive, or unavailable.
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+                <button type="button" className="btn-secondary" onClick={closeLeadPlotAssignment} disabled={assigningPlots}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={!assigningPlotIds.length || assigningPlots}>
+                  {assigningPlots
+                    ? "Assigning…"
+                    : assigningPlotIds.length
+                      ? `Assign ${assigningPlotIds.length} plot${assigningPlotIds.length === 1 ? "" : "s"}`
+                      : "Assign plots"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+        {viewingLeadPlots && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              background: "rgba(15,23,42,.55)",
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lead-view-plots-title"
+              className="card"
+              style={{
+                width: "min(520px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                padding: "1.5rem",
+                background: "var(--modal-bg, var(--surface-color))",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+                <div>
+                  <h2 id="lead-view-plots-title" style={{ margin: 0 }}>Assigned plots</h2>
+                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                    {viewingLeadPlots.lead.name || "Lead"}
+                  </p>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {!isTransportWorkflowLocked(viewingLeadPlots.pickupStatus) && viewingLeadPlots.plots.some((plot) => plot.id && !isPurchasedCustomerPlot(plot, viewingLeadPlots.customer, viewingLeadPlots.pickupStatus)) && (
+                    <button type="button" className="btn-secondary" aria-label={`Edit assigned plots for ${viewingLeadPlots.lead.name || "lead"}`} onClick={openLeadPlotReplacement}>
+                      <Pencil size={13} /> Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    aria-label="Close assigned plots"
+                    onClick={() => setViewingLeadPlots(null)}
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+              </div>
+              <div aria-label="Assigned plot list" style={{ display: "grid", gap: 10 }}>
+                {viewingLeadPlots.plots.map((plot) => (
+                  <div
+                    key={plot.id || `${plot.name}-${plot.plotNumber}`}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: ".8rem",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 10,
+                    }}
+                  >
+                    <span>
+                      <strong>{plot.name || "Plot"}</strong>
+                      <small style={{ display: "block", marginTop: 3, color: "var(--text-secondary)" }}>
+                        {plot.plotNumber ? `Plot ${plot.plotNumber}` : "Plot number unavailable"}
+                      </small>
+                    </span>
+                    {plot.id && (isPurchasedCustomerPlot(
+                      plot,
+                      viewingLeadPlots.customer,
+                      viewingLeadPlots.pickupStatus,
+                    ) || isTransportWorkflowLocked(viewingLeadPlots.pickupStatus)) ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        aria-label={`View selected plot ${plot.plotNumber || plot.name || "details"} for ${viewingLeadPlots.lead.name || "lead"}`}
+                        onClick={() => setViewingLeadPlots((current) => ({
+                          ...current,
+                          selectedPlot: plot,
+                        }))}
+                      >
+                        <Eye size={12} /> View selected plot
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              {viewingLeadPlots.selectedPlot && (
+                <div
+                  role="region"
+                  aria-label="Selected plot details"
+                  style={{
+                    marginTop: 14,
+                    padding: ".9rem",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 10,
+                    background: "var(--subtle-bg, rgba(148,163,184,.08))",
+                  }}
+                >
+                  <strong>Selected plot details</strong>
+                  <div style={{ display: "grid", gap: 5, marginTop: 8, fontSize: ".82rem" }}>
+                    <span>Plot / Site: {viewingLeadPlots.selectedPlot.name || "Not available"}</span>
+                    <span>Plot number: {viewingLeadPlots.selectedPlot.plotNumber || "Not available"}</span>
+                    <span>Block: {viewingLeadPlots.selectedPlot.block || "Not available"}</span>
+                    <span>Address: {viewingLeadPlots.selectedPlot.address || "Not available"}</span>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+        {changingPlotAssignment && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              background: "rgba(15,23,42,.55)",
+            }}
+          >
+            <form
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lead-change-plot-title"
+              className="card"
+              onSubmit={replaceLeadPlot}
+              style={{
+                width: "min(520px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                padding: "1.5rem",
+                background: "var(--modal-bg, var(--surface-color))",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <h2 id="lead-change-plot-title" style={{ margin: 0 }}>Edit assigned plots</h2>
+                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                    {changingPlotAssignment.lead.name || "Lead"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Close edit assigned plots"
+                  onClick={closeLeadPlotReplacement}
+                  disabled={changingPlotNumber}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <p style={{ color: "var(--text-secondary)", fontSize: ".84rem" }}>
+                Select or deselect plots for this Plot / Site. Choosing a different Plot / Site replaces the previous assignments.
+              </p>
+              <label style={{ display: "grid", gap: 6, marginBottom: 12, fontSize: ".82rem", fontWeight: 700 }}>
+                Plot / Site
+                <select className="input-field" aria-label="Edit plot or site name" value={editingLeadPlotName} disabled={changingPlotNumber} onChange={(event) => { const name = event.target.value; setEditingLeadPlotName(name); setLeadReplacementPlotIds((changingPlotAssignment.plots || []).filter((plot) => String(plot.name || "").trim().toLowerCase() === name.trim().toLowerCase()).map((plot) => Number(plot.id))); }}>
+                  {editingLeadPlotNameOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </label>
+              <div role="group" aria-label="Assigned and available plots" style={{ display: "grid", gap: 8 }}>
+                {(changingPlotAssignment.plots || []).filter((plotOption) => String(plotOption.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase()).map((plotOption) => {
+                  const locked = isPurchasedCustomerPlot(plotOption, changingPlotAssignment.customer, changingPlotAssignment.pickupStatus);
+                  return (
+                  <label
+                    key={`assigned-${plotOption.id}`}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: ".75rem",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 10,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      value={plotOption.id}
+                      checked={leadReplacementPlotIds.includes(Number(plotOption.id))}
+                      disabled={changingPlotNumber || locked}
+                      onChange={(event) => toggleLeadReplacementPlot(plotOption.id, event.target.checked)}
+                    />
+                    <span>
+                      <strong>Plot {plotOption.plotNumber}</strong>
+                      {plotOption.block && (
+                        <small style={{ display: "block", color: "var(--text-secondary)" }}>
+                          Block {plotOption.block}
+                        </small>
+                      )}
+                      <small style={{ display: "block", color: "var(--text-secondary)" }}>
+                        {plotOption.name || "Plot"} · {locked ? "Purchased" : "Assigned"}
+                      </small>
+                    </span>
+                  </label>
+                  );
+                })}
+                {replacementPlotChoices.filter(({ canSelect }) => canSelect).map(({ plot: plotOption }) => {
+                  const checked = leadReplacementPlotIds.includes(Number(plotOption.id));
+                  return (
+                    <label key={`available-${plotOption.id}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: ".75rem", border: "1px solid var(--border-color)", borderRadius: 10 }}>
+                      <input type="checkbox" value={plotOption.id} checked={checked} disabled={changingPlotNumber} onChange={(event) => toggleLeadReplacementPlot(plotOption.id, event.target.checked)} />
+                      <span><strong>Plot {plotOption.plotNumber}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>{plotOption.name || "Plot"}{plotOption.block ? ` · Block ${plotOption.block}` : ""} · Available</small></span>
+                    </label>
+                  );
+                })}
+                {!replacementPlotChoices.some(({ canSelect }) => canSelect) && (
+                  <div style={{ padding: "1rem", border: "1px dashed var(--border-color)", borderRadius: 10 }}>
+                    No additional plots are currently available.
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+                <button type="button" className="btn-secondary" onClick={closeLeadPlotReplacement} disabled={changingPlotNumber}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={!hasLeadPlotChanges || changingPlotNumber}>
+                  {changingPlotNumber ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            </form>
+          </div>
         )}
         <WellnessLeadCallDialog
           lead={wellnessCall.target}
@@ -12038,7 +13013,7 @@ const Leads = () => {
             inline form  only the trigger surface moved. */}
       {creating && (
         <div
-          className="create-lead-backdrop"
+          className={`create-lead-backdrop${isGeneric ? " create-lead-backdrop--generic" : ""}`}
           onClick={(e) => {
             if (e.target === e.currentTarget) closeCreate();
           }}
@@ -12059,7 +13034,8 @@ const Leads = () => {
           aria-label="Create Lead"
         >
           <div
-            className="card"
+            ref={createLeadModalRef}
+            className={`card${isGeneric ? " create-lead-modal--generic" : ""}${isTravel ? " create-lead-modal--travel" : ""}`}
             style={{
               background: "var(--bg-color)",
               color: "var(--text-primary)",
@@ -12071,6 +13047,7 @@ const Leads = () => {
             }}
           >
             <div
+              className={isGeneric ? "create-lead-modal__header" : undefined}
               style={{
                 display: "flex",
                 justifyContent: "space-between",
@@ -12101,6 +13078,7 @@ const Leads = () => {
                   HTML strip, email shape). Native HTML5 validation would block
                   submit without giving us a chance to surface the targeted toasts. */}
             <form
+              className={isGeneric ? "create-lead-form--generic" : isTravel ? "create-lead-form--travel" : undefined}
               onSubmit={handleCreateLead}
               noValidate
               style={{
@@ -12110,9 +13088,11 @@ const Leads = () => {
               }}
             >
               <div>
+                <label htmlFor="create-lead-name" style={createLeadFieldLabelStyle}>Full Name<span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span></label>
                 <input
+                  id="create-lead-name"
                   type="text"
-                  placeholder="Full Name"
+                  placeholder={isTravel ? "Full Name *" : "Full Name"}
                   required
                   maxLength={191}
                   className="input-field"
@@ -12139,70 +13119,97 @@ const Leads = () => {
                   </div>
                 )}
               </div>
-              <input
-                type="email"
-                placeholder="Email Address"
-                required={!isWellness}
-                maxLength={191}
-                className="input-field"
-                value={newLead.email}
-                onChange={(e) => handleChange("email", e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={
-                  isTravel
-                    ? "Category (e.g. School Trip, Umrah, Family Holiday)"
-                    : "Company"
-                }
-                maxLength={191}
-                className="input-field"
-                value={newLead.company}
-                onChange={(e) => handleChange("company", e.target.value)}
-              />
-              {!isTravel && (
+              <div>
+                <label htmlFor="create-lead-email" style={createLeadFieldLabelStyle}>Email Address{!isWellness && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                 <input
-                  type="text"
-                  placeholder="Job Title"
-                  maxLength={200}
+                  id="create-lead-email"
+                  type="email"
+                  placeholder={isWellness ? "Email Address (optional)" : "Email Address"}
+                  required={!isWellness}
+                  maxLength={191}
                   className="input-field"
-                  value={newLead.title}
-                  onChange={(e) => handleChange("title", e.target.value)}
+                  value={newLead.email}
+                  onChange={(e) => handleChange("email", e.target.value)}
                 />
+              </div>
+              <div>
+                <label htmlFor="create-lead-company" style={createLeadFieldLabelStyle}>{isTravel ? "Category" : "Company"}</label>
+                <input
+                  id="create-lead-company"
+                  type="text"
+                  placeholder={
+                    isTravel
+                      ? "Category (e.g. School Trip, Umrah, Family Holiday)"
+                      : "Company"
+                  }
+                  maxLength={191}
+                  className="input-field"
+                  value={newLead.company}
+                  onChange={(e) => handleChange("company", e.target.value)}
+                />
+              </div>
+              {!isTravel && (
+                <div>
+                  <label htmlFor="create-lead-title" style={createLeadFieldLabelStyle}>Job Title</label>
+                  <input
+                    id="create-lead-title"
+                    type="text"
+                    placeholder="Job Title"
+                    maxLength={200}
+                    className="input-field"
+                    value={newLead.title}
+                    onChange={(e) => handleChange("title", e.target.value)}
+                  />
+                </div>
               )}
               {/* Phone field — required for wellness, optional for generic and travel. */}
               <div>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+                {isTravel ? (
+                  <div className="create-lead-travel-phone">
+                    <IntlTelInput
+                      ref={travelPhoneInputRef}
+                      value={newLead.phone}
+                      initialCountry="in"
+                      countrySearch
+                      separateDialCode
+                      countrySelectorMode="DROPDOWN"
+                      onOpenCountrySelector={handleTravelCountryOpen}
+                      onCloseCountrySelector={handleTravelCountryClose}
+                      uiTranslations={{
+                        searchPlaceholder: "Search country or calling code",
+                      }}
+                      formatAsYouType
+                      strictMode
+                      loadUtils={() => import("intl-tel-input/utils")}
+                      inputProps={{
+                        className: "input-field travel-lead-phone-input",
+                        placeholder: "Mobile number (optional)",
+                        autoComplete: "tel-national",
+                        "aria-label": "Mobile number (optional)",
+                      }}
+                      onChangeNumber={(value) => handleChange("phone", value)}
+                      onChangeValidity={setTravelPhoneValid}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <label htmlFor="create-lead-phone" style={createLeadFieldLabelStyle}>Phone{isWellness && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
                   {isGeneric ? (
-                    <>
-                      <input
-                        type="text"
-                        inputMode="tel"
-                        list="lead-country-code-options"
-                        aria-label="Country code"
-                        className="input-field"
-                        placeholder="+1"
-                        value={newLead.countryCode}
-                        onChange={(e) => {
-                          genericPhoneCountryUserChangedRef.current = true;
-                          const raw = e.target.value.replace(/[^\d+]/g, "");
-                          handleChange(
-                            "countryCode",
-                            raw && !raw.startsWith("+") ? `+${raw}` : raw,
-                          );
-                        }}
-                        style={{ width: "100px" }}
-                      />
-                      <datalist id="lead-country-code-options">
-                        {COUNTRY_CODES.map((cc) => (
-                          <option
-                            key={cc.code}
-                            value={cc.code}
-                            label={`${cc.country} (${cc.code})`}
-                          />
-                        ))}
-                      </datalist>
-                    </>
+                    <SearchableSelect
+                      ariaLabel="Country code"
+                      value={newLead.countryCode}
+                      placeholder="Code"
+                      allowClear={false}
+                      sanitizeInput={(input) => `${String(input).trimStart().startsWith("+") ? "+" : ""}${String(input).replace(/\D/g, "")}`}
+                      options={COUNTRY_CODES.map((cc) => ({ value: cc.code, label: cc.code, keywords: cc.code }))}
+                      onChange={(value) => {
+                        genericPhoneCountryUserChangedRef.current = true;
+                        handleChange("countryCode", value);
+                      }}
+                      style={{ color: "#111827", caretColor: "#111827" }}
+                      wrapperStyle={{ width: "100px", flexShrink: 0 }}
+                    />
                   ) : (
                     <select
                       className="input-field"
@@ -12220,6 +13227,7 @@ const Leads = () => {
                     </select>
                   )}
                   <input
+                    id="create-lead-phone"
                     type="tel"
                     placeholder={
                       isWellness
@@ -12252,7 +13260,9 @@ const Leads = () => {
                     onChange={(e) => handleChange("phone", e.target.value)}
                     style={{ flex: 1 }}
                   />
-                </div>
+                    </div>
+                  </>
+                )}
                 {createFieldErrors.phone && (
                   <div
                     id="create-lead-phone-error"
@@ -12267,30 +13277,34 @@ const Leads = () => {
                   </div>
                 )}
               </div>
-              <select
-                className="input-field"
-                name="source"
-                value={newLead.source}
-                onChange={(e) => handleChange("source", e.target.value)}
-              >
-                {isWellness
-                  ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))
-                  : isTravel
-                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+              <div>
+                <label htmlFor="create-lead-source" style={createLeadFieldLabelStyle}>Lead Source</label>
+                <select
+                  id="create-lead-source"
+                  className="input-field"
+                  name="source"
+                  value={newLead.source}
+                  onChange={(e) => handleChange("source", e.target.value)}
+                >
+                  {isWellness
+                    ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
                       ))
-                    : SOURCE_OPTIONS.map((src) => (
-                        <option key={src} value={src}>
-                          {src}
-                        </option>
-                      ))}
-              </select>
+                    : isTravel
+                      ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))
+                      : SOURCE_OPTIONS.map((src) => (
+                          <option key={src} value={src}>
+                            {src}
+                          </option>
+                        ))}
+                </select>
+              </div>
 
               {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the
@@ -12374,12 +13388,14 @@ const Leads = () => {
                 </>
               )}
 
-              {renderCustomFieldInputs(
-                newLead.customFields,
-                handleCustomFieldChangeNew,
-              )}
+              {!isGeneric &&
+                renderCustomFieldInputs(
+                  newLead.customFields,
+                  handleCustomFieldChangeNew,
+                )}
 
               <div
+                className={isGeneric ? "create-lead-form__actions" : undefined}
                 style={{
                   display: "flex",
                   justifyContent: "flex-end",

@@ -16,6 +16,7 @@ import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
+import './generic-list-laptop.css';
 
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -1654,8 +1655,8 @@ const Contacts = () => {
 
       <div className="card contacts-page-card" style={{ overflow: 'hidden' }}>
         <div className="contacts-filters-bar" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
-            <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+          <div className="search-with-leading-icon" style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
+            <Search size={18} aria-hidden style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
             <input
               data-tour="contacts-search"
               type="text"
@@ -1663,7 +1664,7 @@ const Contacts = () => {
               placeholder="Search contacts..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
+              style={{ backgroundColor: 'var(--surface-hover)' }}
             />
           </div>
           <select
@@ -1858,6 +1859,8 @@ const Contacts = () => {
               stickyTop
               stickyTopOffset={0}
               hideBottomScrollbar
+              stickyBottom={isGeneric}
+              verticalOverflow="visible"
             >
               <table
                 className="stable-table"

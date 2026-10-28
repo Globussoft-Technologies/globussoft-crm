@@ -137,7 +137,7 @@ export default function NotificationsCenter() {
   };
 
   return (
-    <div style={{ padding: '2rem', maxWidth: 960, margin: '0 auto' }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>

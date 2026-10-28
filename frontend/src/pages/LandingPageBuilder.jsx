@@ -10,6 +10,7 @@ import { getLandingPageSharePath, getLandingPageShareUrl, isTravelLandingPage } 
 import LandingPageTemplateEditor from './LandingPageTemplateEditor';
 import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from './LandingPageWanderluxEditor';
 import LandingPageWellnessEditor from './LandingPageWellnessEditor';
+import LandingPageGenericEditor from './LandingPageGenericEditor';
 import { TeeDecisionPanel } from '../components/TeeDecisionPanel';
 import { AuthContext } from '../App';
 import { getWellnessIconName, WellnessIcon, WellnessNav } from '../components/landing-blocks/BasicBlocks';
@@ -186,6 +187,7 @@ export default function LandingPageBuilder() {
   const isTravelTenant = auth?.user?.tenant?.vertical === 'travel' || auth?.tenant?.vertical === 'travel';
   const isGenericLandingSites = location.pathname.startsWith('/landing-sites');
   const isWellnessTenant = auth?.user?.tenant?.vertical === 'wellness' || auth?.tenant?.vertical === 'wellness';
+  const isGenericTenant = !isTravelTenant && !isWellnessTenant;
   const backTrackState = location.state?.returnTo ? location.state : null;
   const builderBackTarget = backTrackState?.returnTo?.path || (isGenericLandingSites ? '/landing-sites' : '/landing-pages');
   const builderBackLabel = backTrackState?.returnTo?.label || (isGenericLandingSites ? 'Landing sites list' : 'Landing pages list');
@@ -201,7 +203,14 @@ export default function LandingPageBuilder() {
   const previewLogo = brandLogoUrl(previewBrandKit);
   const previewAccent = brandPrimaryColor(previewBrandKit);
   const [page, setPage] = useState(null);
-  const isWellnessLandingSite = isGenericLandingSites && isWellnessTenant && page && typeof page.templateType === 'string' && page.templateType.startsWith('generic-site-');
+  const pageTemplateType = String(page?.templateType || '').toLowerCase();
+  const isGenericLandingSite = isGenericLandingSites && isGenericTenant && (
+    pageTemplateType.startsWith('generic-campaign-') ||
+    (pageTemplateType.startsWith('generic-site-') && !/^generic-site-(wellness|health|hospital|fitness)(?:-|$)/.test(pageTemplateType))
+  );
+  const isWellnessLandingSite = isGenericLandingSites && isWellnessTenant && (
+    pageTemplateType.startsWith('wellness-site-') || /^generic-site-(wellness|health|hospital|fitness)(?:-|$)/.test(pageTemplateType)
+  );
   const [history, dispatch] = useReducer(historyReducer, { past: [], present: [], future: [] });
   const components = history.present;
   // Phase D1 ? template-driven page content (JSON object, not array).
@@ -245,15 +254,6 @@ export default function LandingPageBuilder() {
   const [restoringVersionId, setRestoringVersionId] = useState(null);
   const [selectedVersion, setSelectedVersion] = useState(null);
   const [urlCopied, setUrlCopied] = useState(false);
-  // Track all pages so we can warn when another live page exists.
-  const [allPages, setAllPages] = useState([]);
-  const currentPublishedLandingSite = isGenericLandingSites
-    ? allPages.find((p) => p.status === 'PUBLISHED' && p.id !== page?.id && typeof p.templateType === 'string' && p.templateType.startsWith('generic-site-')) || null
-    : null;
-  const publishBlockedReason = currentPublishedLandingSite
-    ? `Only one published landing site is allowed at a time. Unpublish "${currentPublishedLandingSite.title}" first.`
-    : '';
-
   // #449: hide the global app sidebar while the builder is mounted. The
   // builder is a 3-column layout that competes with the global Sidebar +
   // top header, leaving ~320 px for the canvas. Toggle a body class so
@@ -294,13 +294,6 @@ export default function LandingPageBuilder() {
     fetchApi('/api/lead-routing')
       .then(rules => Array.isArray(rules) ? setRoutingRules(rules) : setRoutingRules([]))
       .catch(() => setRoutingRules([]));
-  }, []);
-
-  // Fetch all pages so we can warn when another page is live.
-  useEffect(() => {
-    fetchApi('/api/landing-pages')
-      .then(res => setAllPages(Array.isArray(res) ? res : (res?.pages || [])))
-      .catch(() => setAllPages([]));
   }, []);
 
   const loadTmcTrips = useCallback(async (query = '') => {
@@ -493,10 +486,6 @@ export default function LandingPageBuilder() {
 
   const handlePublish = async () => {
     if (!page?.id || publishing) return;
-    if (publishBlockedReason) {
-      notify.error(publishBlockedReason);
-      return;
-    }
     setPublishing(true);
     try {
       if (isDirty) await handleSave(false);
@@ -527,8 +516,6 @@ export default function LandingPageBuilder() {
       if (err?.status === 409 && err?.code === 'PUBLISH_GATE_FAILED') {
         setPublishIssues({ ok: false, issues: err.data?.issues || [] });
         setShowPublishModal(true);
-      } else if (err?.status === 409 && err?.code === 'ANOTHER_LANDING_SITE_PUBLISHED') {
-        notify.error(err?.data?.error || publishBlockedReason || 'Only one published landing site is allowed at a time.');
       } else {
         notify.error(err?.message || 'Publish failed.');
       }
@@ -891,15 +878,13 @@ export default function LandingPageBuilder() {
           return (
             <button
               onClick={handlePublish}
-              disabled={publishing || !slugIsValid || Boolean(publishBlockedReason)}
+              disabled={publishing || !slugIsValid}
               title={
                 !slugIsValid
                   ? 'Fix the slug first'
-                  : publishBlockedReason
-                    ? publishBlockedReason
-                    : 'Publish - runs the readiness check then makes the page public'
+                  : 'Publish - runs the readiness check then makes the page public'
               }
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: !slugIsValid ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid || publishBlockedReason) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: (publishing || publishBlockedReason) ? 0.5 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: !slugIsValid ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: publishing ? 0.5 : 1 }}
             >
               <Globe size={13} /> {publishing ? 'Publishing...' : 'Publish'}
             </button>
@@ -1011,6 +996,16 @@ export default function LandingPageBuilder() {
               }}
             />
           </aside>
+        </div>
+      ) : isGenericLandingSite ? (
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <LandingPageGenericEditor
+              content={components}
+              onChange={(next) => { dispatch({ type: 'COMMIT', value: next }); setIsDirty(true); }}
+              page={page}
+            />
+          </div>
         </div>
       ) : isWellnessLandingSite ? (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -1199,8 +1194,8 @@ export default function LandingPageBuilder() {
             setShowPublishModal(false);
           }}
           isGenericLandingSites={isGenericLandingSites}
-          publishDisabled={Boolean(publishBlockedReason)}
-          publishDisabledReason={publishBlockedReason}
+          publishDisabled={false}
+          publishDisabledReason=""
         />
       )}
 

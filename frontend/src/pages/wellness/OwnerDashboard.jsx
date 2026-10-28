@@ -24,12 +24,12 @@ function landingForClinicalStaff(user) {
 const formatRupees = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 
 const StatCard = ({ icon: Icon, label, value, sub, color, onClick }) => (
-  <div className="glass" onClick={onClick} style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', cursor: onClick ? 'pointer' : 'default', transition: onClick ? 'all 0.2s ease' : 'none' }} onMouseEnter={(e) => onClick && (e.currentTarget.style.transform = 'translateY(-4px)')} onMouseLeave={(e) => onClick && (e.currentTarget.style.transform = 'translateY(0)')}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+  <div className="glass wellness-owner-kpi" onClick={onClick} style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', cursor: onClick ? 'pointer' : 'default', transition: onClick ? 'all 0.2s ease' : 'none' }} onMouseEnter={(e) => onClick && (e.currentTarget.style.transform = 'translateY(-4px)')} onMouseLeave={(e) => onClick && (e.currentTarget.style.transform = 'translateY(0)')}>
+    <div title={label} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
       <Icon size={16} color={color} /> {label}
     </div>
-    <div style={{ fontSize: '1.6rem', fontWeight: 600, fontFamily: 'var(--font-family)' }}>{value}</div>
-    {sub && <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{sub}</div>}
+    <div title={String(value)} style={{ fontSize: '1.6rem', fontWeight: 600, fontFamily: 'var(--font-family)' }}>{value}</div>
+    {sub && <div title={sub} style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{sub}</div>}
   </div>
 );
 
@@ -141,7 +141,7 @@ export default function OwnerDashboard() {
   if (!data) return <div style={{ padding: '2rem' }}>Could not load dashboard. Make sure your tenant has the Wellness vertical enabled.</div>;
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="wellness-owner-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           {/* #636: greeting now derives from the user's local clock via the
@@ -166,7 +166,7 @@ export default function OwnerDashboard() {
       </header>
 
       {/* KPI grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div className="wellness-owner-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard icon={Calendar} label="Today's appointments" value={data.today?.visits ?? 0} sub={`${data.today?.completed ?? 0} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
         {/* #565: month-to-date realised revenue from the canonical P&L
             endpoint, matching the figure on /wellness/reports. */}

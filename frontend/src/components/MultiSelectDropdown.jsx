@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, X } from "lucide-react";
 
@@ -29,7 +29,7 @@ const modalInputStyle = {
 //   2. The popover auto-flips upward when there's not enough room
 //      below the trigger — so the last filter in the modal can show
 //      its full list without forcing the modal to scroll at all.
-export default function MultiSelectDropdown({ options, selected, onChange, placeholder, ariaLabel, searchable = false, chipColours = false, disabled = false }) {
+export default function MultiSelectDropdown({ options, selected, onChange, placeholder, ariaLabel, searchable = false, chipColours = false, disabled = false, singleSelect = false, menuHeight = null }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [popoverPos, setPopoverPos] = useState(null);
@@ -59,9 +59,9 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
   //
   // maxHeight is clamped to the available space minus 12 px viewport
   // breathing room so the popover never bleeds past the viewport.
-  const POPOVER_DESIRED = 320;
-  const POPOVER_MIN = 160;
-  const computePos = () => {
+  const computePos = useCallback(() => {
+    const popoverDesired = menuHeight || 320;
+    const popoverMin = 160;
     const trigger = triggerRef.current;
     if (!trigger) return null;
     const rect = trigger.getBoundingClientRect();
@@ -70,9 +70,9 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
     const spaceAbove = rect.top - 12;
     const triggerCenterY = rect.top + rect.height / 2;
     const inLowerHalf = triggerCenterY > vpH * 0.55;
-    const openUp = inLowerHalf && spaceAbove >= POPOVER_MIN;
+    const openUp = inLowerHalf && spaceAbove >= popoverMin;
     const available = openUp ? spaceAbove : spaceBelow;
-    const maxH = Math.max(POPOVER_MIN, Math.min(available, POPOVER_DESIRED));
+    const maxH = Math.max(popoverMin, Math.min(available, popoverDesired));
     if (openUp) {
       return {
         left: rect.left,
@@ -87,7 +87,7 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
       width: rect.width,
       maxHeight: maxH,
     };
-  };
+  }, [menuHeight]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -114,9 +114,14 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
       window.removeEventListener("resize", recompute);
       window.removeEventListener("scroll", recompute, true);
     };
-  }, [open]);
+  }, [computePos, open]);
 
   const toggle = (value) => {
+    if (singleSelect) {
+      if (!selected.includes(value)) onChange([value]);
+      setOpen(false);
+      return;
+    }
     if (selected.includes(value)) onChange(selected.filter((v) => v !== value));
     else onChange([...selected, value]);
   };
@@ -261,7 +266,7 @@ export default function MultiSelectDropdown({ options, selected, onChange, place
                   }}
                 >
                   <input
-                    type="checkbox"
+                    type={singleSelect ? "radio" : "checkbox"}
                     checked={isSelected}
                     onChange={() => toggle(opt.value)}
                     aria-label={opt.label}

@@ -955,6 +955,8 @@ function makePayable(overrides = {}) {
 function installFetchMockWithPayables({
   list = { suppliers: SUPPLIERS_DEFAULT, total: SUPPLIERS_DEFAULT.length, limit: 100, offset: 0 },
   payables = { payables: [], total: 0, limit: 100, offset: 0 },
+  trips = { trips: [], total: 0 },
+  quotes = { quotes: [], total: 0 },
   payablesCreate = null,
   payablesUpdate = null,
   payablesDelete = null,
@@ -963,6 +965,12 @@ function installFetchMockWithPayables({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    if (url.startsWith('/api/travel/trips?') && method === 'GET') {
+      return Promise.resolve(trips);
+    }
+    if (url.startsWith('/api/travel/quotes?') && method === 'GET') {
+      return Promise.resolve(quotes);
+    }
     // Aging endpoint match BEFORE the suppliers prefix.
     if (url.startsWith('/api/travel/payables/aging') && method === 'GET') {
       if (aging instanceof Error) return Promise.reject(aging);
@@ -1010,6 +1018,70 @@ function installFetchMockWithPayables({
 }
 
 describe('<SuppliersAdmin /> — slice 4 (#903) payables panel', () => {
+  it('shows TMC trips for TMC payables and saves the selected trip', async () => {
+    installFetchMockWithPayables({
+      trips: { trips: [
+        { id: 42, tripCode: 'BALI-2026', destination: 'Bali' },
+        { id: 43, tripCode: 'MUMBAI-2026', destination: 'Mumbai' },
+      ], total: 2 },
+      payables: { payables: [makePayable({ tripId: 42 })], total: 1 },
+    });
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Acme Hotels/i }));
+
+    const tripSelect = await screen.findByLabelText('Payable TMC trip for Acme Hotels');
+    expect(screen.queryByLabelText('Payable quote ID for Acme Hotels')).not.toBeInTheDocument();
+    fireEvent.focus(tripSelect);
+    await waitFor(() => expect(screen.getByRole('option', { name: 'BALI-2026 · Bali' })).toBeInTheDocument());
+    fireEvent.change(tripSelect, { target: { value: 'bali' } });
+    expect(screen.getByRole('option', { name: 'BALI-2026 · Bali' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'MUMBAI-2026 · Mumbai' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('payable-row-401')).toHaveTextContent('BALI-2026');
+    fireEvent.click(screen.getByRole('option', { name: 'BALI-2026 · Bali' }));
+    expect(tripSelect).toHaveValue('BALI-2026 · Bali');
+    fireEvent.change(screen.getByLabelText('Payable description for Acme Hotels'), { target: { value: 'School bus' } });
+    fireEvent.change(screen.getByLabelText('Payable amount for Acme Hotels'), { target: { value: '1000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add payable/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([url, options]) =>
+        url === '/api/travel/suppliers/201/payables' && options?.method === 'POST');
+      expect(JSON.parse(post[1].body)).toMatchObject({ tripId: 42, quoteId: null });
+    });
+  });
+
+  it('searches quote IDs and customer names for non-TMC payables', async () => {
+    installFetchMockWithPayables({
+      quotes: { quotes: [
+        { id: 24, contact: { name: 'Imran Ali' } },
+        { id: 20, contact: { name: 'Arjun Mehta' } },
+      ], total: 2 },
+    });
+    renderPage();
+    await screen.findByText('Saudi Flights');
+    fireEvent.click(screen.getByRole('button', { name: /Toggle payables for Saudi Flights/i }));
+
+    const quoteSelect = await screen.findByLabelText('Payable quote ID for Saudi Flights');
+    fireEvent.focus(quoteSelect);
+    await waitFor(() => expect(screen.getByRole('option', { name: 'QT-0024 · Imran Ali' })).toBeInTheDocument());
+    fireEvent.change(quoteSelect, { target: { value: 'Imran' } });
+    expect(screen.getByRole('option', { name: 'QT-0024 · Imran Ali' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'QT-0020 · Arjun Mehta' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'QT-0024 · Imran Ali' }));
+    expect(quoteSelect).toHaveValue('QT-0024 · Imran Ali');
+
+    fireEvent.change(screen.getByLabelText('Payable description for Saudi Flights'), { target: { value: 'Flight booking' } });
+    fireEvent.change(screen.getByLabelText('Payable amount for Saudi Flights'), { target: { value: '1000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add payable/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([url, options]) =>
+        url === '/api/travel/suppliers/202/payables' && options?.method === 'POST');
+      expect(JSON.parse(post[1].body)).toMatchObject({ quoteId: '24', tripId: null });
+    });
+  });
+
   it('expand toggle renders on EVERY supplier row (read-only USER role too)', async () => {
     installFetchMockWithPayables();
     renderPage(USER_USER);
@@ -1043,7 +1115,11 @@ describe('<SuppliersAdmin /> — slice 4 (#903) payables panel', () => {
       );
       expect(get).toBeTruthy();
     });
-    expect(await screen.findByTestId('payables-panel-201')).toBeInTheDocument();
+    const panel = await screen.findByTestId('payables-panel-201');
+    expect(panel).toBeInTheDocument();
+    expect(screen.getByTestId('suppliers-admin-table-scroll')).toContainElement(panel);
+    expect(panel.previousElementSibling).toHaveTextContent('Acme Hotels');
+    expect(panel.querySelector('td > div')).toHaveStyle({ width: '100cqw' });
   });
 
   it('empty state: "No payables recorded yet — add the first one below." when list is empty', async () => {

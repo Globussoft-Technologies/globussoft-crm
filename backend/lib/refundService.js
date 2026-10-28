@@ -178,6 +178,10 @@ async function finalizeRefund(payment, { refundId, amount, reason, refundStatus,
     where: { id: payment.id },
     data: { status: "REFUNDED", metadata: JSON.stringify(newMeta) },
   });
+  if (meta.kind === 'plot-booking-payment') {
+    await require('./plotBookingPayments').reconcilePlotBookingPayment({ ...payment, ...updated, status: 'REFUNDED', metadata: JSON.stringify(newMeta) });
+  }
+
   await writeAudit("Payment", "REFUND", payment.id, userId || null, payment.tenantId, {
     amount, reason: reason || null, refundId: refundId || null, gateway: payment.gateway,
   }).catch(() => {});

@@ -5,7 +5,6 @@ import {
   Plus,
   CheckCircle2,
   Trash2,
-  IndianRupee,
   Clock,
   AlertTriangle,
   Download,
@@ -37,7 +36,7 @@ const STATUS_CONFIG = {
   VOIDED: { color: "#6b7280", bg: "rgba(107,114,128,0.15)", label: "Voided" },
 };
 
-function StatusBadge({ status, borderless = false }) {
+function StatusBadge({ status, borderless = false, label = null }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.UNPAID;
   return (
     <span
@@ -54,12 +53,103 @@ function StatusBadge({ status, borderless = false }) {
         border: borderless ? "0 solid transparent" : `1px solid ${cfg.color}33`,
       }}
     >
-      {cfg.label}
+      {label || cfg.label}
     </span>
   );
 }
 
+function RequiredMark() {
+  return (
+    <span
+      className="invoice-required-mark"
+      aria-hidden="true"
+      title="Required"
+      style={{ marginLeft: "0.2rem", color: "var(--danger-color, #ef4444)", fontWeight: 700 }}
+    >
+      *
+    </span>
+  );
+}
+
+function InvoiceSummaryChip({ interactive, active = false, onClick, style, children }) {
+  if (!interactive) return <span style={style}>{children}</span>;
+  return (
+    <button
+      type="button"
+      className={`invoice-summary-filter-chip${active ? " is-active" : ""}`}
+      onClick={onClick}
+      aria-pressed={active}
+      style={style}
+    >
+      {children}
+    </button>
+  );
+}
+
 const INVOICE_PAGE_SIZE_OPTIONS = [10, 25, 50];
+const EMPTY_INVOICE_COLUMN_FILTERS = {
+  currency: "ALL",
+  status: "ALL",
+  dueDatePreset: "ALL",
+  dueDateFrom: "",
+  dueDateTo: "",
+  issuedDatePreset: "ALL",
+  issuedDateFrom: "",
+  issuedDateTo: "",
+  contact: "",
+};
+
+function InvoiceHeaderFilter({ label, filterKey, activeFilter, hasValue, onToggle, children }) {
+  const isOpen = activeFilter === filterKey;
+  const triggerRef = useRef(null);
+  const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    if (!isOpen) return undefined;
+    const positionPopover = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const popupWidth = 210;
+      setPopoverPosition({
+        top: rect.bottom + 8,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - popupWidth - 8)),
+      });
+    };
+    positionPopover();
+    window.addEventListener("resize", positionPopover);
+    window.addEventListener("scroll", positionPopover, true);
+    return () => {
+      window.removeEventListener("resize", positionPopover);
+      window.removeEventListener("scroll", positionPopover, true);
+    };
+  }, [isOpen]);
+
+  return (
+    <div className="invoice-header-filter" data-invoice-column-filter>
+      <span>{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`invoice-header-filter-button${hasValue ? " is-active" : ""}`}
+        onClick={() => onToggle(isOpen ? null : filterKey)}
+        aria-label={`Filter ${label}`}
+        aria-expanded={isOpen}
+      >
+        <Filter size={14} aria-hidden="true" />
+      </button>
+      {isOpen && createPortal(
+        <div
+          className="invoice-header-filter-popover"
+          data-invoice-column-filter
+          style={{ top: popoverPosition.top, left: popoverPosition.left }}
+        >
+          {children}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
 
 function getInvoicePaginationPages(currentPage, totalPages) {
   if (totalPages <= 7) {
@@ -184,8 +274,37 @@ function InvoicePagination({
 
 import { formatMoney, currencySymbol } from "../utils/money";
 import { formatDate } from "../utils/date";
-const formatCurrency = (v) =>
-  formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+const formatCurrency = (value, currency = "USD") =>
+  formatMoney(value, { currency, maximumFractionDigits: 2, minimumFractionDigits: 2 });
+
+function totalsByCurrency(rows, fallbackCurrency, amountForRow = (row) => Number(row.amount || 0)) {
+  const totals = new Map();
+  for (const row of rows) {
+    const currency = row.currency || fallbackCurrency;
+    totals.set(currency, (totals.get(currency) || 0) + amountForRow(row));
+  }
+  return totals.size
+    ? [...totals].map(([currency, amount]) => formatCurrency(amount, currency)).join(" · ")
+    : formatCurrency(0, fallbackCurrency);
+}
+
+function totalInCurrency(rows, targetCurrency, rateByCode, amountForRow = (row) => Number(row.amount || 0)) {
+  const target = String(targetCurrency || "USD").toUpperCase();
+  const targetRate = rateByCode.get(target);
+  let missingRate = false;
+  const total = rows.reduce((sum, row) => {
+    const amount = amountForRow(row);
+    const source = String(row.currency || target).toUpperCase();
+    if (source === target) return sum + amount;
+    const sourceRate = rateByCode.get(source);
+    if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
+      missingRate = true;
+      return sum;
+    }
+    return sum + ((amount / sourceRate) * targetRate);
+  }, 0);
+  return missingRate ? `Unavailable (missing exchange rate): ${totalsByCurrency(rows, target, amountForRow)}` : formatCurrency(total, target);
+}
 
 function getInvoiceLineItems(invoice) {
   if (Array.isArray(invoice?.lineItems)) return invoice.lineItems;
@@ -196,6 +315,38 @@ function getInvoiceLineItems(invoice) {
   } catch {
     return [];
   }
+}
+
+function getPlotInvoiceDetails(invoice) {
+  if (invoice?.plotDetails) return invoice.plotDetails;
+  const plotItem = getInvoiceLineItems(invoice).find(
+    (item) => String(item?.type || "").toLowerCase() === "plot",
+  );
+  if (!plotItem) return null;
+  return {
+    plotId: plotItem.itemId || null,
+    plotNumber: null,
+    siteName: null,
+    block: null,
+    referenceCode: null,
+    bookingNumber: null,
+    description: plotItem.name || null,
+  };
+}
+
+function getPlotInvoiceDisplayNumber(invoice, plotDetails) {
+  if (!plotDetails) return invoice?.invoiceNum || "";
+  const plotName = String(
+    plotDetails.siteName || plotDetails.description || "PLT",
+  );
+  const plotCode = plotName.replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase() || "PLT";
+  const plotNumber = String(plotDetails.plotNumber || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .toUpperCase();
+  return plotNumber
+    ? `PLOT-${plotCode}-${plotNumber}`
+    : invoice?.invoiceNum || `PLOT-${plotCode}`;
 }
 
 function formatInvoiceQuantity(item) {
@@ -272,11 +423,12 @@ function applyVisitFinalBill(lineItems, finalBill) {
   ));
 }
 
-const createInvoiceForm = (subBrand = "") => ({
+const createInvoiceForm = (subBrand = "", currency = "USD") => ({
   invoiceNum: "",
   contactId: "",
   dealId: "",
   amount: "",
+  currency,
   dueDate: "",
   status: "UNPAID",
   subBrand,
@@ -293,7 +445,7 @@ const createInvoiceForm = (subBrand = "") => ({
   lineItems: [createEmptyLineItem()],
 });
 
-const INVOICE_TABLE_MIN_WIDTH = 940;
+const INVOICE_TABLE_MIN_WIDTH = 930;
 const WELLNESS_INVOICE_TABLE_MIN_WIDTH = 1540;
 const WELLNESS_INVOICE_PRODUCTS_COLUMN_WIDTH = "250px";
 const WELLNESS_INVOICE_QTY_COLUMN_WIDTH = "130px";
@@ -325,6 +477,31 @@ function toLocalDateInput(date) {
 
 function todayDateInput() {
   return toLocalDateInput(new Date());
+}
+
+function invoiceDateKey(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "" : toLocalDateInput(parsed);
+}
+
+function invoiceDateMatchesRange(value, preset, customFrom, customTo) {
+  if (preset === "ALL") return true;
+  const date = invoiceDateKey(value);
+  if (!date) return false;
+  const resolved = resolveDateRange(preset, customFrom, customTo);
+  const from = resolved.from;
+  const to = resolved.to || (preset === "CUSTOM" ? "" : todayDateInput());
+  return (!from || date >= from) && (!to || date <= to);
+}
+
+function openNativeDatePicker(event) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // Some browsers open the native picker automatically and reject an
+    // explicit showPicker() call. The normal input click still works there.
+  }
 }
 
 /**
@@ -366,12 +543,15 @@ export default function Invoices() {
   // to switch to the travel nav); fall back to user.tenant for safety.
   const { user, tenant } = useContext(AuthContext) || {};
   const vertical = tenant?.vertical || user?.tenant?.vertical || "generic";
+  const isGeneric = vertical === "generic";
   const isTravel = vertical === "travel";
   const isWellness = vertical === "wellness";
+  const invoiceDisplayCurrency = isGeneric ? tenant?.defaultCurrency || user?.tenant?.defaultCurrency : undefined;
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand() || {};
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [availableCurrencies, setAvailableCurrencies] = useState([]);
   const [patients, setPatients] = useState([]);
   const [visits, setVisits] = useState([]);
   const [services, setServices] = useState([]);
@@ -382,7 +562,11 @@ export default function Invoices() {
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [isLoadingVisitItems, setIsLoadingVisitItems] = useState(false);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
+  const [isRefreshingInvoices, setIsRefreshingInvoices] = useState(false);
   const visitRequestRef = useRef(0);
+  const invoiceLoadRequestRef = useRef(0);
+  const invoicesLoadedRef = useRef(false);
   const patientLookupRequestRef = useRef(0);
   const productLookupRequestRef = useRef(0);
   const selectedPatientIdRef = useRef("");
@@ -395,13 +579,39 @@ export default function Invoices() {
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [pdfPreview, setPdfPreview] = useState(null); // { url, invoiceNum } | null
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
-  const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm());
+  const [newInvoice, setNewInvoice] = useState(() => createInvoiceForm("", tenant?.defaultCurrency || "USD"));
   // #124: replace the old prompt() flow with a proper modal so the user can
   // pick frequency, see what they're about to activate, and stop recurring
   // explicitly instead of guessing the toggle.
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [summaryFilter, setSummaryFilter] = useState("ALL");
+  const [columnFilters, setColumnFilters] = useState(EMPTY_INVOICE_COLUMN_FILTERS);
+  const [activeColumnFilter, setActiveColumnFilter] = useState(null);
+  const currencyRateByCode = useMemo(
+    () => new Map(availableCurrencies.map((currency) => [
+      String(currency.code || "").toUpperCase(),
+      Number(currency.exchangeRate),
+    ])),
+    [availableCurrencies],
+  );
+  const convertLedgerAmount = useCallback((value, sourceCurrency) => {
+    const source = String(sourceCurrency || tenant?.defaultCurrency || "USD").toUpperCase();
+    const selected = columnFilters.currency;
+    if (!isGeneric || selected === "ALL" || selected === source) {
+      return { amount: Number(value || 0), currency: source };
+    }
+    const sourceRate = currencyRateByCode.get(source);
+    const targetRate = currencyRateByCode.get(selected);
+    if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
+      return { amount: Number(value || 0), currency: source };
+    }
+    return {
+      amount: (Number(value || 0) / sourceRate) * targetRate,
+      currency: selected,
+    };
+  }, [columnFilters.currency, currencyRateByCode, isGeneric, tenant?.defaultCurrency]);
   const [invoicePage, setInvoicePage] = useState(1);
   const [invoicePageSize, setInvoicePageSize] = useState(INVOICE_PAGE_SIZE_OPTIONS[0]);
   const [invoicePageSizeSelection, setInvoicePageSizeSelection] = useState("10");
@@ -439,6 +649,25 @@ export default function Invoices() {
       document.body.style.overflow = previousOverflow;
     };
   }, [isCreateFormOpen, pdfPreview]);
+
+  useEffect(() => {
+    if (!activeColumnFilter) return undefined;
+    const closeColumnFilter = (event) => {
+      if (event.key === "Escape") {
+        setActiveColumnFilter(null);
+        return;
+      }
+      if (event.type === "pointerdown" && !event.target.closest?.("[data-invoice-column-filter]")) {
+        setActiveColumnFilter(null);
+      }
+    };
+    document.addEventListener("pointerdown", closeColumnFilter);
+    document.addEventListener("keydown", closeColumnFilter);
+    return () => {
+      document.removeEventListener("pointerdown", closeColumnFilter);
+      document.removeEventListener("keydown", closeColumnFilter);
+    };
+  }, [activeColumnFilter]);
 
   useEffect(() => {
     if (openActionMenuId == null) return undefined;
@@ -506,6 +735,10 @@ export default function Invoices() {
   // Re-fetch when the travel sub-brand filter changes (no-op for other
   // verticals — activeSubBrand stays undefined there).
   const loadData = useCallback(async () => {
+    const requestId = ++invoiceLoadRequestRef.current;
+    const isInitialLoad = !invoicesLoadedRef.current;
+    if (isInitialLoad) setIsLoadingInvoices(true);
+    else setIsRefreshingInvoices(true);
     try {
       // One query string for both filters. URLSearchParams rather than manual
       // concatenation so adding the date params cannot produce a stray `&`
@@ -516,25 +749,45 @@ export default function Invoices() {
       if (range.from) params.set("from", range.from);
       if (range.to) params.set("to", range.to);
       const qs = params.toString() ? `?${params.toString()}` : "";
-      const [invs, c, d] = await Promise.all([
+      const [invoiceResult, contactResult, dealResult] = await Promise.allSettled([
         fetchApi(`/api/billing${qs}`),
         fetchApi("/api/contacts"),
         fetchApi("/api/deals"),
       ]);
-      setInvoices(Array.isArray(invs) ? invs : []);
-      setContacts(Array.isArray(c) ? c : []);
-      setDeals(Array.isArray(d) ? d : []);
+      if (requestId !== invoiceLoadRequestRef.current) return;
+      const nextInvoices =
+        invoiceResult.status === "fulfilled" && Array.isArray(invoiceResult.value)
+          ? invoiceResult.value
+          : [];
+      const nextContacts =
+        contactResult.status === "fulfilled" && Array.isArray(contactResult.value)
+          ? contactResult.value
+          : [];
+      const nextDeals =
+        dealResult.status === "fulfilled" && Array.isArray(dealResult.value)
+          ? dealResult.value
+          : [];
 
+      let nextServices = [];
       if (isWellness) {
         const [serviceResult] = await Promise.allSettled([
           fetchApi("/api/wellness/services"),
         ]);
-        setServices(
+        nextServices =
           serviceResult.status === "fulfilled" && Array.isArray(serviceResult.value)
             ? serviceResult.value
-            : [],
-        );
-      } else {
+            : [];
+      }
+      if (requestId !== invoiceLoadRequestRef.current) return;
+
+      // Commit the ledger and its lookup data together. Existing rows remain
+      // mounted while requests are in flight, then the completed response is
+      // applied as one stable update.
+      setInvoices(nextInvoices);
+      setContacts(nextContacts);
+      setDeals(nextDeals);
+      if (isWellness) setServices(nextServices);
+      else {
         // Do not retain vertical-specific catalog data if the same SPA session
         // changes tenant context or a stale component render completes later.
         setPatients([]);
@@ -543,13 +796,47 @@ export default function Invoices() {
         setProducts([]);
       }
     } catch (_err) {
-      // Network or auth error handled by fetchApi
+      if (requestId === invoiceLoadRequestRef.current) {
+        // Keep the last successful ledger visible during a background refresh.
+        if (isInitialLoad) {
+          setInvoices([]);
+          setContacts([]);
+          setDeals([]);
+        }
+      }
+    } finally {
+      if (requestId === invoiceLoadRequestRef.current) {
+        invoicesLoadedRef.current = true;
+        setIsLoadingInvoices(false);
+        setIsRefreshingInvoices(false);
+      }
     }
   }, [activeSubBrand, isTravel, isWellness, dateRange, customFrom, customTo]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    const refreshAfterPayment = () => {
+      if (document.visibilityState === "visible") loadData();
+    };
+    window.addEventListener("focus", refreshAfterPayment);
+    document.addEventListener("visibilitychange", refreshAfterPayment);
+    return () => {
+      window.removeEventListener("focus", refreshAfterPayment);
+      document.removeEventListener("visibilitychange", refreshAfterPayment);
+    };
+  }, [isGeneric, loadData]);
+
+  useEffect(() => {
+    let active = true;
+    fetchApi("/api/currencies?fields=summary")
+      .then((rows) => { if (active) setAvailableCurrencies(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (active) setAvailableCurrencies([]); });
+    return () => { active = false; };
+  }, []);
 
   // Patient and product selectors use bounded backend searches. This keeps
   // the invoice screen responsive for large clinics and avoids downloading
@@ -632,36 +919,94 @@ export default function Invoices() {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const totalOutstanding = invoices
-      .filter((inv) => inv.status !== "PAID" && inv.status !== "VOIDED")
-      .reduce((sum, inv) => sum + Number(inv.amount), 0);
+    const outstanding = invoices.filter((inv) => inv.status !== "PAID" && inv.status !== "VOIDED");
 
     // #119: filter on paidAt (set by /pay route). Fall back to issuedDate for legacy
     // rows from before paidAt existed — at worst they count toward the issuance month
     // rather than the (unknown) payment month.
-    const totalPaidThisMonth = invoices
-      .filter(
+    const paidThisMonth = invoices.filter(
         (inv) =>
           inv.status === "PAID" &&
           new Date(inv.paidAt || inv.issuedDate) >= startOfMonth,
-      )
-      .reduce((sum, inv) => sum + Number(inv.amount), 0);
+      );
 
     const overdueCount = invoices.filter(
       (inv) => inv.status === "OVERDUE",
     ).length;
 
-    return { totalOutstanding, totalPaidThisMonth, overdueCount };
-  }, [invoices]);
+    const fallbackCurrency = tenant?.defaultCurrency || "USD";
+    return {
+      totalOutstanding: isGeneric
+        ? totalInCurrency(outstanding, fallbackCurrency, currencyRateByCode, (inv) => Number(inv.balance ?? inv.amount))
+        : totalsByCurrency(outstanding, fallbackCurrency),
+      totalPaidThisMonth: isGeneric
+        ? totalInCurrency(
+          paidThisMonth.flatMap((invoice) => invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice]),
+          fallbackCurrency,
+          currencyRateByCode,
+        )
+        : totalsByCurrency(
+          paidThisMonth.flatMap((invoice) => invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice]),
+          fallbackCurrency,
+        ),
+      overdueCount,
+    };
+  }, [invoices, isGeneric, tenant?.defaultCurrency, currencyRateByCode]);
 
   const filteredInvoices = useMemo(() => {
     let rows = invoices;
     if (hasReportInvoiceFilter) {
       rows = rows.filter((inv) => reportInvoiceIds.has(Number(inv.id)));
     }
-    if (statusFilter === "ALL") return rows;
-    return rows.filter((inv) => inv.status === statusFilter);
-  }, [invoices, statusFilter, hasReportInvoiceFilter, reportInvoiceIds]);
+    if (statusFilter !== "ALL") {
+      rows = rows.filter((inv) => inv.status === statusFilter);
+    }
+    if (isGeneric) {
+      if (summaryFilter === "OUTSTANDING") {
+        rows = rows.filter((inv) => inv.status !== "PAID" && inv.status !== "VOIDED");
+      } else if (summaryFilter === "PAID_MONTH") {
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+        rows = rows.filter((inv) => (
+          inv.status === "PAID" && new Date(inv.paidAt || inv.issuedDate) >= startOfMonth
+        ));
+      } else if (summaryFilter === "OVERDUE") {
+        rows = rows.filter((inv) => inv.status === "OVERDUE");
+      }
+      const contactQuery = columnFilters.contact.trim().toLowerCase();
+      rows = rows.filter((inv) => {
+        const amountPaid = Number(inv.amountPaid || 0);
+        const balanceDue = Number(inv.balance ?? inv.amount ?? 0);
+        const effectiveStatus = inv.status === "UNPAID" && amountPaid > 0 && balanceDue > 0
+          ? "PARTIAL"
+          : inv.status;
+        const contactName = inv.customerName || inv.contact?.name || "";
+        return (
+          (columnFilters.status === "ALL" || effectiveStatus === columnFilters.status) &&
+          invoiceDateMatchesRange(inv.dueDate, columnFilters.dueDatePreset, columnFilters.dueDateFrom, columnFilters.dueDateTo) &&
+          invoiceDateMatchesRange(inv.issuedDate, columnFilters.issuedDatePreset, columnFilters.issuedDateFrom, columnFilters.issuedDateTo) &&
+          (!contactQuery || contactName.toLowerCase().includes(contactQuery))
+        );
+      });
+      rows = [...rows].sort((a, b) => {
+        const aTime = Date.parse(a.issuedDate || a.createdAt || "");
+        const bTime = Date.parse(b.issuedDate || b.createdAt || "");
+        if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return bTime - aTime;
+      });
+    }
+    return rows;
+  }, [invoices, statusFilter, summaryFilter, hasReportInvoiceFilter, reportInvoiceIds, isGeneric, columnFilters]);
+
+  const hasColumnFilters = isGeneric && Object.entries(columnFilters).some(
+    ([key, value]) => ["status", "currency", "dueDatePreset", "issuedDatePreset"].includes(key)
+      ? value !== "ALL"
+      : Boolean(value),
+  );
+  const hasAnyInvoiceFilter = hasColumnFilters || summaryFilter !== "ALL" || statusFilter !== "ALL" || dateRange !== "ALL";
 
   const invoiceTotalPages = Math.max(
     1,
@@ -673,7 +1018,7 @@ export default function Invoices() {
   // rows being removed while the user is on the last page.
   useEffect(() => {
     setInvoicePage(1);
-  }, [statusFilter, dateRange, customFrom, customTo, reportInvoiceIds]);
+  }, [statusFilter, summaryFilter, dateRange, customFrom, customTo, reportInvoiceIds, columnFilters]);
 
   useEffect(() => {
     setInvoicePage((page) => Math.min(Math.max(page, 1), invoiceTotalPages));
@@ -929,6 +1274,7 @@ export default function Invoices() {
         method: "POST",
         body: JSON.stringify({
           amount: isWellness ? wellnessInvoiceTotal : newInvoice.amount,
+          currency: newInvoice.currency,
           dueDate: newInvoice.dueDate,
           contactId: newInvoice.contactId || undefined,
           dealId: newInvoice.dealId || undefined,
@@ -950,7 +1296,7 @@ export default function Invoices() {
             : {}),
         }),
       });
-      setNewInvoice(createInvoiceForm(isTravel ? activeSubBrand || "" : ""));
+      setNewInvoice(createInvoiceForm(isTravel ? activeSubBrand || "" : "", tenant?.defaultCurrency || "USD"));
       setVisits([]);
       setIsLoadingVisits(false);
       setIsLoadingVisitItems(false);
@@ -1067,7 +1413,7 @@ export default function Invoices() {
 
   return (
     <div
-      className={`invoices-mobile-page${
+      className={`invoices-mobile-page generic-billing-page${
         isWellness
           ? " invoices-wellness-page"
           : !isTravel
@@ -1078,7 +1424,7 @@ export default function Invoices() {
         padding: "2rem",
         minHeight: "100%",
         boxSizing: "border-box",
-        animation: "fadeIn 0.5s ease-out",
+        animation: isGeneric ? undefined : "fadeIn 0.5s ease-out",
       }}
     >
       <header style={{ marginBottom: "2rem" }}>
@@ -1101,7 +1447,10 @@ export default function Invoices() {
       {/* Summary Stats */}
       <div className="invoice-summary-controls">
       <div className="invoice-summary-badges">
-        <span
+        <InvoiceSummaryChip
+          interactive={isGeneric}
+          active={summaryFilter === "OUTSTANDING"}
+          onClick={() => setSummaryFilter((current) => current === "OUTSTANDING" ? "ALL" : "OUTSTANDING")}
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
@@ -1115,10 +1464,13 @@ export default function Invoices() {
             gap: "0.4rem",
           }}
         >
-          <IndianRupee size={14} /> Outstanding:{" "}
-          {formatCurrency(stats.totalOutstanding)}
-        </span>
-        <span
+          <Receipt size={14} /> Outstanding:{" "}
+          {stats.totalOutstanding}
+        </InvoiceSummaryChip>
+        <InvoiceSummaryChip
+          interactive={isGeneric}
+          active={summaryFilter === "PAID_MONTH"}
+          onClick={() => setSummaryFilter((current) => current === "PAID_MONTH" ? "ALL" : "PAID_MONTH")}
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
@@ -1133,10 +1485,13 @@ export default function Invoices() {
           }}
         >
           <CheckCircle2 size={14} /> Paid This Month:{" "}
-          {formatCurrency(stats.totalPaidThisMonth)}
-        </span>
+          {stats.totalPaidThisMonth}
+        </InvoiceSummaryChip>
         {stats.overdueCount > 0 && (
-          <span
+          <InvoiceSummaryChip
+            interactive={isGeneric}
+            active={summaryFilter === "OVERDUE"}
+            onClick={() => setSummaryFilter((current) => current === "OVERDUE" ? "ALL" : "OVERDUE")}
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
@@ -1151,9 +1506,9 @@ export default function Invoices() {
             }}
           >
             <AlertTriangle size={14} /> {stats.overdueCount} Overdue
-          </span>
+          </InvoiceSummaryChip>
         )}
-        <span
+        {!isGeneric && <span
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
@@ -1168,7 +1523,7 @@ export default function Invoices() {
               active would read as a tenant-wide count and quietly misreport
               the ledger, so the wording follows the filter. */}
           {invoices.length}{dateRange === "ALL" ? " total invoices" : " invoices in range"}
-        </span>
+        </span>}
         {hasReportInvoiceFilter && (
           <span
             style={{
@@ -1261,6 +1616,8 @@ export default function Invoices() {
         {/* Date-range filter. Applied on the server (?from/?to on GET
             /api/billing); the API's default issued-date scope is the only
             date basis exposed by this ledger control. */}
+        {!isGeneric && (
+          <>
         <div
           className="invoice-filter-pill invoice-date-filter"
           style={{
@@ -1452,6 +1809,8 @@ export default function Invoices() {
             </option>
           </select>
         </div>
+          </>
+        )}
 
         <button
           type="button"
@@ -1465,7 +1824,7 @@ export default function Invoices() {
             whiteSpace: "nowrap",
             color: "#FFFFFF",
     opacity: 1,
-        background: isWellness
+        background: isGeneric || isWellness
           ? "var(--primary-color, var(--accent-color))"
           : "linear-gradient(135deg, #d99f7b 0%, #b98a4d 100%)",
 
@@ -1504,7 +1863,7 @@ export default function Invoices() {
               padding: "1.5rem",
               width: isWellness ? "960px" : "720px",
               maxWidth: "100%",
-              height: "min(92vh, 900px)",
+              height: isGeneric ? "auto" : "min(92vh, 900px)",
               minHeight: 0,
               maxHeight: "calc(100vh - 2rem)",
               overflow: "hidden",
@@ -1560,7 +1919,7 @@ export default function Invoices() {
                 flexDirection: "column",
                 gap: "1.25rem",
                 minHeight: 0,
-                flex: 1,
+                flex: isGeneric ? "0 1 auto" : 1,
                 overflow: "hidden",
               }}
             >
@@ -1571,7 +1930,7 @@ export default function Invoices() {
                   flexDirection: "column",
                   gap: "1.25rem",
                   minHeight: 0,
-                  flex: 1,
+                  flex: isGeneric ? "0 1 auto" : 1,
                   overflowY: "auto",
                   overflowX: "hidden",
                   paddingRight: "0.35rem",
@@ -1863,7 +2222,7 @@ export default function Invoices() {
                       color: "var(--text-secondary)",
                     }}
                   >
-                    Contact
+                    Contact {isGeneric && <RequiredMark />}
                   </label>
                   <SearchableSingleSelect
                     value={newInvoice.contactId}
@@ -1925,14 +2284,22 @@ export default function Invoices() {
                 <select
                   className="input-field"
                   value={newInvoice.dealId}
-                  onChange={(e) => handleFieldChange("dealId", e.target.value)}
+                  onChange={(e) => {
+                    const dealId = e.target.value;
+                    const deal = deals.find((row) => String(row.id) === dealId);
+                    setNewInvoice((current) => ({
+                      ...current,
+                      dealId,
+                      currency: deal?.currency || current.currency,
+                    }));
+                  }}
                   style={{ background: "var(--input-bg)" }}
                   aria-label="Associated deal"
                 >
                   <option value="">-- No Deal --</option>
                     {deals.map((d) => (
                     <option key={d.id} value={d.id}>
-                      {d.title} - {formatCurrency(d.amount)}
+                      {d.title} - {formatCurrency(d.amount, d.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}
                     </option>
                     ))}
                   </select>
@@ -2060,7 +2427,7 @@ export default function Invoices() {
                               aria-label={`Line item ${index + 1} unit price`}
                             />
                             <span style={{ display: "block", fontSize: "0.68rem", color: "var(--text-secondary)", marginTop: "0.2rem" }}>
-                              {formatCurrency(lineTotal)}
+                              {formatCurrency(lineTotal, newInvoice.currency)}
                             </span>
                           </div>
                           <button
@@ -2078,12 +2445,30 @@ export default function Invoices() {
 
                   <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.6rem", borderTop: "1px solid var(--border-color)", paddingTop: "0.75rem" }}>
                     <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Invoice total</span>
-                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal)}</strong>
+                    <strong style={{ color: "var(--success-color)", fontSize: "1.1rem" }}>{formatCurrency(wellnessInvoiceTotal, newInvoice.currency)}</strong>
                   </div>
                 </section>
               )}
 
-              <div style={{ display: "flex", gap: "1rem" }}>
+              <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                {!isWellness && (
+                  <div style={{ flex: 1 }}>
+                    <label htmlFor="invoice-currency" style={{ display: "block", fontSize: "0.875rem", marginBottom: "0.5rem", color: "var(--text-secondary)" }}>
+                      Currency {isGeneric && <RequiredMark />}
+                    </label>
+                    <select
+                      id="invoice-currency"
+                      className="input-field"
+                      aria-label="Invoice currency"
+                      value={newInvoice.currency}
+                      onChange={(e) => handleFieldChange("currency", e.target.value)}
+                    >
+                      {[...new Set([newInvoice.currency, tenant?.defaultCurrency || "USD", ...availableCurrencies.map((row) => row.code)])]
+                        .filter(Boolean)
+                        .map((code) => <option key={code} value={code}>{code}</option>)}
+                    </select>
+                  </div>
+                )}
                 {!isWellness && (
                   <div style={{ flex: 1 }}>
                   <label
@@ -2094,7 +2479,7 @@ export default function Invoices() {
                       color: "var(--text-secondary)",
                     }}
                   >
-                    Amount ({currencySymbol()})
+                    Amount ({currencySymbol(newInvoice.currency)}) {isGeneric && <RequiredMark />}
                   </label>
                   <input
                     type="number"
@@ -2118,7 +2503,7 @@ export default function Invoices() {
                       color: "var(--text-secondary)",
                     }}
                   >
-                    Due Date
+                    Due Date {isGeneric && <RequiredMark />}
                   </label>
                   <input
                     type="date"
@@ -2188,7 +2573,7 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Status
+                  Status {isGeneric && <RequiredMark />}
                 </label>
                 <select
                   className="input-field"
@@ -2228,21 +2613,46 @@ export default function Invoices() {
       )}
 
       {/* Invoice Table */}
-      <div className="card" style={{ padding: "1.5rem", minWidth: 0, overflowX: "hidden" }}>
-        <h3
-          style={{
-            fontSize: "1.15rem",
-            fontWeight: "600",
-            marginBottom: "1rem",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-          }}
-        >
-          <Receipt size={20} color="var(--success-color)" /> Invoice Ledger
-        </h3>
+      <div className="card invoice-ledger-card" style={{ padding: "1.5rem", minWidth: 0, overflowX: "hidden" }}>
+        <div className="invoice-ledger-heading">
+          <h3
+            style={{
+              fontSize: "1.15rem",
+              fontWeight: "600",
+              margin: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+            }}
+          >
+            <Receipt size={20} color="var(--success-color)" /> Invoice Ledger
+            {isRefreshingInvoices && <span className="pickup-module-refresh-status" role="status">Refreshing data…</span>}
+          </h3>
+          {isGeneric && hasAnyInvoiceFilter && (
+            <button
+              type="button"
+              className="btn-secondary invoice-ledger-clear-filters"
+              onClick={() => {
+                setStatusFilter("ALL");
+                setSummaryFilter("ALL");
+                setDateRange("ALL");
+                setCustomFrom("");
+                setCustomTo("");
+                setColumnFilters(EMPTY_INVOICE_COLUMN_FILTERS);
+                setActiveColumnFilter(null);
+              }}
+            >
+              <X size={14} aria-hidden="true" />
+              Clear filters
+            </button>
+          )}
+        </div>
 
-        {invoices.length === 0 ? (
+        {isLoadingInvoices ? (
+          <div className="invoice-ledger-loading" role="status">
+            Loading billing data…
+          </div>
+        ) : invoices.length === 0 && dateRange === "ALL" ? (
           <div
             style={{
               textAlign: "center",
@@ -2264,35 +2674,12 @@ export default function Invoices() {
               No invoices yet. Create one to get started.
             </p>
           </div>
-        ) : filteredInvoices.length === 0 ? (
-          <div
-            style={{
-              textAlign: "center",
-              padding: "2.5rem 1.5rem",
-              background: "var(--subtle-bg-2)",
-              border: "1px dashed var(--border-color)",
-              borderRadius: "8px",
-            }}
-          >
-            <Filter
-              size={48}
-              style={{
-                opacity: 0.2,
-                margin: "0 auto 1rem",
-                color: "var(--accent-color)",
-              }}
-            />
-            <p style={{ color: "var(--text-secondary)" }}>
-              {hasReportInvoiceFilter
-                ? "No invoices from this report drill-down are available."
-                : <>No invoices match the “{STATUS_CONFIG[statusFilter]?.label || statusFilter}” filter.</>}
-            </p>
-          </div>
         ) : (
           <>
             <div className="invoice-table-scroll">
               <TopScrollSync
                 hideTopBar
+                verticalOverflow={isGeneric ? "auto" : "visible"}
                 scrollWidth={`${isWellness ? WELLNESS_INVOICE_TABLE_MIN_WIDTH : INVOICE_TABLE_MIN_WIDTH}px`}
               >
               {/* #243: table-layout fixed + per-column widths so the Contact
@@ -2313,17 +2700,17 @@ export default function Invoices() {
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: isWellness ? "180px" : "110px" }} />
+                  <col style={{ width: isWellness ? "180px" : "160px" }} />
                   {isWellness && <col style={{ width: "190px" }} />}
                   {isWellness && <col style={{ width: WELLNESS_INVOICE_PRODUCTS_COLUMN_WIDTH }} />}
                   {isWellness && <col style={{ width: WELLNESS_INVOICE_QTY_COLUMN_WIDTH }} />}
-                  <col style={{ width: isWellness ? "105px" : "104px" }} />
+                  <col style={{ width: isWellness ? "105px" : "100px" }} />
                   {isWellness && <col style={{ width: "125px" }} />}
-                  <col style={{ width: isWellness ? "100px" : "96px" }} />
-                  <col style={{ width: isWellness ? "105px" : "108px" }} />
-                  <col style={{ width: isWellness ? "105px" : "108px" }} />
-                  {!isWellness && <col style={{ width: "170px" }} />}
-                  <col style={{ width: isWellness ? "250px" : "244px" }} />
+                  <col style={{ width: isWellness ? "100px" : "90px" }} />
+                  <col style={{ width: isWellness ? "105px" : "100px" }} />
+                  <col style={{ width: isWellness ? "105px" : "100px" }} />
+                  {!isWellness && <col style={{ width: "160px" }} />}
+                  <col style={{ width: isWellness ? "250px" : "220px" }} />
                 </colgroup>
                 <thead className="invoice-table-header">
                   <tr
@@ -2394,7 +2781,31 @@ export default function Invoices() {
                         letterSpacing: "0.05em",
                       }}
                     >
-                      Amount
+                      {isGeneric ? (
+                        <InvoiceHeaderFilter
+                          label="Amount"
+                          filterKey="amount"
+                          activeFilter={activeColumnFilter}
+                          hasValue={columnFilters.currency !== "ALL"}
+                          onToggle={setActiveColumnFilter}
+                        >
+                          <select
+                            value={columnFilters.currency}
+                            onChange={(event) => setColumnFilters((current) => ({ ...current, currency: event.target.value }))}
+                            aria-label="Filter by currency"
+                            autoFocus
+                          >
+                            <option value="ALL">Original currency</option>
+                            {[...new Set([
+                              tenant?.defaultCurrency || "USD",
+                              ...availableCurrencies.map((row) => row.code),
+                              ...invoices.map((invoice) => invoice.currency).filter(Boolean),
+                            ])].map((currency) => (
+                              <option key={currency} value={currency}>{currency}</option>
+                            ))}
+                          </select>
+                        </InvoiceHeaderFilter>
+                      ) : "Amount"}
                     </th>
                     {isWellness && (
                       <th
@@ -2420,7 +2831,29 @@ export default function Invoices() {
                         letterSpacing: "0.05em",
                       }}
                     >
-                      Status
+                      {isGeneric ? (
+                        <InvoiceHeaderFilter
+                          label="Status"
+                          filterKey="status"
+                          activeFilter={activeColumnFilter}
+                          hasValue={columnFilters.status !== "ALL"}
+                          onToggle={setActiveColumnFilter}
+                        >
+                          <select
+                            value={columnFilters.status}
+                            onChange={(event) => setColumnFilters((current) => ({ ...current, status: event.target.value }))}
+                            aria-label="Filter table by status"
+                            autoFocus
+                          >
+                            <option value="ALL">All statuses</option>
+                            <option value="PAID">Paid</option>
+                            <option value="UNPAID">Unpaid</option>
+                            <option value="PARTIAL">Partially paid</option>
+                            <option value="OVERDUE">Overdue</option>
+                            <option value="VOIDED">Voided</option>
+                          </select>
+                        </InvoiceHeaderFilter>
+                      ) : "Status"}
                     </th>
                     <th
                       style={{
@@ -2432,7 +2865,32 @@ export default function Invoices() {
                         letterSpacing: "0.05em",
                       }}
                     >
-                      Due Date
+                      {isGeneric ? (
+                        <InvoiceHeaderFilter
+                          label="Due date"
+                          filterKey="dueDate"
+                          activeFilter={activeColumnFilter}
+                          hasValue={columnFilters.dueDatePreset !== "ALL"}
+                          onToggle={setActiveColumnFilter}
+                        >
+                          <select
+                            value={columnFilters.dueDatePreset}
+                            onChange={(event) => setColumnFilters((current) => ({ ...current, dueDatePreset: event.target.value }))}
+                            aria-label="Filter by due date range"
+                            autoFocus
+                          >
+                            {DATE_RANGE_PRESETS.map((preset) => (
+                              <option key={preset.value} value={preset.value}>{preset.label}</option>
+                            ))}
+                          </select>
+                          {columnFilters.dueDatePreset === "CUSTOM" && (
+                            <div className="invoice-header-custom-range">
+                              <label>From<input type="date" value={columnFilters.dueDateFrom} onClick={openNativeDatePicker} onChange={(event) => setColumnFilters((current) => ({ ...current, dueDateFrom: event.target.value }))} aria-label="Filter due date from" /></label>
+                              <label>To<input type="date" value={columnFilters.dueDateTo} min={columnFilters.dueDateFrom || undefined} onClick={openNativeDatePicker} onChange={(event) => setColumnFilters((current) => ({ ...current, dueDateTo: event.target.value }))} aria-label="Filter due date to" /></label>
+                            </div>
+                          )}
+                        </InvoiceHeaderFilter>
+                      ) : "Due Date"}
                     </th>
                     <th
                       style={{
@@ -2444,7 +2902,32 @@ export default function Invoices() {
                         letterSpacing: "0.05em",
                       }}
                     >
-                      Issued
+                      {isGeneric ? (
+                        <InvoiceHeaderFilter
+                          label="Issued"
+                          filterKey="issuedDate"
+                          activeFilter={activeColumnFilter}
+                          hasValue={columnFilters.issuedDatePreset !== "ALL"}
+                          onToggle={setActiveColumnFilter}
+                        >
+                          <select
+                            value={columnFilters.issuedDatePreset}
+                            onChange={(event) => setColumnFilters((current) => ({ ...current, issuedDatePreset: event.target.value }))}
+                            aria-label="Filter by issued date range"
+                            autoFocus
+                          >
+                            {DATE_RANGE_PRESETS.map((preset) => (
+                              <option key={preset.value} value={preset.value}>{preset.label}</option>
+                            ))}
+                          </select>
+                          {columnFilters.issuedDatePreset === "CUSTOM" && (
+                            <div className="invoice-header-custom-range">
+                              <label>From<input type="date" value={columnFilters.issuedDateFrom} onClick={openNativeDatePicker} onChange={(event) => setColumnFilters((current) => ({ ...current, issuedDateFrom: event.target.value }))} aria-label="Filter issued date from" /></label>
+                              <label>To<input type="date" value={columnFilters.issuedDateTo} min={columnFilters.issuedDateFrom || undefined} onClick={openNativeDatePicker} onChange={(event) => setColumnFilters((current) => ({ ...current, issuedDateTo: event.target.value }))} aria-label="Filter issued date to" /></label>
+                            </div>
+                          )}
+                        </InvoiceHeaderFilter>
+                      ) : "Issued"}
                     </th>
                     {!isWellness && <th
                       style={{
@@ -2456,7 +2939,23 @@ export default function Invoices() {
                         letterSpacing: "0.05em",
                       }}
                     >
-                      Contact
+                      {isGeneric ? (
+                        <InvoiceHeaderFilter
+                          label="Contact"
+                          filterKey="contact"
+                          activeFilter={activeColumnFilter}
+                          hasValue={Boolean(columnFilters.contact)}
+                          onToggle={setActiveColumnFilter}
+                        >
+                          <input
+                            value={columnFilters.contact}
+                            onChange={(event) => setColumnFilters((current) => ({ ...current, contact: event.target.value }))}
+                            placeholder="Search contact"
+                            aria-label="Filter by contact"
+                            autoFocus
+                          />
+                        </InvoiceHeaderFilter>
+                      ) : "Contact"}
                     </th>}
                     {/* #119 polish: sticky right-edge so action buttons are always
                         visible regardless of horizontal scroll position. */}
@@ -2477,10 +2976,37 @@ export default function Invoices() {
                   </tr>
                 </thead>
                 <tbody>
+                  {visibleInvoices.length === 0 && (
+                    <tr>
+                      <td colSpan={isWellness ? 10 : 7} className="invoice-filter-empty-cell">
+                        <Filter size={28} aria-hidden="true" />
+                        <span>
+                          {hasReportInvoiceFilter
+                            ? "No invoices from this report drill-down are available."
+                            : "No invoices match the selected filters."}
+                        </span>
+                      </td>
+                    </tr>
+                  )}
                   {visibleInvoices.map((inv) => {
                     const wellnessLineItems = getInvoiceLineItems(inv);
+                    const plotDetails = isGeneric ? getPlotInvoiceDetails(inv) : null;
+                    const isPlotInvoice = Boolean(plotDetails) || /^PLOT-/i.test(inv.invoiceNum || "");
+                    const displayInvoiceNum = isPlotInvoice
+                      ? getPlotInvoiceDisplayNumber(inv, plotDetails)
+                      : inv.invoiceNum;
                     const customerName = inv.customerName || inv.contact?.name || "No customer data";
                     const customerContact = inv.customerPhone || inv.customerEmail || "";
+                    const amountPaid = Number(inv.amountPaid || 0);
+                    const balanceDue = Number(inv.balance ?? inv.amount ?? 0);
+                    const invoiceCurrency = inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD";
+                    const displayAmount = convertLedgerAmount(inv.amount, invoiceCurrency);
+                    const displayAmountPaid = convertLedgerAmount(amountPaid, invoiceCurrency);
+                    const displayBalanceDue = convertLedgerAmount(balanceDue, invoiceCurrency);
+                    const isPartiallyPaid = isGeneric
+                      && inv.status === "UNPAID"
+                      && amountPaid > 0
+                      && balanceDue > 0;
                     return (
                     <tr
                       key={inv.id}
@@ -2488,10 +3014,10 @@ export default function Invoices() {
                         borderBottom: "1px solid var(--border-color)",
                         transition: "background 0.15s",
                       }}
-                      onMouseOver={(e) =>
+                      onMouseOver={isGeneric ? undefined : (e) =>
                         (e.currentTarget.style.background = "var(--hover-bg)")
                       }
-                      onMouseOut={(e) =>
+                      onMouseOut={isGeneric ? undefined : (e) =>
                         (e.currentTarget.style.background = "transparent")
                       }
                     >
@@ -2502,7 +3028,14 @@ export default function Invoices() {
                           letterSpacing: "0.03em",
                         }}
                       >
-                        {inv.invoiceNum}
+                        <span
+                          className={isPlotInvoice ? "plot-invoice-number" : undefined}
+                          title={isPlotInvoice && displayInvoiceNum !== inv.invoiceNum
+                            ? `Stored invoice ID: ${inv.invoiceNum}`
+                            : undefined}
+                        >
+                          {displayInvoiceNum}
+                        </span>
                       </td>
                       {isWellness && (
                         <td
@@ -2572,17 +3105,31 @@ export default function Invoices() {
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
-                        {/* #242: removed the hardcoded $ IndianRupee icon — formatCurrency()
-                            already prefixes the right symbol (₹ for INR tenants, $ for USD,
-                            etc.). Stacking the icon caused "$ ₹1,500.00" on Indian tenants. */}
                         <span
                           style={{
                             color: "var(--success-color)",
                             fontWeight: 600,
                           }}
                         >
-                          {formatCurrency(inv.amount)}
+                          {formatCurrency(displayAmount.amount, displayAmount.currency)}
                         </span>
+                        {isPartiallyPaid && (
+                          <div
+                            data-testid={`invoice-payment-progress-${inv.id}`}
+                            style={{ marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.35, color: "var(--text-secondary)" }}
+                          >
+                            <div>Paid {formatCurrency(displayAmountPaid.amount, displayAmountPaid.currency)}</div>
+                            <div>Balance {formatCurrency(displayBalanceDue.amount, displayBalanceDue.currency)}</div>
+                          </div>
+                        )}
+                        {inv.status === "PAID" && inv.receivedPayments?.some((payment) => payment.currency !== (inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")) && (
+                          <div style={{ marginTop: 3, color: "var(--text-secondary)", fontSize: "0.72rem" }}>
+                            Received: {inv.receivedPayments.map((payment) => {
+                              const converted = convertLedgerAmount(payment.amount, payment.currency || invoiceCurrency);
+                              return formatCurrency(converted.amount, converted.currency);
+                            }).join(" · ")}
+                          </div>
+                        )}
                       </td>
                       {isWellness && (
                         <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
@@ -2590,7 +3137,11 @@ export default function Invoices() {
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>
-                        <StatusBadge status={inv.status} borderless={isWellness} />
+                        <StatusBadge
+                          status={inv.status}
+                          borderless={isWellness}
+                          label={isPartiallyPaid ? "Partially paid" : null}
+                        />
                       </td>
                       <td
                         style={{
@@ -2672,7 +3223,7 @@ export default function Invoices() {
                             className="invoice-action-button invoice-action-button--view"
                             onClick={() => {
                               setOpenActionMenuId(null);
-                              viewInvoicePdf(inv.id, inv.invoiceNum);
+                              viewInvoicePdf(inv.id, displayInvoiceNum);
                             }}
                             aria-label={`View invoice ${inv.invoiceNum}`}
                           >
@@ -2754,7 +3305,7 @@ export default function Invoices() {
                                   <Download size={16} aria-hidden="true" />
                                   <span>Download PDF</span>
                                 </button>
-                                {inv.status !== "VOIDED" && (
+                                {inv.status !== "VOIDED" && !isPlotInvoice && (
                                   <>
                                     <button
                                       type="button"
@@ -2885,7 +3436,7 @@ export default function Invoices() {
               }}
             >
               Invoice {recurInvoice.invoiceNum} ·{" "}
-              {formatCurrency(recurInvoice.amount)}
+              {formatCurrency(recurInvoice.amount, recurInvoice.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}
             </p>
 
             {recurInvoice.isRecurring ? (
@@ -3150,7 +3701,7 @@ export default function Invoices() {
               <strong>{linkModal.inv.contact?.name || "the customer"}</strong>{" "}
               to collect payment for invoice{" "}
               <strong>{linkModal.inv.invoiceNum}</strong> (
-              {formatCurrency(linkModal.inv.amount)}).
+              {formatCurrency(linkModal.inv.amount, linkModal.inv.currency || invoiceDisplayCurrency || tenant?.defaultCurrency || "USD")}).
             </p>
             <div
               style={{
@@ -3216,6 +3767,12 @@ export default function Invoices() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .invoice-ledger-card:hover {
+          transform: none;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+          border-color: var(--border-color);
+        }
+        .invoice-ledger-card::before { display: none; }
         .invoices-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
         .invoices-grid > .card { align-self: start; }
         .invoice-create-form-scroll {
@@ -3353,6 +3910,134 @@ export default function Invoices() {
           background-color: var(--bg-color, #15171c) !important;
           background-clip: border-box;
           box-shadow: inset 0 -1px 0 var(--border-color);
+        }
+        .invoice-ledger-heading {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          min-height: 32px;
+          margin-bottom: 1rem;
+        }
+        .invoice-summary-filter-chip {
+          margin: 0;
+          font-family: inherit;
+          line-height: inherit;
+          cursor: pointer;
+          transition: box-shadow 0.15s ease, filter 0.15s ease;
+        }
+        .invoice-summary-filter-chip:hover {
+          filter: brightness(0.97);
+        }
+        .invoice-summary-filter-chip.is-active {
+          box-shadow: inset 0 0 0 1px currentColor;
+        }
+        .invoice-ledger-clear-filters {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.35rem;
+          flex: 0 0 auto;
+          padding: 0.45rem 0.7rem;
+          color: var(--text-secondary);
+          font-size: 0.75rem;
+          line-height: 1;
+        }
+        .invoices-generic-page .invoice-header-filter {
+          position: relative;
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          min-width: 0;
+        }
+        .invoices-generic-page .invoice-header-filter-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 auto;
+          width: 25px;
+          height: 25px;
+          padding: 0;
+          border: 1px solid transparent;
+          border-radius: 5px;
+          background: transparent;
+          color: var(--text-secondary);
+          cursor: pointer;
+        }
+        .invoices-generic-page .invoice-header-filter-button:hover,
+        .invoices-generic-page .invoice-header-filter-button[aria-expanded="true"],
+        .invoices-generic-page .invoice-header-filter-button.is-active {
+          border-color: color-mix(in srgb, var(--primary-color, var(--accent-color)) 35%, transparent);
+          background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+          color: var(--primary-color, var(--accent-color));
+        }
+        .invoice-header-filter-popover {
+          position: fixed;
+          display: flex;
+          flex-direction: column;
+          gap: 0.55rem;
+          z-index: 10020;
+          width: 210px;
+          padding: 0.65rem;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          background: var(--popover-bg, #fff);
+          opacity: 1;
+          backdrop-filter: none;
+          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+          text-transform: none;
+          letter-spacing: normal;
+        }
+        .invoice-header-custom-range {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 0.45rem;
+        }
+        .invoice-header-custom-range label {
+          display: grid;
+          gap: 0.25rem;
+          color: var(--text-secondary);
+          font-size: 0.68rem;
+          font-weight: 600;
+          text-transform: none;
+          letter-spacing: normal;
+        }
+        .invoice-header-filter-popover input,
+        .invoice-header-filter-popover select {
+          width: 100%;
+          min-width: 0;
+          height: 36px;
+          box-sizing: border-box;
+          padding: 0 0.65rem;
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          outline: none;
+          background: var(--surface-color);
+          color: var(--text-primary);
+          font: inherit;
+          font-size: 0.78rem;
+          font-weight: 400;
+        }
+        .invoice-header-filter-popover input:focus,
+        .invoice-header-filter-popover select:focus {
+          border-color: var(--primary-color, var(--accent-color));
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+        }
+        .invoice-filter-empty-cell {
+          height: 180px;
+          padding: 2rem !important;
+          text-align: center;
+          color: var(--text-secondary);
+          background: var(--bg-color);
+        }
+        .invoice-filter-empty-cell > svg {
+          display: block;
+          margin: 0 auto 0.6rem;
+          color: var(--text-secondary);
+        }
+        .invoice-filter-empty-cell > span {
+          display: block;
+          margin-bottom: 0.85rem;
         }
         [data-wellness-invoice="true"] th,
         [data-wellness-invoice="true"] td {

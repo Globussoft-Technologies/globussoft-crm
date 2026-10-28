@@ -40,6 +40,12 @@ const GENERIC_SERVER_ERROR_MESSAGE = "Something went wrong on our end. Please tr
 // ---------------------------------------------------------------------------
 let _inMemoryToken = null;
 
+// Some automatic page probes can fail more than once during a single login
+// (React's development remount and later background refreshes are the common
+// cases). Keep narrowly-scoped notices from nagging the user until the next
+// authentication session. clearAuthToken() resets this set on logout/expiry.
+const sessionToastKeys = new Set();
+
 // "Keep me signed in" — opt-in cross-tab token persistence.
 //
 // Default (remember=false): token lives in memory + sessionStorage only.
@@ -117,6 +123,7 @@ export function getAuthToken() {
 
 export function clearAuthToken() {
   _inMemoryToken = null;
+  sessionToastKeys.clear();
   try {
     sessionStorage.removeItem('token');
   } catch {
@@ -336,7 +343,17 @@ export const fetchApi = async (url, options = {}) => {
     const isSubscriptionError = response.status === 402 &&
       (serverMsg === 'NO_ACTIVE_SUBSCRIPTION' || serverMsg === 'TRIAL_EXPIRED' ||
         errorCode === 'NO_ACTIVE_SUBSCRIPTION' || errorCode === 'TRIAL_EXPIRED');
-    if (!silent && _globalNotify && !isSubscriptionError) {
+    // The Callified campaigns request is an automatic Generic CRM Leads-page
+    // probe (and its only frontend consumer). If its credentials are invalid,
+    // show that actionable setup error once per login session. Logout clears
+    // sessionToastKeys, so the next login can surface the error once again.
+    const sessionToastKey =
+      errorCode === 'CALLIFIED_AUTH_FAILED' &&
+      String(url).split('?')[0] === '/api/callified/campaigns/with-lead-counts'
+        ? 'generic-leads-callified-auth'
+        : null;
+    const alreadyShownThisSession = sessionToastKey && sessionToastKeys.has(sessionToastKey);
+    if (!silent && _globalNotify && !isSubscriptionError && !alreadyShownThisSession) {
       // Append the error code in the toast for 5xx so a dev (or a user
       // screenshotting for support) can see it without opening DevTools —
       // it's a stable enum string, safe to show, and short enough to not
@@ -344,6 +361,7 @@ export const fetchApi = async (url, options = {}) => {
       const shouldShowAiNotice = !isAiSetupRequired || Date.now() - lastAiSetupNoticeAt > 10_000;
       if (shouldShowAiNotice) {
         if (isAiSetupRequired) lastAiSetupNoticeAt = Date.now();
+        if (sessionToastKey) sessionToastKeys.add(sessionToastKey);
         _globalNotify.error(userMsg);
       }
     }

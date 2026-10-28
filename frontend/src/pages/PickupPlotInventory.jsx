@@ -17,8 +17,9 @@ import AddressAutocomplete from '../components/AddressAutocomplete';
 import MultiSelectDropdown from '../components/MultiSelectDropdown';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import CompactPickupLocationCell from '../components/CompactPickupLocationCell';
+import InventorySpreadsheetImport from '../components/InventorySpreadsheetImport';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
-import { googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
+import { googleMapsSearchUrl } from '../utils/googleMaps';
 
 const EMPTY_PLOT = {
   name: '', plotNumber: '', block: '', address: '', area: '', areaUnit: 'SQ_FT', price: '',
@@ -95,12 +96,42 @@ const PLOT_INVENTORY_COLUMNS = [
   { label: 'Actions', width: 110, minWidth: 90 },
 ];
 
+const PLOT_IMPORT_COLUMNS = [
+  { key: 'name', header: 'Plot / Site name' },
+  { key: 'plotNumber', header: 'Plot number' },
+  { key: 'block', header: 'Block' },
+  { key: 'address', header: 'Address' },
+  { key: 'pickupLocationNames', header: 'Pickup location names' },
+  { key: 'area', header: 'Area' },
+  { key: 'areaUnit', header: 'Area unit' },
+  { key: 'price', header: 'Price' },
+  { key: 'availability', header: 'Availability' },
+  { key: 'roadWidth', header: 'Road width' },
+  { key: 'facing', header: 'Facing' },
+  { key: 'propertyType', header: 'Property type' },
+];
+
+const PLOT_IMPORT_EXAMPLE = {
+  name: 'Koramangala',
+  plotNumber: 'A-101',
+  block: 'A',
+  address: 'Koramangala, Bengaluru, Karnataka',
+  pickupLocationNames: 'North Gate | South Gate',
+  area: '1200',
+  areaUnit: 'SQ_FT',
+  price: '2500000',
+  availability: 'AVAILABLE',
+  roadWidth: '30 ft',
+  facing: 'EAST',
+  propertyType: 'RESIDENTIAL',
+};
+
 const fieldStyle = { width: '100%', marginTop: 5, boxSizing: 'border-box' };
 const labelStyle = { display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' };
 const plotTableHeaderStyle = {
   padding: '0.55rem 0.75rem', textAlign: 'left', fontSize: '0.78rem',
-  color: 'var(--text-secondary)',
-  background: '#f3f4f6',
+  color: 'var(--text-primary)',
+  background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
   borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'normal', overflowWrap: 'anywhere',
   position: 'sticky', top: 0, zIndex: 1,
 };
@@ -113,8 +144,10 @@ const columnFilterLabelStyle = {
   display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, whiteSpace: 'nowrap',
 };
 
-function plotMapUrl(address) {
-  return googleMapsSearchUrl(address);
+function plotMapUrl(plot) {
+  const placeName = String(plot?.name || '').trim();
+  const address = String(plot?.address || '').trim();
+  return googleMapsSearchUrl([placeName, address].filter(Boolean).join(', '));
 }
 
 function areaInSquareFeet(value) {
@@ -162,8 +195,7 @@ function PlotAddress({ plot, areaUnit, locale }) {
 
   return (
     <a
-      href={plotMapUrl(address)}
-      onClick={(event) => { void openPreciseGoogleMap(event, plot); }}
+      href={plotMapUrl(plot)}
       target="_blank"
       rel="noreferrer"
       aria-label={`Show ${plot.name} address on Google Maps`}
@@ -253,6 +285,8 @@ export default function PickupPlotInventory() {
   const notify = useNotify();
   const [data, setData] = useState({ plots: [], pickupLocations: [], summary: {} });
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [plotDialog, setPlotDialog] = useState(null);
@@ -289,7 +323,9 @@ export default function PickupPlotInventory() {
   }, [data.plots, plotDialog?.id, plotForm.name, plotForm.plotNumber]);
 
   const loadInventory = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     setLoadError('');
     try {
       const response = await fetchApi('/api/pickup-plot-inventory');
@@ -298,12 +334,14 @@ export default function PickupPlotInventory() {
         pickupLocations: Array.isArray(response?.pickupLocations) ? response.pickupLocations : [],
         summary: response?.summary || {},
       });
+      loadedRef.current = true;
     } catch (error) {
       const message = error.message || 'The inventory service could not be reached.';
       setLoadError(message);
       notify.error(`Could not load pickup and plot inventory. ${message}`);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [notify]);
 
@@ -357,9 +395,18 @@ export default function PickupPlotInventory() {
       notify.error('Add at least 3 GPS points to close the plot boundary, or clear it.');
       return;
     }
+    const editing = Boolean(plotDialog?.id);
+    const confirmed = await notify.confirm({
+      title: editing ? 'Confirm plot changes' : 'Confirm new plot',
+      message: editing
+        ? `Are you sure you want to save changes to Plot ${plotForm.plotNumber} in ${plotForm.name}?`
+        : `Are you sure you want to add Plot ${plotForm.plotNumber} to ${plotForm.name}?`,
+      confirmText: editing ? 'Save changes' : 'Add plot',
+      cancelText: 'Cancel',
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
-      const editing = Boolean(plotDialog?.id);
       await fetchApi(`/api/pickup-plot-inventory/plots${editing ? `/${plotDialog.id}` : ''}`, {
         method: editing ? 'PUT' : 'POST',
         body: JSON.stringify(plotForm),
@@ -404,11 +451,11 @@ export default function PickupPlotInventory() {
 
   return (
     <div
+      className="pickup-plot-inventory-page"
       data-testid="pickup-plot-inventory-page"
       style={{
         display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0,
         overflow: 'hidden', boxSizing: 'border-box', padding: '2rem',
-        animation: 'fadeIn .35s ease-out',
       }}
     >
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
@@ -434,24 +481,27 @@ export default function PickupPlotInventory() {
             maxVisibleRows={4}
             width={130}
           />
+          <InventorySpreadsheetImport
+            entityLabel="plots and sites"
+            endpoint="/api/pickup-plot-inventory/plots/import"
+            templateBaseName="plots-and-sites-import-template"
+            sheetName="Plots and sites"
+            columns={PLOT_IMPORT_COLUMNS}
+            example={PLOT_IMPORT_EXAMPLE}
+            onImported={async (result) => {
+              notify.success(`Import complete: ${result.created || 0} created, ${result.updated || 0} updated.`);
+              await loadInventory();
+            }}
+          />
           <button className="btn-primary" onClick={() => openPlot()} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}>
             <Plus size={16} /> Add Plot / Site
           </button>
         </div>
       </header>
 
-      {loading ? (
-        <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading inventory…</div>
-      ) : loadError ? (
-        <div role="alert" className="card" style={{ padding: '2rem', textAlign: 'center' }}>
-          <strong>Inventory could not be loaded.</strong>
-          <p style={{ color: 'var(--text-secondary)', margin: '0.6rem 0 1rem' }}>{loadError}</p>
-          <button type="button" className="btn-primary" onClick={loadInventory}>Retry</button>
-        </div>
-      ) : (
-        <div
+      <div
           ref={plotTableViewportRef}
-          className="card pickup-plot-table-scroll"
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="plot-inventory-table"
           style={{
             flex: '1 1 auto', minHeight: 0, maxHeight: '100%', width: '100%', maxWidth: '100%',
@@ -459,8 +509,14 @@ export default function PickupPlotInventory() {
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
-          <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-resizable-table" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          {loading && !loadedRef.current && <div className="pickup-module-refresh-status" role="status">Loading inventory…</div>}
+          {loadError && <div role="alert" className="pickup-module-refresh-status" style={{ pointerEvents: 'auto' }}>
+            Inventory could not be loaded. {loadError}
+            <button type="button" className="btn-primary" onClick={loadInventory} style={{ marginLeft: 8, padding: '0.25rem 0.5rem' }}>Retry</button>
+          </div>}
+          {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
+          {(!loadError || loadedRef.current) && <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
+          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={PLOT_INVENTORY_COLUMNS[index].label} style={{ width }} />)}
             </colgroup>
@@ -522,13 +578,13 @@ export default function PickupPlotInventory() {
                   </div></td>
                 </tr>
               ))}
-              {data.plots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites yet.</td></tr>}
-              {data.plots.length > 0 && filteredPlots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites match the selected filters.</td></tr>}
+              {loading && !loadedRef.current && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading inventory…</td></tr>}
+              {!loading && data.plots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites yet.</td></tr>}
+              {!loading && data.plots.length > 0 && filteredPlots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites match the selected filters.</td></tr>}
             </tbody>
           </table>
-          </div>
+          </div>}
         </div>
-      )}
 
       {plotDialog && <Modal title={plotDialog.id ? 'Edit Plot / Site' : 'Add Plot / Site'} onClose={() => setPlotDialog(null)} onSave={savePlot} saving={saving} saveDisabled={duplicatePlotNumber} wide>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
@@ -589,6 +645,7 @@ export default function PickupPlotInventory() {
             {activePickupLocations.length === 0 && <div style={{ marginTop: 5, color: 'var(--text-secondary)', fontSize: '.76rem' }}>No active pickup locations are available. Add one in Pickup Inventory first.</div>}
           </div>
           <AddressAutocomplete
+            provider="google"
             style={{ gridColumn: '1 / -1' }}
             label="Address *"
             required

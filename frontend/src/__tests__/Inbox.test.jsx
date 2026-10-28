@@ -157,9 +157,9 @@ function defaultFetch(url, opts) {
   return Promise.resolve([]);
 }
 
-function renderInbox({ user = adminUser, tenant = { vertical: "generic" } } = {}) {
+function renderInbox({ user = adminUser, tenant = { vertical: "generic" }, initialEntries = ['/'] } = {}) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={{ user, tenant }}>
         <Inbox />
       </AuthContext.Provider>
@@ -217,6 +217,15 @@ describe("<Inbox />", () => {
     expect(screen.queryByRole("tab", { name: /whatsapp/i })).not.toBeInTheDocument();
   });
 
+  it('opens the generic compose modal with the selected customer prefilled', async () => {
+    renderInbox({
+      initialEntries: ['/inbox?composeTo=rishu%40x.in&composeContactId=c1'],
+    });
+
+    expect(await screen.findByRole('heading', { name: 'New Message' })).toBeInTheDocument();
+    expect(screen.getByLabelText('To:')).toHaveValue('rishu@x.in');
+  });
+
   it("persists an opened unread email as read", async () => {
     const user = userEvent.setup();
     renderInbox();
@@ -231,14 +240,14 @@ describe("<Inbox />", () => {
     });
   });
 
-  it("uses the same page shell spacing as the other CRM pages", async () => {
+  it("uses the shared full-width Generic CRM content shell", async () => {
     renderInbox();
 
     const shell = await screen.findByTestId("inbox-page-shell");
     expect(shell).toHaveStyle({
-      padding: "2rem",
-      maxWidth: "1480px",
-      margin: "0 auto",
+      padding: "0px",
+      maxWidth: "100%",
+      margin: "0px",
     });
 
     const listCard = screen.getByTestId("inbox-list-card");

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Filter, MapPin, Pencil, Plus, Power, PowerOff, RefreshCw, Save, Search, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MapPin, Pencil, Plus, Power, PowerOff, RefreshCw, Save, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import AddressAutocomplete from '../components/AddressAutocomplete';
+import InventorySpreadsheetImport from '../components/InventorySpreadsheetImport';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
-import { googleMapsCoordinateUrl, googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
+import { googleMapsCoordinateUrl, googleMapsPlaceUrl, googleMapsSearchUrl, openPreciseGoogleMap } from '../utils/googleMaps';
 import './PickupInventory.css';
 
 const PICKUP_INVENTORY_COLUMNS = [
@@ -18,6 +19,20 @@ const PICKUP_INVENTORY_COLUMNS = [
   { label: 'Updated at', width: 140, minWidth: 120 },
   { label: 'Actions', width: 190, minWidth: 180 },
 ];
+
+const PICKUP_IMPORT_COLUMNS = [
+  { key: 'name', header: 'Location name' },
+  { key: 'address', header: 'Address' },
+  { key: 'googleMapsLink', header: 'Google Maps link' },
+  { key: 'maxAssignments', header: 'Maximum assignments' },
+];
+
+const PICKUP_IMPORT_EXAMPLE = {
+  name: 'North Gate',
+  address: '10 Market Road, Bengaluru',
+  googleMapsLink: 'https://maps.google.com/?q=12.9716,77.5946',
+  maxAssignments: '25',
+};
 
 function mapsUrl(location) {
   return location.googleMapsLink
@@ -37,6 +52,8 @@ export default function PickupInventory() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState(null);
   const [addingLocation, setAddingLocation] = useState(false);
@@ -51,17 +68,21 @@ export default function PickupInventory() {
   );
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     setError('');
     try {
       const response = await fetchApi('/api/pickup-plot-inventory');
       const rows = Array.isArray(response?.pickupLocations) ? response.pickupLocations : [];
       setLocations(rows);
       setLimits(Object.fromEntries(rows.map((row) => [row.id, row.maxAssignments ?? ''])));
+      loadedRef.current = true;
     } catch (loadError) {
       setError(loadError?.message || 'Could not load pickup inventory.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -211,7 +232,7 @@ export default function PickupInventory() {
   };
 
   return (
-    <div className="pickup-inventory-page" data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
+    <div className="pickup-inventory-page" data-testid="pickup-inventory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><MapPin size={28} /> Pickup Inventory</h1>
@@ -222,14 +243,13 @@ export default function PickupInventory() {
             <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input className="input-field" type="search" aria-label="Search pickup inventory" placeholder="Search pickup locations..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 36 }} />
           </label>
-          <label style={{ position: 'relative', flex: '0 0 150px' }}>
-            <Filter size={15} aria-hidden="true" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+          <label style={{ flex: '0 0 150px' }}>
             <select
               className="input-field"
               aria-label="Filter pickup locations by status"
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 34 }}
+              style={{ width: '100%', height: 44, boxSizing: 'border-box' }}
             >
               <option value="all">All statuses</option>
               <option value="active">Active</option>
@@ -237,14 +257,25 @@ export default function PickupInventory() {
             </select>
           </label>
           <button type="button" className="btn-secondary pickup-inventory-refresh" onClick={load} disabled={loading} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><RefreshCw size={15} /> Refresh</button>
+          <InventorySpreadsheetImport
+            entityLabel="pickup locations"
+            endpoint="/api/pickup-plot-inventory/locations/import"
+            templateBaseName="pickup-locations-import-template"
+            sheetName="Pickup locations"
+            columns={PICKUP_IMPORT_COLUMNS}
+            example={PICKUP_IMPORT_EXAMPLE}
+            onImported={async (result) => {
+              notify.success(`Import complete: ${result.created || 0} created, ${result.updated || 0} updated.`);
+              await load();
+            }}
+          />
           <button type="button" className="btn-primary pickup-inventory-add" onClick={openAddLocation} style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap' }}><Plus size={15} /> Add Pickup Location</button>
         </div>
       </header>
 
       {error && <div role="alert" className="card" style={{ padding: '1rem', color: 'var(--danger-color, #dc2626)' }}>{error}</div>}
-      {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</div> : !error && (
-        <div
-          className="card pickup-plot-table-scroll"
+      {(!error || loadedRef.current) && <div
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="pickup-inventory-table-scroll"
           style={{
             flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
@@ -252,8 +283,9 @@ export default function PickupInventory() {
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
-          <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-resizable-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
+          {(!error || loadedRef.current) && <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
               <ResizableTableHeader
@@ -329,12 +361,12 @@ export default function PickupInventory() {
                   </td>
                 </tr>;
               })}
-              {filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
+              {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</td></tr>}
+              {!loading && filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
             </tbody>
           </table>
-          </div>
-        </div>
-      )}
+          </div>}
+        </div>}
 
       {addingLocation && (
         <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>
@@ -348,6 +380,7 @@ export default function PickupInventory() {
                 <input className="input-field" aria-label="Location name *" required maxLength={150} value={newLocation.name} onChange={(event) => setNewLocation((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Bangalore Palace" />
               </label>
               <AddressAutocomplete
+                provider="google"
                 label="Pickup address *"
                 required
                 placeholder="Start typing a pickup location address..."
@@ -355,7 +388,9 @@ export default function PickupInventory() {
                 onChange={(address) => setNewLocation((current) => ({ ...current, address, googleMapsLink: '' }))}
                 onSelect={(suggestion) => setNewLocation((current) => ({
                   ...current,
-                  googleMapsLink: googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
+                  googleMapsLink: suggestion.place_id
+                    ? googleMapsPlaceUrl(suggestion.place_id, suggestion.display_name)
+                    : googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
                 }))}
               />
               <label style={{ display: 'grid', gap: 6, fontSize: '.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Maximum assignments
@@ -385,6 +420,7 @@ export default function PickupInventory() {
                 <input className="input-field" aria-label="Edit location name *" required maxLength={150} value={editingLocation.name} onChange={(event) => setEditingLocation((current) => ({ ...current, name: event.target.value }))} />
               </label>
               <AddressAutocomplete
+                provider="google"
                 label="Edit pickup address *"
                 required
                 placeholder="Start typing a pickup location address..."
@@ -392,7 +428,9 @@ export default function PickupInventory() {
                 onChange={(address) => setEditingLocation((current) => ({ ...current, address, googleMapsLink: '' }))}
                 onSelect={(suggestion) => setEditingLocation((current) => ({
                   ...current,
-                  googleMapsLink: googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
+                  googleMapsLink: suggestion.place_id
+                    ? googleMapsPlaceUrl(suggestion.place_id, suggestion.display_name)
+                    : googleMapsCoordinateUrl(suggestion.lat, suggestion.lng),
                 }))}
               />
             </div>
@@ -407,5 +445,5 @@ export default function PickupInventory() {
   );
 }
 
-const headerStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-secondary)', background: '#f3f4f6', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', fontSize: '0.78rem' };
+const headerStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', fontSize: '0.78rem' };
 const cellStyle = { padding: '0.85rem', verticalAlign: 'middle', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', overflowWrap: 'anywhere' };

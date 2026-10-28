@@ -71,7 +71,7 @@ beforeEach(() => {
 function tenantRow(overrides = {}) {
   return {
     id: 1, name: 'Acme Travel', slug: 'acme', ownerEmail: 'owner@acme.com',
-    isActive: true, createdAt: new Date('2026-01-01'),
+    vertical: 'travel', isActive: true, createdAt: new Date('2026-01-01'),
     ...overrides,
   };
 }
@@ -106,6 +106,7 @@ describe('getSuperAdminTenantsOverview', () => {
     expect(result.tenants).toHaveLength(1);
     const row = result.tenants[0];
     expect(row.tenantId).toBe(1);
+    expect(row.vertical).toBe('travel');
     expect(row.platformSubscription.planName).toBe('Pro');
     expect(row.platformSubscription.isManualGrant).toBe(false);
     expect(row.aiAccess.resolverAccess).toBe('crm-managed');

@@ -90,7 +90,7 @@ async function getSuperAdminTenantsOverview({ search = "", from, to } = {}) {
   const searchTerm = String(search || "").trim().toLowerCase();
 
   const tenants = await prisma.tenant.findMany({
-    select: { id: true, name: true, slug: true, ownerEmail: true, isActive: true, createdAt: true },
+    select: { id: true, name: true, slug: true, ownerEmail: true, vertical: true, isActive: true, createdAt: true },
     orderBy: { name: "asc" },
   });
 
@@ -137,6 +137,7 @@ async function getSuperAdminTenantsOverview({ search = "", from, to } = {}) {
       organization: tenant.name,
       slug: tenant.slug,
       ownerEmail: tenant.ownerEmail || null,
+      vertical: tenant.vertical || "generic",
       status: tenant.isActive ? "active" : "disabled",
       createdAt: tenant.createdAt,
       platformSubscription: latestSub

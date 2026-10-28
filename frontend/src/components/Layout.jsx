@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
@@ -18,7 +18,7 @@ import {
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
-import Softphone from "./Softphone";
+// import Softphone from "./Softphone";
 import TravelKeyboardShortcuts, {
   TRAVEL_KEYBOARD_SHORTCUTS_EVENT,
 } from "./travel/TravelKeyboardShortcuts";
@@ -148,7 +148,7 @@ function TenantChip({ tenant }) {
 
 // Keep this aligned with the drawer media queries in responsive.css. JS uses
 // it for the sidebar dialog semantics and keyboard focus trap.
-const DRAWER_BREAKPOINT_PX = 1440;
+const DRAWER_BREAKPOINT_PX = 900;
 
 const Layout = () => {
   const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
@@ -170,16 +170,22 @@ const Layout = () => {
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
+  const isPickupPlotModule = !isWellness && !isTravel && (
+    location.pathname === "/pickup-customers"
+    || location.pathname.startsWith("/pickup-")
+    || location.pathname === "/transport-persons"
+    || location.pathname === "/plot-brokers"
+    || location.pathname === "/billing-persons"
+    || location.pathname === "/transport-workspace"
+    || location.pathname === "/sales-workspace"
+    || location.pathname === "/invoices"
+    || location.pathname === "/billing"
+  );
   const isGenericLeadsPage =
     !isWellness && !isTravel && location.pathname === "/leads";
-  // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat,
-  // the inbox page, and the Gmail compose page it overlaps the docked composer.
-  // Hide it only on those routes; every other page keeps it unchanged.
-  const isWhatsAppChat =
-    location.pathname === "/whatsapp" ||
-    location.pathname === "/travel/whatsapp" ||
-    location.pathname === "/gmail" ||
-    location.pathname === "/inbox";
+  // The built-in Softphone FAB is intentionally disabled for Generic CRM.
+  // Keep its import and mount code commented so it can be restored later
+  // without affecting the separate GenericLeadsAssistant chat on /leads.
   // Travel navigation also opens shared top-level routes (for example
   // /leads, /invoices, and /tasks). Use the active tenant rather than the
   // URL prefix so travel shortcuts remain available on every travel page.
@@ -361,7 +367,7 @@ const Layout = () => {
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell${isTravel ? " travel-app-shell" : ""}`}
       style={{
         // Anchor the application to all four viewport edges instead of
         // relying on viewport units. Some desktop Chrome/display-scaling
@@ -624,7 +630,7 @@ const Layout = () => {
         </header>
         <main
           data-tour="page-content"
-          className="page-fade-in"
+          className={`${isPickupPlotModule ? "" : "page-fade-in"}${isWellness || isTravel ? "" : " generic-page-content"}`}
           style={{
             flex: 1,
             minWidth: 0,
@@ -632,7 +638,6 @@ const Layout = () => {
             overflowX: "hidden",
             overflowY:
               popupScrollLocked || isGenericLeadsPage ? "hidden" : "auto",
-            padding: "0",
             backgroundColor: "transparent",
           }}
         >
@@ -641,14 +646,14 @@ const Layout = () => {
             <div className="travel-content-frame">
               <TenantPageGuard>
                 <PageAccessGuard>
-                  <Outlet />
+                  <Suspense fallback={<div role="status" style={{ padding: '1rem' }}>Loading page…</div>}><Outlet /></Suspense>
                 </PageAccessGuard>
               </TenantPageGuard>
             </div>
           ) : (
             <TenantPageGuard>
               <PageAccessGuard>
-                <Outlet />
+                <Suspense fallback={<div role="status" style={{ padding: '1rem' }}>Loading page…</div>}><Outlet /></Suspense>
               </PageAccessGuard>
             </TenantPageGuard>
           )}
@@ -686,7 +691,9 @@ const Layout = () => {
           </small>
         </footer>
       </div>
-      {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
+      {/* Generic CRM phone-call FAB intentionally disabled.
+          {!isWellness && !isTravel && !isWhatsAppChat && !isGenericLeadsPage && <Softphone />}
+      */}
       {/* Wellness Admin Support Chatbot — the component itself also guards
           on tenant.vertical === 'wellness' + authenticated user; the layout
           check avoids mounting it at all for other verticals. */}

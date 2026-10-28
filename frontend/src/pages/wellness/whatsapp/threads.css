@@ -1,0 +1,447 @@
+.whatsapp-threads-page,
+.whatsapp-inbox {
+  width: 100%;
+  min-width: 0;
+}
+
+.whatsapp-thread-list {
+/* The list should consume less space as the dashboard gets narrower so the
+Reduces text, padding, heights, and spacing.
+1.     reading pane remains useful.  The desktop cap preserves the existing
+     360px appearance at normal widths. */
+  flex: 0 1 clamp(220px, 27vw, 300px);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.whatsapp-thread-search-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--input-bg);
+}
+
+.whatsapp-thread-search-wrap:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+  background: var(--input-bg-focus);
+}
+
+.whatsapp-thread-search-wrap > svg {
+  flex: 0 0 14px;
+  color: var(--text-secondary);
+}
+
+.app-main > main .whatsapp-thread-search-wrap > input.whatsapp-thread-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: auto;
+  padding: 0 !important;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  box-shadow: none;
+  padding-left: 0 !important;
+  text-indent: 0 !important;
+}
+
+.whatsapp-thread-detail {
+  overflow: hidden;
+}
+
+.whatsapp-thread-back {
+  display: none;
+}
+
+/* Tablet/laptop widths still have enough room for the two-pane inbox.  The
+   old <=800px rule changed the interaction model and hid one pane, which
+   caused the dashboard to rearrange before its controls had compacted. */
+@media (min-width: 640px) and (max-width: 899px) {
+  .app-shell:has(.whatsapp-threads-page) .app-sidebar {
+    position: relative;
+    width: clamp(190px, 23vw, 238px) !important;
+    max-width: none;
+    height: 100% !important;
+    transform: none !important;
+    box-shadow: none;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .sidebar-backdrop,
+  .app-shell:has(.whatsapp-threads-page) .sidebar-toggle {
+    display: none !important;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .app-main {
+    width: auto !important;
+    flex: 1 1 auto;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .app-topbar {
+    flex-wrap: nowrap !important;
+    gap: clamp(4px, 0.9vw, 10px) !important;
+    padding: clamp(5px, 0.8vw, 8px) clamp(8px, 1.4vw, 16px) !important;
+    overflow: hidden;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .app-header-search {
+    order: initial;
+    flex: 1 1 auto;
+    width: auto;
+    margin-right: auto !important;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .omnibar-root {
+    width: clamp(150px, 24vw, 260px) !important;
+    min-width: 0 !important;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .app-tenant-chip {
+    max-width: clamp(140px, 18vw, 220px) !important;
+    min-width: 0;
+  }
+
+  .app-shell:has(.whatsapp-threads-page) .app-profile-name {
+    max-width: clamp(54px, 7vw, 90px);
+  }
+
+  .whatsapp-thread-list > header {
+    padding: clamp(0.65rem, 1.25vw, 1rem) !important;
+  }
+
+  .whatsapp-thread-list > header h2 {
+    font-size: clamp(0.9rem, 1.7vw, 1.15rem) !important;
+    gap: clamp(4px, 0.65vw, 8px) !important;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .whatsapp-thread-list > header h2 > svg {
+    width: clamp(16px, 1.7vw, 20px);
+    height: clamp(16px, 1.7vw, 20px);
+  }
+
+  .whatsapp-thread-list > header > div:first-child,
+  .whatsapp-thread-list form,
+  .whatsapp-thread-list form > div,
+  .whatsapp-thread-list > header > div:last-child {
+    gap: clamp(4px, 0.65vw, 8px) !important;
+  }
+
+  .whatsapp-thread-list > header > div:first-child > div {
+    flex-shrink: 0;
+  }
+
+  .whatsapp-thread-list > header > div:first-child {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .whatsapp-thread-list > div > div {
+    padding: clamp(0.6rem, 1.15vw, 0.85rem) clamp(0.65rem, 1.25vw, 1rem) !important;
+    gap: clamp(6px, 0.8vw, 10px) !important;
+  }
+
+  .whatsapp-thread-list > div > div > div[style*="flex-direction: column"] {
+    gap: clamp(2px, 0.45vw, 4px) !important;
+  }
+
+  .whatsapp-thread-detail-header,
+  .whatsapp-thread-detail > footer {
+    padding: clamp(0.65rem, 1.25vw, 0.9rem) clamp(0.75rem, 1.8vw, 1.5rem) !important;
+  }
+
+  .whatsapp-thread-detail > div[style*="background: var(--chat-bg)"] {
+    padding: clamp(0.75rem, 1.8vw, 1.5rem) !important;
+    gap: clamp(10px, 1.5vw, 18px) !important;
+  }
+
+  .whatsapp-thread-detail button,
+  .whatsapp-thread-list button,
+  .whatsapp-thread-list a {
+    font-size: clamp(0.68rem, 1.15vw, 0.8rem) !important;
+  }
+
+  .whatsapp-thread-detail-header button,
+  .whatsapp-thread-detail-header select {
+    padding: clamp(0.28rem, 0.55vw, 0.4rem) clamp(0.4rem, 0.8vw, 0.75rem) !important;
+  }
+
+  .whatsapp-thread-detail-header svg,
+  .whatsapp-thread-detail > footer svg {
+    width: clamp(12px, 1.35vw, 18px);
+    height: clamp(12px, 1.35vw, 18px);
+  }
+
+  .whatsapp-thread-detail-header > div:first-of-type > div:first-child {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 13px !important;
+  }
+
+  .whatsapp-thread-detail-header h2 {
+    font-size: clamp(0.82rem, 1.35vw, 1rem) !important;
+  }
+
+  .whatsapp-thread-detail-header > p {
+    font-size: clamp(0.66rem, 0.95vw, 0.76rem) !important;
+  }
+
+  .whatsapp-thread-detail > footer {
+    padding: clamp(0.4rem, 0.8vw, 0.65rem) !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] {
+    gap: 3px !important;
+    padding: 3px !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] > button,
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] > div > button {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] textarea {
+    min-height: 20px !important;
+    padding: 4px 3px !important;
+    font-size: clamp(0.7rem, 1vw, 0.82rem) !important;
+  }
+}
+
+/* Keep the detail pane visibly compact across laptop and tablet widths. */
+@media (min-width: 640px) and (max-width: 1440px) {
+  .whatsapp-thread-detail-header {
+    padding: 0.55rem 0.75rem !important;
+    gap: 4px !important;
+  }
+
+  .whatsapp-thread-detail-header > div:first-of-type > div:first-child {
+    width: 30px !important;
+    height: 30px !important;
+    font-size: 12px !important;
+  }
+
+  .whatsapp-thread-detail-header h2 {
+    font-size: 0.9rem !important;
+  }
+
+  .whatsapp-thread-detail-header > p {
+    font-size: 0.68rem !important;
+  }
+
+  .whatsapp-thread-detail-header > div:last-child {
+    gap: 3px !important;
+  }
+
+  .whatsapp-thread-detail-header > div:last-child select {
+    width: 112px !important;
+    min-width: 0 !important;
+    padding: 0.22rem 0.3rem !important;
+    font-size: 0.66rem !important;
+  }
+
+  .whatsapp-thread-detail-header > div:last-child button,
+  .whatsapp-thread-detail-header > div:last-child > span {
+    padding: 0.22rem 0.34rem !important;
+    font-size: 0.64rem !important;
+    white-space: nowrap;
+    display: inline-flex !important;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .whatsapp-thread-detail-header > div:last-child button svg,
+  .whatsapp-thread-detail-header > div:last-child > span svg {
+    display: inline-block !important;
+    width: 11px !important;
+    height: 11px !important;
+    flex: 0 0 11px;
+  }
+
+  .whatsapp-thread-detail-header > div:last-child label {
+    min-width: 0 !important;
+  }
+
+  .whatsapp-thread-detail-header > div:last-child label svg {
+    display: inline-block !important;
+    width: 11px !important;
+    height: 11px !important;
+    flex: 0 0 11px;
+  }
+
+  /* The destructive action keeps its tooltip but becomes icon-only so the
+     compact action bar does not create a second row. */
+  .whatsapp-thread-detail-header > div:last-child > button:last-child {
+    width: 26px !important;
+    min-width: 26px !important;
+    padding-inline: 0 !important;
+    justify-content: center;
+    font-size: 0 !important;
+  }
+
+  /* At compact widths all conversation actions are icon-only. Their title
+     attributes remain available for hover/focus guidance. */
+  .whatsapp-thread-detail-header > div:last-child > button {
+    width: 28px !important;
+    min-width: 28px !important;
+    padding-inline: 0 !important;
+    justify-content: center;
+    font-size: 0 !important;
+  }
+
+  .whatsapp-thread-detail > footer {
+    padding: 0.4rem 0.65rem !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] {
+    gap: 2px !important;
+    padding: 2px !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] > button,
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] > div > button {
+    width: 26px !important;
+    height: 26px !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] svg {
+    width: 14px !important;
+    height: 14px !important;
+  }
+
+  .whatsapp-thread-detail > footer > div > div[style*="border-radius: 24px"] textarea {
+    min-height: 18px !important;
+    padding: 3px 2px !important;
+    font-size: 0.72rem !important;
+  }
+}
+
+@media (max-width: 639px) {
+  .whatsapp-inbox--with-list .whatsapp-thread-list,
+  .whatsapp-inbox--with-list .whatsapp-thread-detail {
+    min-width: 0;
+  }
+
+  /* Keep both panes visible on narrow dashboards. The previous mobile rule
+     made the list 100% wide and hid the detail pane, which made the list
+     appear oversized. */
+  .whatsapp-inbox--with-list .whatsapp-thread-list {
+    flex: 0 1 clamp(170px, 48vw, 250px);
+    width: auto;
+  }
+
+  .whatsapp-inbox--with-list .whatsapp-thread-detail {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .whatsapp-inbox--with-list:not(.whatsapp-inbox--selected) .whatsapp-thread-detail,
+  .whatsapp-inbox--with-list.whatsapp-inbox--selected .whatsapp-thread-list {
+    display: flex !important;
+  }
+
+  .whatsapp-thread-list {
+    border-right: 1px solid var(--border-color) !important;
+  }
+
+  .whatsapp-thread-list > header {
+    padding: 0.55rem !important;
+  }
+
+  .whatsapp-thread-list > header h2 {
+    font-size: 0.8rem !important;
+    gap: 4px !important;
+  }
+
+  .whatsapp-thread-list > header h2 > svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .whatsapp-thread-list > header > div:first-child > div a {
+    display: none;
+  }
+
+  .whatsapp-thread-list > header > div:first-child > div {
+    gap: 3px !important;
+  }
+
+  .whatsapp-thread-list form {
+    gap: 4px !important;
+  }
+
+  .whatsapp-thread-list form > button {
+    padding-inline: 0.5rem !important;
+  }
+
+  .whatsapp-thread-list > header > div:last-child {
+    gap: 4px !important;
+  }
+
+  .whatsapp-thread-list > header > div:last-child label {
+    font-size: 0.68rem !important;
+  }
+
+  .whatsapp-thread-list > div > div {
+    padding: 0.55rem 0.5rem !important;
+    gap: 6px !important;
+  }
+
+  .whatsapp-thread-list > header > div:first-child {
+    flex-wrap: wrap;
+  }
+
+  .whatsapp-thread-list > header > div:first-child > div {
+    margin-left: auto;
+  }
+
+  .whatsapp-thread-list form > div,
+  .whatsapp-thread-list select {
+    min-width: 0;
+  }
+
+  .whatsapp-inbox--with-list .whatsapp-thread-back {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 0.4rem;
+    min-height: 36px;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.83rem;
+  }
+
+  .whatsapp-thread-detail-header,
+  .whatsapp-thread-detail > footer {
+    padding: 0.75rem !important;
+  }
+}
+
+/* Conversation actions are intentionally icon-only at every content width;
+   titles/aria-labels provide the text on hover and for assistive technology. */
+.whatsapp-thread-detail-header > div:last-child > button {
+  width: 30px !important;
+  min-width: 30px !important;
+  padding-inline: 0 !important;
+  justify-content: center;
+  font-size: 0 !important;
+}
+
+.whatsapp-thread-detail-header > div:last-child > button svg {
+  display: inline-block !important;
+  width: 13px !important;
+  height: 13px !important;
+  flex: 0 0 13px;
+}

@@ -107,7 +107,7 @@ import ReportsPage from '../pages/Reports';
 // Reports renders <Link> (clickable navigation); give every render(<Reports />)
 // call site a Router context without touching the 20+ call sites.
 const Reports = (props) => (
-  <MemoryRouter>
+  <MemoryRouter initialEntries={[props.initialEntry || '/reports']}>
     <ReportsPage {...props} />
   </MemoryRouter>
 );
@@ -154,6 +154,18 @@ describe('<Reports /> — broad page surface', () => {
     fetchApiMock.mockImplementation(defaultFetchImpl);
   });
 
+  it('starts with the dashboard date range and queries that period', async () => {
+    const { container } = render(<Reports initialEntry="/reports?from=2026-10-15&to=2026-10-20" />);
+    const dateInputs = container.querySelectorAll('input[type="date"]');
+    expect(dateInputs[0]).toHaveValue('2026-10-15');
+    expect(dateInputs[1]).toHaveValue('2026-10-20');
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url]) => {
+      if (!url.startsWith('/api/reports/query?')) return false;
+      const params = new URL(url, 'http://localhost').searchParams;
+      return params.get('from') === '2026-10-15' && params.get('to') === '2026-10-20';
+    })).toBe(true));
+  });
+
   it('renders the page header title + tagline', async () => {
     render(<Reports />);
     expect(
@@ -197,71 +209,69 @@ describe('<Reports /> — broad page surface', () => {
     });
   });
 
-  it('Query Builder sidebar renders title + metric label + all 8 metric options', async () => {
+  it('Query Builder renders the supported metrics as buttons', async () => {
     render(<Reports />);
     expect(screen.getByText(/Query Builder/i)).toBeInTheDocument();
-    expect(screen.getByText(/1\. Select Metric/i)).toBeInTheDocument();
+    expect(screen.getByText(/Select Metric/i)).toBeInTheDocument();
     // 8 METRIC_OPTIONS entries. Use partial text since Revenue carries a
     // currency-symbol suffix that depends on tenant; just check the option
     // count + a couple of known labels.
-    const opts = screen.getAllByRole('option');
-    // The page renders metric (8) + groupBy (2, conditional) + chartType (3)
-    // = 13 default <option> elements when needsGroupBy is true.
-    expect(opts.length).toBeGreaterThanOrEqual(13);
+    expect(screen.getByRole('button', { name: /Revenue/i })).toBeInTheDocument();
     // Pick a couple of stable label fragments — the revenue label carries
     // a tenant-dependent currency symbol but always contains "Revenue".
     expect(
-      screen.getByRole('option', { name: /Revenue/i })
+      screen.getByRole('button', { name: /Revenue/i })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('option', { name: /Deal Count/i })
+      screen.getByRole('button', { name: /Deal Count/i })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('option', { name: /Win Rate/i })
+      screen.getByRole('button', { name: /Win\/Loss Rate/i })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('option', { name: /Task Status/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', { name: /Contacts by Source/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', { name: /Contacts by Status/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', { name: /Invoice Status/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', { name: /Expenses by Category/i })
-    ).toBeInTheDocument();
+      screen.queryByRole('button', { name: /Task Status/i })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Invoice Status/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Lead by Source/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Expenses by Category/i })).not.toBeInTheDocument();
   });
 
-  it('shows the Group By label only when metric is revenue/count', async () => {
+  it('shows Group By only for revenue, deal count, and win/loss rate', async () => {
     render(<Reports />);
     // Default metric is "revenue" → Group By visible.
-    expect(screen.getByText(/2\. Group By/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Deal Type$/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bar Chart/i })).toBeInTheDocument();
 
     // Switch to "Win Rate" — Group By should disappear.
-    const metricSelect = screen.getByDisplayValue(/Revenue/i);
-    fireEvent.change(metricSelect, { target: { value: 'win_rate' } });
+    fireEvent.click(screen.getByRole('button', { name: /Win\/Loss Rate/i }));
 
     await waitFor(() => {
-      expect(screen.queryByText(/Group By/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/^Deal Type$/i)).toBeInTheDocument();
     });
     // Visualization is now labelled "2." rather than "3."
-    expect(screen.getByText(/2\. Visualization/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Invoice Status/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/^Deal Type$/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Bar Chart/i })).toBeInTheDocument();
   });
 
-  it('Visualization select carries Bar/Donut/Area options', async () => {
+  it('Visualization buttons match the selected metric recommendations', async () => {
     render(<Reports />);
     expect(
-      screen.getByRole('option', { name: /Bar Chart/i })
+      screen.getByRole('button', { name: /Bar Chart/i })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('option', { name: /Donut Chart/i })
+      screen.getByRole('button', { name: /Line Chart/i })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('option', { name: /Area Chart/i })
+      screen.getByRole('button', { name: /Horizontal Bar/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Pie Chart/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Donut Chart/i })
     ).toBeInTheDocument();
   });
 
@@ -292,16 +302,15 @@ describe('<Reports /> — broad page surface', () => {
     });
   });
 
-  it('Detailed Data view renders all 6 DETAIL_TYPES selector buttons', async () => {
+  it('Detailed Data view renders the supported detail-type selector buttons', async () => {
     render(<Reports />);
     fireEvent.click(screen.getByRole('button', { name: /Detailed Data/i }));
     await waitFor(() => {
-      // Each DETAIL_TYPES entry is a button. "Deals" / "Contacts" / "Tasks"
-      // / "Call Logs" / "Invoices" / "Expenses".
+      // Each supported DETAIL_TYPES entry is a button.
       expect(screen.getByRole('button', { name: /^Deals$/i })).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: /^Contacts$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Tasks$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Tasks$/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Call Logs/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Invoices$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Expenses$/i })).toBeInTheDocument();
@@ -378,9 +387,8 @@ describe('<Reports /> — broad page surface', () => {
       ).toBeTruthy();
     });
 
-    // Find the two date inputs. The page renders <input type="date" ...> twice
-    // (start + end). Capture them via container.querySelectorAll since they
-    // have no label/role we can target by text.
+    // Select the custom range option before editing the native date inputs.
+    fireEvent.change(screen.getByRole('combobox', { name: /Date range/i }), { target: { value: 'custom' } });
     const dateInputs = document.querySelectorAll('input[type="date"]');
     expect(dateInputs.length).toBeGreaterThanOrEqual(2);
 
@@ -410,6 +418,7 @@ describe('<Reports /> — broad page surface', () => {
       ).toBeTruthy();
     });
 
+    fireEvent.change(screen.getByRole('combobox', { name: /Date range/i }), { target: { value: 'custom' } });
     const dateInputs = document.querySelectorAll('input[type="date"]');
     // Set start AFTER end → inverted.
     fireEvent.change(dateInputs[0], { target: { value: '2026-06-01' } });
@@ -532,6 +541,7 @@ describe('<Reports /> — broad page surface', () => {
       return Promise.resolve(null);
     });
     render(<Reports />);
+    fireEvent.click(screen.getByRole('button', { name: /Detailed Data/i }));
 
     await waitFor(() => {
       expect(
@@ -551,6 +561,23 @@ describe('<Reports /> — broad page surface', () => {
     expect(deleteButton.parentElement).toBe(pauseButton.parentElement);
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'center' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', minWidth: '0px' });
+  });
+
+  it('exports a chart PDF with the display currency rather than a default deal-detail report', async () => {
+    fetchApiMock.mockImplementation((url, opts) => url.startsWith('/api/currencies')
+      ? Promise.resolve([{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate: 83 }])
+      : defaultFetchImpl(url, opts));
+    render(<Reports />);
+    fireEvent.change(await screen.findByLabelText('Display currency'), { target: { value: 'INR' } });
+    fireEvent.click(screen.getByRole('button', { name: /PDF/i }));
+    await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([url]) => url.includes('/api/reports/export-pdf'));
+      expect(call).toBeTruthy();
+      const params = new URL(call[0], 'http://localhost').searchParams;
+      expect(params.get('type')).toBe('chart');
+      expect(params.get('metric')).toBe('revenue');
+      expect(params.get('currency')).toBe(screen.getByLabelText('Display currency').value);
+    });
   });
 
   it('CSV export button triggers a /api/reports/export-csv fetch with Bearer token', async () => {
@@ -576,6 +603,7 @@ describe('<Reports /> — broad page surface', () => {
       // Chart-mode params: metric + groupBy on the URL.
       expect(fetchCall[0]).toContain('metric=revenue');
       expect(fetchCall[0]).toContain('groupBy=stage');
+      expect(fetchCall[0]).toContain('currency=');
     });
   });
 });

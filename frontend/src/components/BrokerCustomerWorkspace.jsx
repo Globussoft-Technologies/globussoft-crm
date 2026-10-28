@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import Inbox from '../pages/Inbox';
+import CallifiedCallDialog from './CallifiedCallDialog';
 import './TransportDriverWorkspace.css';
 
 const BROKER_STEPS = [
@@ -52,6 +54,8 @@ export default function BrokerCustomerWorkspace() {
   const [search, setSearch] = useState('');
   const [updating, setUpdating] = useState(null);
   const [assigning, setAssigning] = useState(null);
+  const [emailCustomer, setEmailCustomer] = useState(null);
+  const [callCustomer, setCallCustomer] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,7 +147,8 @@ export default function BrokerCustomerWorkspace() {
   };
 
   return (
-    <main className="transport-workspace" data-testid="broker-customer-workspace">
+    <>
+      <main className="transport-workspace" data-testid="broker-customer-workspace">
       <section className="transport-summary" aria-label="Customer summary">
         <div><span className="transport-summary-icon total"><Users size={18} /></span><span><strong>{summary.total}</strong><small>All customers</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Ready for visit</small></span></div>
@@ -158,14 +163,15 @@ export default function BrokerCustomerWorkspace() {
             <button key={key} type="button" role="tab" aria-selected={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}</button>
           ))}
         </div>
-        <label style={{ position: 'relative', flex: '1 1 230px', maxWidth: 340 }}>
-          <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-          <input aria-label="Search assigned customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: 11, border: '1px solid var(--border-color)', background: 'var(--card-bg, var(--subtle-bg-2))', color: 'var(--text-primary)' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 230px', maxWidth: 340, padding: '0 10px', border: '1px solid var(--border-color)', borderRadius: 11, background: 'var(--card-bg, var(--subtle-bg-2))' }}>
+          <Search size={16} aria-hidden="true" style={{ flex: '0 0 16px', color: 'var(--text-secondary)' }} />
+          <input aria-label="Search assigned customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" style={{ width: '100%', minWidth: 0, padding: '10px 2px', border: 0, outline: 0, background: 'transparent', color: 'var(--text-primary)' }} />
         </label>
       </div>
 
       {error && <div className="transport-error" role="alert">{error}</div>}
       {loading && !data && <div className="transport-loading" role="status">Loading your assigned customers…</div>}
+      {loading && data && <div className="transport-loading" role="status">Refreshing data…</div>}
       {!loading && !error && visibleCustomers.length === 0 && (
         <section className="transport-empty">
           <span><Users size={28} /></span>
@@ -185,30 +191,64 @@ export default function BrokerCustomerWorkspace() {
             assignmentOptions={data?.assignmentOptions || []}
             onAdvance={(status, details) => advanceWorkflow(customer, status, details)}
             onAssign={(targetProfileId) => assignSalesExecutive(customer, targetProfileId)}
+            onEmail={() => setEmailCustomer(customer)}
+            onCall={() => setCallCustomer(customer)}
           />
         ))}
       </section>
-    </main>
+      </main>
+      {emailCustomer && (
+        <Inbox
+          composeOnly
+          initialComposeTo={emailCustomer.email}
+          initialComposeContactId={emailCustomer.id}
+          onComposeClose={() => setEmailCustomer(null)}
+          onComposeSent={() => {
+            window.history.pushState({}, '', '/inbox');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }}
+        />
+      )}
+      {callCustomer && (
+        <CallifiedCallDialog
+          customer={{ name: callCustomer.name, phone: callCustomer.phone, subtitle: callCustomer.email || callCustomer.company || null }}
+          endpoints={{
+            context: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/context`,
+            campaigns: '/api/pickup-plot-inventory/calling/campaigns',
+            aiCall: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/ai-call`,
+            manualCall: `/api/pickup-plot-inventory/calling/customers/${callCustomer.id}/manual-call`,
+          }}
+          historyHref="/callified-data"
+          onClose={() => setCallCustomer(null)}
+        />
+      )}
+    </>
   );
 }
 
-function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign }) {
+function CustomerCard({ customer, updating, assigning, adminOverview, assignmentOptions, onAdvance, onAssign, onEmail, onCall }) {
   const [visitScheduledAt, setVisitScheduledAt] = useState('');
   const [selectedPlotId, setSelectedPlotId] = useState(String(customer.plot?.id || ''));
   const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
   const initials = String(customer.name || '?').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const workflowStatus = customer.brokerWorkflow?.status;
-  const index = workflowIndex(workflowStatus);
-  const currentStep = SPECIAL_STEPS[workflowStatus] || BROKER_STEPS[index];
-  const needsSchedule = ['READY_TO_SCHEDULE', 'NO_SHOW'].includes(workflowStatus);
-  const needsAttendance = workflowStatus === 'REMINDER_SENT';
+  const siteVisitAt = customer.brokerWorkflow?.visitScheduledAt || customer.dropOffAt || customer.scheduledDropOffAt;
+  const canMarkPlotShown = customer.tripCompleted
+    && Boolean(siteVisitAt)
+    && ['READY_TO_SCHEDULE', 'VISIT_SCHEDULED', 'VISIT_CONFIRMED', 'REMINDER_SENT'].includes(workflowStatus);
+  const index = workflowIndex(canMarkPlotShown ? 'ATTENDED' : workflowStatus);
+  const currentStep = canMarkPlotShown
+    ? { label: 'Ready to show plot', action: 'Mark plot shown', next: 'PLOT_SHOWN' }
+    : SPECIAL_STEPS[workflowStatus] || BROKER_STEPS[index];
+  const needsSchedule = workflowStatus === 'NO_SHOW';
+  const needsAttendance = workflowStatus === 'REMINDER_SENT' && !canMarkPlotShown;
   const needsPlotSelection = workflowStatus === 'PLOT_SHOWN';
   const handedToBilling = workflowStatus === 'PLOT_SELECTED';
   const noShow = workflowStatus === 'NO_SHOW';
 
   const submitSchedule = () => {
     if (!visitScheduledAt) return;
-    onAdvance(workflowStatus === 'NO_SHOW' ? 'VISIT_RESCHEDULED' : 'VISIT_SCHEDULED', { visitScheduledAt });
+    onAdvance('VISIT_RESCHEDULED', { visitScheduledAt });
   };
   return (
     <article className="transport-trip-card" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -231,13 +271,14 @@ function CustomerCard({ customer, updating, assigning, adminOverview, assignment
       <div style={{ display: 'grid', gap: 9, color: 'var(--text-secondary)', fontSize: '.82rem' }}>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><MapPin size={15} /> {customer.plot ? plotLabel(customer.plot) : 'Plot not assigned'}</span>
         {customer.plot?.address && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Building2 size={15} /> {customer.plot.address}</span>}
-        {customer.brokerWorkflow?.visitScheduledAt && <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><CalendarClock size={15} /> {new Date(customer.brokerWorkflow.visitScheduledAt).toLocaleString()}</span>}
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Clock3 size={15} /> Pickup time: {customer.pickupAt || customer.scheduledPickupAt ? new Date(customer.pickupAt || customer.scheduledPickupAt).toLocaleString() : 'Pending'}</span>
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><CalendarClock size={15} /> Site visit time: {siteVisitAt ? new Date(siteVisitAt).toLocaleString() : 'Pending'}</span>
       </div>
 
       <div style={{ padding: 12, borderRadius: 12, background: customer.tripCompleted ? 'rgba(16,185,129,.10)' : 'var(--subtle-bg-2)', color: customer.tripCompleted ? '#047857' : 'var(--text-secondary)', fontSize: '.8rem', fontWeight: 700 }}>
         {customer.tripCompleted
           ? 'Trip completed — customer is ready for site visit management.'
-          : 'Trip not completed. Site visit actions unlock after the customer reaches the plot.'}
+          : 'Trip is not started yet.'}
       </div>
 
       {customer.tripCompleted && customer.brokerWorkflow && (
@@ -339,8 +380,26 @@ function CustomerCard({ customer, updating, assigning, adminOverview, assignment
       )}
 
       <footer style={{ marginTop: 'auto' }}>
-        {customer.email && <a className="transport-map-button" href={`mailto:${customer.email}`}><Mail size={16} /> Email</a>}
-        {customer.phone && <a className="transport-primary-button" href={`tel:${customer.phone}`}><Phone size={16} /> Call customer</a>}
+        {customer.email && (
+          <button
+            type="button"
+            className="transport-map-button"
+            aria-label={`Email ${customer.name}`}
+            onClick={onEmail}
+          >
+            <Mail size={16} /> Email
+          </button>
+        )}
+        {customer.phone && (
+          <button
+            type="button"
+            className="transport-primary-button"
+            aria-label={`Call ${customer.name}`}
+            onClick={onCall}
+          >
+            <Phone size={16} /> Call customer
+          </button>
+        )}
       </footer>
     </article>
   );

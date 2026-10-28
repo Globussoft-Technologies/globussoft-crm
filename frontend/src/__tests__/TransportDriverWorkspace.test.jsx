@@ -7,6 +7,14 @@ const { notifyMock } = vi.hoisted(() => ({
   notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn(), confirm: vi.fn() },
 }));
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyMock }));
+vi.mock('../components/CallifiedCallDialog', () => ({
+  default: ({ customer, endpoints, historyHref, onClose }) => (
+    <div role="dialog" aria-label={`Call ${customer.name}`} data-ai-endpoint={endpoints.aiCall} data-history-href={historyHref}>
+      <span>Call Customer</span>
+      <button type="button" onClick={onClose}>Close call dialog</button>
+    </div>
+  ),
+}));
 import { fetchApi } from '../utils/api';
 
 const driverData = {
@@ -51,21 +59,37 @@ describe('<TransportDriverWorkspace />', () => {
   });
 
   it('shows the assigned customer, pickup, drop, navigation and call actions', async () => {
-    fetchApi.mockResolvedValueOnce(driverData);
+    fetchApi.mockResolvedValueOnce({
+      ...driverData,
+      assignments: [{
+        ...driverData.assignments[0],
+        pickupAt: '2026-10-06T09:15:00.000Z',
+        dropOffAt: '2026-10-06T10:00:00.000Z',
+      }],
+    });
     render(<TransportDriverWorkspace />);
     expect((await screen.findAllByText('Priya Shah')).length).toBeGreaterThan(0);
     expect(screen.queryByText('My pickup & drop trips')).toBeNull();
     expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
     expect(screen.getByText('North Gate')).toBeInTheDocument();
     expect(screen.getByText('Green Acres')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /call priya shah/i })).toHaveAttribute('href', 'tel:9000022222');
+    const tripTimes = screen.getByLabelText('Pickup and drop-off times for Priya Shah');
+    expect(tripTimes).toHaveTextContent('Pickup time');
+    expect(tripTimes).toHaveTextContent('Drop-off / site visit time');
+    expect(screen.getByLabelText('Pickup time for Priya Shah').value).toContain('2026-10-06T');
+    expect(screen.getByLabelText('Drop-off time for Priya Shah').value).toContain('2026-10-06T');
+    const callButton = screen.getByRole('button', { name: /call priya shah/i });
+    fireEvent.click(callButton);
+    const callDialog = screen.getByRole('dialog', { name: 'Call Priya Shah' });
+    expect(callDialog).toHaveAttribute('data-ai-endpoint', '/api/pickup-plot-inventory/calling/customers/61/ai-call');
+    expect(callDialog).toHaveAttribute('data-history-href', '/callified-data');
     expect(screen.getByRole('link', { name: /open route/i })).toHaveAttribute('href', expect.stringContaining('google.com/maps/dir'));
   });
 
   it('advances the trip one status at a time', async () => {
     fetchApi
       .mockResolvedValueOnce(driverData)
-      .mockResolvedValueOnce({ assignmentKey: 'customer-61', status: 'ACCEPTED', statusUpdatedAt: '2026-10-06T10:00:00.000Z' });
+      .mockResolvedValueOnce({ assignmentKey: 'customer-61', status: 'ACCEPTED', statusUpdatedAt: '2026-10-06T10:00:00.000Z', pickupAt: null, dropOffAt: null });
     render(<TransportDriverWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /accept trip/i }));
     await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
@@ -74,6 +98,69 @@ describe('<TransportDriverWorkspace />', () => {
     ));
     expect(await screen.findByText('Accepted')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start pickup/i })).toBeInTheDocument();
+  });
+
+  it('lets the transport person schedule pickup and drop-off times on the trip card', async () => {
+    fetchApi
+      .mockResolvedValueOnce(driverData)
+      .mockResolvedValueOnce({
+        assignmentKey: 'customer-61',
+        scheduledPickupAt: '2099-10-27T04:30:00.000Z',
+        scheduledDropOffAt: null,
+        pickupAt: null,
+        dropOffAt: null,
+      })
+      .mockResolvedValueOnce({
+        assignmentKey: 'customer-61',
+        scheduledPickupAt: '2099-10-27T04:30:00.000Z',
+        scheduledDropOffAt: '2099-11-18T06:12:00.000Z',
+        pickupAt: null,
+        dropOffAt: null,
+      });
+    render(<TransportDriverWorkspace />);
+
+    const savePickupButton = await screen.findByRole('button', { name: 'Save pickup time' });
+    expect(savePickupButton).toBeDisabled();
+    expect(savePickupButton.querySelector('svg')).toHaveClass('lucide-check');
+    expect(screen.getByRole('button', { name: 'Save drop-off time' })).toBeDisabled();
+    fireEvent.change(await screen.findByLabelText('Pickup time for Priya Shah'), { target: { value: '2099-10-27T10:00' } });
+    expect(screen.getByRole('button', { name: 'Save pickup time' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save drop-off time' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save pickup time' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61/schedule',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          scheduledPickupAt: new Date('2099-10-27T10:00').toISOString(),
+        }),
+      },
+    ));
+    expect(notifyMock.success).toHaveBeenCalledWith('Pickup time saved for Priya Shah.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save pickup time' })).toBeDisabled());
+
+    const dropOffInput = screen.getByLabelText('Drop-off time for Priya Shah');
+    fireEvent.change(dropOffInput, { target: { value: '2000-09-18T11:42' } });
+    expect(screen.getByText('Choose the present time or a future time')).toBeInTheDocument();
+    expect(dropOffInput).toHaveValue('');
+    expect(dropOffInput).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Save drop-off time' })).toBeDisabled();
+    fireEvent.change(dropOffInput, { target: { value: '2099-11-18T11:42' } });
+    expect(screen.queryByText('Choose the present time or a future time')).toBeNull();
+    expect(dropOffInput).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByRole('button', { name: 'Save drop-off time' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save pickup time' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save drop-off time' }));
+    await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/transport-persons/me/assignments/customer-61/schedule',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ scheduledDropOffAt: new Date('2099-11-18T11:42').toISOString() }),
+      },
+    ));
+    expect(notifyMock.success).toHaveBeenLastCalledWith('Drop-off time saved for Priya Shah.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save drop-off time' })).toBeDisabled());
   });
 
   it('shows completed customer trips only when Completed or All is selected', async () => {

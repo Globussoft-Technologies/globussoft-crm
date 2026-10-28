@@ -81,14 +81,77 @@ function renderPipeline(initialEntry = '/pipeline') {
   );
 }
 
+function expectedRange(days) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1);
+  const asDate = (date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+  return { from: asDate(start), to: asDate(today) };
+}
+
+function hasRange(url, range) {
+  const params = new URL(url, 'http://localhost').searchParams;
+  return params.get('from') === range.from && params.get('to') === `${range.to}T23:59:59.999Z`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   notifyObj.confirm.mockResolvedValue(true);
   mockApi();
 });
 
 describe('Deals and Pipelines page', () => {
+  it('shows deals in legacy stages even when the configured stages do not include them', async () => {
+    mockApi({ deals: [{ ...DEALS[0], title: 'Legacy proposal deal', stage: 'proposal' }] });
+    render(
+      <AuthContext.Provider value={{ user: { tenantId: 1 }, tenant: { id: 1, vertical: 'generic' } }}>
+        <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    expect(await screen.findByText('Legacy proposal deal')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'proposal' })).toBeInTheDocument();
+  });
+  it('defaults to All time for deals and totals', async () => {
+    renderPipeline();
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && !new URL(url, 'http://localhost').searchParams.has('from'))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && !new URL(url, 'http://localhost').searchParams.has('from'))).toBe(true);
+    });
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('all');
+  });
+
+  it('changes the date range preset for deals and totals', async () => {
+    renderPipeline();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Date range' }), { target: { value: 'last30' } });
+    const range = expectedRange(30);
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && hasRange(url, range))).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && hasRange(url, range))).toBe(true);
+    });
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last30');
+  });
+
+  it('preserves URL date filters on load and allows switching to Last 7 days', async () => {
+    renderPipeline('/pipeline?from=2026-10-15&to=2026-10-20');
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      for (const prefix of ['/api/deals?', '/api/deals/stats?']) {
+        expect(urls.some((url) => {
+          if (!url.startsWith(prefix)) return false;
+          const params = new URL(url, 'http://localhost').searchParams;
+          return params.get('from') === '2026-10-15' && params.get('to') === '2026-10-20T23:59:59.999Z';
+        })).toBe(true);
+      }
+    });
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('custom');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Date range' }), { target: { value: 'last7' } });
+    await waitFor(() => expect(fetchApi.mock.calls.some(([url]) => url.startsWith('/api/deals?') && hasRange(url, expectedRange(7)))).toBe(true));
+    expect(screen.getByRole('combobox', { name: 'Date range' })).toHaveValue('last7');
+  });
+
   it('renders the current page heading and primary actions', async () => {
     renderPipeline();
     expect(await screen.findByRole('heading', { name: 'Deals and Pipelines' })).toBeInTheDocument();
@@ -195,6 +258,23 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByText('Stage')).toBeInTheDocument();
     expect(screen.getByText('Owner')).toBeInTheDocument();
     expect(screen.getByText('Probability')).toBeInTheDocument();
+  });
+
+  it('restores the chosen view after leaving and returning to the page', async () => {
+    const firstVisit = renderPipeline();
+    await screen.findByLabelText('Deal pipeline board');
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    expect(screen.getByText('Deal')).toBeInTheDocument();
+
+    firstVisit.unmount();
+    const returnVisit = renderPipeline();
+    expect(await screen.findByText('Deal')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Deal pipeline board')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    returnVisit.unmount();
+    renderPipeline();
+    expect(await screen.findByLabelText('Deal pipeline board')).toBeInTheDocument();
   });
 
   it('filters deals by title and company search', async () => {

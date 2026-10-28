@@ -6,6 +6,8 @@ import {
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { formatPercent } from '../utils/percent';
+import { useContext } from 'react';
+import { AuthContext } from '../appContexts';
 import { BarChart3, TrendingDown, Filter, Calendar, IndianRupee, Users, Award, X } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -26,10 +28,14 @@ const fmtMoney = (n) => formatMoney(Number(n || 0), { maximumFractionDigits: 0 }
 const fmtPct = (n) => formatPercent(n);
 
 export default function FunnelPage() {
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [pipelineId, setPipelineId] = useState('');
   const [pipelines, setPipelines] = useState([]);
+  const [dealType, setDealType] = useState('');
+  const [dealTypes, setDealTypes] = useState([]);
 
   const [stages, setStages] = useState([]);
   const [bySource, setBySource] = useState([]);
@@ -40,10 +46,30 @@ export default function FunnelPage() {
 
   // Load pipelines (best-effort — endpoint may not exist in all installs)
   useEffect(() => {
+    if (isGeneric) {
+      setPipelines([]);
+      return undefined;
+    }
     fetchApi('/api/pipelines')
       .then((res) => setPipelines(Array.isArray(res) ? res : []))
       .catch(() => setPipelines([]));
-  }, []);
+    return undefined;
+  }, [isGeneric]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    fetchApi('/api/tenant-settings/generic.dealTypes', { silent: true })
+      .then((setting) => {
+        try {
+          const parsed = typeof setting?.value === 'string' ? JSON.parse(setting.value) : setting?.value;
+          setDealTypes(Array.isArray(parsed) ? parsed.filter((type) => type?.name) : []);
+        } catch (_error) {
+          setDealTypes([]);
+        }
+      })
+      .catch(() => setDealTypes([]));
+    return undefined;
+  }, [isGeneric]);
 
   const dateQs = () => {
     const p = [];
@@ -55,13 +81,15 @@ export default function FunnelPage() {
   useEffect(() => {
     setLoading(true);
     const qs = dateQs();
-    const stagesQs = [pipelineId && `pipelineId=${pipelineId}`, qs].filter(Boolean).join('&');
+    const filterQs = isGeneric ? (dealType && `dealType=${encodeURIComponent(dealType)}`) : (pipelineId && `pipelineId=${pipelineId}`);
+    const stagesQs = [filterQs, qs].filter(Boolean).join('&');
+    const metricsQs = [filterQs, qs].filter(Boolean).join('&');
     Promise.all([
-      fetchApi(`/api/funnel/stages${stagesQs ? '?' + stagesQs : ''}`).catch(() => ({ stages: [] })),
-      fetchApi(`/api/funnel/conversion-by-source${qs ? '?' + qs : ''}`).catch(() => []),
-      fetchApi(`/api/funnel/by-rep${qs ? '?' + qs : ''}`).catch(() => []),
-      fetchApi('/api/funnel/velocity').catch(() => []),
-      fetchApi('/api/funnel/trend?months=6').catch(() => []),
+      fetchApi(`/api/funnel/stages${stagesQs ? '?' + stagesQs : ''}`, { headers: { 'X-Funnel-Mode': 'consistent' } }).catch(() => ({ stages: [] })),
+      fetchApi(`/api/funnel/conversion-by-source${metricsQs ? '?' + metricsQs : ''}`).catch(() => []),
+      fetchApi(`/api/funnel/by-rep${metricsQs ? '?' + metricsQs : ''}`).catch(() => []),
+      fetchApi(`/api/funnel/velocity${filterQs ? '?' + filterQs : ''}`).catch(() => []),
+      fetchApi(`/api/funnel/trend?months=6${filterQs ? '&' + filterQs : ''}`).catch(() => []),
     ]).then(([s, src, rep, vel, tr]) => {
       setStages((s && s.stages) || []);
       setBySource(Array.isArray(src) ? src : []);
@@ -70,7 +98,7 @@ export default function FunnelPage() {
       setTrend(Array.isArray(tr) ? tr : []);
       setLoading(false);
     });
-  }, [from, to, pipelineId]);
+  }, [from, to, pipelineId, dealType, isGeneric]);
 
   // KPI computations
   const kpis = useMemo(() => {
@@ -94,9 +122,10 @@ export default function FunnelPage() {
   const funnelData = useMemo(
     () => stages.map((s, i) => ({
       name: s.name,
-      value: s.totalEntered || 0,
+      value: s.current ?? s.totalEntered ?? 0,
       current: s.current || 0,
-      conversion: s.conversionToNext,
+      conversion: null,
+      nextConversion: s.conversionToNext,
       totalValue: s.totalValue || 0,
       fill: COLORS[i % COLORS.length],
     })),
@@ -125,15 +154,15 @@ export default function FunnelPage() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Filter size={16} color="var(--text-secondary)" />
-            <select className="input-field" value={pipelineId} onChange={(e) => setPipelineId(e.target.value)} style={{ padding: '0.45rem', fontSize: '0.85rem' }}>
-              <option value="">All Pipelines</option>
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+            <select className="input-field" value={isGeneric ? dealType : pipelineId} onChange={(e) => (isGeneric ? setDealType(e.target.value) : setPipelineId(e.target.value))} style={{ padding: '0.45rem', fontSize: '0.85rem' }}>
+              <option value="">{isGeneric ? 'All Deal Types' : 'All Pipelines'}</option>
+              {(isGeneric ? dealTypes : pipelines).map((item) => (
+                <option key={item.id || item.name} value={isGeneric ? item.name : item.id}>{item.name}</option>
               ))}
             </select>
           </div>
-          {(from || to || pipelineId) && (
-            <button className="btn-secondary" onClick={() => { setFrom(''); setTo(''); setPipelineId(''); }} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 0.75rem' }}>
+          {(from || to || pipelineId || dealType) && (
+            <button className="btn-secondary" onClick={() => { setFrom(''); setTo(''); setPipelineId(''); setDealType(''); }} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.45rem 0.75rem' }}>
               <X size={14} /> Clear
             </button>
           )}
@@ -200,6 +229,7 @@ export default function FunnelPage() {
                         background: s.fill, borderRadius: 4,
                       }} />
                     </div>
+                    {s.nextConversion != null && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Next-stage conversion: {fmtPct(s.nextConversion)} →</span>}
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                       {s.value} • {fmtMoney(s.totalValue)} {s.conversion != null && `• ${fmtPct(s.conversion)} →`}
                     </span>
@@ -258,43 +288,45 @@ export default function FunnelPage() {
       </div>
 
       {/* Tables */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '1.5rem' }}>
-        <div style={cardStyle}>
+      <div className="funnel-tables-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '1.5rem' }}>
+        <div className="funnel-table-card" style={cardStyle}>
           <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.05rem' }}>Conversion by Source</h3>
           {bySource.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)' }}>No source data.</p>
+            <p className="funnel-table-empty" style={{ color: 'var(--text-secondary)' }}>No source data.</p>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
-                  <th style={{ padding: '0.5rem 0.6rem' }}>Source</th>
-                  <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Leads</th>
-                  <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Won</th>
-                  <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Conv %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bySource.map((s) => (
-                  <tr key={s.source} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <td style={{ padding: '0.55rem 0.6rem' }}>{s.source}</td>
-                    <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.count}</td>
-                    <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.won}</td>
-                    <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right', fontWeight: 600, color: s.conversionRate >= 20 ? COLORS[2] : 'var(--text-primary)' }}>
-                      {fmtPct(s.conversionRate)}
-                    </td>
+            <div className="funnel-table-scroll" role="region" aria-label="Conversion by source data" tabIndex={0}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Source</th>
+                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Leads</th>
+                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Won</th>
+                    <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right' }}>Conv %</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {bySource.map((s) => (
+                    <tr key={s.source} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <td style={{ padding: '0.55rem 0.6rem' }}>{s.source}</td>
+                      <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.count}</td>
+                      <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right' }}>{s.won}</td>
+                      <td style={{ padding: '0.55rem 0.6rem', textAlign: 'right', fontWeight: 600, color: s.conversionRate >= 20 ? COLORS[2] : 'var(--text-primary)' }}>
+                        {fmtPct(s.conversionRate)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
-        <div style={cardStyle}>
+        <div className="funnel-table-card" style={cardStyle}>
           <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.05rem' }}>Rep Performance</h3>
           {byRep.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)' }}>No rep data.</p>
+            <p className="funnel-table-empty" style={{ color: 'var(--text-secondary)' }}>No rep data.</p>
           ) : (
-            <div className="funnel-rep-scroll" role="region" aria-label="Rep performance columns" tabIndex={0} style={{ overflowX: 'auto' }}>
+            <div className="funnel-table-scroll funnel-rep-scroll" role="region" aria-label="Rep performance columns" tabIndex={0}>
               <table className="funnel-rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>

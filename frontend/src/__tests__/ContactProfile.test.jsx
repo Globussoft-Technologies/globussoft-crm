@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { AuthContext } from '../appContexts';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -43,17 +44,22 @@ const baseContact = {
   ],
 };
 
-function renderProfile() {
-  return render(
+function renderProfile(authValue) {
+  const profile = (
     <MemoryRouter initialEntries={['/contacts/7']}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  return render(authValue
+    ? <AuthContext.Provider value={authValue}>{profile}</AuthContext.Provider>
+    : profile);
 }
 
 beforeEach(() => {
+  localStorage.clear();
+  Element.prototype.scrollIntoView = vi.fn();
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
@@ -74,6 +80,109 @@ describe('ContactDetail profile', () => {
     expect(panel.getByText('Status')).toBeTruthy();
     expect(panel.getByText('Summary')).toBeTruthy();
     expect(panel.getByText('Starter plan')).toBeTruthy();
+  });
+
+  it('hides the retired Generic CRM profile actions while keeping Delete and Export', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+
+    expect(panel.queryByRole('button', { name: 'Sales activities' })).not.toBeInTheDocument();
+    fireEvent.click(panel.getByRole('button', { name: 'More actions' }));
+    const menu = within(panel.getByRole('menu'));
+    for (const action of ['Edit', 'Clone', 'Add to sequence', 'Unsubscribe', 'Forget']) {
+      expect(menu.queryByRole('menuitem', { name: action })).not.toBeInTheDocument();
+    }
+    expect(menu.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
+    expect(menu.getByRole('menuitem', { name: 'Export' })).toBeInTheDocument();
+    fireEvent.click(menu.getByRole('menuitem', { name: 'Delete' }));
+    expect(await screen.findByRole('dialog', { name: 'Delete Ahmad Malik?' })).toHaveTextContent(
+      'Do you want to delete this contact permanently? This action cannot be undone.',
+    );
+  });
+
+  it('keeps the existing profile actions outside Generic CRM', async () => {
+    renderProfile({ tenant: { id: 2, vertical: 'wellness' }, user: { id: 3, role: 'ADMIN' } });
+    const panel = within(await screen.findByLabelText('Contact profile'));
+
+    expect(panel.getByRole('button', { name: 'Care activities' })).toBeInTheDocument();
+    expect(panel.queryByRole('button', { name: 'WhatsApp' })).not.toBeInTheDocument();
+    fireEvent.click(panel.getByRole('button', { name: 'More actions' }));
+    const menu = within(panel.getByRole('menu'));
+    for (const action of ['Edit', 'Clone', 'Delete', 'Add to sequence', 'Export', 'Unsubscribe', 'Forget']) {
+      expect(menu.getByRole('menuitem', { name: action })).toBeInTheDocument();
+    }
+    fireEvent.click(menu.getByRole('menuitem', { name: 'Delete' }));
+    expect(await screen.findByRole('dialog', { name: 'Delete Ahmad Malik?' })).toHaveTextContent(
+      'The contact will be moved to trash. You can restore it later from the contacts list.',
+    );
+  });
+
+  it('uses the requested Generic CRM action order and sends a WhatsApp message', async () => {
+    renderProfile();
+    const panelElement = await screen.findByLabelText('Contact profile');
+    const panel = within(panelElement);
+    const actionLabels = within(panelElement.querySelector('.cp-actions-bar'))
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label') || button.textContent.trim());
+    expect(actionLabels).toEqual([
+      'Email',
+      'SMS',
+      'WhatsApp',
+      'Call',
+      'Meeting',
+      'Note',
+      'Task',
+      'Add deal',
+      'More actions',
+    ]);
+
+    fireEvent.click(panel.getByRole('button', { name: 'WhatsApp' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'WhatsApp Ahmad Malik' }));
+    fireEvent.change(dialog.getByPlaceholderText('Type your message…'), {
+      target: { value: 'Hello from Globussoft CRM' },
+    });
+    fireEvent.click(dialog.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/whatsapp/send',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const sendCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/whatsapp/send' && options?.method === 'POST');
+    expect(JSON.parse(sendCall[1].body)).toEqual({
+      to: baseContact.phone,
+      body: 'Hello from Globussoft CRM',
+      contactId: baseContact.id,
+    });
+  });
+
+  it('shows the Generic CRM contact WhatsApp chat in Conversation', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      if (url === '/api/whatsapp/messages?contactId=7') {
+        return Promise.resolve({ messages: [{
+          id: 81,
+          direction: 'INBOUND',
+          from: baseContact.phone,
+          to: 'whatsapp-business-number',
+          body: 'Please share the latest quotation',
+          status: 'DELIVERED',
+          createdAt: '2026-10-26T10:00:00.000Z',
+          contact: { id: 7, name: baseContact.name },
+        }] });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Conversation' }));
+
+    expect(await panel.findByText('Please share the latest quotation')).toBeInTheDocument();
+    expect(panel.getAllByRole('button', { name: 'WhatsApp' })).toHaveLength(2);
+    expect(panel.getByRole('button', { name: 'New WhatsApp' })).toBeInTheDocument();
+    expect(panel.getByText(/whatsapp.*DELIVERED/i)).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/messages?contactId=7', { silent: true });
   });
 
   it('keeps the files workflow reachable from the profile navigation', async () => {
@@ -100,7 +209,7 @@ describe('ContactDetail profile', () => {
     let currentContact = { ...baseContact };
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/contacts/7' && opts?.method === 'PATCH') {
-        currentContact = { ...currentContact, status: JSON.parse(opts.body).status };
+        currentContact = { ...currentContact, ...JSON.parse(opts.body) };
         return Promise.resolve(currentContact);
       }
       if (url === '/api/contacts/7') return Promise.resolve(currentContact);
@@ -112,8 +221,9 @@ describe('ContactDetail profile', () => {
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7', expect.objectContaining({ method: 'PATCH' }));
     });
-    expect(JSON.parse(fetchApiMock.mock.calls.find(([_u, o]) => o?.method === 'PATCH')[1].body)).toEqual({ status: 'Prospect' });
-    await waitFor(() => expect(panel.getByRole('button', { name: 'Interested / Unqualified' }).className).toMatch(/current/));
+    expect(JSON.parse(fetchApiMock.mock.calls.find(([_u, o]) => o?.method === 'PATCH')[1].body)).toEqual({ lifecycleStageKey: 'interested' });
+    expect(currentContact.status).toBe('Lead');
+    await waitFor(() => expect(panel.getByRole('button', { name: 'Interested' }).className).toMatch(/current/));
   });
 
   it('qualified dropdown shows Qualified and red Lost options', async () => {
@@ -122,6 +232,257 @@ describe('ContactDetail profile', () => {
     fireEvent.click(panel.getByRole('button', { name: 'Qualified / Lost' }));
     expect(panel.getByRole('button', { name: 'Qualified' })).toBeTruthy();
     expect(panel.getByRole('button', { name: 'Lost' })).toBeTruthy();
+  });
+
+  it('requires and submits a reason when a negative stage is selected', async () => {
+    let currentContact = { ...baseContact };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/7' && opts?.method === 'PATCH') {
+        currentContact = { ...currentContact, ...JSON.parse(opts.body) };
+        return Promise.resolve(currentContact);
+      }
+      if (url === '/api/contacts/7') return Promise.resolve(currentContact);
+      return Promise.resolve([]);
+    });
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Interested / Unqualified' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Unqualified' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'Reason required' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Confirm stage' }));
+    expect(fetchApiMock.mock.calls.some(([_url, options]) => options?.method === 'PATCH')).toBe(false);
+    fireEvent.change(dialog.getByRole('textbox', { name: 'Negative stage reason' }), { target: { value: 'Duplicate and invalid enquiry' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Confirm stage' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7', expect.objectContaining({ method: 'PATCH' })));
+    const patchCall = fetchApiMock.mock.calls.find(([_url, options]) => options?.method === 'PATCH');
+    expect(JSON.parse(patchCall[1].body)).toEqual({
+      lifecycleStageKey: 'unqualified',
+      lifecycleTransitionReason: 'Duplicate and invalid enquiry',
+    });
+    await waitFor(() => expect(panel.getByRole('button', { name: 'Unqualified' }).className).toMatch(/lost/));
+
+    fireEvent.click(panel.getByRole('button', { name: 'Won / Churned' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Won' }));
+
+    await waitFor(() => expect(panel.getByRole('button', { name: 'Won' }).className).toMatch(/current/));
+    expect(panel.getByRole('button', { name: 'Unqualified' }).className).toMatch(/lost/);
+    fireEvent.click(panel.getByRole('button', { name: 'Unqualified' }));
+    expect(panel.getByRole('button', { name: 'Interested' })).toBeInTheDocument();
+    expect(panel.getAllByRole('button', { name: 'Unqualified' })).toHaveLength(2);
+  });
+
+  it('asks for confirmation before returning to a previous stage', async () => {
+    const qualifiedContact = { ...baseContact, status: 'Customer', lifecycleStageKey: 'qualified' };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/7' && opts?.method === 'PATCH') return Promise.resolve({ ...qualifiedContact, ...JSON.parse(opts.body) });
+      if (url === '/api/contacts/7') return Promise.resolve(qualifiedContact);
+      return Promise.resolve([]);
+    });
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Contacted' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'Go back to a previous stage?' }));
+    expect(dialog.getByText('Are you sure you want to move back to Contacted?')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([_url, options]) => options?.method === 'PATCH')).toBe(false);
+    fireEvent.click(dialog.getByRole('button', { name: 'Yes, go back' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7', expect.objectContaining({ method: 'PATCH' })));
+  });
+
+  it('restores this lead\'s selected conditional outcomes from lifecycle history', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact, status: 'Customer', lifecycleStageKey: 'won' });
+      if (url === '/api/contacts/7/lifecycle-history') {
+        return Promise.resolve({
+          data: [
+            { id: 2, to: { stageKey: 'won', stage: 'Won', status: 'Customer' } },
+            { id: 1, to: { stageKey: 'unqualified', stage: 'Unqualified', status: 'Junk' } },
+          ],
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    await waitFor(() => expect(panel.getByRole('button', { name: 'Unqualified' }).className).toMatch(/lost/));
+    expect(panel.getByRole('button', { name: 'Won' }).className).toMatch(/current/);
+    expect(panel.queryByRole('button', { name: 'Interested / Unqualified' })).not.toBeInTheDocument();
+    expect(panel.queryByRole('button', { name: 'Won / Churned' })).not.toBeInTheDocument();
+  });
+
+  it('adds a Generic CRM lifecycle stage at the end and scrolls it into view', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const dialogElement = await screen.findByRole('dialog', { name: 'Manage lifecycle stages' });
+    expect(dialogElement).toHaveAttribute('aria-modal', 'true');
+    const dialog = within(dialogElement);
+    fireEvent.click(dialog.getByRole('button', { name: 'Add stage' }));
+    const newStageInput = dialog.getByRole('textbox', { name: 'Stage 6 name' });
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' }));
+    expect(newStageInput).toHaveFocus();
+    fireEvent.change(newStageInput, { target: { value: 'Renewal' } });
+    expect(dialog.getByRole('button', { name: 'Move Renewal down' })).toBeDisabled();
+    fireEvent.click(dialog.getByRole('button', { name: 'Save stages' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/tenant-settings/generic.contactLifecycleStages',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const putCall = fetchApiMock.mock.calls.find(([url, options]) => url.includes('generic.contactLifecycleStages') && options?.method === 'PUT');
+    const saved = JSON.parse(JSON.parse(putCall[1].body).value);
+    expect(saved[5].title).toBe('Renewal');
+    expect(saved[5].options[0].status).toBe('Lead');
+    expect(localStorage.getItem('crm:generic-lifecycle-draft:v1:generic:current')).toBeNull();
+  });
+
+  it('allows an unwanted default stage to be deleted', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Delete New' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Save stages' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/tenant-settings/generic.contactLifecycleStages',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const putCall = fetchApiMock.mock.calls.find(([url, options]) => url.includes('generic.contactLifecycleStages') && options?.method === 'PUT');
+    const saved = JSON.parse(JSON.parse(putCall[1].body).value);
+    expect(saved).toHaveLength(4);
+    expect(saved.some((stage) => stage.id === 'new')).toBe(false);
+  });
+
+  it('resets the Generic CRM lifecycle to the five defaults and updates the overview after save', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Add stage' }));
+    fireEvent.change(dialog.getByRole('textbox', { name: 'Stage 6 name' }), { target: { value: 'Renewal' } });
+
+    fireEvent.click(dialog.getByRole('button', { name: 'Default stages' }));
+    let warning = within(await screen.findByRole('dialog', { name: 'Reset to default stages?' }));
+    expect(warning.getByRole('alert')).toHaveTextContent('Custom stages and unsaved stage changes will be removed.');
+    expect(dialog.getByDisplayValue('Renewal')).toBeInTheDocument();
+    fireEvent.click(warning.getByRole('button', { name: 'Cancel' }));
+    expect(dialog.getByDisplayValue('Renewal')).toBeInTheDocument();
+
+    fireEvent.click(dialog.getByRole('button', { name: 'Default stages' }));
+    warning = within(await screen.findByRole('dialog', { name: 'Reset to default stages?' }));
+    fireEvent.click(warning.getByRole('button', { name: 'Use default stages' }));
+
+    expect(dialog.getByRole('textbox', { name: 'Stage 1 name' })).toHaveValue('New');
+    expect(dialog.getByRole('textbox', { name: 'Stage 2 name' })).toHaveValue('Contacted');
+    expect(dialog.queryByDisplayValue('Renewal')).not.toBeInTheDocument();
+    expect(dialog.getByText('5 stages in this lifecycle')).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Save stages' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/tenant-settings/generic.contactLifecycleStages',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const putCall = fetchApiMock.mock.calls.find(([url, options]) => url.includes('generic.contactLifecycleStages') && options?.method === 'PUT');
+    expect(JSON.parse(JSON.parse(putCall[1].body).value)).toHaveLength(5);
+    expect(panel.queryByRole('button', { name: 'Renewal' })).not.toBeInTheDocument();
+    expect(panel.getByRole('button', { name: 'New' })).toBeInTheDocument();
+    expect(panel.getByRole('button', { name: 'Contacted' })).toBeInTheDocument();
+  });
+
+  it('allows two conditions with separate CRM statuses in one lifecycle stage', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Add stage' }));
+
+    const stageInput = dialog.getByRole('textbox', { name: 'Stage 6 name' });
+    const stageRow = within(stageInput.closest('.cp-stage-manager-row'));
+    fireEvent.click(stageRow.getByRole('button', { name: 'Add condition' }));
+
+    expect(stageRow.queryByRole('textbox', { name: 'Stage 6 name' })).not.toBeInTheDocument();
+    expect(stageRow.getAllByRole('textbox')).toHaveLength(2);
+    expect(stageRow.getByRole('textbox', { name: 'New stage condition 1' })).toHaveValue('New stage');
+    const secondCondition = stageRow.getByRole('textbox', { name: 'New stage condition 2' });
+    fireEvent.change(secondCondition, { target: { value: 'No response' } });
+    fireEvent.change(stageRow.getByRole('combobox', { name: 'No response CRM status' }), { target: { value: 'Prospect' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Save stages' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/tenant-settings/generic.contactLifecycleStages',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const putCall = fetchApiMock.mock.calls.find(([url, options]) => url.includes('generic.contactLifecycleStages') && options?.method === 'PUT');
+    const saved = JSON.parse(JSON.parse(putCall[1].body).value);
+    expect(saved[5].options).toHaveLength(2);
+    expect(saved[5].options[1]).toEqual(expect.objectContaining({ label: 'No response', status: 'Prospect', negative: true }));
+
+    const groupedStage = panel.getByRole('button', { name: 'New stage / No response' });
+    fireEvent.click(groupedStage);
+    const groupedStageMenu = within(groupedStage.closest('.cp-chev-wrap'));
+    expect(groupedStageMenu.getByRole('button', { name: 'New stage' })).toBeInTheDocument();
+    expect(groupedStageMenu.getByRole('button', { name: 'No response' })).toBeInTheDocument();
+    fireEvent.click(groupedStageMenu.getByRole('button', { name: 'No response' }));
+    expect(await screen.findByRole('dialog', { name: 'Reason required' })).toBeInTheDocument();
+  });
+
+  it('restores an unsaved lifecycle draft after closing and revisiting the page', async () => {
+    const firstRender = renderProfile();
+    const firstPanel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(firstPanel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const firstDialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    fireEvent.click(firstDialog.getByRole('button', { name: 'Add stage' }));
+    fireEvent.change(firstDialog.getByRole('textbox', { name: 'Stage 6 name' }), { target: { value: 'Draft renewal' } });
+    fireEvent.click(firstDialog.getByRole('button', { name: 'Close lifecycle stage editor' }));
+
+    await waitFor(() => expect(localStorage.getItem('crm:generic-lifecycle-draft:v1:generic:current')).toContain('Draft renewal'));
+    firstRender.unmount();
+
+    renderProfile();
+    const nextPanel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(nextPanel.getByRole('button', { name: 'Edit lifecycle stage and status' }));
+    const restoredDialog = within(await screen.findByRole('dialog', { name: 'Manage lifecycle stages' }));
+    expect(restoredDialog.getByRole('textbox', { name: 'Stage 6 name' })).toHaveValue('Draft renewal');
+    expect(restoredDialog.getByRole('combobox', { name: 'Draft renewal CRM status' })).toHaveValue('Lead');
+  });
+
+  it('shows who changed the lifecycle, when, and the complete from/to values', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      if (url === '/api/contacts/7/lifecycle-history') {
+        return Promise.resolve({
+          data: [{
+            id: 88,
+            changedAt: '2026-10-22T07:30:00.000Z',
+            changedBy: { id: 7, name: 'Rajesh Sharma', email: 'rajesh@example.com' },
+            from: { stageKey: 'new', stage: 'New', status: 'Lead' },
+            to: { stageKey: 'contacted', stage: 'Contacted', status: 'Prospect' },
+            reason: 'Requested a later follow-up',
+          }],
+          total: 1,
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'View lifecycle history' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Lifecycle history' }));
+
+    expect(await dialog.findByText('Rajesh Sharma')).toBeInTheDocument();
+    expect(dialog.getByText('rajesh@example.com')).toBeInTheDocument();
+    expect(dialog.getByText('New')).toBeInTheDocument();
+    expect(dialog.getByText('Contacted')).toBeInTheDocument();
+    expect(dialog.getByText('CRM status: Lead')).toBeInTheDocument();
+    expect(dialog.getByText('CRM status: Prospect')).toBeInTheDocument();
+    expect(dialog.getByText(/Requested a later follow-up/)).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7/lifecycle-history', { silent: true });
   });
 
   it('adds a note via POST and clears the input', async () => {

@@ -5764,6 +5764,44 @@ paths:
       responses:
         "200": { description: Locations. }
 
+  /v1/external/plot-inventory:
+    get:
+      summary: "[EXTERNAL][GENERIC] List safe plot/site inventory"
+      description: |
+        Returns only active Generic CRM plots/sites for the tenant bound to
+        the X-API-Key. Customer records, assignments, notes, boundary data,
+        bookings, and tenant identifiers are intentionally excluded. A
+        legacy tenant-wide key is accepted; purpose-scoped keys must use
+        purpose `plot-inventory-read`.
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 120 }
+          description: Search name, plot number, block, address, reference code, or property type.
+        - in: query
+          name: availability
+          schema:
+            type: string
+            enum: [AVAILABLE, HOLD, BOOKED, REGISTERED, RESERVED, SOLD]
+        - in: query
+          name: pickupLocationId
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Tenant-scoped active plot/site inventory.
+        "403": { description: API key purpose is not allowed for this endpoint. }
+        "404": { description: Endpoint is not available to this CRM vertical. }
+        "401": { description: Missing or invalid API key. }
+
   /v1/voyagr/manifest:
     get:
       summary: "[EXTERNAL] Voyagr manifest endpoint (sister-product feed)"

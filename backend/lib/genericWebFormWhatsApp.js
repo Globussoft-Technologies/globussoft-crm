@@ -8,7 +8,7 @@ function firstName(name) {
   return String(name || "").trim().split(/\s+/)[0] || "there";
 }
 
-function render(template, { contact, tenant, form }) {
+function render(template, { contact, tenant, form, selectionLink }) {
   const values = {
     "lead.name": contact.name || "",
     "lead.firstName": firstName(contact.name),
@@ -18,10 +18,11 @@ function render(template, { contact, tenant, form }) {
     "organization.name": tenant.name || "",
     "form.name": form.name || "",
   };
-  return String(template || DEFAULT_TEMPLATE).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => values[key] ?? "");
+  const rendered = String(template || DEFAULT_TEMPLATE).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => values[key] ?? "");
+  return selectionLink ? `${rendered}\n\nChoose your pickup location and interested plot: ${selectionLink}` : rendered;
 }
 
-function templateParameters(contact, tenant, form, body) {
+function templateValues(contact, tenant, form, selectionLink = null) {
   const values = [
     firstName(contact.name),
     contact.company || "",
@@ -29,7 +30,13 @@ function templateParameters(contact, tenant, form, body) {
     contact.phone || "",
     tenant.name || "",
     form.name || "",
+    selectionLink || "",
   ];
+  return values.map(value => String(value ?? ""));
+}
+
+function templateParameters(contact, tenant, form, body, selectionLink = null) {
+  const values = templateValues(contact, tenant, form, selectionLink);
   const parameters = [];
   const seen = new Set();
   const regex = /\{\{(\d+)\}\}/g;
@@ -43,9 +50,9 @@ function templateParameters(contact, tenant, form, body) {
   return parameters;
 }
 
-function renderApprovedTemplate(body, parameters) {
-  const values = new Map((parameters || []).map((item, index) => [index + 1, item.text || ""]));
-  return String(body || "").replace(/\{\{(\d+)\}\}/g, (match, index) => values.get(Number(index)) ?? match);
+function renderApprovedTemplate(body, contact, tenant, form, selectionLink = null) {
+  const values = templateValues(contact, tenant, form, selectionLink);
+  return String(body || "").replace(/\{\{(\d+)\}\}/g, (match, index) => values[Number(index) - 1] ?? match);
 }
 
 function leadStatusKey(contact, isNewContact) {
@@ -107,6 +114,7 @@ async function sendGenericWebFormWhatsApp({
   source = "web_form",
   db = prisma,
   bulkTemplateId = null,
+  selectionLink = null,
 }) {
   const rawRecipientPhone = contact?.whatsappPhone || contact?.phone;
   // The Create Lead form stores a display-formatted value such as
@@ -144,9 +152,13 @@ async function sendGenericWebFormWhatsApp({
   }
   if (bulkTemplateId && !approvedTemplate) return { sent: false, code: "TEMPLATE_UNAVAILABLE" };
 
-  const parameters = approvedTemplate ? templateParameters(contact, tenant, form, approvedTemplate.body) : [];
+  const isPickupPlotDefault = approvedTemplate
+    && ["generic_new_lead_pickup_plot", "generic_lead_pickup_plot"].includes(approvedTemplate.name)
+    && /\{\{7\}\}/.test(approvedTemplate.body || "");
+  const templateSelectionLink = isPickupPlotDefault ? selectionLink : null;
+  const parameters = approvedTemplate ? templateParameters(contact, tenant, form, approvedTemplate.body, templateSelectionLink) : [];
   const body = approvedTemplate
-    ? renderApprovedTemplate(approvedTemplate.body, parameters)
+    ? renderApprovedTemplate(approvedTemplate.body, contact, tenant, form, templateSelectionLink)
     : render(DEFAULT_TEMPLATE, { contact, tenant, form });
   const messageMetadata = JSON.stringify({
     submissionId,

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
+import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
-import TopScrollSync from '../components/TopScrollSync';
+import './Contracts.css';
 
 const STATUS_STYLES = {
   Draft:      { bg: 'rgba(100,116,139,0.12)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
@@ -43,6 +43,7 @@ export default function Contracts() {
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   // Server-driven paging: `contracts` holds ONLY the current page (full
@@ -100,6 +101,19 @@ export default function Contracts() {
   useEffect(() => { loadStatic(); }, []);
   // Page effect also fires on mount, so no separate initial loadPage call.
 
+  useEffect(() => {
+    if (!isCreateModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const mainContent = document.querySelector('.app-main > main');
+    const previousMainOverflow = mainContent?.style.overflow;
+    document.body.style.overflow = 'hidden';
+    if (mainContent) mainContent.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (mainContent) mainContent.style.overflow = previousMainOverflow;
+    };
+  }, [isCreateModalOpen]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadPage(); }, [currentPage, pageSize]);
 
@@ -111,6 +125,7 @@ export default function Contracts() {
         body: JSON.stringify(form),
       });
       setForm(EMPTY_FORM);
+      setIsCreateModalOpen(false);
       loadData();
     } catch (err) {
       notify.error('Failed to create contract');
@@ -181,18 +196,27 @@ export default function Contracts() {
   }, [currentPage, totalPages]);
 
   return (
-    <div className="contracts-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <FileText size={26} color="var(--accent-color)" /> Contracts
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Manage client contracts, track statuses, and oversee agreement lifecycle.
-        </p>
+    <div className="contracts-page" style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="contracts-page-header" style={{ marginBottom: '2.5rem' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <FileText size={26} color="var(--accent-color)" /> Contracts
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Manage client contracts, track statuses, and oversee agreement lifecycle.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary contracts-create-button"
+          onClick={() => setIsCreateModalOpen(true)}
+        >
+          <Plus size={17} /> Create Contract
+        </button>
       </header>
 
       {/* Stats bar */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+      <div className="contracts-stats" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(100,116,139,0.1)', color: '#94a3b8', border: '1px solid rgba(100,116,139,0.3)',
@@ -214,14 +238,25 @@ export default function Contracts() {
         </span>
       </div>
 
-      <div className="contracts-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
-
-        {/* Create Form */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Create Contract
-          </h3>
-          <form onSubmit={createContract} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {isCreateModalOpen && (
+        <div className="contracts-modal-backdrop" role="presentation" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setIsCreateModalOpen(false);
+        }}>
+          <div className="card contracts-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-contract-title">
+            <div className="contracts-modal-header">
+              <h2 id="create-contract-title">
+                <Plus size={20} color="var(--accent-color)" /> Create Contract
+              </h2>
+              <button
+                type="button"
+                className="contracts-modal-close"
+                aria-label="Close create contract dialog"
+                onClick={() => setIsCreateModalOpen(false)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+          <form className="contracts-form" onSubmit={createContract} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Contract Title</label>
               <input
@@ -270,7 +305,7 @@ export default function Contracts() {
               />
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem' }}>
+            <div className="contracts-date-fields" style={{ display: 'flex', gap: '1rem' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Start Date</label>
                 <input
@@ -302,10 +337,14 @@ export default function Contracts() {
               Create Contract
             </button>
           </form>
+          </div>
         </div>
+      )}
+
+      <div className="contracts-grid" style={{ display: 'block' }}>
 
         {/* Contracts Table */}
-        <div className="card" style={{ padding: '2rem' }}>
+        <div className="card contracts-table-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileText size={20} color="var(--success-color)" /> All Contracts
           </h3>
@@ -316,8 +355,11 @@ export default function Contracts() {
               <p style={{ color: 'var(--text-secondary)' }}>No contracts yet. Create your first contract to get started.</p>
             </div>
           ) : (
-            <TopScrollSync>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <div className="contracts-table-scroll">
+              <table className="contracts-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <colgroup>
+                  {Array.from({ length: 8 }, (_, index) => <col key={index} />)}
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                     <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Title</th>
@@ -343,9 +385,10 @@ export default function Contracts() {
                       <td style={{ padding: '0.85rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {c.deal?.title || '—'}
                       </td>
-                      <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
-                        <IndianRupee size={14} color="var(--success-color)" />
-                        {formatMoney(c.value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600' }}>
+                        <span className="contracts-value">
+                          {formatMoney(c.value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>
                         <StatusBadge status={c.status} />
@@ -357,24 +400,28 @@ export default function Contracts() {
                         {c.endDate ? formatDate(c.endDate) : '—'}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>
-                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <div className="contracts-row-actions" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                           {c.status !== 'Active' && c.status !== 'Terminated' && (
                             <button
                               onClick={() => activateContract(c.id)}
                               className="btn-secondary"
+                              aria-label="Activate contract"
+                              title="Activate contract"
                               style={{
                                 padding: '0.35rem 0.65rem', fontSize: '0.75rem',
                                 background: 'var(--success-color)', color: '#fff', border: 'none',
                                 display: 'flex', alignItems: 'center', gap: '0.25rem',
                               }}
                             >
-                              <CheckCircle2 size={12} /> Activate
+                              <CheckCircle2 size={12} /> <span className="contracts-action-label">Activate</span>
                             </button>
                           )}
                           {c.status !== 'Terminated' && (
                             <button
                               onClick={() => terminateContract(c.id)}
                               className="btn-secondary"
+                              aria-label="Terminate contract"
+                              title="Terminate contract"
                               style={{
                                 padding: '0.35rem 0.65rem', fontSize: '0.75rem',
                                 background: 'transparent', color: '#f59e0b',
@@ -382,11 +429,13 @@ export default function Contracts() {
                                 display: 'flex', alignItems: 'center', gap: '0.25rem',
                               }}
                             >
-                              <XCircle size={12} /> Terminate
+                              <XCircle size={12} /> <span className="contracts-action-label">Terminate</span>
                             </button>
                           )}
                           <button
                             onClick={() => deleteContract(c.id)}
+                            aria-label="Delete contract"
+                            title="Delete contract"
                             style={{
                               background: 'transparent', border: '1px solid rgba(239,68,68,0.3)',
                               color: 'var(--text-secondary)', cursor: 'pointer',
@@ -396,7 +445,7 @@ export default function Contracts() {
                             onMouseOver={e => e.currentTarget.style.color = '#ef4444'}
                             onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
                           >
-                            <Trash2 size={12} /> Delete
+                            <Trash2 size={12} /> <span className="contracts-action-label">Delete</span>
                           </button>
                         </div>
                       </td>
@@ -404,7 +453,7 @@ export default function Contracts() {
                   ))}
                 </tbody>
               </table>
-            </TopScrollSync>
+            </div>
           )}
           {total > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>

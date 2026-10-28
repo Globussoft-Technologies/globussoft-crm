@@ -93,6 +93,15 @@ prisma.payment.findMany = vi.fn();
 prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
+prisma.payment.updateMany = vi.fn();
+prisma.plotInstallment = prisma.plotInstallment || {};
+prisma.plotInstallment.findFirst = vi.fn();
+prisma.plotBooking = prisma.plotBooking || {};
+prisma.plotBooking.findMany = vi.fn().mockResolvedValue([]);
+prisma.plotSite = prisma.plotSite || {};
+prisma.plotSite.findMany = vi.fn().mockResolvedValue([]);
+prisma.plotBroker = prisma.plotBroker || {};
+prisma.plotBroker.findMany = vi.fn();
 prisma.payment.aggregate = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
@@ -101,6 +110,7 @@ prisma.$transaction = vi.fn(async callback => callback(prisma));
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
+prisma.invoice.create = vi.fn();
 prisma.invoice.update = vi.fn();
 prisma.sale = prisma.sale || {};
 prisma.sale.findMany = vi.fn();
@@ -134,6 +144,7 @@ prisma.tripInstalmentPayment.update = vi.fn().mockResolvedValue({});
 prisma.tripParticipant = prisma.tripParticipant || {};
 prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn().mockResolvedValue(null);
 prisma.contact.findMany = vi.fn().mockResolvedValue([]);
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
@@ -151,6 +162,10 @@ prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 }
 prisma.plotBooking = prisma.plotBooking || {};
 prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
 prisma.plotBooking.update = vi.fn().mockResolvedValue({});
+prisma.plotSite = prisma.plotSite || {};
+prisma.plotSite.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotInvoiceItem = prisma.plotInvoiceItem || {};
+prisma.plotInvoiceItem.create = vi.fn().mockResolvedValue({});
 
 import express from 'express';
 import request from 'supertest';
@@ -189,15 +204,20 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', userType = 'STAFF' 
 }
 
 beforeEach(() => {
+  prisma.plotCommission = { findFirst: vi.fn().mockResolvedValue(null) };
   prisma.payment.findMany.mockReset();
   prisma.payment.findFirst.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
+  prisma.payment.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.plotInstallment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotBroker.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.aggregate.mockReset().mockResolvedValue({ _sum: { amount: 0 } });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.$queryRaw.mockReset().mockResolvedValue([]);
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
+  prisma.invoice.create.mockReset();
   prisma.invoice.update.mockReset();
   prisma.sale.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset();
@@ -208,6 +228,7 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
@@ -220,6 +241,8 @@ beforeEach(() => {
   prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
   prisma.plotBooking.update.mockReset().mockResolvedValue({});
+  prisma.plotSite.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotInvoiceItem.create.mockReset().mockResolvedValue({});
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.visit.findMany.mockReset().mockResolvedValue([]);
   prisma.visit.update.mockReset().mockResolvedValue({});
@@ -341,6 +364,36 @@ describe('GET / — list payments under tenant scope', () => {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 200,
     });
+  });
+
+  test('enriches plot payments with tenant-scoped plot name and number', async () => {
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 41,
+      invoiceId: null,
+      description: 'Initial payment for plot booking BOOK-SECRET',
+      amount: 5000,
+      currency: 'INR',
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      tenantId: 1,
+      metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 73 }),
+      createdAt: new Date('2026-10-27'),
+    }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{ id: 73, plotSiteId: 91 }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 91, name: 'Green Meadows', plotNumber: 'A-12' }]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
+
+    expect(res.status).toBe(200);
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, id: { in: [73] } },
+      select: { id: true, plotSiteId: true },
+    });
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, id: { in: [91] } },
+      select: { id: true, name: true, plotNumber: true },
+    });
+    expect(res.body[0].plotSite).toEqual({ id: 91, name: 'Green Meadows', plotNumber: 'A-12' });
   });
 
   test('?status, ?gateway, ?invoiceId flow through with canonical casing + parsed int', async () => {
@@ -857,6 +910,26 @@ describe('customer payments require tenant Razorpay config (no env fallback)', (
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST /webhook/razorpay — signature verification + event dispatch', () => {
+  test('fallback resolves only the exact tenant, booking and installment payment', async () => {
+    prisma.plotInstallment.findFirst.mockResolvedValue({ paymentId: 55 });
+    prisma.payment.findFirst.mockResolvedValue({ id: 55, tenantId: 1, metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 7, installmentId: 10 }) });
+    const body = JSON.stringify({ event: 'payment.failed', payload: { payment: { entity: { notes: { kind: 'plot-booking-payment', tenantId: '1', plotBookingId: '7', installmentId: '1', paymentLinkId: 'plink_1' } } } } });
+    const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(body).digest('hex');
+    const res = await request(makeApp()).post('/api/payments/webhook/razorpay').set('content-type', 'application/json').set('x-razorpay-signature', signature).send(body);
+    expect(res.status).toBe(200);
+    expect(prisma.plotInstallment.findFirst).toHaveBeenCalledWith({ where: { id: 1, tenantId: 1, plotBookingId: 7 }, select: { paymentId: true } });
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  test('late authorization cannot downgrade a successful plot payment', async () => {
+    prisma.payment.findFirst.mockResolvedValue({ id: 55, tenantId: 1, status: 'SUCCESS', metadata: JSON.stringify({ kind: 'plot-booking-payment', plotBookingId: 7 }) });
+    const body = JSON.stringify({ event: 'payment.authorized', payload: { payment: { entity: { id: 'pay_1', order_id: 'order_1' } } } });
+    const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(body).digest('hex');
+    const res = await request(makeApp()).post('/api/payments/webhook/razorpay').set('content-type', 'application/json').set('x-razorpay-signature', signature).send(body);
+    expect(res.status).toBe(200);
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({ where: { id: 55, status: { in: ['PENDING', 'PROCESSING'] } }, data: { status: 'PROCESSING' } });
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
   test('400 + Invalid signature when x-razorpay-signature does not match', async () => {
     const eventBody = JSON.stringify({
       event: 'payment.captured',
@@ -1251,6 +1324,14 @@ describe('POST /webhook/razorpay — plot-booking payment reconciliation', () =>
     });
     prisma.$queryRaw.mockResolvedValue([{ amountPaid: 750000 }]);
     prisma.plotBooking.findFirst.mockResolvedValue({ id: 501, tenantId: 1, totalAmount: 4500000 });
+    prisma.payment.findMany.mockResolvedValue([{ amount: 500000 }, { amount: 250000 }]);
+    prisma.plotBooking.findFirst.mockResolvedValue({
+      id: 501, tenantId: 1, contactId: 61, plotSiteId: 30,
+      invoiceId: null, totalAmount: 4500000,
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 61, name: 'Sadab', email: 'sadab@example.com', phone: '9000000000' });
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, name: 'Marathahalli', plotNumber: '10' });
+    prisma.invoice.create.mockImplementation(async ({ data }) => ({ id: 701, ...data }));
 
     const eventObj = {
       event: 'payment_link.paid',
@@ -1275,6 +1356,16 @@ describe('POST /webhook/razorpay — plot-booking payment reconciliation', () =>
     expect(prisma.plotBooking.update).toHaveBeenCalledWith({
       where: { id: 501 },
       data: { amountPaid: 750000, balance: 3750000, paymentStatus: 'PARTIAL' },
+    });
+    expect(prisma.invoice.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        contactId: 61, amount: 4500000, amountPaid: 750000,
+        balance: 3750000, status: 'UNPAID', tenantId: 1,
+      }),
+    });
+    expect(prisma.payment.update).toHaveBeenCalledWith({
+      where: { id: 801 },
+      data: { invoiceId: 701 },
     });
   });
 });

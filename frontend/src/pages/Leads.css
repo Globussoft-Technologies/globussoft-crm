@@ -1,0 +1,218 @@
+/* Create Lead modal layout overrides for Generic and Travel CRM. */
+.create-lead-modal--generic {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%) !important;
+  max-width: 480px !important;
+  overflow: hidden !important;
+}
+
+/* A modal should stay visually fixed while the pointer moves over it. The
+ * shared .card hover lift/shimmer is useful for dashboard cards, but feels
+ * excessive on this dialog. */
+.create-lead-modal--generic::before {
+  display: none;
+}
+
+.create-lead-modal--generic:hover {
+  transform: none;
+  border-color: var(--border-color);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.create-lead-modal--travel {
+  box-sizing: border-box;
+  width: min(480px, calc(100vw - 2rem)) !important;
+  max-width: 480px !important;
+  min-width: 0;
+  --travel-country-list-height: clamp(64px, calc(90vh - 150px), 168px);
+  --travel-country-list-height: clamp(64px, calc(90dvh - 150px), 168px);
+}
+
+.create-lead-form--travel,
+.create-lead-form--travel > * {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.create-lead-form--travel .input-field {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+/* Travel Create Lead country picker, styled to match the shared CRM inputs. */
+.create-lead-travel-phone .iti {
+  width: 100%;
+  position: relative;
+}
+
+/* Keep the searchable country menu compact and attached to the phone field. */
+.create-lead-travel-phone .iti__country-selector {
+  top: calc(100% + 3px) !important;
+  bottom: auto !important;
+  max-width: min(380px, calc(100vw - 2rem));
+  overflow: hidden;
+  z-index: 20;
+  border: 1px solid #d7dce5;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(20, 30, 50, 0.16);
+}
+
+.create-lead-travel-phone .iti__search-input {
+  box-sizing: border-box;
+  min-height: 46px;
+  border-radius: 0;
+}
+
+.create-lead-travel-phone .iti--inline-country-selector .iti__country-list {
+  max-height: var(--travel-country-list-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #f0f2f5;
+}
+
+.create-lead-travel-phone .iti__country {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.create-lead-travel-phone .iti__country:hover,
+.create-lead-travel-phone .iti__country.iti__highlight {
+  background: #e4e8ef;
+}
+
+.create-lead-travel-phone .iti__country-name {
+  flex: 1;
+}
+
+.create-lead-travel-phone .iti__dial-code {
+  margin-left: auto;
+  color: #687386;
+}
+
+.create-lead-travel-phone .iti input[type="tel"] {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  padding-left: 116px !important;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.create-lead-travel-phone .iti__country-container {
+  width: 102px;
+  padding: 0;
+}
+
+.create-lead-travel-phone .iti__selected-country {
+  box-sizing: border-box;
+  width: 100%;
+  justify-content: flex-start;
+  border-right: 1px solid var(--border-color, #d8dce3);
+  border-radius: 9px 0 0 9px;
+  color: var(--text-primary, #172033);
+  cursor: pointer;
+}
+
+.create-lead-travel-phone .iti__selected-country-primary {
+  width: auto;
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  padding-right: 0;
+  padding-left: 14px;
+  background: transparent !important;
+}
+
+.create-lead-travel-phone .iti__selected-country-primary:hover,
+.create-lead-travel-phone .iti__selected-country-primary:focus,
+.create-lead-travel-phone .iti__selected-country[aria-expanded="true"]
+  .iti__selected-country-primary {
+  background: transparent !important;
+}
+
+.create-lead-travel-phone .iti__arrow {
+  margin-left: 12px;
+}
+
+.create-lead-travel-phone .iti__selected-dial-code {
+  margin-left: 11px;
+}
+
+.create-lead-modal--generic .create-lead-modal__header {
+  flex: 0 0 auto;
+}
+
+.create-lead-modal--generic .create-lead-form--generic {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  min-height: 0;
+  overflow: visible;
+}
+
+.create-lead-form--generic > * {
+  min-width: 0;
+}
+
+.create-lead-form--generic > .input-field {
+  max-width: 100%;
+}
+
+/* Keep entered values high-contrast after focus moves to another field. */
+.create-lead-modal--generic .create-lead-form--generic input:not([type="checkbox"]):not([type="radio"]):not(:placeholder-shown),
+.create-lead-modal--generic .create-lead-form--generic textarea:not(:placeholder-shown),
+.create-lead-modal--generic .create-lead-form--generic input:-webkit-autofill,
+.create-lead-modal--generic .create-lead-form--generic textarea:-webkit-autofill {
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  font-weight: 600;
+}
+
+/* Keep the active field unmistakable while typing in the Generic CRM lead
+ * dialog. This is intentionally scoped here so other CRM verticals and forms
+ * keep their existing focus presentation. */
+.create-lead-modal--generic .create-lead-form--generic input:focus,
+.create-lead-modal--generic .create-lead-form--generic textarea:focus,
+.create-lead-modal--generic .create-lead-form--generic select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.22);
+  background-color: var(--input-bg-focus);
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  font-weight: 600;
+}
+
+.create-lead-form--generic .create-lead-form__actions {
+  grid-column: 1 / -1;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 0.75rem;
+  padding-bottom: 0.1rem;
+  background: var(--bg-color);
+}
+
+@media (max-width: 640px) {
+  .create-lead-backdrop--generic {
+    align-items: stretch !important;
+    padding: 0.5rem !important;
+  }
+
+  .create-lead-modal--generic {
+    max-height: calc(100dvh - 1rem) !important;
+    padding: 1rem !important;
+  }
+
+  .create-lead-modal--generic .create-lead-form--generic {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

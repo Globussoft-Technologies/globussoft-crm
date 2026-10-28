@@ -67,7 +67,7 @@ const ICON_BUTTON_SITES = [
   },
   {
     file: ["pages", "Pipeline.jsx"],
-    substr: "aria-label={`Delete deal ${deal.title}`}",
+    substr: "aria-label={`Delete deal ${displayName}`}",
   },
   {
     file: ["pages", "Pipeline.jsx"],
@@ -266,15 +266,30 @@ describe("Leads split-table surface contract", () => {
     expect(css).toMatch(/table\.leads-table\s+th,\s*table\.leads-table\s+td\s*\{[^}]*background-color:\s*var\(--surface-color\)/s);
   });
 
+  it("bounds only the Generic CRM records viewport and keeps its column headers fixed", () => {
+    expect(css).toMatch(
+      /\.leads-page-root--generic\s+\.leads-split-table--no-topbar\s*\{[^}]*height:\s*clamp\(300px,\s*calc\(100dvh - 24rem\),\s*640px\)[^}]*overflow-y:\s*auto\s*!important/s,
+    );
+    expect(css).toMatch(
+      /\.leads-page-root--generic\s+\.leads-table-frozen-pane\s+table\.leads-table\s+thead,\s*\.leads-page-root--generic\s+\.leads-table-scroll-pane\s+table\.leads-table\s+thead\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*899px\)[\s\S]*?\.leads-page-root--generic\s+\.leads-split-table--no-topbar\s*\{[^}]*height:\s*auto\s*!important[^}]*overflow-y:\s*visible\s*!important/s,
+    );
+    expect(css).toMatch(
+      /\.leads-page-root--generic\s+\.leads-split-table--compact-count\s*\{[^}]*height:\s*auto[^}]*max-height:\s*none\s*!important[^}]*overflow-y:\s*visible\s*!important/s,
+    );
+  });
+
   it("keeps Overall status actions visible in compact density", () => {
     expect(css).toMatch(
-      /\.leads-split-table--density-compact\s+\.generic-overall-status-cell\s*\{[^}]*overflow:\s*visible\s*!important/s,
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+\.generic-overall-status-cell\s*\{[^}]*overflow:\s*visible\s*!important/s,
     );
     expect(css).toMatch(
-      /\.leads-split-table--density-compact\s+\.generic-overall-status-content\s*\{[^}]*display:\s*grid[^}]*grid-template-areas:[^}]*"status action"[^}]*"date action"[^}]*overflow:\s*visible/s,
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+\.generic-overall-status-content\s*\{[^}]*display:\s*grid[^}]*grid-template-areas:\s*"status action"[^}]*overflow:\s*visible/s,
     );
     expect(css).toMatch(
-      /\.leads-split-table--density-compact\s+\.generic-overall-status-action\s*\{[^}]*grid-area:\s*action/s,
+      /\.leads-page-root--generic\s+\.leads-split-table--density-compact\s+\.generic-overall-status-action\s*\{[^}]*grid-area:\s*action/s,
     );
   });
 
@@ -306,11 +321,12 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
   const TABLES = [
     {
       file: ["pages", "Contacts.jsx"],
-      pattern: /<table\s+className="stable-table"/,
+      pattern: /<table\s+className="[^"]*\bstable-table\b[^"]*"/s,
     },
     {
       file: ["pages", "Tickets.jsx"],
-      pattern: /<table\s+className="stable-table"/,
+      // Tickets keeps its page-specific class alongside the shared utility.
+      pattern: /<table\s+className="[^\"]*\bstable-table\b[^\"]*"/s,
     },
     {
       file: ["pages", "Invoices.jsx"],
@@ -319,7 +335,7 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
     },
     {
       file: ["pages", "Currencies.jsx"],
-      pattern: /<table\s+className="stable-table"/,
+      pattern: /<table\s+className="[^"]*\bstable-table\b[^"]*"/s,
     },
     {
       file: ["pages", "Territories.jsx"],

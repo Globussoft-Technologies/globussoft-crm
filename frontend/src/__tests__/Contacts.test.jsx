@@ -205,6 +205,8 @@ describe('Contacts.jsx — top-level page contract', () => {
 
     const bottomScroll = document.querySelector('.contacts-table-scroll-pane .top-scroll-sync__bottom');
     expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+    expect(bottomScroll).toHaveStyle({ overflowX: 'visible', overflowY: 'visible' });
+    expect(document.querySelector('.contacts-table-scroll-pane .top-scroll-sync__sticky-bottom')).toBeTruthy();
   });
 
   it('places pagination in a responsive footer below the table', async () => {

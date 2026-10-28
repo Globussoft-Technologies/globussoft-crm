@@ -159,6 +159,10 @@ function renderProjects() {
   return render(<Projects />);
 }
 
+function openCreateProjectModal() {
+  fireEvent.click(screen.getByRole('button', { name: /New Project/i }));
+}
+
 describe('<Projects /> — page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -173,6 +177,10 @@ describe('<Projects /> — page surface', () => {
     expect(
       screen.getByRole('heading', { name: /Projects/i })
     ).toBeInTheDocument();
+    expect(document.querySelector('.projects-board-card')).toBeTruthy();
+    await screen.findByRole('table', { name: 'Projects table' });
+    expect(document.querySelector('.projects-table-scroll')).toBeTruthy();
+    expect(document.querySelector('.projects-pagination')).toBeTruthy();
 
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
@@ -284,6 +292,7 @@ describe('<Projects /> — page surface', () => {
     expect(screen.getAllByText('Critical').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('High').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Medium').length).toBeGreaterThanOrEqual(1);
+    openCreateProjectModal();
     expect(screen.getAllByText('Low').length).toBeGreaterThanOrEqual(1);
   });
 
@@ -305,9 +314,10 @@ describe('<Projects /> — page surface', () => {
     await waitFor(() => {
       expect(screen.getByText('Aurora Migration')).toBeInTheDocument();
     });
+    openCreateProjectModal();
     fetchApiMock.mockClear();
 
-    const submitBtn = screen.getByRole('button', { name: /Create Project/i });
+    const submitBtn = screen.getByRole('button', { name: /^Create Project$/i });
     fireEvent.click(submitBtn);
 
     // Give any in-flight microtasks a chance — but the HTML `required`
@@ -325,17 +335,18 @@ describe('<Projects /> — page surface', () => {
     await waitFor(() => {
       expect(screen.getByText('Aurora Migration')).toBeInTheDocument();
     });
+    openCreateProjectModal();
 
-    fireEvent.change(screen.getByLabelText(/Project name/i), {
+    fireEvent.change(screen.getByPlaceholderText('Project name'), {
       target: { value: 'Phoenix Rollout' },
     });
-    fireEvent.change(screen.getByLabelText(/Project description/i), {
+    fireEvent.change(screen.getByPlaceholderText('Project description...'), {
       target: { value: 'Q4 rollout to APAC region' },
     });
-    fireEvent.change(screen.getByLabelText(/Project priority/i), {
+    fireEvent.change(screen.getByLabelText('Priority'), {
       target: { value: 'High' },
     });
-    fireEvent.change(screen.getByLabelText(/Project budget/i), {
+    fireEvent.change(screen.getByPlaceholderText('0.00'), {
       target: { value: '75000' },
     });
 
@@ -347,7 +358,7 @@ describe('<Projects /> — page surface', () => {
       return defaultMock(url, opts);
     });
 
-    const submitBtn = screen.getByRole('button', { name: /Create Project/i });
+    const submitBtn = screen.getByRole('button', { name: /^Create Project$/i });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -450,6 +461,7 @@ describe('<Projects /> — page surface', () => {
     await waitFor(() => {
       expect(screen.getByText('Aurora Migration')).toBeInTheDocument();
     });
+    openCreateProjectModal();
     // Contact <option>s use the format "<name> (<email>)".
     expect(
       screen.getByText('Anita Sharma (anita@example.com)')

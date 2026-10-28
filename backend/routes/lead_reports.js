@@ -7,6 +7,7 @@
  * EmailMessage / SequenceEnrollment) — no new tables, so nothing that
  * currently works can regress.
  *
+ *   GET  /overview                Lead and communication overview
  *   GET  /productivity            Daily · weekly · monthly productivity report
  *   GET  /lead-quality            Lead quality performance report
  *   GET  /follow-up-tracking      Follow-up tracking report
@@ -30,6 +31,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const M = require("../lib/leadReportMetrics");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 router.use(verifyRole(["ADMIN", "MANAGER"]));
 
@@ -96,6 +98,238 @@ function ownerLabel(byId, userId) {
 }
 
 // ─── Funnel-builder stage config ─────────────────────────────────────
+
+const OVERVIEW_RANGES = new Set([
+  "all_time",
+  "last_7_days",
+  "last_30_days",
+  "last_90_days",
+  "this_month",
+  "this_year",
+  "custom",
+]);
+
+function resolveOverviewRange(req) {
+  const preset = OVERVIEW_RANGES.has(req.query.range) ? req.query.range : "last_30_days";
+  if (preset === "custom") return { ...resolveRange(req, 30), preset };
+
+  const to = new Date();
+  let from = null;
+  if (preset === "last_7_days") from = new Date(M.startOfUtcDay(to).getTime() - 6 * 86400000);
+  if (preset === "last_30_days") from = new Date(M.startOfUtcDay(to).getTime() - 29 * 86400000);
+  if (preset === "last_90_days") from = new Date(M.startOfUtcDay(to).getTime() - 89 * 86400000);
+  if (preset === "this_month") from = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
+  if (preset === "this_year") from = new Date(Date.UTC(to.getUTCFullYear(), 0, 1));
+  return { from, to, preset };
+}
+
+async function loadLifecycleStageConfig(tenantId) {
+  try {
+    const raw = await getSetting(tenantId, KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES, { coerce: String });
+    const groups = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const stages = (Array.isArray(groups) ? groups : [])
+      .map((group) => ({
+        id: String(group?.id || "").trim(),
+        label: String(group?.title || "").trim(),
+        options: (Array.isArray(group?.options) ? group.options : [])
+          .map((option) => ({
+            id: String(option?.id || "").trim(),
+            status: String(option?.status || "").trim().toLowerCase(),
+          }))
+          .filter((option) => option.id),
+      }))
+      .filter((stage) => stage.id && stage.label);
+    const optionToStageId = new Map(
+      stages.flatMap((stage) => stage.options.map((option) => [option.id, stage.id])),
+    );
+    // Contacts created before lifecycleStageKey was introduced only have the
+    // broad CRM status. Resolve those through the first configured stage that
+    // owns that status so legacy leads do not appear as "Not set". Explicit
+    // lifecycle keys always take precedence below.
+    const statusToStageId = new Map();
+    for (const stage of stages) {
+      for (const option of stage.options) {
+        if (option.status && !statusToStageId.has(option.status)) {
+          statusToStageId.set(option.status, stage.id);
+        }
+      }
+    }
+    return { stages, optionToStageId, statusToStageId };
+  } catch (_error) {
+    return { stages: [], optionToStageId: new Map(), statusToStageId: new Map() };
+  }
+}
+
+// One graph-ready summary for the first Lead Reports tab. This is additive:
+// the existing report endpoints and their response contracts remain unchanged.
+router.get("/overview", async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const range = resolveOverviewRange(req);
+    if (range.error) return res.status(range.error.status).json(range.error);
+    const { to, preset } = range;
+    const ownerId = parseOwnerId(req);
+    const createdAt = range.from ? { gte: range.from, lte: to } : { lte: to };
+    // Lead metrics describe the current Leads population created in the range,
+    // not historical acquisition: converted contacts are intentionally excluded.
+    // Lead and meeting metrics mirror the Generic CRM Leads page. Meeting
+    // ownership follows Contact.assignedToId (the lead owner), not the staff
+    // member who happened to create the activity. Communication metrics below
+    // mirror their Inbox surfaces and therefore include inbound + outbound.
+    const leadRelationWhere = {
+      tenantId,
+      deletedAt: null,
+      ...(ownerId === null ? {} : { assignedToId: ownerId }),
+    };
+    const lifecycleConfig = await loadLifecycleStageConfig(tenantId);
+
+    const [
+      users,
+      contacts,
+      activities,
+      tasks,
+      emails,
+      sms,
+      whatsapp,
+      emailTotal,
+      smsTotal,
+      whatsappTotal,
+    ] = await Promise.all([
+      prisma.user.findMany({
+        where: { tenantId },
+        select: { id: true, name: true, email: true },
+        orderBy: { id: "asc" },
+      }),
+      prisma.contact.findMany({
+        where: {
+          tenantId,
+          createdAt,
+          deletedAt: null,
+          status: "Lead",
+          ...(ownerId === null ? {} : { assignedToId: ownerId }),
+        },
+        select: { id: true, createdAt: true, source: true, status: true, lifecycleStageKey: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_ROWS,
+      }),
+      prisma.activity.findMany({
+        where: { tenantId, createdAt, contact: leadRelationWhere },
+        select: { id: true, type: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_ROWS,
+      }),
+      prisma.task.findMany({
+        where: { tenantId, createdAt, deletedAt: null, contact: leadRelationWhere },
+        select: { id: true, type: true, title: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_ROWS,
+      }),
+      prisma.emailMessage.findMany({
+        where: { tenantId, createdAt },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_ROWS,
+      }),
+      prisma.smsMessage.findMany({
+        where: { tenantId, createdAt },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_ROWS,
+      }),
+      prisma.whatsAppMessage.findMany({
+        where: { tenantId, createdAt },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_ROWS,
+      }),
+      prisma.emailMessage.count({ where: { tenantId, createdAt } }),
+      prisma.smsMessage.count({ where: { tenantId, createdAt } }),
+      prisma.whatsAppMessage.count({ where: { tenantId, createdAt } }),
+    ]);
+
+    const allRows = [contacts, activities, tasks, emails, sms, whatsapp];
+    const dates = allRows.flatMap((rows) => rows.map((row) => row.createdAt).filter(Boolean));
+    const earliestTime = dates.reduce(
+      (earliest, date) => Math.min(earliest, new Date(date).getTime()),
+      Number.POSITIVE_INFINITY,
+    );
+    const effectiveFrom = range.from || (Number.isFinite(earliestTime)
+      ? new Date(earliestTime)
+      : M.startOfUtcDay(to));
+    const spanDays = Math.max(1, Math.ceil((to.getTime() - effectiveFrom.getTime()) / 86400000));
+    const period = spanDays > 120 ? "monthly" : "daily";
+    const blank = () => ({ leadsCreated: 0, meetings: 0, sms: 0, emails: 0, whatsapp: 0 });
+    const buckets = new Map(
+      M.buildBuckets(effectiveFrom, to, period).map((bucket) => [bucket.key, {
+        key: bucket.key,
+        label: M.bucketLabel(bucket.key, period),
+        ...blank(),
+      }]),
+    );
+    const bump = (date, field) => {
+      const bucket = buckets.get(M.bucketKey(date, period));
+      if (bucket) bucket[field] += 1;
+    };
+
+    const sourceCounts = new Map();
+    const lifecycleCounts = new Map(
+      lifecycleConfig.stages.map((stage) => [stage.id, { key: stage.id, label: stage.label, value: 0 }]),
+    );
+    for (const contact of contacts) {
+      bump(contact.createdAt, "leadsCreated");
+      const source = String(contact.source || "Unknown").trim() || "Unknown";
+      sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+      const lifecycleKey = String(contact.lifecycleStageKey || "").trim();
+      const legacyStatus = String(contact.status || "").trim().toLowerCase();
+      const stageId = lifecycleConfig.optionToStageId.get(lifecycleKey)
+        || lifecycleConfig.statusToStageId.get(legacyStatus);
+      const stage = stageId ? lifecycleCounts.get(stageId) : null;
+      if (stage) stage.value += 1;
+    }
+    for (const activity of activities) {
+      if (String(activity.type || "").toLowerCase() === "meeting") bump(activity.createdAt, "meetings");
+    }
+    for (const task of tasks) {
+      if (M.isVisitTask(task)) bump(task.createdAt, "meetings");
+    }
+    for (const row of emails) bump(row.createdAt, "emails");
+    for (const row of sms) bump(row.createdAt, "sms");
+    for (const row of whatsapp) bump(row.createdAt, "whatsapp");
+
+    const series = Array.from(buckets.values());
+    const totals = series.reduce((sum, row) => {
+      for (const key of Object.keys(blank())) sum[key] += row[key];
+      return sum;
+    }, blank());
+    const ranked = (counts) => Array.from(counts, ([label, value]) => ({ label, value }))
+      .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+    const bySource = ranked(sourceCounts);
+    const byLifecycleStage = Array.from(lifecycleCounts.values());
+
+    res.json({
+      preset,
+      period,
+      from: effectiveFrom.toISOString(),
+      to: to.toISOString(),
+      totals: {
+        ...totals,
+        emails: emailTotal,
+        sms: smsTotal,
+        whatsapp: whatsappTotal,
+        leadSources: bySource.length,
+        lifecycleStages: lifecycleConfig.stages.length,
+      },
+      series,
+      bySource,
+      byLifecycleStage,
+      users: users.map((user) => ({ id: user.id, name: user.name || user.email })),
+      truncated: allRows.some((rows) => rows.length >= MAX_ROWS),
+    });
+  } catch (err) {
+    console.error("[lead-reports/overview]", err);
+    res.status(500).json({ error: "Failed to build lead overview", code: "OVERVIEW_FAILED" });
+  }
+});
 
 async function loadStages(tenantId) {
   try {

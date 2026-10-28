@@ -38,6 +38,19 @@
         padding: 20px;
       }
 
+      html.landing-embed,
+      html.landing-embed body {
+        background: transparent;
+      }
+
+      html.landing-embed body {
+        padding: 0;
+      }
+
+      html.landing-embed .wrap {
+        max-width: none;
+      }
+
       html.standalone-form body {
         min-height: 100vh;
         min-height: 100dvh;
@@ -422,6 +435,20 @@
         box-shadow: 0 0 0 4px
           color-mix(in srgb, var(--gbs-focus-border, #6366f1) 13%, transparent);
         transform: translateY(-1px);
+      }
+
+      /* Typed and autofilled values remain high-contrast after focus moves to
+         another field; placeholders retain their configured muted color. */
+      html.generic-scope #gbs-form input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(:placeholder-shown),
+      html.generic-scope #gbs-form textarea:not(:placeholder-shown),
+      html.generic-scope #gbs-form input:-webkit-autofill,
+      html.generic-scope #gbs-form textarea:-webkit-autofill,
+      html.generic-scope #gbs-form input:focus,
+      html.generic-scope #gbs-form select:focus,
+      html.generic-scope #gbs-form textarea:focus {
+        color: #111827 !important;
+        -webkit-text-fill-color: #111827 !important;
+        font-weight: 600 !important;
       }
 
       .check {
@@ -1500,7 +1527,11 @@
 
         var params = new URLSearchParams(location.search);
 
-        var slug = params.get("id") || params.get("slug") || "";
+        var initialForm = window.__GBS_INITIAL_FORM__ || null;
+        var slug =
+          params.get("id") ||
+          params.get("slug") ||
+          String(window.__GBS_INITIAL_FORM_ID__ || "");
 
         var scope = params.get("scope") || "generic";
         var advanced = scope === "generic" || scope === "travel";
@@ -3606,7 +3637,7 @@
           var trigger = document.createElement("input");
           trigger.type = "text";
           trigger.placeholder = "+91";
-          trigger.inputMode = "numeric";
+          trigger.inputMode = "tel";
           trigger.pattern = "\\+?[0-9]*";
           trigger.setAttribute("aria-label", ariaLabel || "Phone country code");
           var options = document.createElement("div");
@@ -3690,8 +3721,10 @@
           trigger.addEventListener("click", openCountryPicker);
           trigger.addEventListener("keydown", openCountryPicker);
           trigger.addEventListener("input", function () {
+            var hasLeadingPlus = trigger.value.trim().charAt(0) === "+";
             var numericQuery = trigger.value.replace(/\D/g, "");
-            if (trigger.value !== numericQuery) trigger.value = numericQuery;
+            var visibleQuery = (hasLeadingPlus ? "+" : "") + numericQuery;
+            if (trigger.value !== visibleQuery) trigger.value = visibleQuery;
             var query = numericQuery ? "+" + numericQuery : "";
             openCountryPicker();
             options.querySelectorAll("button").forEach(function (node) {
@@ -4528,7 +4561,7 @@
               }
               updatePickerTrigger();
               trigger.placeholder = "+91";
-              trigger.inputMode = "numeric";
+              trigger.inputMode = "tel";
               // The displayed country code includes the international '+'
               // prefix (for example, +91), so the picker must allow it.
               trigger.pattern = "\\+?[0-9]*";
@@ -4599,9 +4632,11 @@
               trigger.addEventListener("click", openCountryPicker);
               trigger.addEventListener("keydown", openCountryPicker);
               trigger.addEventListener("input", function () {
+                var hasLeadingPlus = trigger.value.trim().charAt(0) === "+";
                 var numericQuery = trigger.value.replace(/\D/g, "");
-                if (trigger.value !== numericQuery)
-                  trigger.value = numericQuery;
+                var visibleQuery = (hasLeadingPlus ? "+" : "") + numericQuery;
+                if (trigger.value !== visibleQuery)
+                  trigger.value = visibleQuery;
                 var query = numericQuery ? "+" + numericQuery : "";
                 var normalizedQuery = numericQuery;
                 openCountryPicker();
@@ -4889,9 +4924,10 @@
             Object.keys(detectedLocationMetadata).forEach(function (key) {
               tracking[key] = detectedLocationMetadata[key];
             });
-            // Internal transport header: this is not a form field and is never
-            // exposed in the form builder or rendered in the visitor form.
-            event._gbsTrackingMetadata = tracking;
+            // Carry attribution in the multipart payload. A custom request
+            // header triggers a CORS preflight on external websites and can be
+            // dropped before it reaches the API.
+            fd.set("_gbsTracking", JSON.stringify(tracking));
           }
 
           if (advanced && fd.get("phone") && fd.get("phoneCountry")) {
@@ -4978,19 +5014,13 @@
           }
 
           try {
-            var requestHeaders = {};
-            if (event._gbsTrackingMetadata) {
-              requestHeaders["X-GBS-Tracking"] = JSON.stringify(
-                event._gbsTrackingMetadata,
-              );
-            }
             var res = await fetch(
               apiBase +
                 "/api/forms/public/" +
                 encodeURIComponent(slug) +
                 "/submit?scope=" +
                 encodeURIComponent(scope),
-              { method: "POST", body: fd, headers: requestHeaders },
+              { method: "POST", body: fd },
             );
 
             var json = await res.json().catch(function () {
@@ -5124,6 +5154,14 @@
 
               return;
             }
+          }
+
+          if (initialForm) {
+            var bootstrappedForm = initialForm;
+            initialForm = null;
+            window.__GBS_INITIAL_FORM__ = null;
+            renderForm(bootstrappedForm);
+            return;
           }
 
           if (!slug) {

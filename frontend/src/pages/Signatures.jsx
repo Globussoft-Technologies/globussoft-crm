@@ -7,6 +7,7 @@ import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import { AuthContext } from '../App';
+import './Signatures.css';
 
 const STATUS_STYLES = {
   PENDING: { bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' },
@@ -312,7 +313,7 @@ useEffect(() => {
   if (isWellness && isCustomer) return <CustomerConsentForms />;
 
   return (
-    <div style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="signatures-page" style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -352,19 +353,19 @@ useEffect(() => {
       </div>
 
       {/* Requests Table */}
-      <div className="card" style={{ padding: '2rem', minWidth: 0, overflowX: 'hidden' }}>
+      <div className="card signatures-requests-card" style={{ padding: '2rem', minWidth: 0, overflowX: 'hidden' }}>
         <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <FileSignature size={20} color="var(--accent-color)" /> All Signature Requests
         </h3>
 
         {requests.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+          <div className="signatures-empty-state" style={{ textAlign: 'center', padding: '4rem 2rem', background: 'var(--subtle-bg-2)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
             <FileSignature size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
             <p style={{ color: 'var(--text-secondary)' }}>No signature requests yet. Send your first one to get started.</p>
           </div>
         ) : (
-          <TopScrollSync hideTopBar>
-            <table style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+          <TopScrollSync hideTopBar verticalOverflow="auto">
+            <table className="signatures-requests-table" style={{ width: '100%', minWidth: '900px', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
                   <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Document</th>
@@ -378,10 +379,7 @@ useEffect(() => {
               </thead>
               <tbody>
                 {requests.map(r => (
-                  <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)' }}
-                    onMouseOver={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
-                    onMouseOut={e => e.currentTarget.style.background = 'transparent'}
-                  >
+                  <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                     <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600' }}>
                       {r.documentType} #{r.documentId}
                     </td>

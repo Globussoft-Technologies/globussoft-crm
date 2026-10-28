@@ -107,7 +107,11 @@ prisma.invoice.create = vi.fn();
 
 prisma.payment = prisma.payment || {};
 prisma.payment.create = vi.fn();
+prisma.payment.findMany = vi.fn();
 prisma.payment.aggregate = vi.fn();
+prisma.plotInvoiceItem.findMany = vi.fn();
+prisma.plotSite.findMany = vi.fn();
+prisma.plotBooking.findMany = vi.fn();
 
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
@@ -148,7 +152,11 @@ beforeEach(() => {
   prisma.invoice.update.mockReset();
   prisma.invoice.create.mockReset();
   prisma.payment.create.mockReset();
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.aggregate.mockReset();
+  prisma.plotInvoiceItem.findMany.mockReset().mockResolvedValue([]);
+  prisma.plotSite.findMany.mockReset().mockResolvedValue([]);
+  prisma.plotBooking.findMany.mockReset().mockResolvedValue([]);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.fieldPermission.findMany.mockReset().mockResolvedValue([]);
@@ -332,6 +340,21 @@ describe('POST /:id/payments — happy paths', () => {
     expect(createArg.gatewayId).toBeNull(); // reference omitted
   });
 
+  test('payment currency defaults to the issued invoice currency', async () => {
+    prisma.invoice.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'UNPAID', amount: 200, currency: 'INR',
+    });
+    prisma.payment.create.mockResolvedValue({ id: 1004 });
+    prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 50 } });
+
+    const res = await request(makeApp())
+      .post('/api/v1/invoices/50/payments')
+      .send({ method: 'UPI', amount: 50 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.payment.create.mock.calls[0][0].data.currency).toBe('INR');
+  });
+
   test('201 reference truncated to 128 chars when over limit', async () => {
     prisma.invoice.findFirst.mockResolvedValue({
       id: 50, tenantId: 1, status: 'UNPAID', amount: 200,
@@ -401,12 +424,25 @@ describe('catch-all delegation through billingRouter', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
+    expect(prisma.plotInvoiceItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, invoiceId: { in: [1, 2] }, itemType: 'PLOT' } }));
     // Tenant-scoping pin survives the router-as-handler indirection.
     expect(prisma.invoice.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tenantId: 42 },
       })
     );
+  });
+
+  test('GET / hydrates plot invoices through the v1 alias using tenant-scoped queries', async () => {
+    prisma.invoice.findMany.mockResolvedValue([{ id: 1, tenantId: 42, amount: 100, status: 'UNPAID' }]);
+    prisma.plotInvoiceItem.findMany.mockResolvedValue([{ invoiceId: 1, plotBookingId: 5, itemId: 8, description: 'North Avenue' }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 8, name: 'North Avenue', plotNumber: '24' }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{ id: 5, bookingNumber: 'BOOK-5', plotSiteId: 8 }]);
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/v1/invoices');
+    expect(res.status).toBe(200);
+    expect(res.body[0].plotDetails).toMatchObject({ plotId: 8, plotNumber: '24', siteName: 'North Avenue', bookingId: 5, bookingNumber: 'BOOK-5' });
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, id: { in: [8] } } }));
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, id: { in: [5] } } }));
   });
 
   test('GET /:id returns tenant-scoped invoice (billing.GET /:id handler)', async () => {

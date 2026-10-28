@@ -98,6 +98,8 @@ providerMod.sendText = vi.fn().mockResolvedValue({
   success: true,
   providerMsgId: 'wamid.mock-text',
 });
+providerMod.submitTemplateToMeta = vi.fn();
+providerMod.deleteTemplateFromMeta = vi.fn();
 providerMod.verifyWebhook = vi.fn().mockImplementation((req) => {
   const mode = req?.query?.['hub.mode'];
   const token = req?.query?.['hub.verify_token'];
@@ -212,6 +214,8 @@ beforeEach(() => {
   enqueueSend.mockReset();
   providerMod.sendTemplate.mockClear();
   providerMod.sendText.mockClear();
+  providerMod.submitTemplateToMeta.mockReset();
+  providerMod.deleteTemplateFromMeta.mockReset();
   providerMod.verifyWebhook.mockClear();
   auditMod.writeAudit.mockClear();
 
@@ -327,6 +331,63 @@ describe('POST /send — validation', () => {
     expect(enqueueSend).toHaveBeenCalledWith({ messageId: 81, tenantId: 1 });
   });
 
+  test('Generic CRM template sends fill mapped variables from the selected contact', async () => {
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ phoneNumberId: 'meta-number-1' });
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'NovaCrest Technologies', vertical: 'generic' });
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({
+      id: 91,
+      name: 'generic_new_lead_pickup_plot',
+      body: 'Hi {{1}}, thank you for contacting {{5}} through {{6}}. Company: {{2}}. Email: {{3}}. Phone: {{4}}. Link: {{7}}',
+      variableMapping: JSON.stringify({
+        1: 'contact.first_name',
+        2: 'contact.company',
+        3: 'contact.email',
+        4: 'contact.phone',
+        5: 'organization.name',
+        6: 'form.name',
+        7: 'system.pickupPlotLink',
+      }),
+    });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 22,
+      name: 'Kanchan Gupta',
+      email: 'kanchangupta@globussoft.in',
+      phone: '+919876543210',
+      whatsappPhone: null,
+      company: 'Globussoft',
+      tagsJson: null,
+      leadCustomFieldValues: [],
+    });
+    prisma.user.findFirst.mockResolvedValue({ name: 'Rajesh Sharma', email: 'rajesh@example.com' });
+    prisma.whatsAppThread.upsert.mockResolvedValue({ id: 73, status: 'OPEN', unreadCount: 0 });
+    prisma.whatsAppThread.findMany.mockResolvedValue([]);
+    prisma.whatsAppMessage.create.mockResolvedValue({ id: 83 });
+
+    const res = await request(makeApp({ tenantId: 1, userId: 7 }))
+      .post('/api/whatsapp/send')
+      .send({
+        to: '+919876543210',
+        templateName: 'generic_new_lead_pickup_plot',
+        language: 'en_US',
+        contactId: 22,
+      });
+
+    expect(res.status).toBe(202);
+    const createData = prisma.whatsAppMessage.create.mock.calls[0][0].data;
+    const metadata = JSON.parse(createData.interactiveJson);
+    expect(metadata.parameters.slice(0, 6)).toEqual([
+      'Kanchan',
+      'Globussoft',
+      'kanchangupta@globussoft.in',
+      '+919876543210',
+      'NovaCrest Technologies',
+      'Generic CRM',
+    ]);
+    expect(metadata.parameters[6]).toContain('/pickup-plot-selection/');
+    expect(createData.body).toContain('Hi Kanchan, thank you for contacting NovaCrest Technologies through Generic CRM.');
+    expect(createData.contactId).toBe(22);
+  });
+
   test('non-Generic sends preserve the existing direct thread upsert path', async () => {
     prisma.whatsAppConfig.findFirst.mockResolvedValue({ phoneNumberId: 'meta-number-2' });
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
@@ -430,6 +491,49 @@ describe('POST /templates — validation', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/name and body are required/i);
   });
+
+  test('returns a specific code when the template name and language already exist in Meta', async () => {
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({
+      businessAccountId: 'waba-1',
+      accessToken: 'token-1',
+    });
+    providerMod.submitTemplateToMeta.mockResolvedValue({
+      ok: false,
+      code: 100,
+      subcode: 2388024,
+      userTitle: 'Content in this language already exists',
+      error: 'There is already English (US) content for this template.',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/whatsapp/templates')
+      .send({ name: 'generic_new_lead_pickup_plot', body: 'Hi {{1}}, welcome to our team.' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('META_TEMPLATE_ALREADY_EXISTS');
+    expect(prisma.whatsAppTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a local duplicate name before submitting the template to Meta', async () => {
+    prisma.whatsAppTemplate.findFirst.mockResolvedValueOnce({ id: 40, name: 'welcome' });
+
+    const res = await request(makeApp())
+      .post('/api/whatsapp/templates')
+      .send({ name: 'welcome', body: 'Hi {{1}}, welcome to our team.' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: 'A WhatsApp template with this name already exists',
+      code: 'TEMPLATE_NAME_EXISTS',
+    });
+    expect(prisma.whatsAppTemplate.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 1, name: 'welcome' },
+      select: { id: true },
+    });
+    expect(prisma.whatsAppConfig.findFirst).not.toHaveBeenCalled();
+    expect(providerMod.submitTemplateToMeta).not.toHaveBeenCalled();
+    expect(prisma.whatsAppTemplate.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('PUT /templates/:id — tenant isolation', () => {
@@ -448,9 +552,67 @@ describe('PUT /templates/:id — tenant isolation', () => {
     const findArgs = prisma.whatsAppTemplate.findFirst.mock.calls[0][0];
     expect(findArgs.where.tenantId).toBe(1);
   });
+
+  test('rejects a name already used by another WhatsApp template', async () => {
+    prisma.whatsAppTemplate.findFirst
+      .mockResolvedValueOnce({ id: 41, name: 'old_name' })
+      .mockResolvedValueOnce({ id: 42, name: 'welcome' });
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .put('/api/whatsapp/templates/41')
+      .send({ name: 'welcome' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TEMPLATE_NAME_EXISTS');
+    expect(prisma.whatsAppTemplate.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { tenantId: 1, name: 'welcome', id: { not: 41 } },
+      select: { id: true },
+    });
+    expect(prisma.whatsAppTemplate.update).not.toHaveBeenCalled();
+  });
 });
 
 // ─── GET /config — ADMIN gate + masking (#651) ─────────────────────────────
+
+describe('DELETE /templates/:id — durable Meta deletion', () => {
+  test('deletes a Meta-backed template remotely before deleting its CRM row', async () => {
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({ id: 41, name: 'old_notice', metaTemplateId: 'meta-41' });
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ businessAccountId: 'waba-1', accessToken: 'token-1' });
+    providerMod.deleteTemplateFromMeta.mockResolvedValue({ ok: true, data: { success: true } });
+    prisma.whatsAppTemplate.delete.mockResolvedValue({ id: 41 });
+
+    const res = await request(makeApp()).delete('/api/whatsapp/templates/41');
+
+    expect(res.status).toBe(200);
+    expect(providerMod.deleteTemplateFromMeta).toHaveBeenCalledWith({ wabaId: 'waba-1', accessToken: 'token-1', name: 'old_notice' });
+    expect(prisma.whatsAppTemplate.delete).toHaveBeenCalledWith({ where: { id: 41 } });
+    expect(res.body.message).toBe('Template deleted from Meta and CRM');
+  });
+
+  test('keeps the CRM row when Meta deletion fails so the state stays consistent', async () => {
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({ id: 42, name: 'active_notice', metaTemplateId: 'meta-42' });
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ businessAccountId: 'waba-1', accessToken: 'token-1' });
+    providerMod.deleteTemplateFromMeta.mockResolvedValue({ ok: false, error: 'Meta permission denied' });
+
+    const res = await request(makeApp()).delete('/api/whatsapp/templates/42');
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('META_TEMPLATE_DELETE_FAILED');
+    expect(prisma.whatsAppTemplate.delete).not.toHaveBeenCalled();
+  });
+
+  test('preserves local-only template deletion without requiring Meta configuration', async () => {
+    prisma.whatsAppTemplate.findFirst.mockResolvedValue({ id: 43, name: 'local_notice', metaTemplateId: null });
+    prisma.whatsAppTemplate.delete.mockResolvedValue({ id: 43 });
+
+    const res = await request(makeApp()).delete('/api/whatsapp/templates/43');
+
+    expect(res.status).toBe(200);
+    expect(providerMod.deleteTemplateFromMeta).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConfig.findFirst).not.toHaveBeenCalled();
+    expect(prisma.whatsAppTemplate.delete).toHaveBeenCalledWith({ where: { id: 43 } });
+  });
+});
 
 describe('GET /config — admin-only + masked credentials (#651)', () => {
   test('role=USER → 403 RBAC_DENIED', async () => {

@@ -1,0 +1,605 @@
+.projects-page {
+  container-type: inline-size;
+}
+
+.projects-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.projects-header h1 {
+  margin: 0;
+}
+
+.projects-create-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex: none;
+  padding: 0.55rem 0.9rem !important;
+  font-size: 0.78rem !important;
+  white-space: nowrap;
+}
+
+.projects-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 1rem !important;
+}
+
+.projects-grid > .card {
+  min-width: 0;
+  padding: 1rem !important;
+}
+
+.projects-board-card {
+  align-self: start;
+}
+
+.projects-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.projects-create-modal {
+  container: projects-form / inline-size;
+  box-sizing: border-box !important;
+  width: min(100%, 480px) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  align-self: center;
+  overflow-x: clip !important;
+  overflow-y: visible !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3);
+}
+
+.projects-create-modal::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.projects-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.projects-modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.projects-modal-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.projects-modal-close:hover {
+  background: var(--subtle-bg-2);
+  color: var(--text-primary);
+}
+
+.projects-modal-submit {
+  margin-top: 0.25rem;
+}
+
+.projects-grid > .card > h3 {
+  font-size: 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+.projects-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem !important;
+  min-width: 0;
+}
+
+.projects-form label {
+  display: block;
+  font-size: 0.7rem !important;
+  margin-bottom: 0.2rem !important;
+}
+
+.projects-form :is(input, select, textarea) {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0.3rem 0.5rem !important;
+  font-size: 0.75rem !important;
+  line-height: 1.2;
+  box-sizing: border-box;
+}
+
+.projects-date-fields {
+  display: flex;
+  gap: 0.5rem !important;
+}
+
+.projects-date-fields > div {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.projects-date-fields input[type="date"] {
+  padding-inline: 0.3rem !important;
+  font-size: 0.68rem !important;
+}
+
+.projects-form textarea.input-field {
+  height: 56px;
+  min-height: 56px;
+  resize: vertical;
+}
+
+.projects-form > div {
+  min-width: 0;
+}
+
+.projects-modal-submit {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.projects-summary {
+  gap: 0.5rem !important;
+  margin-bottom: 1.25rem !important;
+}
+
+.projects-summary > span {
+  padding: 0.3rem 0.7rem !important;
+  font-size: 0.68rem !important;
+}
+
+.projects-table-scroll {
+  min-width: 0;
+  width: 100%;
+}
+
+/* Generic CRM only: Projects is a fixed-height workspace. The page header,
+   summary, board heading, table headings, and pagination stay in place while
+   only the project rows scroll. */
+body[data-vertical="generic"] .projects-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"]
+  .projects-page
+  > :is(.projects-header, .projects-summary) {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .projects-grid {
+  display: flex !important;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .projects-board-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-self: stretch;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .projects-board-card > h3,
+body[data-vertical="generic"] .projects-pagination {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .projects-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .projects-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-color);
+}
+
+body[data-vertical="generic"] .projects-empty-state {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+  box-sizing: border-box;
+}
+
+@container (max-width: 1250px) {
+  .projects-header {
+    margin-bottom: 1.25rem !important;
+  }
+
+  .projects-header h1 {
+    font-size: 1.55rem !important;
+  }
+
+  .projects-header p {
+    font-size: 0.75rem !important;
+  }
+
+  .projects-table-scroll {
+    overflow-x: clip !important;
+  }
+
+  .projects-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .projects-table col:nth-child(1) { width: 17%; }
+  .projects-table col:nth-child(2) { width: 10%; }
+  .projects-table col:nth-child(3) { width: 11%; }
+  .projects-table col:nth-child(4) { width: 9%; }
+  .projects-table col:nth-child(5) { width: 14%; }
+  .projects-table col:nth-child(6) { width: 9%; }
+  .projects-table col:nth-child(7) { width: 16%; }
+  .projects-table col:nth-child(8) { width: 14%; }
+
+  .projects-table :is(th, td),
+  body[data-vertical="generic"] main.generic-page-content .projects-page table.projects-table :is(th, td) {
+    padding: 0.4rem 0.2rem !important;
+    font-size: 0.58rem !important;
+    line-height: 1.2;
+  }
+
+  .projects-table th {
+    letter-spacing: 0 !important;
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(1),
+  .projects-table td:nth-child(2),
+  .projects-table td:nth-child(7) {
+    overflow-wrap: anywhere;
+  }
+
+  .projects-table td:nth-child(3),
+  .projects-table td:nth-child(4) {
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(3) span,
+  .projects-table td:nth-child(4) span {
+    padding: 0.1rem 0.25rem !important;
+    font-size: 0.54rem !important;
+  }
+
+  .projects-table td:nth-child(5) svg,
+  .projects-table td:nth-child(6) svg {
+    width: 11px !important;
+    height: 11px !important;
+    flex: none;
+  }
+
+  .projects-table td:nth-child(8) > div {
+    gap: 0.15rem !important;
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) select {
+    width: 72px !important;
+    min-width: 0 !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    padding: 0.1rem 0.15rem !important;
+    font-size: 0.54rem !important;
+    flex: none !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button {
+    width: 18px !important;
+    height: 18px !important;
+    min-height: 18px !important;
+    padding: 0.15rem !important;
+    justify-content: center;
+    flex: none;
+    color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.08) !important;
+    border-color: rgba(239, 68, 68, 0.32) !important;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button svg {
+    width: 11px !important;
+    height: 11px !important;
+  }
+
+  .projects-table td:nth-child(8) button:hover {
+    background: rgba(239, 68, 68, 0.16) !important;
+    border-color: rgba(239, 68, 68, 0.55) !important;
+  }
+}
+
+@container (max-width: 850px) {
+  .projects-header {
+    flex-wrap: wrap;
+  }
+
+  .projects-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+}
+
+@media (max-width: 600px) {
+  .projects-create-modal {
+    width: min(100%, 480px) !important;
+    padding: 0.75rem;
+  }
+}
+
+/* Only make the dialog scroll internally when the screen is too short for the
+   full form. On ordinary screens, keep every field visible and the panel snug
+   around its contents. */
+@media (max-height: 650px) {
+  .projects-create-modal {
+    max-height: calc(100dvh - 1rem) !important;
+    overflow-y: auto !important;
+  }
+}
+
+@container projects-form (max-width: 280px) {
+  .projects-date-fields {
+    flex-direction: column;
+  }
+}
+
+@container (max-width: 700px) {
+  .projects-grid {
+    gap: 0.75rem !important;
+  }
+
+  .projects-form {
+    gap: 0.55rem !important;
+  }
+
+  .projects-form :is(input, select) {
+    height: 30px;
+    min-height: 30px;
+  }
+
+  .projects-form textarea.input-field {
+    height: 56px;
+    min-height: 56px;
+  }
+
+  .projects-form button[type="submit"] {
+    padding: 0.65rem !important;
+    margin-top: 0 !important;
+  }
+
+  .projects-table-scroll {
+    overflow-x: auto !important;
+  }
+
+  .projects-table {
+    min-width: 700px;
+  }
+}
+
+/* Keep the board as one compact surface as its available width changes.
+   Container units make this continuous, so the desktop values remain the
+   ceiling and the controls/table simply become denser on smaller layouts. */
+@container (max-width: 1250px) {
+  .projects-board-card {
+    --projects-width-scale: clamp(0.62, 14.2857cqw, 1);
+  }
+
+  .projects-board-card > h3 {
+    gap: clamp(0.25rem, 0.7cqw, 0.5rem) !important;
+    font-size: clamp(0.72rem, 1.64cqw, 1.15rem) !important;
+    margin-bottom: clamp(0.65rem, 2.14cqw, 1.5rem) !important;
+    white-space: nowrap;
+  }
+
+  .projects-board-card > h3 svg {
+    width: clamp(13px, 2.86cqw, 20px) !important;
+    height: clamp(13px, 2.86cqw, 20px) !important;
+    flex: none;
+  }
+
+  .projects-table-scroll {
+    overflow-x: clip !important;
+  }
+
+  .projects-table {
+    min-width: 0 !important;
+    table-layout: fixed;
+  }
+
+  .projects-table :is(th, td) {
+    padding: clamp(0.22rem, 0.9cqw, 0.75rem) clamp(0.12rem, 0.57cqw, 0.5rem) !important;
+    font-size: clamp(0.48rem, 1.25cqw, 0.875rem) !important;
+    line-height: 1.2;
+  }
+
+  .projects-table th {
+    letter-spacing: 0 !important;
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(3),
+  .projects-table td:nth-child(4),
+  .projects-table td:nth-child(5),
+  .projects-table td:nth-child(6),
+  .projects-table td:nth-child(7),
+  .projects-table td:nth-child(8) {
+    white-space: nowrap;
+  }
+
+  .projects-table td:nth-child(7) {
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: clip;
+  }
+
+  .projects-table td:nth-child(3) span,
+  .projects-table td:nth-child(4) span {
+    padding: clamp(0.08rem, 0.28cqw, 0.2rem) clamp(0.16rem, 0.7cqw, 0.6rem) !important;
+    font-size: clamp(0.44rem, 1.05cqw, 0.75rem) !important;
+  }
+
+  .projects-table td:nth-child(5) svg,
+  .projects-table td:nth-child(6) svg {
+    width: clamp(9px, 2cqw, 14px) !important;
+    height: clamp(9px, 2cqw, 14px) !important;
+  }
+
+  .projects-table td:nth-child(8) > div {
+    gap: clamp(0.1rem, 0.7cqw, 0.5rem) !important;
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) select {
+    width: clamp(42px, 8.2cqw, 90px) !important;
+    height: clamp(18px, 3.15cqw, 32px) !important;
+    min-height: 0 !important;
+    padding: clamp(0.04rem, 0.35cqw, 0.25rem) clamp(0.06rem, 0.45cqw, 0.35rem) !important;
+    font-size: clamp(0.46rem, 1.07cqw, 0.75rem) !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button {
+    width: clamp(16px, 2.6cqw, 32px) !important;
+    height: clamp(16px, 2.6cqw, 32px) !important;
+    min-height: 0 !important;
+    padding: clamp(0.1rem, 0.45cqw, 0.4rem) !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button svg {
+    width: clamp(9px, 1.8cqw, 14px) !important;
+    height: clamp(9px, 1.8cqw, 14px) !important;
+  }
+
+  .projects-pagination {
+    flex-wrap: nowrap !important;
+    gap: clamp(0.35rem, 1.7cqw, 1rem) !important;
+    margin-top: clamp(0.6rem, 1.7cqw, 1rem) !important;
+    padding-top: clamp(0.6rem, 1.7cqw, 1rem) !important;
+    white-space: nowrap;
+  }
+
+  .projects-pagination > p,
+  .projects-pagination label,
+  .projects-pagination > div,
+  .projects-pagination > span {
+    font-size: clamp(0.52rem, 1.25cqw, 0.875rem) !important;
+  }
+
+  .projects-pagination > div {
+    gap: clamp(0.25rem, 1.1cqw, 0.75rem) !important;
+  }
+
+  .projects-pagination label {
+    gap: clamp(0.2rem, 0.7cqw, 0.5rem) !important;
+  }
+
+  .projects-pagination select,
+  .projects-pagination button {
+    min-height: 0 !important;
+    padding: clamp(0.25rem, 0.85cqw, 0.6rem) clamp(0.35rem, 1.4cqw, 1rem) !important;
+    font-size: clamp(0.52rem, 1.25cqw, 0.875rem) !important;
+  }
+}
+
+@container (max-width: 850px) {
+  .projects-header {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: clamp(0.4rem, 1.7cqw, 1rem);
+  }
+
+  .projects-header h1 {
+    font-size: clamp(1rem, 3.1cqw, 1.55rem) !important;
+    white-space: nowrap;
+  }
+
+  .projects-header p {
+    font-size: clamp(0.58rem, 1.5cqw, 0.75rem) !important;
+  }
+}
+
+@container (max-width: 700px) {
+  .projects-table-scroll,
+  .projects-table {
+    min-width: 0 !important;
+  }
+}
+
+@container (max-width: 500px) {
+  /* The action controls otherwise outgrow their percentage column at phone
+     widths and are clipped by the table surface. */
+  .projects-table col:nth-child(1) { width: 20%; }
+  .projects-table col:nth-child(2) { width: 10%; }
+  .projects-table col:nth-child(3) { width: 10%; }
+  .projects-table col:nth-child(4) { width: 9%; }
+  .projects-table col:nth-child(5) { width: 13%; }
+  .projects-table col:nth-child(6) { width: 8%; }
+  .projects-table col:nth-child(7) { width: 12%; }
+  .projects-table col:nth-child(8) { width: 18%; }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) select {
+    width: clamp(30px, 7cqw, 60px) !important;
+    padding-inline: 0.08rem !important;
+    text-overflow: clip;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button {
+    width: clamp(13px, 2.6cqw, 18px) !important;
+    height: clamp(13px, 2.6cqw, 18px) !important;
+  }
+
+  body[data-vertical="generic"] .app-main > main .projects-page .projects-table td:nth-child(8) button svg {
+    width: clamp(7px, 1.8cqw, 11px) !important;
+    height: clamp(7px, 1.8cqw, 11px) !important;
+  }
+}

@@ -177,12 +177,14 @@ jobs:
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \
+            tests/currency-catalog-api.spec.js \
             tests/travel-email-provider-api.spec.js \
             tests/travel-meeting-forms-api.spec.js \
             tests/web-form-leads-api.spec.js \
             tests/web-form-folders-api.spec.js \
             tests/sales-teams-api.spec.js \
             tests/geocode-api.spec.js \
+            tests/google-maps-settings-api.spec.js \
             tests/wellness-location-assignments-api.spec.js \
             tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \

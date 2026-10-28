@@ -73,6 +73,8 @@ prisma.sequenceStep = {
 };
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 
@@ -116,6 +118,7 @@ beforeEach(() => {
   prisma.sequenceStep.update.mockReset();
   prisma.sequenceStep.delete.mockReset();
   prisma.contact.findFirst.mockReset();
+  prisma.tenant.findUnique.mockReset();
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
 });
 
@@ -854,6 +857,33 @@ describe('S85 — SequenceStep route forwards attachmentRefsJson', () => {
     expect(res.status).toBe(201);
     const createArgs = prisma.sequenceStep.create.mock.calls[0][0];
     expect(createArgs.data.attachmentRefsJson).toBeNull();
+  });
+
+  test('POST /:id/steps accepts WhatsApp steps only for Generic CRM sequences', async () => {
+    arrangeStepCreateMocks();
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
+    const conditionJson = JSON.stringify({ version: 1, whatsappTemplateId: 73 });
+
+    const accepted = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'whatsapp', position: 0, conditionJson });
+
+    expect(accepted.status).toBe(201);
+    expect(prisma.sequenceStep.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ kind: 'whatsapp', conditionJson }),
+    }));
+
+    prisma.sequenceStep.create.mockClear();
+    arrangeStepCreateMocks();
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    const rejected = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'whatsapp', position: 0, conditionJson });
+
+    expect(rejected.status).toBe(400);
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
   });
 
   // ── POST: malformed JSON string → 400 INVALID_ATTACHMENT_REFS ─────────

@@ -4,15 +4,19 @@ import { Building2, Download, FileText, Plus, Trash2, Upload } from 'lucide-reac
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDate, formatDateTime } from '../../utils/date';
+import { fetchApi } from '../../utils/api';
 import {
   assignOwner, deleteAttachment, fetchAttachments, fetchEmailThreads,
-  fetchActivities, fetchScore, fetchSiblings, fetchSmsMessages, patchContact,
+  fetchActivities, fetchScore, fetchSiblings, fetchSmsMessages, fetchWhatsappMessages, patchContact,
   updateDeal, uploadContactFiles,
 } from './contactActions';
 import { DEAL_STAGES } from './contactProfileConfig';
 import { FormRow, Modal, Stars } from './ProfileWidgets';
 import { isRichTextMarkup, richTextToPlainText, RichText } from '../../utils/richText';
 import RichTextNotePreview from './RichTextNotePreview';
+
+const DEFAULT_GENERIC_DEAL_STAGES = ['New Lead', 'Contracted', 'Negotiation', 'Won', 'Lost'];
+const dealStageId = (name) => String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
 export function DetailsTab({ contact, staff, refresh }) {
   const notify = useNotify();
@@ -86,7 +90,7 @@ export function DetailsTab({ contact, staff, refresh }) {
   );
 }
 
-export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = false, richText = false }) {
+export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = false, showWhatsapp = false, richText = false }) {
   const [filter, setFilter] = useState('all');
   const [openedEmail, setOpenedEmail] = useState(null);
   const [items, setItems] = useState([]);
@@ -94,8 +98,9 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [sms, threads] = await Promise.all([
+    const [sms, whatsapp, threads] = await Promise.all([
       fetchSmsMessages(contactId),
+      showWhatsapp ? fetchWhatsappMessages(contactId) : Promise.resolve([]),
       fetchEmailThreads(),
     ]);
     const email = contact.email ? contact.email.toLowerCase() : null;
@@ -123,13 +128,26 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
         body: m.body,
         personName: m.contactName || m.contact?.name || m.name || contact.name,
         participant: m.direction === 'INBOUND' ? (m.from || m.sender || m.fromNumber) : (m.to || m.recipient || m.toNumber),
+        status: m.status,
+        errorMessage: m.errorMessage,
+        createdAt: m.createdAt || m.sentAt || m.timestamp,
+      })),
+      ...whatsapp.map((m) => ({
+        id: `whatsapp-${m.id}`,
+        channel: 'whatsapp',
+        direction: m.direction || 'OUTBOUND',
+        body: m.body,
+        personName: m.contactName || m.contact?.name || m.name || contact.name,
+        participant: m.direction === 'INBOUND' ? (m.from || m.sender) : (m.to || m.recipient),
+        status: m.status,
+        errorMessage: m.errorMessage,
         createdAt: m.createdAt || m.sentAt || m.timestamp,
       })),
       ...emailItems,
     ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     setItems(norm);
     setLoading(false);
-  }, [contact.email, contact.name, contactId]);
+  }, [contact.email, contact.name, contactId, showWhatsapp]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -162,12 +180,13 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
     <div className="cp-card">
       <h3>Conversation ({items.length})</h3>
       <div className="cp-filters">
-        {[['all', 'All'], ['email', 'Email'], ...(!hideSms ? [['sms', 'SMS']] : [])].map(([k, label]) => (
+        {[['all', 'All'], ['email', 'Email'], ...(!hideSms ? [['sms', 'SMS']] : []), ...(showWhatsapp ? [['whatsapp', 'WhatsApp']] : [])].map(([k, label]) => (
           <button key={k} type="button" className={`cp-filter${filter === k ? ' active' : ''}`} onClick={() => setFilter(k)}>{label}</button>
         ))}
         <span style={{ flex: 1 }} />
         {contact.email && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('email')}>New email</button>}
         {!hideSms && contact.phone && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('sms')}>New SMS</button>}
+        {showWhatsapp && (contact.whatsappPhone || contact.phone) && <button type="button" className="cp-action-btn" onClick={() => onOpenAction?.('whatsapp')}>New WhatsApp</button>}
       </div>
       {loading ? (
         <div className="cp-empty">Loading conversations…</div>
@@ -193,9 +212,15 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
                     <div className="cp-msg-meta">
                       {m.channel} • {formatDateTime(m.createdAt)}
                       {m.participant ? ` • ${m.direction === 'INBOUND' ? 'From' : 'To'} ${m.participant}` : ''}
+                      {['sms', 'whatsapp'].includes(m.channel) && m.status ? ` • ${m.status}` : ''}
                     </div>
                     {m.subject && <div className="cp-msg-subject">{m.subject}</div>}
                     <div>{m.body || '—'}</div>
+                    {['sms', 'whatsapp'].includes(m.channel) && m.status === 'FAILED' && m.errorMessage && (
+                      <div style={{ color: 'var(--danger-color, #dc2626)', fontSize: '0.75rem', marginTop: '0.35rem' }}>
+                        Delivery failed: {m.errorMessage}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -369,18 +394,32 @@ export function AccountsTab({ contact, refresh, patchField, isTravel = false }) 
   );
 }
 
-export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isTravel = false, onOpenAppointment, onOpenTravelDeal }) {
+export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isTravel = false, isGeneric = false, onOpenAppointment, onOpenTravelDeal }) {
   const notify = useNotify();
   const deals = contact.deals || [];
   const [appointments, setAppointments] = useState(contact.appointments || []);
   const total = deals.reduce((n, d) => n + (Number(d.amount) || 0), 0);
   const [savingId, setSavingId] = useState(null);
+  const [dealTypeConfigs, setDealTypeConfigs] = useState([]);
 
   useEffect(() => {
     if (!isWellness) return undefined;
     setAppointments(contact.appointments || []);
     return undefined;
   }, [contact.appointments, isWellness]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi('/api/tenant-settings/generic.dealTypes', { silent: true }).then((setting) => {
+      if (!active) return;
+      try {
+        const parsed = typeof setting?.value === 'string' ? JSON.parse(setting.value) : setting?.value;
+        setDealTypeConfigs(Array.isArray(parsed) ? parsed : []);
+      } catch { setDealTypeConfigs([]); }
+    }).catch(() => { if (active) setDealTypeConfigs([]); });
+    return () => { active = false; };
+  }, [isGeneric]);
 
   if (isWellness) {
     return (
@@ -413,6 +452,12 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
       setSavingId(null);
     }
   };
+  const stagesForDeal = (deal) => {
+    if (!isGeneric) return DEAL_STAGES.map((name) => ({ value: name, label: name }));
+    const config = dealTypeConfigs.find((type) => type.name === deal.dealType) || dealTypeConfigs.find((type) => type.isDefault) || dealTypeConfigs[0];
+    const stages = Array.isArray(config?.stages) && config.stages.length ? config.stages : DEFAULT_GENERIC_DEAL_STAGES.map((name) => ({ name }));
+    return stages.map((stage) => ({ value: stage.id || dealStageId(stage.name), label: stage.name }));
+  };
 
   return (
     <div className="cp-card">
@@ -430,7 +475,7 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
               <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>{formatMoney(d.amount, { currency: d.currency })}{d.expectedClose ? ` • closes ${formatDate(d.expectedClose)}` : ''}</span>
             </button>
             <select className="cp-input cp-stage-select" value={d.stage} disabled={savingId === d.id} onChange={(e) => changeStage(d, e.target.value)}>
-              {DEAL_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {stagesForDeal(d).map((stageOption) => <option key={stageOption.value} value={stageOption.value}>{stageOption.label}</option>)}
             </select>
           </div>
         ))

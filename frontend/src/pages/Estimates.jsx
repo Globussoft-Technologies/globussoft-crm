@@ -729,7 +729,7 @@ export default function Estimates() {
       )}
 
       {/* Estimates Table */}
-      <div className="card" style={{ padding: '2rem' }}>
+      <div className="card estimate-ledger-card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileSpreadsheet size={20} color="var(--success-color)" /> Estimate Ledger
           </h3>
@@ -775,19 +775,19 @@ export default function Estimates() {
             >
               <table
                 className="estimates-ledger-table"
-                style={{ width: '100%', minWidth: 1120, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
+                style={{ width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
                 role="table"
                 aria-label="Estimates table"
               >
                 <colgroup>
                   <col style={{ width: '10%' }} />
-                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '18%' }} />
                   <col style={{ width: '11%' }} />
                   <col style={{ width: '10%' }} />
                   <col style={{ width: '9%' }} />
                   <col style={{ width: '10%' }} />
                   <col style={{ width: '6%' }} />
-                  <col style={{ width: '32%' }} />
+                  <col style={{ width: '26%' }} />
                 </colgroup>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
@@ -852,7 +852,7 @@ export default function Estimates() {
                             }}
                             aria-label={`Download PDF for estimate ${est.estimateNum}`}
                           >
-                            <Download size={14} /> PDF
+                            <Download size={14} /><span>PDF</span>
                           </button>
                           <button
                             onClick={() => emailEstimate(est)}
@@ -867,7 +867,7 @@ export default function Estimates() {
                             }}
                             aria-label={`Email estimate ${est.estimateNum}`}
                           >
-                            <Mail size={14} /> Email
+                            <Mail size={14} /><span>Email</span>
                           </button>
                           {est.status !== 'Converted' && (
                             <button
@@ -880,7 +880,7 @@ export default function Estimates() {
                               }}
                               aria-label={`Convert estimate ${est.estimateNum} to invoice`}
                             >
-                              <ArrowRightLeft size={14} /> Convert
+                              <ArrowRightLeft size={14} /><span>Convert</span>
                             </button>
                           )}
                           <button
@@ -895,7 +895,7 @@ export default function Estimates() {
                             onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'}
                             aria-label={`Delete estimate ${est.estimateNum}`}
                           >
-                            <Trash2 size={14} /> Delete
+                            <Trash2 size={14} /><span>Delete</span>
                           </button>
                         </div>
                       </td>
@@ -942,6 +942,202 @@ export default function Estimates() {
         </div>
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .estimate-ledger-card:hover {
+          transform: none;
+          box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+          border-color: var(--border-color);
+        }
+        .estimate-ledger-card::before { display: none; }
+        /* Estimates visual refresh: use a calmer dashboard hierarchy and keep
+           the dense ledger readable without making the surrounding page feel
+           like one oversized white block. */
+        .estimates-page {
+          max-width: 1480px;
+          margin: 0 auto;
+          padding: clamp(1rem, 2.2vw, 2.25rem) !important;
+        }
+        .estimates-page > header {
+          margin-bottom: clamp(1rem, 2vw, 1.75rem) !important;
+        }
+        .estimates-page > header h1 {
+          font-size: clamp(1.35rem, 2.15vw, 2rem) !important;
+          letter-spacing: -0.025em;
+          gap: 0.55rem !important;
+        }
+        .estimates-page > header h1 svg { width: 20px; height: 20px; }
+        .estimates-page > header p {
+          margin-top: 0.4rem !important;
+          font-size: clamp(0.72rem, 0.9vw, 0.875rem) !important;
+        }
+        .estimates-toolbar {
+          align-items: stretch !important;
+          gap: 0.85rem !important;
+          margin-bottom: 1.25rem !important;
+        }
+        .estimates-toolbar > div:first-child {
+          gap: 0.5rem !important;
+          align-items: center;
+        }
+        .estimates-toolbar > div:first-child > button,
+        .estimates-toolbar > div:first-child > span {
+          min-height: 34px;
+          padding: 0.45rem 0.75rem !important;
+          border-radius: 10px !important;
+          font-size: 0.75rem !important;
+          letter-spacing: 0.01em;
+        }
+        .estimates-toolbar > div:first-child > span svg {
+          width: 14px;
+          height: 14px;
+        }
+        .estimates-toolbar > .btn-primary {
+          min-height: 36px;
+          align-self: center;
+          border-radius: 10px !important;
+          padding: 0.55rem 0.9rem !important;
+          box-shadow: 0 7px 16px rgba(79, 70, 229, 0.2);
+        }
+        .estimates-toolbar > .btn-primary svg { width: 15px; height: 15px; }
+        .estimate-ledger-card {
+          padding: clamp(0.85rem, 1.5vw, 1.45rem) !important;
+          border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+          border-radius: 16px !important;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, 0.09) !important;
+        }
+        .estimate-ledger-card > h3 {
+          margin-bottom: 1rem !important;
+          padding: 0 0.15rem;
+          font-size: 0.95rem !important;
+          letter-spacing: -0.01em;
+        }
+        .estimate-ledger-card > h3 svg { width: 16px; height: 16px; }
+        .estimates-ledger-scroll {
+          container: estimates-ledger / inline-size;
+          display: block;
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          overflow-x: auto !important;
+          overflow-y: hidden;
+          border-radius: 10px !important;
+          scrollbar-width: auto;
+          scrollbar-color: var(--scrollbar-thumb) color-mix(in srgb, var(--border-color) 55%, transparent);
+          overscroll-behavior-x: contain;
+        }
+        .estimates-ledger-scroll::-webkit-scrollbar {
+          height: 10px;
+        }
+        .estimates-ledger-scroll::-webkit-scrollbar-track {
+          background: color-mix(in srgb, var(--border-color) 45%, transparent);
+          border-radius: 999px;
+        }
+        .estimates-ledger-scroll::-webkit-scrollbar-thumb {
+          background: var(--scrollbar-thumb);
+          border-radius: 999px;
+        }
+        .estimates-ledger-scroll::-webkit-scrollbar-thumb:hover {
+          background: var(--scrollbar-thumb-hover);
+        }
+        .estimates-ledger-table {
+          min-width: clamp(760px, 78vw, 1120px) !important;
+        }
+        .estimates-ledger-table th {
+          background: color-mix(in srgb, var(--bg-color) 88%, var(--surface-color)) !important;
+          color: var(--text-secondary) !important;
+          padding: 0.55rem 0.6rem !important;
+          font-size: 0.68rem !important;
+          letter-spacing: 0.055em !important;
+        }
+        .estimates-ledger-table td {
+          padding: 0.62rem 0.6rem !important;
+          font-size: 0.78rem !important;
+          line-height: 1.25;
+          border-bottom: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+        }
+        .estimates-ledger-table tbody tr:last-child td { border-bottom: 0; }
+        .estimates-ledger-table tbody tr:hover td {
+          background: color-mix(in srgb, var(--accent-color) 5%, transparent) !important;
+        }
+        .estimates-ledger-table td:last-child > div {
+          gap: 0.32rem !important;
+          justify-content: flex-start !important;
+        }
+        .estimates-ledger-table td:last-child {
+          text-align: left !important;
+        }
+        .estimates-ledger-table td:last-child button {
+          min-height: 30px;
+          padding: 0.3rem 0.48rem !important;
+          border-radius: 8px !important;
+          font-size: 0.72rem !important;
+          line-height: 1.1;
+        }
+        .estimates-ledger-table td:last-child button svg {
+          width: 13px !important;
+          height: 13px !important;
+        }
+        @container estimates-ledger (max-width: 780px) {
+          .estimates-ledger-scroll {
+            overflow-x: auto !important;
+          }
+          .estimates-ledger-table {
+            min-width: 760px !important;
+            width: 100% !important;
+          }
+          .estimates-ledger-table col:nth-child(1) { width: 11% !important; }
+          .estimates-ledger-table col:nth-child(2) { width: 11% !important; }
+          .estimates-ledger-table col:nth-child(3) { width: 11% !important; }
+          .estimates-ledger-table col:nth-child(4) { width: 11% !important; }
+          .estimates-ledger-table col:nth-child(5) { width: 12% !important; }
+          .estimates-ledger-table col:nth-child(6) { width: 12% !important; }
+          .estimates-ledger-table col:nth-child(7) { width: 7% !important; }
+          .estimates-ledger-table col:nth-child(8) { width: 25% !important; }
+          .estimates-ledger-table td:nth-child(5) > span {
+            padding: 0.18rem 0.4rem !important;
+            font-size: 0.62rem !important;
+            white-space: nowrap;
+          }
+          .estimates-ledger-table td:last-child > div {
+            gap: clamp(0.08rem, 0.35cqw, 0.25rem) !important;
+            flex-wrap: nowrap !important;
+          }
+          .estimates-ledger-table td:last-child button {
+            min-width: 0 !important;
+            flex: 0 0 auto !important;
+            width: 30px !important;
+            height: 28px !important;
+            justify-content: center !important;
+            padding: 0 !important;
+            gap: 0 !important;
+            font-size: 0 !important;
+          }
+          .estimates-ledger-table td:last-child button > span {
+            display: none !important;
+          }
+          .estimates-ledger-table td:last-child button svg {
+            width: clamp(9px, 1.45cqw, 12px) !important;
+            height: clamp(9px, 1.45cqw, 12px) !important;
+          }
+        }
+        .estimate-ledger-card > div:last-child {
+          margin-top: 1rem !important;
+          gap: 0.6rem !important;
+        }
+        .estimate-ledger-card > div:last-child > button {
+          min-height: 34px;
+          padding: 0.4rem 0.72rem !important;
+          border-radius: 8px !important;
+          font-size: 0.75rem !important;
+        }
+        .estimate-ledger-card > div:last-child > span,
+        .estimate-ledger-card > div:last-child > label {
+          font-size: 0.75rem !important;
+        }
+        .estimate-ledger-card > div:last-child select {
+          min-height: 34px;
+          padding: 0.35rem 0.55rem !important;
+          border-radius: 8px !important;
+        }
         .estimates-ledger-table th,
         .estimates-ledger-table td {
           white-space: nowrap;
@@ -951,6 +1147,7 @@ export default function Estimates() {
         .estimates-ledger-table td:last-child button {
           flex-shrink: 0;
           white-space: nowrap;
+        }
         }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
            Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the

@@ -409,6 +409,28 @@ describe('GET /api/contacts — list', () => {
     expect(prisma.contact.count).not.toHaveBeenCalled();
   });
 
+  test('count-only dashboard request uses the full tenant and inclusive date range', async () => {
+    prisma.contact.count.mockResolvedValue(2105);
+    const res = await request(makeApp()).get('/api/contacts?count=1&from=2026-10-01&to=2026-10-19');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ total: 2105 });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.contact.count).toHaveBeenCalledWith({ where: expect.objectContaining({
+      tenantId: TENANT_ID,
+      deletedAt: null,
+      createdAt: { gte: new Date('2026-10-01T00:00:00.000Z'), lt: new Date('2026-10-20T00:00:00.000Z') },
+    }) });
+  });
+
+  test('rejects malformed or reversed contact date ranges before querying', async () => {
+    for (const query of ['from=invalid', 'from=2026-10-20&to=2026-10-01']) {
+      const res = await request(makeApp()).get(`/api/contacts?count=1&${query}`);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    }
+    expect(prisma.contact.count).not.toHaveBeenCalled();
+  });
+
   test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
     const res = await request(makeApp()).get(
       '/api/contacts?status=Customer&q=Acme&callifiedCampaignIds=41,42&count=1',
@@ -908,7 +930,12 @@ describe('GET /api/contacts/:id — read', () => {
     expect(args.include.webFormSubmissions).toMatchObject({
       take: 1,
       orderBy: { submittedAt: 'desc' },
-      select: { id: true, payloadJson: true, submittedAt: true },
+      select: {
+        id: true,
+        payloadJson: true,
+        submittedAt: true,
+        webForm: { select: { id: true, name: true } },
+      },
     });
   });
 
@@ -1476,6 +1503,91 @@ describe('PUT /api/contacts/:id — update', () => {
     expect(res.status).toBe(200);
     const updateData = prisma.contact.update.mock.calls[0][0].data;
     expect(updateData.callifiedCampaignId).toBe(42);
+  });
+
+  test('persists a configured Generic CRM lifecycle stage without changing its broad status', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, lifecycleStageKey: 'interested' });
+
+    const res = await request(makeApp())
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'interested' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update.mock.calls[0][0].data).toMatchObject({
+      lifecycleStageKey: 'interested',
+    });
+    expect(prisma.contact.update.mock.calls[0][0].data).not.toHaveProperty('status');
+  });
+
+  test('requires a reason for a negative Generic CRM lifecycle stage', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({ ...SAMPLE_CONTACT, status: 'Lead', lifecycleStageKey: 'interested' });
+
+    const res = await request(makeApp())
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'churned' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NEGATIVE_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('requires a reason for the second condition even when its configured status is not negative', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({ ...SAMPLE_CONTACT, lifecycleStageKey: 'qualified' });
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify([{
+        id: 'decision',
+        title: 'Approved / Needs review',
+        options: [
+          { id: 'approved', label: 'Approved', status: 'Customer', negative: false },
+          { id: 'needs-review', label: 'Needs review', status: 'Prospect', negative: false },
+        ],
+      }]),
+    });
+
+    const res = await request(makeApp())
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'needs-review' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NEGATIVE_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('records a negative lifecycle-stage reason in the audit transition without passing it to Prisma', async () => {
+    const existing = { ...SAMPLE_CONTACT, status: 'Lead', lifecycleStageKey: 'interested' };
+    const updated = { ...existing, lifecycleStageKey: 'churned' };
+    prisma.contact.findFirst.mockResolvedValueOnce(existing);
+    prisma.contact.update.mockResolvedValueOnce(updated);
+    diffFieldsMock.mockReturnValueOnce({ lifecycleStageKey: { from: 'lost', to: 'churned' } });
+
+    const res = await request(makeApp())
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'churned', lifecycleTransitionReason: 'Customer cancelled renewal' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update.mock.calls[0][0].data).not.toHaveProperty('lifecycleTransitionReason');
+    expect(writeAuditMock).toHaveBeenCalledWith(
+      'Contact',
+      'UPDATE',
+      9001,
+      USER_ID,
+      TENANT_ID,
+      expect.objectContaining({ lifecycleTransition: expect.objectContaining({ reason: 'Customer cancelled renewal' }) }),
+    );
+  });
+
+  test('does not write Generic CRM lifecycle stages for another vertical', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    prisma.contact.update.mockResolvedValueOnce(SAMPLE_CONTACT);
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'new' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update.mock.calls[0][0].data.lifecycleStageKey).toBeUndefined();
   });
 });
 

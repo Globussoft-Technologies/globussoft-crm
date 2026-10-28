@@ -122,6 +122,19 @@ beforeEach(() => {
 });
 
 describe('POST /api/travel/commission-profiles', () => {
+  test('rejects a Valid to date on the same day as Valid from', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/commission-profiles')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Invalid window', profileType: 'flat_percent', profileJson: flatPercentProfile,
+        validFrom: '2026-09-08', validTo: '2026-09-08',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE_RANGE' });
+    expect(prisma.travelCommissionProfile.create).not.toHaveBeenCalled();
+  });
+
   test('happy path with flat_percent profile returns 201', async () => {
     prisma.travelCommissionProfile.create.mockResolvedValue({
       id: 42,
@@ -366,6 +379,19 @@ describe('GET /api/travel/commission-profiles/:id', () => {
 });
 
 describe('PUT /api/travel/commission-profiles/:id', () => {
+  test('rejects a Valid to date on the same day as the existing Valid from', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue({
+      id: 5, tenantId: 1, subBrand: 'tmc', validFrom: new Date('2026-09-08'), validTo: null,
+    });
+    const res = await request(makeApp())
+      .put('/api/travel/commission-profiles/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ validTo: '2026-09-08' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE_RANGE' });
+    expect(prisma.travelCommissionProfile.update).not.toHaveBeenCalled();
+  });
+
   test('partial update happy path returns 200 + only touches sent fields', async () => {
     prisma.travelCommissionProfile.findFirst.mockResolvedValue({
       id: 5,

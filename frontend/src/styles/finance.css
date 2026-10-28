@@ -8,8 +8,90 @@
   box-sizing: border-box;
   min-height: 100% !important;
   overflow-x: hidden;
+  container-type: inline-size;
   color: var(--text-primary);
   animation: fadeIn 0.4s ease-out;
+}
+
+/* Payments is a dense seven-column ledger. Keep it fluid inside the actual
+   content pane (which can be much narrower than the browser viewport), so a
+   sidebar or split layout does not create an artificial horizontal scrollbar. */
+.payment-ledger-table {
+  width: 100% !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  table-layout: fixed;
+}
+
+.payment-ledger-table :is(th, td) {
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.payment-ledger-table th:nth-child(1),
+.payment-ledger-table td:nth-child(1) { width: 14%; }
+.payment-ledger-table th:nth-child(2),
+.payment-ledger-table td:nth-child(2) { width: 20%; }
+.payment-ledger-table th:nth-child(3),
+.payment-ledger-table td:nth-child(3) { width: 13%; }
+.payment-ledger-table th:nth-child(4),
+.payment-ledger-table td:nth-child(4) { width: 12%; }
+.payment-ledger-table th:nth-child(5),
+.payment-ledger-table td:nth-child(5) { width: 12%; }
+.payment-ledger-table th:nth-child(6),
+.payment-ledger-table td:nth-child(6) { width: 13%; }
+.payment-ledger-table th:nth-child(7),
+.payment-ledger-table td:nth-child(7) { width: 16% !important; }
+
+.payment-ledger-table td:nth-child(2) {
+  white-space: nowrap;
+}
+
+.payment-ledger-table td:nth-child(7) {
+  white-space: normal;
+  overflow: hidden;
+}
+
+.payment-ledger-table td:nth-child(7) button {
+  min-width: 0 !important;
+  max-width: 100%;
+  margin-right: 0.15rem !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (max-width: 900px) {
+  .payment-ledger-table {
+    font-size: clamp(0.56rem, 1.55cqw, 0.85rem) !important;
+  }
+
+  .payment-ledger-table :is(th, td) {
+    padding: clamp(0.2rem, 1.15cqw, 0.75rem) clamp(0.15rem, 1.1cqw, 1rem) !important;
+    line-height: 1.25;
+  }
+
+  .payment-ledger-table th {
+    font-size: clamp(0.46rem, 1.3cqw, 0.75rem) !important;
+    letter-spacing: clamp(0.01em, 0.25cqw, 0.05em);
+  }
+
+  .payment-ledger-table td:nth-child(7) button {
+    padding: clamp(0.12rem, 0.55cqw, 0.3rem) clamp(0.12rem, 0.75cqw, 0.7rem) !important;
+    font-size: clamp(0.46rem, 1.25cqw, 0.75rem) !important;
+    line-height: 1.1;
+  }
+
+  .payment-ledger-table td:nth-child(4) span,
+  .payment-ledger-table td:nth-child(5) span {
+    padding: clamp(0.1rem, 0.5cqw, 0.25rem) clamp(0.15rem, 0.7cqw, 0.6rem) !important;
+    font-size: clamp(0.45rem, 1.15cqw, 0.72rem) !important;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* The Travel invoice ledger is a viewport inside the finance shell. Keep the
@@ -89,6 +171,7 @@
 
 .invoices-mobile-page .invoice-summary-controls {
   margin-bottom: 1.75rem;
+  container-type: inline-size;
 }
 
 .invoices-mobile-page .invoice-summary-badges {
@@ -113,7 +196,7 @@
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-summary-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 1rem;
   flex-wrap: wrap;
 }
@@ -131,7 +214,214 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoi
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
   flex: 0 0 auto;
   flex-wrap: nowrap;
-  margin-left: auto;
+  margin-left: 0 !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
+  .invoice-filters > .invoice-filter-pill {
+  margin-left: 0 !important;
+}
+
+/* Generic CRM keeps the invoice workspace inside the available viewport.
+   Only the live API-backed table rows scroll; Wellness and Travel retain
+   their existing layouts. */
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+@media (min-width: 769px) {
+  /* The app shell normally lets <main> scroll. On Generic invoices the
+     ledger owns vertical scrolling, so suppress the redundant page bar. */
+  .app-main > main.generic-page-content:has(.invoices-mobile-page.invoices-generic-page) {
+    overflow-y: hidden !important;
+  }
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header,
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-summary-controls {
+  flex: 0 0 auto;
+}
+
+/* Match the compact page hierarchy used by Generic CRM list pages (Leads,
+   Pipeline, Contacts) without changing the shared Wellness/Travel markup. */
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header {
+  margin-bottom: 0.75rem !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header h1 {
+  gap: 0.625rem !important;
+  font-size: 1.5rem !important;
+  font-weight: 600 !important;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header h1 > svg {
+  width: 24px !important;
+  height: 24px !important;
+  color: var(--text-primary) !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header p {
+  margin-top: 0.2rem !important;
+  font-size: 0.875rem;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-summary-controls {
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
+  :is(.invoice-summary-badges > span, .invoice-filter-pill, .invoice-create-button) {
+  min-height: 34px;
+  box-sizing: border-box;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow, 0 2px 8px rgba(15, 23, 42, 0.08));
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
+  > .invoice-ledger-card > h3 {
+  font-size: 1rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+/* Fluid invoice toolbar density for laptop/tablet widths. Keep the KPI chips
+   and filter controls in their existing rows while reducing their chrome
+   continuously instead of making each control wrap internally. */
+@media (min-width: 601px) and (max-width: 1919px) {
+  .invoices-mobile-page .invoice-summary-controls {
+    gap: clamp(0.45rem, 1vw, 1rem);
+  }
+
+  .invoices-mobile-page .invoice-summary-badges {
+    gap: clamp(0.35rem, 0.75vw, 0.75rem);
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span {
+    min-width: 0;
+    flex: 0 1 auto;
+    padding: clamp(0.28rem, 0.4vw, 0.4rem) clamp(0.55rem, 1vw, 1rem) !important;
+    font-size: clamp(0.62rem, 0.75vw, 0.75rem) !important;
+    gap: clamp(0.2rem, 0.4vw, 0.4rem) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span svg,
+  .invoices-mobile-page .invoice-filter-pill > svg {
+    width: clamp(11px, 1vw, 14px) !important;
+    height: clamp(11px, 1vw, 14px) !important;
+    flex-shrink: 0;
+  }
+
+  .invoices-mobile-page .invoice-filters {
+    min-width: 0;
+    gap: clamp(0.3rem, 0.65vw, 0.5rem);
+    flex-wrap: nowrap;
+  }
+
+  .invoices-mobile-page .invoice-filter-pill {
+    min-width: 0;
+    gap: clamp(0.25rem, 0.5vw, 0.5rem) !important;
+    padding: clamp(0.18rem, 0.3vw, 0.25rem) clamp(0.45rem, 0.75vw, 0.75rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-filter-pill :is(label, select, input),
+  .invoices-mobile-page .invoice-filter-pill > span {
+    font-size: clamp(0.62rem, 0.75vw, 0.75rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-create-button {
+    padding: clamp(0.35rem, 0.55vw, 0.55rem) clamp(0.55rem, 0.9vw, 0.9rem) !important;
+    font-size: clamp(0.62rem, 0.75vw, 0.75rem) !important;
+    gap: clamp(0.2rem, 0.4vw, 0.4rem) !important;
+    white-space: nowrap;
+  }
+}
+
+/* Scale from the actual invoice content width (after the sidebar), not only
+   from the browser viewport width. This keeps the toolbar usable on narrow
+   laptop layouts where the main pane is substantially smaller than 100vw. */
+@container (max-width: 700px) {
+  .invoices-mobile-page .invoice-summary-badges > span {
+    padding-inline: clamp(0.35rem, 1.5cqw, 0.65rem) !important;
+    font-size: clamp(0.55rem, 1.5cqw, 0.68rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-summary-badges > span svg,
+  .invoices-mobile-page .invoice-filter-pill > svg {
+    width: clamp(10px, 2cqw, 13px) !important;
+    height: clamp(10px, 2cqw, 13px) !important;
+  }
+
+  .invoices-mobile-page .invoice-filters {
+    gap: clamp(0.2rem, 1cqw, 0.4rem);
+  }
+
+  .invoices-mobile-page .invoice-filter-pill {
+    gap: clamp(0.15rem, 1cqw, 0.35rem) !important;
+    padding-inline: clamp(0.3rem, 1.5cqw, 0.6rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-filter-pill :is(label, select, input),
+  .invoices-mobile-page .invoice-filter-pill > span,
+  .invoices-mobile-page .invoice-create-button {
+    font-size: clamp(0.55rem, 1.5cqw, 0.68rem) !important;
+  }
+
+  .invoices-mobile-page .invoice-create-button {
+    padding-inline: clamp(0.35rem, 1.5cqw, 0.65rem) !important;
+  }
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-ledger-card > h3,
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-pagination {
+  flex: 0 0 auto;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll,
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll .top-scroll-sync__bottom {
+  flex: 1 1 auto;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto !important;
+}
+
+.invoices-mobile-page.invoices-generic-page .invoice-ledger-card table.stable-table tbody tr:hover,
+.invoices-mobile-page.invoices-generic-page .invoice-ledger-card table.stable-table tbody tr:hover td {
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 /* Wellness uses the same compact invoice toolbar composition as the approved
@@ -450,7 +740,7 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
   max-width: none;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 899px) {
   .finance-page .finance-page__header,
   .finance-page .finance-page__section-header {
     display: grid !important;
@@ -549,6 +839,16 @@ html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .inv
   html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-filters {
     flex-wrap: wrap;
     margin-left: 0;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page {
+    height: auto;
+    min-height: 100% !important;
+    overflow: visible;
+  }
+
+  html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
+    overflow: hidden !important;
   }
 
   html[data-vertical="wellness"] .invoices-mobile-page.invoices-wellness-page .invoice-summary-controls {

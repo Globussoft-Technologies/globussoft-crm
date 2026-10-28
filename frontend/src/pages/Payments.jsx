@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -20,12 +21,13 @@ import {
   Plus,
   ChevronLeft,
   ChevronRight,
+  Filter,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
-import { formatMoney } from "../utils/money";
+import { formatMoney, currencySymbol } from "../utils/money";
 import {
   DateRangeFilter,
   resolveDateRange,
@@ -81,6 +83,63 @@ const GATEWAY_CONFIG = {
   },
 };
 
+const EMPTY_PAYMENT_COLUMN_FILTERS = {
+  currency: "ALL",
+  gateway: "ALL",
+  status: "ALL",
+  paidDatePreset: "all",
+  paidDateStart: "",
+  paidDateEnd: "",
+};
+
+function PaymentHeaderFilter({ label, filterKey, activeFilter, hasValue, onToggle, children }) {
+  const isOpen = activeFilter === filterKey;
+  const triggerRef = useRef(null);
+  const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    if (!isOpen) return undefined;
+    const positionPopover = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const popupWidth = 210;
+      setPopoverPosition({
+        top: rect.bottom + 8,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - popupWidth - 8)),
+      });
+    };
+    positionPopover();
+    window.addEventListener("resize", positionPopover);
+    window.addEventListener("scroll", positionPopover, true);
+    return () => {
+      window.removeEventListener("resize", positionPopover);
+      window.removeEventListener("scroll", positionPopover, true);
+    };
+  }, [isOpen]);
+
+  return (
+    <div className="payment-header-filter" data-payment-column-filter>
+      <span>{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`payment-header-filter-button${hasValue ? " is-active" : ""}`}
+        onClick={() => onToggle(isOpen ? null : filterKey)}
+        aria-label={`Filter ${label}`}
+        aria-expanded={isOpen}
+      >
+        <Filter size={14} aria-hidden="true" />
+      </button>
+      {isOpen && createPortal(
+        <div className="payment-header-filter-popover" data-payment-column-filter style={{ top: popoverPosition.top, left: popoverPosition.left }}>
+          {children}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function StatusBadge({ status }) {
   const normalizedStatus = ["PAID", "CAPTURED"].includes(String(status || "").toUpperCase())
     ? "SUCCESS"
@@ -133,8 +192,20 @@ function GatewayBadge({ gateway }) {
   );
 }
 
-function paymentSubjectLabel(payment) {
+function plotPaymentSubjectLabel(payment) {
+  if (payment?.metadata?.kind !== "plot-booking-payment" || !payment.plotSite) return null;
+  const plotName = String(payment.plotSite.name || "").trim();
+  const plotNumber = String(payment.plotSite.plotNumber || "").trim();
+  if (plotName && plotNumber) return `${plotName} (Plot No. ${plotNumber})`;
+  return plotName || (plotNumber ? `Plot No. ${plotNumber}` : null);
+}
+
+function paymentSubjectLabel(payment, { preferPlotSite = false } = {}) {
   if (!payment) return null;
+  if (preferPlotSite) {
+    const plotLabel = plotPaymentSubjectLabel(payment);
+    if (plotLabel) return plotLabel;
+  }
   if (payment.description) return payment.description;
   if (payment.service?.name) return payment.service.name;
   if (payment.product?.name) return payment.product.name;
@@ -142,12 +213,12 @@ function paymentSubjectLabel(payment) {
   return payment.travelInvoiceNum || null;
 }
 
-// Always render in the tenant's default currency (INR for wellness tenants).
-// Per-row currency stamps were previously honored, which surfaced "$" rows on
-// INR tenants when historical payments were captured in USD — now display is
-// uniformly tenant-currency.
-function formatCurrency(amount) {
-  return formatMoney(amount || 0);
+// Generic CRM pickup/plot payments are denominated in INR even when an older
+// tenant record still carries USD as its default. Other verticals retain the
+// existing tenant-aware currency behavior.
+function formatCurrency(amount, currency) {
+  if (!Number.isFinite(Number(amount))) return "Rate unavailable";
+  return formatMoney(amount || 0, currency ? { currency, locale: currency === "INR" ? "en-IN" : undefined } : undefined);
 }
 
 function formatDate(value) {
@@ -170,14 +241,26 @@ function formatPaidDate(value) {
   }
 }
 
+function openNativeDatePicker(event) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // Browsers that open date inputs automatically may reject showPicker().
+  }
+}
+
 export default function Payments() {
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
   const isCustomer = user?.role === "CUSTOMER" || user?.userType === "CUSTOMER";
+  const isGenericCrm = (tenant?.vertical || user?.tenant?.vertical) === "generic";
+  const displayCurrency = isGenericCrm ? tenant?.defaultCurrency || user?.tenant?.defaultCurrency : undefined;
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
+  const [availableCurrencies, setAvailableCurrencies] = useState([]);
   const [customerLedger, setCustomerLedger] = useState({ total: 0, stats: { collected: 0, pending: 0, failed: 0 } });
+  const [genericStats, setGenericStats] = useState(null);
   const loadSequence = useRef(0);
   const [config, setConfig] = useState(null);
   const [tab, setTab] = useState("all");
@@ -186,8 +269,30 @@ export default function Payments() {
   const [notice, setNotice] = useState("");
   const [refundingId, setRefundingId] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [showGatewayConfiguration, setShowGatewayConfiguration] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [columnFilters, setColumnFilters] = useState(() => ({
+    ...EMPTY_PAYMENT_COLUMN_FILTERS,
+    paidDatePreset: "last30",
+  }));
+  const [activeColumnFilter, setActiveColumnFilter] = useState(null);
+  const selectGateway = useCallback((gateway) => {
+    setTab(gateway);
+    if (isGenericCrm && !isCustomer) {
+      setColumnFilters((current) => ({
+        ...current,
+        gateway: gateway === "all" ? "ALL" : gateway,
+      }));
+    }
+  }, [isGenericCrm, isCustomer]);
+  const toggleStatusFilter = useCallback((status) => {
+    setColumnFilters((current) => ({
+      ...current,
+      status: current.status === status ? "ALL" : status,
+    }));
+    setActiveColumnFilter(null);
+  }, []);
   // Default to last30 to preserve the prior "Total Collected (30D)" semantics —
   // user can now switch to today / this week / this month / this year / custom
   // and the KPI label and table follow.
@@ -202,6 +307,31 @@ export default function Payments() {
     return o ? o.label : "All time";
   }, [dateFilter.preset]);
 
+  const currencyRateByCode = useMemo(
+    () => new Map(availableCurrencies.map((currency) => [
+      String(currency.code || "").toUpperCase(),
+      Number(currency.exchangeRate),
+    ])),
+    [availableCurrencies],
+  );
+  const inferredLedgerCurrency = useMemo(() => {
+    const currencies = [...new Set(payments.map((payment) => payment.currency).filter(Boolean).map((currency) => String(currency).toUpperCase()))];
+    return currencies.length === 1 ? currencies[0] : String(displayCurrency || "USD").toUpperCase();
+  }, [payments, displayCurrency]);
+  const selectedDisplayCurrency = columnFilters.currency === "ALL"
+    ? inferredLedgerCurrency
+    : columnFilters.currency;
+  const convertPaymentAmount = useCallback((value, sourceCurrency, targetCurrency = selectedDisplayCurrency) => {
+    const amount = Number(value || 0);
+    const source = String(sourceCurrency || inferredLedgerCurrency).toUpperCase();
+    const target = String(targetCurrency || source).toUpperCase();
+    if (source === target) return amount;
+    const sourceRate = currencyRateByCode.get(source);
+    const targetRate = currencyRateByCode.get(target);
+    if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return NaN;
+    return (amount / sourceRate) * targetRate;
+  }, [currencyRateByCode, inferredLedgerCurrency, selectedDisplayCurrency]);
+
   const paymentUrl = useMemo(() => {
     if (!isCustomer) return "/api/payments";
     const params = new URLSearchParams({ page: String(page), limit: String(pageSize), dateBasis: "payment" });
@@ -211,18 +341,29 @@ export default function Payments() {
     return `/api/payments?${params}`;
   }, [isCustomer, page, pageSize, tab, rangeStart, rangeEnd]);
 
+  const genericStatsUrl = useMemo(() => {
+    if (!isGenericCrm || isCustomer) return null;
+    const params = new URLSearchParams({ dateBasis: "payment" });
+    if (tab !== "all") params.set("gateway", tab);
+    if (rangeStart) params.set("from", rangeStart.toISOString());
+    if (rangeEnd) params.set("to", rangeEnd.toISOString());
+    return `/api/payments/stats?${params}`;
+  }, [isGenericCrm, isCustomer, tab, rangeStart, rangeEnd]);
+
   const loadAll = useCallback(async ({ silent = false } = {}) => {
     const request = ++loadSequence.current;
     if (!silent) setLoading(true);
     setError("");
     try {
-      const [list, cfg] = await Promise.all([
+      const [list, cfg, aggregate] = await Promise.all([
         isCustomer ? fetchApi(paymentUrl) : fetchApi(paymentUrl).catch(() => []),
         isCustomer ? Promise.resolve(null) : fetchApi("/api/payments/config").catch(() => null),
+        genericStatsUrl ? fetchApi(genericStatsUrl).catch(() => null) : Promise.resolve(null),
       ]);
       if (request !== loadSequence.current) return;
       setPayments(isCustomer ? (list?.data || []) : (Array.isArray(list) ? list : []));
       if (isCustomer) setCustomerLedger({ total: list?.total || 0, stats: list?.stats || { collected: 0, pending: 0, failed: 0 } });
+      if (genericStatsUrl) setGenericStats(aggregate);
       if (isCustomer && Number(list?.page) > (list?.totalPages || 1)) setPage(list?.totalPages || 1);
       setConfig(cfg);
     } catch (err) {
@@ -230,13 +371,22 @@ export default function Payments() {
     } finally {
       if (request === loadSequence.current) setLoading(false);
     }
-  }, [isCustomer, paymentUrl]);
+  }, [isCustomer, paymentUrl, genericStatsUrl]);
 
   useEffect(() => {
     loadAll();
     const refreshTimer = window.setInterval(() => loadAll({ silent: true }), 15000);
     return () => { window.clearInterval(refreshTimer); loadSequence.current += 1; };
   }, [loadAll]);
+
+  useEffect(() => {
+    if (!isGenericCrm || isCustomer) return undefined;
+    let active = true;
+    fetchApi("/api/currencies?fields=summary")
+      .then((rows) => { if (active) setAvailableCurrencies(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (active) setAvailableCurrencies([]); });
+    return () => { active = false; };
+  }, [isGenericCrm, isCustomer]);
 
   // A travel BOOKING collection (advance / milestone / full-invoice link). These
   // refund through the booking's CANCELLATION flow so the retention policy
@@ -290,10 +440,10 @@ export default function Payments() {
         override: booking,
         title: booking
           ? "Admin override — refund now (bypasses the cancellation policy)"
-          : `Refund ${formatCurrency(p.amount)} via Razorpay`,
+          : `Refund ${formatCurrency(p.amount, p.currency || displayCurrency)} via Razorpay`,
       };
     },
-    [isBookingPayment, isAdmin, user],
+    [isBookingPayment, isAdmin, user, displayCurrency],
   );
 
   async function handleRefund(p) {
@@ -312,7 +462,7 @@ export default function Payments() {
     } else {
       const ok = await notify.confirm({
         title: "Refund payment?",
-        message: `Refund ${formatCurrency(p.amount)} back to the customer via Razorpay? This cannot be undone.`,
+        message: `Refund ${formatCurrency(p.amount, p.currency || displayCurrency)} back to the customer via Razorpay? This cannot be undone.`,
         confirmText: "Refund",
         cancelText: "Cancel",
         destructive: true,
@@ -329,7 +479,7 @@ export default function Payments() {
         body: JSON.stringify(reason ? { reason: String(reason).trim() } : {}),
       });
       setNotice(
-        `Refund of ${formatCurrency(p.amount)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
+        `Refund of ${formatCurrency(p.amount, p.currency || displayCurrency)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
       );
       await loadAll();
     } catch (err) {
@@ -350,20 +500,67 @@ export default function Payments() {
     [rangeStart, rangeEnd],
   );
 
+  useEffect(() => {
+    if (!activeColumnFilter) return undefined;
+    const closeColumnFilter = (event) => {
+      if (event.key === "Escape") {
+        setActiveColumnFilter(null);
+        return;
+      }
+      if (event.type === "pointerdown" && !event.target.closest?.("[data-payment-column-filter]")) {
+        setActiveColumnFilter(null);
+      }
+    };
+    document.addEventListener("pointerdown", closeColumnFilter);
+    document.addEventListener("keydown", closeColumnFilter);
+    return () => {
+      document.removeEventListener("pointerdown", closeColumnFilter);
+      document.removeEventListener("keydown", closeColumnFilter);
+    };
+  }, [activeColumnFilter]);
+
+  const [paidDateStart, paidDateEnd] = useMemo(() => resolveDateRange({
+    preset: columnFilters.paidDatePreset,
+    start: columnFilters.paidDateStart,
+    end: columnFilters.paidDateEnd,
+  }), [columnFilters.paidDatePreset, columnFilters.paidDateStart, columnFilters.paidDateEnd]);
+
   const filtered = useMemo(() => {
     if (isCustomer) return payments;
     return payments.filter((p) => {
       if (tab !== "all" && String(p.gateway || "").toLowerCase() !== tab)
         return false;
-      return inDateRange(p);
+      if (!inDateRange(p)) return false;
+      if (!isGenericCrm) return true;
+      const normalizedStatus = ["PAID", "CAPTURED"].includes(String(p.status || "").toUpperCase())
+        ? "SUCCESS"
+        : String(p.status || "").toUpperCase();
+      // Preserve the removed toolbar's payment-date behavior: successful rows
+      // use paidAt, while pending/failed rows fall back to createdAt.
+      const paidAt = (p.paidAt || p.createdAt)
+        ? new Date(p.paidAt || p.createdAt).getTime()
+        : Number.NaN;
+      return (
+        (columnFilters.gateway === "ALL" || String(p.gateway || "").toLowerCase() === columnFilters.gateway)
+        && (columnFilters.status === "ALL" || normalizedStatus === columnFilters.status)
+        && (!paidDateStart || (!Number.isNaN(paidAt) && paidAt >= paidDateStart.getTime()))
+        && (!paidDateEnd || (!Number.isNaN(paidAt) && paidAt <= paidDateEnd.getTime()))
+      );
     });
-  }, [payments, tab, inDateRange, isCustomer]);
+  }, [payments, tab, inDateRange, isCustomer, isGenericCrm, columnFilters, paidDateStart, paidDateEnd]);
+
+  const hasColumnFilters = isGenericCrm && !isCustomer && (
+    columnFilters.currency !== "ALL"
+    || columnFilters.gateway !== "ALL"
+    || columnFilters.status !== "ALL"
+    || columnFilters.paidDatePreset !== "all"
+  );
 
   // Reset to the first page whenever the filter changes so the user does not
   // land on an empty page after narrowing the result set.
   useEffect(() => {
     setPage(1);
-  }, [tab, dateFilter]);
+  }, [tab, dateFilter, columnFilters]);
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil((isCustomer ? customerLedger.total : filtered.length) / pageSize)),
@@ -378,6 +575,17 @@ export default function Payments() {
 
   const stats = useMemo(() => {
     if (isCustomer) return customerLedger.stats;
+    if (isGenericCrm && genericStats) {
+      const statusCount = (names) => names.reduce(
+        (total, name) => total + Number(genericStats.byStatus?.[name] || 0),
+        0,
+      );
+      return {
+        collected: Number(genericStats.successfulAmount || 0),
+        pending: statusCount(["PENDING", "pending"]),
+        failed: statusCount(["FAILED", "failed"]),
+      };
+    }
     let collected = 0,
       pending = 0,
       failed = 0;
@@ -390,12 +598,24 @@ export default function Payments() {
       else if (p.status === "FAILED") failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments, inDateRange, isCustomer, customerLedger.stats]);
+  }, [payments, inDateRange, isCustomer, isGenericCrm, genericStats, customerLedger.stats]);
+
+  const displayedCollected = useMemo(() => {
+    if (!isGenericCrm || isCustomer) return stats.collected;
+    const totals = Object.entries(genericStats?.successfulAmountByCurrency || {});
+    if (totals.length > 0) {
+      return totals.reduce(
+        (sum, [currency, amount]) => sum + convertPaymentAmount(amount, currency, selectedDisplayCurrency),
+        0,
+      );
+    }
+    return convertPaymentAmount(stats.collected, inferredLedgerCurrency, selectedDisplayCurrency);
+  }, [isGenericCrm, isCustomer, stats.collected, genericStats, convertPaymentAmount, inferredLedgerCurrency, selectedDisplayCurrency]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
     <div
-      className="finance-page"
+      className={`finance-page${isGenericCrm && !isCustomer ? " finance-page--generic-ledger" : ""}`}
       style={{
         padding: "2rem",
         color: "var(--text-primary)",
@@ -490,7 +710,11 @@ export default function Payments() {
       {/* #848: per-tenant Razorpay keys (BYOK) for CUSTOMER payments. Admin-only.
           Distinct from the platform env-var gateway below (which powers the
           payments table + subscription billing). */}
-      {isAdmin && <RazorpayGatewayCard />}
+      {isAdmin && (
+        <RazorpayGatewayCard
+          onViewGatewayConfiguration={isGenericCrm ? () => setShowGatewayConfiguration(true) : undefined}
+        />
+      )}
 
       {/* #371: surface a clear configuration banner when neither Stripe
           nor Razorpay is wired up. Previously the page rendered a
@@ -622,39 +846,37 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
 
       {/* Stats row — labels are window-aware so the KPI value the user sees
           always matches what the date filter is showing. */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "1rem",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <StatCard
-          icon={<IndianRupee size={20} />}
-          label={`${isCustomer ? "Total Paid" : "Total Collected"} (${filterLabel})`}
-          value={formatMoney(stats.collected)}
-          color="#10b981"
-        />
-        <StatCard
-          icon={<Clock size={20} />}
-          label={`Pending (${filterLabel})`}
-          value={stats.pending}
-          color="#f59e0b"
-        />
-        <StatCard
-          icon={<XCircle size={20} />}
-          label={`Failed (${filterLabel})`}
-          value={stats.failed}
-          color="#ef4444"
-        />
-      </div>
+      {isGenericCrm && !isCustomer ? (
+        <div className="payment-summary-chips" data-testid="payment-summary-chips">
+          <PaymentStatChip icon={<span aria-hidden="true">{currencySymbol(selectedDisplayCurrency)}</span>} label={`Total Collected (${filterLabel})`} value={formatCurrency(displayedCollected, selectedDisplayCurrency)} color="#10b981" active={columnFilters.status === "SUCCESS"} onClick={() => toggleStatusFilter("SUCCESS")} />
+          <PaymentStatChip icon={<Clock size={14} />} label={`Pending (${filterLabel})`} value={stats.pending} color="#f59e0b" active={columnFilters.status === "PENDING"} onClick={() => toggleStatusFilter("PENDING")} />
+          <PaymentStatChip icon={<XCircle size={14} />} label={`Failed (${filterLabel})`} value={stats.failed} color="#ef4444" active={columnFilters.status === "FAILED"} onClick={() => toggleStatusFilter("FAILED")} />
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "1rem",
+            marginBottom: "1.5rem",
+          }}
+        >
+          <StatCard
+            icon={<IndianRupee size={20} />}
+            label={`${isCustomer ? "Total Paid" : "Total Collected"} (${filterLabel})`}
+            value={formatCurrency(stats.collected, displayCurrency)}
+            color="#10b981"
+          />
+          <StatCard icon={<Clock size={20} />} label={`Pending (${filterLabel})`} value={stats.pending} color="#f59e0b" />
+          <StatCard icon={<XCircle size={20} />} label={`Failed (${filterLabel})`} value={stats.failed} color="#ef4444" />
+        </div>
+      )}
 
       {/* Gateway chips + date filter — share a row, gateway chips on the left,
           date picker right-pinned via marginLeft: auto so they wrap together
           when the viewport narrows. Theme-aware: bg/border use --surface
           + --border so tabs stay readable on light AND dark. */}
-      <div
+      {(!isGenericCrm || isCustomer) && <div
         className="finance-page__filters"
         style={{
           display: "flex",
@@ -667,7 +889,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         {["all", "stripe", "razorpay"].map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => selectGateway(t)}
             aria-pressed={tab === t}
             style={{
               padding: "0.5rem 1.1rem",
@@ -700,7 +922,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         >
           <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
         </div>
-      </div>
+      </div>}
 
       {/* Payments table — wrap in a clearly-delineated card. `box-shadow`
           + padding give it visual weight against the page background, and
@@ -713,16 +935,17 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
         }}
       >
-        <TopScrollSync hideTopBar>
+        <TopScrollSync hideTopBar disabled>
           <table
+            className="payment-ledger-table"
             style={{
               width: "100%",
-              minWidth: 1100,
               borderCollapse: "collapse",
               fontSize: "0.85rem",
+              tableLayout: "fixed",
             }}
           >
-            <thead>
+            <thead className="payment-ledger-head">
               <tr
                 style={{
                   background: "var(--surface-hover)",
@@ -731,14 +954,80 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
               >
                 <Th>{isCustomer ? "Payer" : "Customer"}</Th>
                 <Th>For</Th>
-                <Th>Amount</Th>
-                <Th>Gateway</Th>
-                <Th>Status</Th>
-                <Th>Paid Date</Th>
-                <Th style={{ width: "1%", whiteSpace: "nowrap" }}>Actions</Th>
+                <Th>{isGenericCrm && !isCustomer ? (
+                  <PaymentHeaderFilter label="Amount" filterKey="currency" activeFilter={activeColumnFilter} hasValue={columnFilters.currency !== "ALL"} onToggle={setActiveColumnFilter}>
+                    <select autoFocus value={columnFilters.currency} onChange={(event) => setColumnFilters((current) => ({ ...current, currency: event.target.value }))} aria-label="Filter payments by currency">
+                      <option value="ALL">Original currencies</option>
+                      {[...new Set([
+                        displayCurrency,
+                        ...availableCurrencies.map((currency) => currency.code),
+                        ...payments.map((payment) => payment.currency),
+                      ].filter(Boolean).map((currency) => String(currency).toUpperCase()))].map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                    </select>
+                  </PaymentHeaderFilter>
+                ) : "Amount"}</Th>
+                <Th>{isGenericCrm && !isCustomer ? (
+                  <PaymentHeaderFilter label="Gateway" filterKey="gateway" activeFilter={activeColumnFilter} hasValue={columnFilters.gateway !== "ALL"} onToggle={setActiveColumnFilter}>
+                    <select autoFocus value={columnFilters.gateway} onChange={(event) => selectGateway(event.target.value === "ALL" ? "all" : event.target.value)} aria-label="Filter payments by gateway">
+                      <option value="ALL">All gateways</option>
+                      {[...new Set(["stripe", "razorpay", ...payments.map((payment) => String(payment.gateway || "").toLowerCase()).filter(Boolean)])].map((gateway) => <option key={gateway} value={gateway}>{GATEWAY_CONFIG[gateway]?.label || gateway}</option>)}
+                    </select>
+                  </PaymentHeaderFilter>
+                ) : "Gateway"}</Th>
+                <Th>{isGenericCrm && !isCustomer ? (
+                  <PaymentHeaderFilter label="Status" filterKey="status" activeFilter={activeColumnFilter} hasValue={columnFilters.status !== "ALL"} onToggle={setActiveColumnFilter}>
+                    <select autoFocus value={columnFilters.status} onChange={(event) => setColumnFilters((current) => ({ ...current, status: event.target.value }))} aria-label="Filter payments by status">
+                      <option value="ALL">All statuses</option>
+                      {Object.entries(STATUS_CONFIG).map(([value, configValue]) => <option key={value} value={value}>{configValue.label}</option>)}
+                    </select>
+                  </PaymentHeaderFilter>
+                ) : "Status"}</Th>
+                <Th>{isGenericCrm && !isCustomer ? (
+                  <PaymentHeaderFilter label="Paid Date" filterKey="paidDate" activeFilter={activeColumnFilter} hasValue={columnFilters.paidDatePreset !== "all"} onToggle={setActiveColumnFilter}>
+                    <select autoFocus value={columnFilters.paidDatePreset} onChange={(event) => {
+                      const preset = event.target.value;
+                      setColumnFilters((current) => ({ ...current, paidDatePreset: preset }));
+                      setDateFilter((current) => ({ ...current, preset }));
+                    }} aria-label="Filter payments by paid date">
+                      {DATE_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                    {columnFilters.paidDatePreset === "custom" && <div className="payment-header-custom-range">
+                      <label>From<input type="date" value={columnFilters.paidDateStart} onClick={openNativeDatePicker} onChange={(event) => {
+                        const start = event.target.value;
+                        setColumnFilters((current) => ({ ...current, paidDateStart: start }));
+                        setDateFilter((current) => ({ ...current, start }));
+                      }} aria-label="Filter paid date from" /></label>
+                      <label>To<input type="date" value={columnFilters.paidDateEnd} min={columnFilters.paidDateStart || undefined} onClick={openNativeDatePicker} onChange={(event) => {
+                        const end = event.target.value;
+                        setColumnFilters((current) => ({ ...current, paidDateEnd: end }));
+                        setDateFilter((current) => ({ ...current, end }));
+                      }} aria-label="Filter paid date to" /></label>
+                    </div>}
+                  </PaymentHeaderFilter>
+                ) : "Paid Date"}</Th>
+                <Th style={{ width: "1%", whiteSpace: "nowrap" }}>
+                  <div className="payment-actions-header">
+                    <span>Actions</span>
+                    {hasColumnFilters && (
+                      <button
+                        type="button"
+                        className="payment-clear-filters"
+                        onClick={() => {
+                          setColumnFilters(EMPTY_PAYMENT_COLUMN_FILTERS);
+                          setTab("all");
+                          setDateFilter({ preset: "all", start: "", end: "" });
+                          setActiveColumnFilter(null);
+                        }}
+                        aria-label="Clear payment filters"
+                      >
+                        <X size={13} aria-hidden="true" /> Clear filters
+                      </button>
+                    )}
+                  </div>
+                </Th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="payment-ledger-body">
               {/* #372: empty-state with column headers visible above (the
                 <thead> sits outside this conditional) plus an explicit
                 "Process your first payment" CTA. Previously the empty
@@ -843,7 +1132,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     }}
                   >
                     {(() => {
-                      const label = paymentSubjectLabel(p);
+                      const label = paymentSubjectLabel(p, { preferPlotSite: isGenericCrm });
                       if (!label)
                         return (
                           <span style={{ color: "var(--text-secondary)" }}>
@@ -870,7 +1159,9 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     })()}
                   </Td>
                   <Td>
-                    <strong>{formatCurrency(p.amount)}</strong>
+                    <strong>{isGenericCrm && !isCustomer && columnFilters.currency !== "ALL"
+                      ? formatCurrency(convertPaymentAmount(p.amount, p.currency || inferredLedgerCurrency), selectedDisplayCurrency)
+                      : formatCurrency(p.amount, p.currency || selectedDisplayCurrency)}</strong>
                   </Td>
                   <Td>
                     <GatewayBadge gateway={p.gateway} />
@@ -1066,7 +1357,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
       </div>
 
       {/* Admin configuration section */}
-      {isAdmin && (
+      {isAdmin && !isGenericCrm && (
         <div style={{ ...GLASS, padding: "1.25rem", marginTop: "2rem" }}>
           <div
             style={{
@@ -1139,12 +1430,48 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         </div>
       )}
 
-      {/* Detail modal */}
-      {selected && (
-        <DetailModal payment={selected} onClose={() => setSelected(null)} />
+      {showGatewayConfiguration && (
+        <GatewayConfigurationModal
+          config={config}
+          onClose={() => setShowGatewayConfiguration(false)}
+        />
       )}
 
-      <style>{`@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }`}</style>
+      {/* Detail modal */}
+      {selected && (
+        <DetailModal
+          payment={selected}
+          displayCurrency={displayCurrency}
+          preferPlotSite={isGenericCrm}
+          onClose={() => setSelected(null)}
+        />
+      )}
+
+      <style>{`
+        @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+        .payment-header-filter { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+        .payment-header-filter-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 25px; height: 25px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+        .payment-header-filter-button:hover, .payment-header-filter-button[aria-expanded="true"], .payment-header-filter-button.is-active { border-color: color-mix(in srgb, var(--primary-color, var(--accent-color)) 35%, transparent); background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent); color: var(--primary-color, var(--accent-color)); }
+        .payment-header-filter-popover { position: fixed; display: flex; flex-direction: column; gap: 0.55rem; z-index: 10020; width: 210px; padding: 0.65rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--popover-bg, #fff); opacity: 1; box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18); text-transform: none; letter-spacing: normal; }
+        .payment-header-filter-popover input, .payment-header-filter-popover select { width: 100%; min-width: 0; height: 36px; box-sizing: border-box; padding: 0 0.65rem; border: 1px solid var(--border-color); border-radius: 6px; outline: none; background: var(--surface-color); color: var(--text-primary); font: inherit; font-size: 0.78rem; font-weight: 400; }
+        .payment-header-filter-popover input:focus, .payment-header-filter-popover select:focus { border-color: var(--primary-color, var(--accent-color)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent); }
+        .payment-header-custom-range { display: grid; grid-template-columns: 1fr; gap: 0.45rem; }
+        .payment-header-custom-range label { display: grid; gap: 0.25rem; color: var(--text-secondary); font-size: 0.68rem; font-weight: 600; text-transform: none; letter-spacing: normal; }
+        .payment-actions-header { display: flex; align-items: center; justify-content: flex-start; gap: 0.65rem; }
+        .payment-clear-filters { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.3rem 0.45rem; border: 1px solid var(--border-color); border-radius: 6px; background: var(--surface-color); color: var(--text-secondary); cursor: pointer; font: inherit; font-size: 0.68rem; font-weight: 600; text-transform: none; letter-spacing: normal; }
+        .payment-clear-filters:hover { border-color: var(--primary-color, var(--accent-color)); color: var(--primary-color, var(--accent-color)); }
+        .payment-summary-chips { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .app-main > main.generic-page-content:has(.finance-page--generic-ledger) { overflow-y: hidden !important; }
+        .finance-page--generic-ledger { display: flex; flex-direction: column; height: 100%; min-height: 0 !important; padding-bottom: 0 !important; overflow: hidden; box-sizing: border-box; }
+        .finance-page--generic-ledger > .finance-page__header,
+        .finance-page--generic-ledger > .finance-page__subtitle,
+        .finance-page--generic-ledger > .razorpay-gateway-card,
+        .finance-page--generic-ledger > .payment-summary-chips { flex: 0 0 auto; }
+        .finance-page--generic-ledger > .finance-page__table-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden !important; }
+        .finance-page--generic-ledger .top-scroll-sync--disabled { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+        .finance-page--generic-ledger .payment-ledger-head { position: sticky; top: 0; z-index: 2; }
+        .finance-page--generic-ledger .payment-ledger-head > tr { background: var(--surface-hover); }
+      `}</style>
     </div>
   );
 }
@@ -1177,6 +1504,33 @@ function Td({ children, onClick, style }) {
     >
       {children}
     </td>
+  );
+}
+
+function PaymentStatChip({ icon, label, value, color, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.4rem",
+        padding: "0.4rem 1rem",
+        borderRadius: "999px",
+        border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
+        background: `color-mix(in srgb, ${color} 10%, transparent)`,
+        color,
+        fontSize: "0.75rem",
+        fontWeight: 600,
+        fontFamily: "inherit",
+        cursor: "pointer",
+        boxShadow: active ? `inset 0 0 0 1px ${color}` : "none",
+      }}
+    >
+      {icon} {label}: <strong>{value}</strong>
+    </button>
   );
 }
 
@@ -1423,7 +1777,131 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
   );
 }
 
-function DetailModal({ payment, onClose }) {
+function GatewayConfigurationModal({ config, onClose }) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1200,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+        background: "var(--overlay-bg, rgba(0, 0, 0, 0.6))",
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="gateway-configuration-title"
+        style={{
+          ...GLASS,
+          background: "var(--modal-bg, #ffffff)",
+          color: "var(--text-primary)",
+          width: "min(1100px, 100%)",
+          maxHeight: "calc(100vh - 2rem)",
+          overflowY: "auto",
+          padding: "1.25rem",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.35)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <SettingsIcon size={18} />
+          <h3 id="gateway-configuration-title" style={{ margin: 0, fontSize: "1rem", flex: 1 }}>
+            Gateway Configuration
+          </h3>
+          <button
+            type="button"
+            aria-label="Close gateway configuration"
+            onClick={onClose}
+            autoFocus
+            style={{
+              width: 34,
+              height: 34,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 8,
+              border: "1px solid var(--border-color)",
+              background: "var(--subtle-bg)",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+            }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div
+          className="payment-gateway-grid"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
+            gap: "1rem",
+          }}
+        >
+          <ConfigCard
+            name="Stripe"
+            configured={!!config?.stripe?.configured}
+            extras={[
+              { label: "API key (STRIPE_SECRET_KEY)", ok: !!config?.stripe?.configured },
+              { label: "Webhook secret (STRIPE_WEBHOOK_SECRET)", ok: !!config?.stripe?.webhookConfigured },
+            ]}
+            hint="Get keys from dashboard.stripe.com → Developers → API keys. Configure webhook endpoint at /api/payments/webhook/stripe."
+            brandColor="#635bff"
+          />
+          <ConfigCard
+            name="Razorpay"
+            configured={!!config?.razorpay?.configured}
+            extras={[
+              {
+                label: "Key ID (RAZORPAY_KEY_ID)",
+                ok: !!config?.razorpay?.configured,
+                value: config?.razorpay?.keyId,
+              },
+              { label: "Key secret (RAZORPAY_KEY_SECRET)", ok: !!config?.razorpay?.configured },
+            ]}
+            hint="Get keys from dashboard.razorpay.com → Settings → API Keys. Webhook endpoint: /api/payments/webhook/razorpay."
+            brandColor="#3395ff"
+          />
+        </div>
+
+        <p style={{ margin: "1rem 0 0", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+          Add the env vars to your root <code>.env</code> file and restart the backend (PM2). Keys are loaded once at startup and never exposed to the frontend.
+        </p>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function DetailModal({ payment, displayCurrency, preferPlotSite = false, onClose }) {
   const meta =
     payment.metadata && typeof payment.metadata === "object"
       ? payment.metadata
@@ -1486,7 +1964,7 @@ function DetailModal({ payment, onClose }) {
         </DetailRow>
         <DetailRow label="Amount">
           <strong>
-            {formatCurrency(payment.amount)} {payment.currency}
+            {formatCurrency(payment.amount, payment.currency || displayCurrency)} {payment.currency || displayCurrency}
           </strong>
         </DetailRow>
         <DetailRow label="Gateway">
@@ -1536,7 +2014,7 @@ function DetailModal({ payment, onClose }) {
           </div>
         )}
 
-        {paymentSubjectLabel(payment) && (
+        {paymentSubjectLabel(payment, { preferPlotSite }) && (
           <div
             style={{
               marginTop: "0.75rem",
@@ -1557,7 +2035,9 @@ function DetailModal({ payment, onClose }) {
             >
               Payment for
             </div>
-            <div style={{ fontWeight: 500 }}>{paymentSubjectLabel(payment)}</div>
+            <div style={{ fontWeight: 500 }}>
+              {paymentSubjectLabel(payment, { preferPlotSite })}
+            </div>
           </div>
         )}
 

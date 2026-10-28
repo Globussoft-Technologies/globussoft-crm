@@ -154,6 +154,7 @@ import { getGenericAccessByPath, isTenantPageHidden } from "../utils/sidebarSear
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
 import { useEffectiveBrand } from "../hooks/useEffectiveBrand";
 import { getDomainBranding } from "../utils/domainBranding";
+import { pathWithDateRange, readDateRange } from "../utils/dateRangeNavigation";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -669,6 +670,7 @@ const Sidebar = ({
     const canonicalAccess = !isTravel && !isWellness
       ? getGenericAccessByPath(to)
       : null;
+    if (canonicalAccess?.sidebarHidden) return null;
     const adminOnly = canonicalAccess ? Boolean(canonicalAccess.adminOnly) : requestedAdminOnly;
     const managerOnly = canonicalAccess ? Boolean(canonicalAccess.managerOnly) : requestedManagerOnly;
     const requiredPermission = canonicalAccess?.requiredPermission || requestedPermission;
@@ -755,10 +757,17 @@ const Sidebar = ({
                         })()
                         : to;
     const activeTarget = to;
+    const sharedDatePages = ["/dashboard", "/pipeline", "/reports"];
+    // Re-selecting Dashboard must keep its current range. Other pages do not
+    // replace Dashboard's saved range when navigating back to it.
+    const keepDashboardRange = to === "/dashboard" && location.pathname === "/dashboard";
+    const datedTo = (keepDashboardRange || (to !== "/dashboard" && sharedDatePages.includes(to) && sharedDatePages.includes(location.pathname)))
+      ? pathWithDateRange(resolvedTo, readDateRange(new URLSearchParams(location.search)))
+      : resolvedTo;
     const isTravelDirectLink = isTravel && (activeTarget === "/travel" || activeTarget === "/settings");
     return (
       <NavLink
-        to={resolvedTo}
+        to={datedTo}
         data-tour-nav={activeTarget}
         end={end}
         className={({ isActive }) => {
@@ -1004,6 +1013,7 @@ const Sidebar = ({
   // Ref-backed impl + stable useMemo identity  same perf rationale as Link.
   const adsGptImplRef = useRef(null);
   adsGptImplRef.current = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
+    if (!isTravel && !isWellness && isTenantPageHidden("/integrations/adsgpt", hiddenPagePaths)) return null;
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
@@ -1034,7 +1044,6 @@ const Sidebar = ({
           textAlign: "left",
           cursor: adsLoading ? "wait" : "pointer",
           fontFamily: "inherit",
-          fontSize: "inherit",
         }}
       >
         {adsLoading ? (
@@ -1063,6 +1072,7 @@ const Sidebar = ({
     icon: Icon = PhoneCall,
     label = "Callified",
   }) => {
+    if (!isTravel && !isWellness && isTenantPageHidden("/integrations/callified", hiddenPagePaths)) return null;
     const handleClick = async (e) => {
       e.preventDefault();
       if (callifiedLoading) return;
@@ -1096,7 +1106,6 @@ const Sidebar = ({
           textAlign: "left",
           cursor: callifiedLoading ? "wait" : "pointer",
           fontFamily: "inherit",
-          fontSize: "inherit",
         }}
       >
         {callifiedLoading ? (
@@ -1365,7 +1374,6 @@ const PAGE_ICON_BY_PATH = {
   "/pipeline": Briefcase,
   "/transport-workspace": Truck,
   "/sales-workspace": Handshake,
-  "/billing-workspace": Receipt,
   // Finance
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
@@ -1535,16 +1543,16 @@ function WellnessNavGroup({
     });
   }, [isMobileViewport]);
 
+  const deactivatePanel = useCallback(() => {
+    onActivate((current) => (current === label ? null : current));
+  }, [label, onActivate]);
+
   const clearCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
   }, []);
-
-  const deactivatePanel = useCallback(() => {
-    onActivate((current) => (current === label ? null : current));
-  }, [label, onActivate]);
 
   const openPanel = useCallback(() => {
     clearCloseTimer();
@@ -1725,6 +1733,42 @@ function WellnessNavGroup({
       {trigger}
       {typeof document !== "undefined" ? createPortal(panel, document.body) : null}
     </>
+  );
+}
+
+function GenericNavGroup({ label, dataTour, paths = [], children }) {
+  const location = useLocation();
+  const isActive = paths.some((path) =>
+    location.pathname === path || location.pathname.startsWith(`${path}/`),
+  );
+  const [isOpen, setIsOpen] = useState(isActive);
+  const Icon = WELLNESS_CATEGORY_ICON[label] || LayoutDashboard;
+  const sectionId = `generic-nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+
+  useEffect(() => {
+    if (isActive) setIsOpen(true);
+  }, [isActive, location.pathname]);
+
+  return (
+    <div className="generic-nav-section">
+      <button
+        type="button"
+        className={`generic-nav-section-trigger${isOpen ? " is-open" : ""}${isActive ? " is-active" : ""}`}
+        aria-expanded={isOpen}
+        aria-controls={sectionId}
+        data-tour={dataTour}
+        onClick={() => setIsOpen((open) => !open)}
+      >
+        <span className="generic-nav-section-icon"><Icon size={20} aria-hidden="true" /></span>
+        <span className="generic-nav-section-label">{label}</span>
+        <ChevronDown size={14} aria-hidden="true" className={isOpen ? "" : "is-collapsed"} />
+      </button>
+      {isOpen && (
+        <div id={sectionId} className="generic-nav-section-items" data-search-highlight-scope="global-search">
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2641,6 +2685,7 @@ function renderGenericNav({
   const canRenderLink = (props) => {
     if (isTenantPageHidden(props.to, hiddenPagePaths)) return false;
     const canonical = getGenericAccessByPath(props.to);
+    if (canonical?.sidebarHidden) return false;
     const adminOnly = canonical ? Boolean(canonical.adminOnly) : props.adminOnly;
     const managerOnly = canonical ? Boolean(canonical.managerOnly) : props.managerOnly;
     const requiredPermission = canonical?.requiredPermission || props.requiredPermission;
@@ -2676,18 +2721,21 @@ function renderGenericNav({
       if (child.props?.to) paths.push(child.props.to);
       return false;
     });
-    return (
-      <WellnessNavGroup
-        label={label}
-        dataTour={dataTour}
-        paths={paths}
-        isMobileViewport={isMobileViewport}
-        activeGroup={openGenericGroup}
-        onActivate={onOpenGenericGroup}
-      >
-        {children}
-      </WellnessNavGroup>
-    );
+    if (isMobileViewport) {
+      return (
+        <WellnessNavGroup
+          label={label}
+          dataTour={dataTour}
+          paths={paths}
+          isMobileViewport
+          activeGroup={openGenericGroup}
+          onActivate={onOpenGenericGroup}
+        >
+          {children}
+        </WellnessNavGroup>
+      );
+    }
+    return <GenericNavGroup label={label} dataTour={dataTour} paths={paths}>{children}</GenericNavGroup>;
   };
 
   return (
@@ -2707,11 +2755,11 @@ function renderGenericNav({
       {renderGroup("Sales", <>
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
         <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
         <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
+        {/* <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} /> */}
         <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
         <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
       </>)}
@@ -2720,7 +2768,10 @@ function renderGenericNav({
         <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly requiredPermission={{ module: "lead_scoring", action: "read" }} />
-        <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} />
+        {/* Generic CRM: Lead Routing is intentionally hidden. Keep the page
+            implementation and API intact so this can be re-enabled without
+            affecting Callified's separate assigning-staff controls. */}
+        {/* <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} /> */}
         <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
       </>, "leads-group")}
 
@@ -2764,15 +2815,16 @@ function renderGenericNav({
 
       {renderGroup("Finance", <>
         <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
-        <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} />
+        {/* Generic CRM: Estimates is intentionally hidden. Keep the page
+            implementation intact so it can be re-enabled later. */}
+        {/* <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} /> */}
         <Link to="/expenses" icon={IndianRupee} label="Expenses" requiredPermission={{ module: "expenses", action: "read" }} />
         <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
         <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly requiredPermission={{ module: "cpq", action: "read" }} />
       </>)}
 
       {renderGroup("Analytics & Reports", <>
-        <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
-        <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly requiredPermission={{ module: "pipeline", action: "read" }} />
+        {/* Generic CRM: Win/Loss and Funnel are temporarily hidden. */}
         <Link to="/reports" icon={BarChart3} label="Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
         <Link to="/agent-reports" icon={Trophy} label="Agent Reports" managerOnly />
         <Link to="/dashboards" icon={LayoutDashboard} label="Dashboards" managerOnly />
@@ -2791,14 +2843,13 @@ function renderGenericNav({
       {renderGroup("Pickup & Plot", <>
         <Link to="/pickup-plot-inventory" icon={MapIcon} label="Plot Inventory" adminOnly />
         <Link to="/pickup-inventory" icon={MapPin} label="Pickup Inventory" adminOnly />
-        <Link to="/pickup-customers" icon={MapPin} label="Customer Workflows" adminOnly />
+        <Link to="/pickup-customers" icon={MapPin} label="Customer Workflows" requiredPermission={{ module: "billing_workspace", action: "read" }} />
         <Link to="/transport-persons" icon={Truck} label="Transport Persons" adminOnly />
         <Link to="/plot-brokers" icon={Handshake} label="Sales Executives" adminOnly />
         <Link to="/billing-persons" icon={Receipt} label="Billing Persons" adminOnly />
         <Link to="/pickup-work-assignments" icon={ClipboardCheck} label="Assign Staff Work" adminOnly />
         <Link to="/transport-workspace" icon={Truck} label="Transport Work" requiredPermission={{ module: "transport_workspace", action: "read" }} />
         <Link to="/sales-workspace" icon={Handshake} label="Site Visits" requiredPermission={{ module: "broker_workspace", action: "read" }} />
-        <Link to="/billing-workspace" icon={Receipt} label="Billing Queue" requiredPermission={{ module: "billing_workspace", action: "read" }} />
       </>)}
 
       {renderGroup("Administration", <>
@@ -2867,7 +2918,7 @@ const navStyle = {
   // compositor in "live layer" mode for nav-links  drop it.)
   transition: "background-color 0.2s ease, color 0.2s ease",
   textDecoration: "none",
-  fontSize: "0.9rem",
+  fontSize: "var(--sidebar-nav-font-size, 0.85rem)",
   flexShrink: 0,
 };
 

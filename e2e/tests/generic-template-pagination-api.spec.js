@@ -29,6 +29,15 @@ test('Generic preview resolves missing merge values consistently', async ({ requ
   expect(await response.json()).toMatchObject({ subject: 'the requested information', body: '<p>the requested information</p>' });
 });
 
+test('Generic template reorder validates the bounded unique-ID contract', async ({ request }) => {
+  const response = await request.put(`${baseURL}/api/email-templates/reorder`, {
+    headers,
+    data: { channel: 'EMAIL', orderedIds: [1] },
+  });
+  expect(response.status()).toBe(400);
+  expect(await response.json()).toMatchObject({ code: 'INVALID_ORDER' });
+});
+
 test('Campaign pagination validates dates and returns scoped totals', async ({ request }) => {
   const invalid = await request.get(`${baseURL}/api/marketing/campaigns?paginate=1&createdFrom=invalid`, { headers });
   expect(invalid.status()).toBe(400);

@@ -16,6 +16,25 @@ const { decryptCredential } = require("../lib/credentialMasking");
 const { sanitizeText, sanitizeHtmlBody, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
+const SEQUENCE_ORDER_SETTING_PREFIX = "generic.marketing.sequenceOrder";
+
+function parseSavedCardOrder(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isSafeInteger) : [];
+  } catch {
+    return [];
+  }
+}
+
+function applySavedCardOrder(rows, orderedIds) {
+  const rank = new Map(orderedIds.map((id, index) => [Number(id), index]));
+  return [...rows].sort((left, right) => {
+    const leftRank = rank.has(left.id) ? rank.get(left.id) : Number.MAX_SAFE_INTEGER;
+    const rightRank = rank.has(right.id) ? rank.get(right.id) : Number.MAX_SAFE_INTEGER;
+    return leftRank - rightRank;
+  });
+}
 
 function parseStoredStatusObject(value) {
   if (!value) return {};
@@ -504,6 +523,28 @@ router.get("/campaigns", verifyToken, async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.channel) where.channel = req.query.channel;
     if (req.query.status) where.status = req.query.status;
+    // Generic CRM sequence builders use one Campaign per channel + trigger.
+    // Resolve that campaign from the full tenant-scoped set instead of the
+    // currently visible UI page, otherwise an older Email sequence on page 2
+    // can be recreated as a duplicate. Both metadata keys are supported:
+    // Email/SMS use triggerEvent; WhatsApp uses eventTrigger.
+    const sequenceTrigger = typeof req.query.sequenceTrigger === "string"
+      ? req.query.sequenceTrigger.trim()
+      : "";
+    if (sequenceTrigger) {
+      const campaigns = await prisma.campaign.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+      return res.json(campaigns.filter((campaign) => {
+        try {
+          const metadata = JSON.parse(campaign.scheduleFilters || "{}");
+          return (metadata.triggerEvent || metadata.eventTrigger) === sequenceTrigger;
+        } catch {
+          return false;
+        }
+      }));
+    }
     const paginate = req.query.paginate === "1";
     if (paginate && (req.query.createdFrom || req.query.createdTo)) {
       const from = req.query.createdFrom ? new Date(req.query.createdFrom) : null;
@@ -527,10 +568,27 @@ router.get("/campaigns", verifyToken, async (req, res) => {
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 50) : 8;
-    const [campaigns, total] = await Promise.all([
-      prisma.campaign.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * limit, take: limit }),
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    const isGenericTenant = tenant?.vertical === "generic";
+    const settingKey = `${SEQUENCE_ORDER_SETTING_PREFIX}.${where.channel || "EMAIL"}`;
+    const [rows, total, orderSetting] = await Promise.all([
+      prisma.campaign.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        ...(isGenericTenant ? {} : { skip: (page - 1) * limit, take: limit }),
+      }),
       prisma.campaign.count({ where }),
+      isGenericTenant ? prisma.tenantSetting.findUnique({
+        where: { tenantId_key: { tenantId: req.user.tenantId, key: settingKey } },
+        select: { value: true },
+      }) : Promise.resolve(null),
     ]);
+    const campaigns = isGenericTenant
+      ? applySavedCardOrder(rows, parseSavedCardOrder(orderSetting?.value)).slice((page - 1) * limit, page * limit)
+      : rows;
     return res.json({
       items: campaigns,
       pagination: { page, pageSize: limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
@@ -542,6 +600,52 @@ router.get("/campaigns", verifyToken, async (req, res) => {
 });
 
 // POST /campaigns — create
+// Generic CRM sequence-card ordering. Literal route intentionally precedes
+// /campaigns/:id. Reuse the dragged page's slots in the complete channel list
+// so reordering remains stable with pagination and date filters.
+router.put("/campaigns/reorder", verifyToken, async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+    if (tenant?.vertical !== "generic") {
+      return res.status(404).json({ error: "Sequence ordering is available only for Generic CRM", code: "GENERIC_ONLY" });
+    }
+    const channel = String(req.body?.channel || "").trim().toUpperCase();
+    if (!["EMAIL", "SMS", "WHATSAPP"].includes(channel)) {
+      return res.status(400).json({ error: "channel must be EMAIL, SMS, or WHATSAPP", code: "INVALID_CHANNEL" });
+    }
+    const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds.map(Number) : [];
+    if (orderedIds.length < 2 || orderedIds.length > 50 || orderedIds.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(orderedIds).size !== orderedIds.length) {
+      return res.status(400).json({ error: "orderedIds must contain 2 to 50 unique sequence IDs", code: "INVALID_ORDER" });
+    }
+    const settingKey = `${SEQUENCE_ORDER_SETTING_PREFIX}.${channel}`;
+    const [rows, currentSetting] = await Promise.all([prisma.campaign.findMany({
+      where: { tenantId: req.user.tenantId, channel },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true },
+    }), prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: settingKey } },
+      select: { value: true },
+    })]);
+    const rowIds = applySavedCardOrder(rows, parseSavedCardOrder(currentSetting?.value)).map(row => row.id);
+    if (orderedIds.some(id => !rowIds.includes(id))) {
+      return res.status(409).json({ error: "Sequence order is out of date. Refresh and try again.", code: "ORDER_STALE" });
+    }
+    const moving = new Set(orderedIds);
+    const slots = rowIds.map((id, index) => moving.has(id) ? index : -1).filter(index => index >= 0);
+    const nextIds = [...rowIds];
+    slots.forEach((slot, index) => { nextIds[slot] = orderedIds[index]; });
+    await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: settingKey } },
+      update: { value: JSON.stringify(nextIds), category: "ui" },
+      create: { tenantId: req.user.tenantId, key: settingKey, value: JSON.stringify(nextIds), category: "ui" },
+    });
+    return res.json({ success: true, orderedIds });
+  } catch (err) {
+    console.error("[Marketing] Reorder campaigns error:", err.message);
+    return res.status(500).json({ error: "Failed to reorder sequences", code: "SEQUENCE_REORDER_FAILED" });
+  }
+});
+
 router.post("/campaigns", verifyToken, async (req, res) => {
   try {
     const { name, channel, budget, sequenceId } = req.body;
@@ -643,6 +747,47 @@ router.put("/campaigns/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[Marketing] Update campaign error:", err.message);
     res.status(500).json({ error: "Failed to update campaign." });
+  }
+});
+
+// DELETE /campaigns/bulk — only Draft sequences in the requested channel may be removed in bulk.
+// allDrafts applies to the current date filter and covers every page.
+router.delete("/campaigns/bulk", verifyToken, async (req, res) => {
+  try {
+    const { ids, allDrafts, channel = "EMAIL", createdFrom, createdTo } = req.body || {};
+    if (!["EMAIL", "SMS", "WHATSAPP"].includes(channel)) {
+      return res.status(400).json({ error: "Channel must be EMAIL, SMS, or WHATSAPP." });
+    }
+    if (allDrafts !== true && (!Array.isArray(ids) || ids.length < 1 || ids.length > 500 || !ids.every(id => Number.isSafeInteger(id) && id > 0))) {
+      return res.status(400).json({ error: "Provide 1 to 500 valid campaign IDs." });
+    }
+    if (allDrafts === true && ids !== undefined) {
+      return res.status(400).json({ error: "Choose IDs or all Draft sequences, not both." });
+    }
+    if (allDrafts !== true && (createdFrom !== undefined || createdTo !== undefined)) {
+      return res.status(400).json({ error: "Date filters require allDrafts." });
+    }
+    const where = { tenantId: req.user.tenantId, channel, status: "Draft" };
+    if (allDrafts === true) {
+      const from = createdFrom ? new Date(createdFrom) : null;
+      const to = createdTo ? new Date(createdTo) : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime())) || (from && to && from > to)) {
+        return res.status(400).json({ error: "Invalid created date range." });
+      }
+      if (from || to) where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) };
+    } else {
+      const uniqueIds = [...new Set(ids)];
+      const eligible = await prisma.campaign.findMany({ where: { ...where, id: { in: uniqueIds } }, select: { id: true } });
+      if (eligible.length !== uniqueIds.length) {
+        return res.status(409).json({ error: `Selection includes a sequence that is no longer a Draft ${channel} sequence. Refresh and try again.` });
+      }
+      where.id = { in: uniqueIds };
+    }
+    const result = await prisma.campaign.deleteMany({ where });
+    res.json({ deleted: result.count });
+  } catch (err) {
+    console.error("[Marketing] Bulk delete campaigns error:", err.message);
+    res.status(500).json({ error: "Failed to delete Draft sequences." });
   }
 });
 

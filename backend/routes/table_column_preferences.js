@@ -65,9 +65,17 @@ const BUILTIN_COLUMNS = {
     { key: "aiScore", label: "Lead Score" },
     { key: "source", label: "Source" },
     { key: "webForm", label: "Web Form" },
+    {
+      key: "lifecycleStage",
+      label: "Lifecycle Stage",
+      filterField: "lifecycleStageKey",
+      filterKind: "enum",
+    },
     { key: "medium", label: "Medium" }, // Contact.medium — web-form Medium, kept separate from Source
     { key: "location", label: "Location" },
-    { key: "pickupLocation", label: "Pickup Location", lockedVisible: true },
+    { key: "pickupLocation", label: "Pickup Location" },
+    { key: "plotAssign", label: "Plot Assign" },
+    { key: "overallPickupStatus", label: "Overall Status" },
     { key: "tags", label: "Tags" },
     { key: "assignedTo", label: "Assigned To" },
     { key: "createdAt", label: "Created" },
@@ -173,14 +181,13 @@ function getBuiltinColumns(tableKey, vertical) {
 }
 
 function getDefaultVisibleColumns(tableKey, vertical) {
-  // Preserve the established Generic Leads first-load layout. The broader
-  // catalog remains available through the picker, but existing Generic users
-  // should not suddenly receive every optional column after this change.
+  // Generic Leads starts with the compact calling-focused layout requested by
+  // the CRM team. The broader catalog remains available through the picker.
   if (vertical === "generic" && tableKey === "leads") {
     return [
-      "name", "email", "company", "phone", "whatsappPhone", "aiScore", "source", "webForm",
-      "medium", "location", "pickupLocation", "subBrand", "tags", "assignedTo", "createdAt", "campaign",
-      "callStatus", "callifiedAi", "callifiedScore",
+      "name", "phone", "email", "campaign", "callStatus", "callifiedAi",
+      "callifiedScore", "source", "webForm", "createdAt", "lastUpdated",
+      "actions",
     ];
   }
   return getBuiltinColumns(tableKey, vertical).map((c) => c.key);
@@ -245,9 +252,7 @@ router.get("/:tableKey", async (req, res) => {
         tableKey,
         saved.filter((k) => availableKeys.has(k)),
       );
-      // Restore locked columns on read as well as write. Pickup Location was
-      // promoted to a core Leads column after many users already had saved
-      // layouts, so those layouts must receive it without a manual reset.
+      // Restore genuinely locked columns on read as well as write.
       const lockedKeys = getBuiltinColumns(tableKey, res.locals.tenantVertical)
         .filter((column) => column.lockedVisible)
         .map((column) => column.key);

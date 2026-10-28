@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BriefcaseBusiness, Check, Receipt, Search, Truck, UsersRound } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -40,11 +40,15 @@ export default function PickupPlotWorkAssignments() {
   const [drafts, setDrafts] = useState({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [loadError, setLoadError] = useState('');
   const [savingId, setSavingId] = useState(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     setLoadError('');
     try {
       const response = await fetchApi('/api/pickup-plot-inventory/work-assignments');
@@ -56,7 +60,9 @@ export default function PickupPlotWorkAssignments() {
       setLoadError(message);
       notify.error(message);
     } finally {
+      loadedRef.current = true;
       setLoading(false);
+      setRefreshing(false);
     }
   }, [notify]);
 
@@ -103,7 +109,7 @@ export default function PickupPlotWorkAssignments() {
   const assignedCount = staff.filter((person) => (person.workTypes || []).length > 0).length;
   const headerCellStyle = {
     position: 'sticky', top: 0, zIndex: 2, padding: '13px 14px',
-    borderBottom: '1px solid var(--border-color)', background: 'var(--card-bg, #fff)',
+    borderBottom: '1px solid var(--border-color)', background: 'var(--popover-bg)',
     color: 'var(--text-secondary)', fontSize: '.76rem', textAlign: 'left',
     textTransform: 'uppercase', letterSpacing: '.04em',
   };
@@ -119,35 +125,44 @@ export default function PickupPlotWorkAssignments() {
             Give staff Transport, Site Visit, or Billing work—one at a time or in any combination.
           </p>
         </div>
-        <div className="card" style={{ padding: '12px 16px', minWidth: 170 }}>
-          <strong style={{ display: 'block', fontSize: '1.25rem' }}>{assignedCount}</strong>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '.8rem' }}>staff with assigned work</span>
+        <div
+          data-testid="staff-work-assignment-header-actions"
+          style={{ display: 'flex', flex: '1 1 100%', alignItems: 'center', justifyContent: 'flex-start', flexWrap: 'wrap', gap: 12 }}
+        >
+          <div className="pickup-plot-work-search-wrap" style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 280px', maxWidth: 420, minWidth: 220, padding: '0 10px', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--input-bg)' }}>
+            <Search
+              size={17}
+              aria-hidden="true"
+              style={{ flex: '0 0 17px', color: 'var(--text-secondary)', pointerEvents: 'none' }}
+            />
+            <input
+              className="input-field pickup-plot-work-search"
+              type="search"
+              aria-label="Search staff"
+              placeholder="Search by name, email, or phone…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              style={{ width: '100%', height: 42, boxSizing: 'border-box', padding: '0 4px', border: 0, outline: 0, background: 'transparent' }}
+            />
+          </div>
+          <div
+            className="card"
+            data-testid="staff-work-assignment-count"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, height: 44, minWidth: 170, padding: '0 16px', boxSizing: 'border-box' }}
+          >
+            <strong style={{ flex: '0 0 auto', fontSize: '1.15rem', lineHeight: 1 }}>{assignedCount}</strong>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '.76rem', lineHeight: 1.2, whiteSpace: 'nowrap' }}>staff with assigned work</span>
+          </div>
         </div>
       </header>
 
-      <div className="card" style={{ flex: '0 0 auto', padding: 16, marginBottom: 18 }}>
-        <label style={{ position: 'relative', display: 'block', maxWidth: 520 }}>
-          <Search size={17} aria-hidden="true" style={{ position: 'absolute', left: 13, top: 13, color: 'var(--text-secondary)' }} />
-          <span className="sr-only">Search staff</span>
-          <input
-            className="input-field"
-            type="search"
-            aria-label="Search staff"
-            placeholder="Search by name, email, or phone…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            style={{ width: '100%', height: 44, boxSizing: 'border-box', paddingLeft: 40 }}
-          />
-        </label>
-      </div>
-
-      {loading ? <div className="card" style={{ flex: '1 1 0', minHeight: 0, padding: 48, textAlign: 'center' }}>Loading staff…</div> : (
-        <div
-          className="card"
+      <div
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="staff-work-assignment-table-scroll"
           style={{ flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >
-          <table aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
+          <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               <col style={{ width: '22%' }} />
               <col style={{ width: '22%' }} />
@@ -196,7 +211,10 @@ export default function PickupPlotWorkAssignments() {
                   </tr>
                 );
               })}
-              {visibleStaff.length === 0 && (
+              {loading && !loadedRef.current && (
+                <tr><td colSpan="5" style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading staff…</td></tr>
+              )}
+              {!loading && visibleStaff.length === 0 && (
                 <tr>
                   <td colSpan="5" style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>
                     {loadError ? (
@@ -213,7 +231,6 @@ export default function PickupPlotWorkAssignments() {
             </tbody>
           </table>
         </div>
-      )}
     </main>
   );
 }

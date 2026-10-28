@@ -101,6 +101,28 @@ function safeJsonParse(value, fallback = {}) {
   }
 }
 
+async function findPlotInstallmentPayment(notes) {
+  const tenantId = Number(notes?.tenantId);
+  const installmentId = Number(notes?.installmentId);
+  const bookingId = Number(notes?.plotBookingId);
+  const paymentLinkId = String(notes?.paymentLinkId || '').trim();
+  if (![tenantId, installmentId, bookingId].every((id) => Number.isInteger(id) && id > 0)) return null;
+  // An installment can have historical attempts. Without the provider's
+  // unique link ID, notes alone cannot identify which attempt produced an
+  // event. payment_link.paid has the link ID and reconciles independently.
+  if (!paymentLinkId) return null;
+  const installment = await prisma.plotInstallment.findFirst({
+    where: { id: installmentId, tenantId, plotBookingId: bookingId },
+    select: { paymentId: true },
+  });
+  if (!installment?.paymentId) return null;
+  const payment = await prisma.payment.findFirst({
+    where: { id: installment.paymentId, tenantId, gateway: 'razorpay', status: { in: ['PENDING', 'PROCESSING'] } },
+  });
+  const metadata = safeJsonParse(payment?.metadata, {});
+  return metadata.kind === 'plot-booking-payment' && Number(metadata.installmentId) === installmentId && Number(metadata.plotBookingId) === bookingId && metadata.plinkId === paymentLinkId ? payment : null;
+}
+
 function serialize(payment) {
   if (!payment) return payment;
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
@@ -687,19 +709,31 @@ router.post(
           }
         }
 
-        if (orderId) {
-          let payment = await prisma.payment.findFirst({
+        if (orderId || (notes && notes.kind === "plot-booking-payment" && notes.installmentId)) {
+          let payment = orderId ? await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
-          });
-          if (!payment) {
+          }) : null;
+          if (!payment && orderId) {
             payment = await prisma.payment.findFirst({
               where: {
                 gateway: "razorpay",
-                metadata: { contains: `\"orderId\":\"${orderId}\"` },
+                metadata: { contains: `"orderId":"${orderId}"` },
               },
             });
           }
+          if (!payment && notes && notes.kind === "plot-booking-payment" && notes.installmentId) {
+            payment = await findPlotInstallmentPayment(notes);
+          }
           if (payment) {
+            const plotPaymentMeta = safeJsonParse(payment.metadata, {});
+            if (eventName === "payment.authorized" && plotPaymentMeta.kind === "plot-booking-payment") {
+              const updated = await prisma.payment.updateMany({
+                where: { id: payment.id, status: { in: ['PENDING', 'PROCESSING'] } },
+                data: { status: "PROCESSING" },
+              });
+              if (updated.count) await reconcilePlotBookingPayment({ ...payment, status: 'PROCESSING' });
+              return res.json({ ok: true });
+            }
             const capturedAt = ent && ent.captured_at
               ? new Date(ent.captured_at * 1000)
               : new Date();
@@ -757,15 +791,28 @@ router.post(
         }
       } else if (eventName === "payment.failed") {
         const orderId = ent && ent.order_id;
-        if (orderId) {
-          const payment = await prisma.payment.findFirst({
+        const notes = ent && ent.notes;
+        if (orderId || (notes && notes.kind === "plot-booking-payment" && notes.installmentId)) {
+          let payment = orderId ? await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
-          });
+          }) : null;
+          if (!payment && notes && notes.kind === "plot-booking-payment" && notes.installmentId) {
+            payment = await findPlotInstallmentPayment(notes);
+          }
           if (payment) {
-            await prisma.payment.update({
+            if (safeJsonParse(payment.metadata, {}).kind === 'plot-booking-payment') {
+              const transition = await prisma.payment.updateMany({
+                where: { id: payment.id, status: { in: ['PENDING', 'PROCESSING'] } },
+                data: { status: 'FAILED' },
+              });
+              if (transition.count) await reconcilePlotBookingPayment({ ...payment, status: 'FAILED' });
+              return res.json({ ok: true });
+            }
+            const failed = await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "FAILED" },
             });
+            await reconcilePlotBookingPayment(failed);
           }
         }
       } else if (eventName === "payment_link.paid") {
@@ -1257,6 +1304,34 @@ router.get("/", async (req, res) => {
       parsedMetaMap[p.id] = meta;
     }
 
+    // Generic CRM plot payments deliberately keep invoiceId null and retain
+    // only plotBookingId in metadata. Resolve the tenant-owned booking and
+    // site in batches so the ledger can show the useful plot identity instead
+    // of the internal BOOK-* booking number stored in description.
+    const plotBookingIds = [...new Set(payments
+      .filter((payment) => parsedMetaMap[payment.id]?.kind === "plot-booking-payment")
+      .map((payment) => Number(parsedMetaMap[payment.id]?.plotBookingId))
+      .filter((id) => Number.isInteger(id) && id > 0))];
+    const plotSiteByBookingId = {};
+    if (plotBookingIds.length > 0) {
+      const plotBookings = await prisma.plotBooking.findMany({
+        where: { tenantId, id: { in: plotBookingIds } },
+        select: { id: true, plotSiteId: true },
+      });
+      const plotSiteIds = [...new Set(plotBookings.map((booking) => booking.plotSiteId).filter(Boolean))];
+      const plotSites = plotSiteIds.length > 0
+        ? await prisma.plotSite.findMany({
+            where: { tenantId, id: { in: plotSiteIds } },
+            select: { id: true, name: true, plotNumber: true },
+          })
+        : [];
+      const plotSiteMap = {};
+      plotSites.forEach((site) => { plotSiteMap[site.id] = site; });
+      plotBookings.forEach((booking) => {
+        if (plotSiteMap[booking.plotSiteId]) plotSiteByBookingId[booking.id] = plotSiteMap[booking.plotSiteId];
+      });
+    }
+
     // Some landing-page payments were created before the registration draft
     // was converted, so contactId may still be null even though the payment
     // metadata contains the payer email. Resolve those contacts in the same
@@ -1595,7 +1670,11 @@ router.get("/", async (req, res) => {
           }
         }
       }
-      return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff };
+      const plotBookingId = Number(parsedMetaMap[p.id]?.plotBookingId);
+      const plotSite = parsedMetaMap[p.id]?.kind === "plot-booking-payment"
+        ? (plotSiteByBookingId[plotBookingId] || null)
+        : null;
+      return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff, plotSite };
     }));
   } catch (err) {
     console.error("[Payments] list error:", err);
@@ -1672,8 +1751,9 @@ router.get("/config", async (req, res) => {
 // the middleware explicitly so the auth surface is grep-visible).
 //
 // Query params:
-//   ?from / ?to — optional ISO date bounds on createdAt. Invalid → 400
-//                 INVALID_DATE. Both optional and independent.
+//   ?from / ?to — optional ISO date bounds. Invalid → 400 INVALID_DATE.
+//   ?dateBasis=payment — use paidAt, falling back to createdAt.
+//   ?gateway — optional gateway filter.
 //
 // Response envelope:
 //   { total, byStatus, byMethod, totalAmount, successfulAmount,
@@ -1701,15 +1781,25 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
     }
 
     const where = { tenantId: tenantOf(req) };
+    if (req.query.gateway) {
+      where.gateway = String(req.query.gateway).trim().toLowerCase();
+    }
     if (Object.keys(createdAtClause).length > 0) {
-      where.createdAt = createdAtClause;
+      if (req.query.dateBasis === "payment") {
+        where.OR = [
+          { paidAt: createdAtClause },
+          { paidAt: null, createdAt: createdAtClause },
+        ];
+      } else {
+        where.createdAt = createdAtClause;
+      }
     }
 
     // Pull just the columns we need to aggregate. Avoids dragging the
     // full row (metadata blob in particular) into memory just to sum.
     const rows = await prisma.payment.findMany({
       where,
-      select: { status: true, gateway: true, amount: true, createdAt: true },
+      select: { status: true, gateway: true, amount: true, currency: true, paidAt: true, createdAt: true },
     });
 
     const total = rows.length;
@@ -1717,6 +1807,7 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
     const byMethod = {};
     let totalSum = 0;
     let successSum = 0;
+    const successfulAmountByCurrency = {};
     let lastCreatedAt = null;
 
     for (const r of rows) {
@@ -1731,9 +1822,12 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
       totalSum += amt;
       if (["SUCCESS", "PAID", "CAPTURED"].includes(String(status).toUpperCase())) {
         successSum += amt;
+        const currency = String(r.currency || "USD").toUpperCase();
+        successfulAmountByCurrency[currency] = (successfulAmountByCurrency[currency] || 0) + amt;
       }
-      if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {
-        lastCreatedAt = new Date(r.createdAt);
+      const activityAt = req.query.dateBasis === "payment" ? (r.paidAt || r.createdAt) : r.createdAt;
+      if (activityAt && (lastCreatedAt === null || new Date(activityAt) > lastCreatedAt)) {
+        lastCreatedAt = new Date(activityAt);
       }
     }
 
@@ -1747,6 +1841,9 @@ router.get("/stats", verifyToken, requireStaffPaymentStats, async (req, res) => 
       byMethod,
       totalAmount: round2(totalSum),
       successfulAmount: round2(successSum),
+      successfulAmountByCurrency: Object.fromEntries(
+        Object.entries(successfulAmountByCurrency).map(([currency, amount]) => [currency, round2(amount)]),
+      ),
       lastPaymentAt: lastCreatedAt ? lastCreatedAt.toISOString() : null,
     });
   } catch (err) {

@@ -118,7 +118,7 @@ const ADMIN_ROLE = {
   ],
 };
 
-function renderPage(roles = [ADMIN_ROLE], extraResponses = {}) {
+function renderPage(roles = [ADMIN_ROLE], extraResponses = {}, vertical = 'travel') {
   fetchApiMock.mockImplementation((url, opts) => {
     const responseKey = Object.keys(extraResponses).find(
       (key) => url === key || url.startsWith(`${key}?`),
@@ -138,7 +138,7 @@ function renderPage(roles = [ADMIN_ROLE], extraResponses = {}) {
     <AuthContext.Provider
       value={{
         user: { id: 1, role: 'ADMIN', userType: 'STAFF', email: 'admin@x' },
-        tenant: { vertical: 'travel' },
+        tenant: { vertical },
         token: 'tok',
         loading: false,
       }}
@@ -157,6 +157,116 @@ beforeEach(() => {
   notifyObj.info.mockReset();
   notifyObj.confirm.mockReset();
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
+});
+
+describe('role key editing', () => {
+  it('suggests a key from the new role name until the key is edited', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'New role' }));
+    const name = screen.getByPlaceholderText('e.g. Receptionist');
+    const key = screen.getByTestId('create-role-key-input');
+    fireEvent.change(name, { target: { value: 'Travel Broker' } });
+    expect(key.value).toBe('TRAVEL_BROKER');
+    fireEvent.change(key, { target: { value: 'BROKER' } });
+    fireEvent.change(name, { target: { value: 'Senior Travel Broker' } });
+    expect(key.value).toBe('BROKER');
+  });
+
+  it.each(['travel', 'wellness'])('removes Page permission from the %s role-creation flow', async (vertical) => {
+    renderPage([], {
+      '/api/roles': (opts) => opts?.method === 'POST'
+        ? { id: 501, name: 'Receptionist', key: 'RECEPTIONIST', permissions: [] }
+        : { roles: [], tenantId: 11 },
+      '/api/pages/catalog': {
+        catalog: [{
+          label: 'Contacts',
+          path: '/contacts',
+          category: 'CRM Core',
+          requiredPermissions: [{ module: 'contacts', action: 'read' }],
+        }],
+      },
+    }, vertical);
+    fireEvent.click(await screen.findByRole('button', { name: 'New role' }));
+    const createDialog = screen.getByRole('dialog', { name: 'Create a new role' });
+    for (const label of ['Display name', 'Key', 'User type', 'Data scope']) {
+      expect(within(createDialog).getByText(label).parentElement.textContent).toContain('*');
+    }
+    expect(within(createDialog).getByText('Description (optional)').parentElement.textContent).not.toContain('*');
+    expect(within(createDialog).queryByText('Page permission')).toBeNull();
+    expect(within(createDialog).queryByRole('button', { name: 'Add permission' })).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('e.g. Receptionist'), { target: { value: 'Receptionist' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/roles', expect.objectContaining({
+      method: 'POST',
+    })));
+    const createCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/roles' && opts?.method === 'POST');
+    expect(JSON.parse(createCall[1].body)).not.toHaveProperty('permissions');
+    expect(screen.queryByRole('dialog', { name: 'Permissions: Receptionist' })).toBeNull();
+  });
+
+  it('requires the Add permission matrix only for generic CRM roles', async () => {
+    renderPage([], {
+      '/api/roles': (opts) => opts?.method === 'POST'
+        ? {
+            id: 502,
+            name: 'Receptionist',
+            key: 'RECEPTIONIST',
+            permissions: [{ module: 'contacts', action: 'read' }],
+          }
+        : { roles: [], tenantId: 11 },
+      '/api/roles/catalog': { ...CATALOG, vertical: 'generic' },
+      '/api/pages/catalog': {
+        catalog: [{
+          label: 'Contacts',
+          path: '/contacts',
+          category: 'CRM Core',
+          requiredPermissions: [{ module: 'contacts', action: 'read' }],
+        }],
+      },
+    }, 'generic');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New role' }));
+    fireEvent.change(screen.getByPlaceholderText('e.g. Receptionist'), { target: { value: 'Receptionist' } });
+    expect(screen.queryByRole('combobox', { name: 'Page permission' })).toBeNull();
+    expect(screen.getByText('Page permission').parentElement.textContent).toContain('*');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }));
+    expect(await screen.findByText('Please give this role permission to at least one page before creating it.')).toBeTruthy();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/roles', expect.objectContaining({ method: 'POST' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add permission' }));
+    const draftDialog = await screen.findByRole('dialog', { name: 'Permissions: Receptionist' });
+    fireEvent.click(draftDialog.querySelector('[aria-describedby="perm-desc-contacts-read"]'));
+    fireEvent.click(within(draftDialog).getByRole('button', { name: 'Apply permissions' }));
+    expect(await screen.findByText('1 permission selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/roles', expect.objectContaining({
+      method: 'POST',
+      body: expect.stringContaining('"permissions":[{"module":"contacts","action":"read"}]'),
+    })));
+    expect(screen.queryByRole('dialog', { name: 'Permissions: Receptionist' })).toBeNull();
+  });
+
+  it('allows correcting the key of an unassigned custom role', async () => {
+    renderPage([{ ...ADMIN_ROLE, id: 44, key: 'BROKER', name: 'broker', isSystem: false, userCount: 0 }]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit broker' }));
+    const key = screen.getByDisplayValue('BROKER');
+    expect(key.disabled).toBe(false);
+    fireEvent.change(key, { target: { value: 'SENIOR_BROKER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/roles/44', expect.objectContaining({
+      method: 'PUT',
+      body: expect.stringContaining('"key":"SENIOR_BROKER"'),
+    })));
+  });
+
+  it('locks the key when users are assigned', async () => {
+    renderPage([{ ...ADMIN_ROLE, id: 44, key: 'BROKER', name: 'broker', isSystem: false, userCount: 1 }]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit broker' }));
+    expect(screen.getByDisplayValue('BROKER').disabled).toBe(true);
+  });
 });
 
 describe('permission review', () => {

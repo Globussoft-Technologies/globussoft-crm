@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Edit2, Eye, Handshake, MapPin, Phone, Plus, Power, Truck, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -81,7 +81,7 @@ const PEOPLE_TABLE_COLUMNS = {
     { label: 'Actions', width: 120, minWidth: 100 },
   ],
 };
-const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere', background: '#f3f4f6' };
+const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';
@@ -336,6 +336,8 @@ export default function PickupPlotPeopleDirectory({ type }) {
   const [staffUsers, setStaffUsers] = useState([]);
   const [staffRole, setStaffRole] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(config.empty);
@@ -354,7 +356,9 @@ export default function PickupPlotPeopleDirectory({ type }) {
   const phoneError = touchedFields.phone ? validatePhoneNumber(form.phone) : null;
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     try {
       const response = await fetchApi(config.endpoint);
       setRows(Array.isArray(response?.[config.rowsKey]) ? response[config.rowsKey] : []);
@@ -366,9 +370,11 @@ export default function PickupPlotPeopleDirectory({ type }) {
     } catch (error) {
       notify.error(error.message || `Could not load ${config.title.toLowerCase()}.`);
     } finally {
+      loadedRef.current = true;
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [config, notify, type]);
+  }, [config.endpoint, config.rowsKey, config.title, notify, type]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -582,7 +588,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
   }, [completedTransportCustomerIds, customerOptions, editing?.id, form.pickupLocationIds, form.plotSiteIds, type]);
 
   return (
-    <div className="pickup-person-directory-page" data-testid={`${type}-directory-page`} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem', animation: 'fadeIn .35s ease-out' }}>
+    <div className="pickup-person-directory-page" data-testid={`${type}-directory-page`} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><Icon size={28} /> {config.title}</h1>
@@ -612,9 +618,8 @@ export default function PickupPlotPeopleDirectory({ type }) {
         </div>
       </header>
 
-      {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading {config.title.toLowerCase()}…</div> : (
-        <div
-          className="card pickup-plot-table-scroll"
+      <div
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid={`${type}-directory-table-scroll`}
           style={{
             flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
@@ -622,8 +627,9 @@ export default function PickupPlotPeopleDirectory({ type }) {
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
+          {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           <div data-testid={`${type}-directory-table-width`} style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-resizable-table" aria-label={config.title} style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label={config.title} style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={columns[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>
               {columns.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={directoryHeaderStyle}>{column.label}</ResizableTableHeader>)}
@@ -641,20 +647,20 @@ export default function PickupPlotPeopleDirectory({ type }) {
                   </> : <>
                     <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{row.agency || 'Independent'}</td>
                     <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={(row.plots || []).length ? row.plots : row.plotSite ? [row.plotSite] : []} /></td>
-                    <td style={{ padding: '.55rem .65rem' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? 'Not set' : `${Number(row.commissionPercent)}%`}</td>
+                    <td style={{ padding: '.55rem .65rem' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? '10% (default)' : `${Number(row.commissionPercent)}%`}</td>
                   </>}
                   <td style={{ padding: '.55rem .65rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
                   <td style={{ padding: '.55rem .65rem' }}><StatusPill active={row.isActive} /></td>
                   <td style={{ padding: '.55rem .65rem' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggleStatus(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No {config.title.toLowerCase()} yet.</td></tr>}
-              {rows.length > 0 && filteredRows.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No {config.title.toLowerCase()} match the selected filters.</td></tr>}
+              {loading && !loadedRef.current && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading {config.title.toLowerCase()}…</td></tr>}
+              {!loading && rows.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No {config.title.toLowerCase()} yet.</td></tr>}
+              {!loading && rows.length > 0 && filteredRows.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No {config.title.toLowerCase()} match the selected filters.</td></tr>}
             </tbody>
           </table>
           </div>
         </div>
-      )}
 
       {editing && <Modal title={`${editing.id ? 'Edit' : 'Add'} ${type === 'transport' ? 'Transport Person' : 'Sales Executive'}`} saving={saving} onClose={() => { setEditing(null); setServiceAreasOpen(false); setSelectedCustomersOpen(false); }} onSave={save}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>

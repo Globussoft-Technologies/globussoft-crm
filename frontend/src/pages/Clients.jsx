@@ -68,7 +68,7 @@ const Clients = () => {
   }, [loading, currentPage, totalPages]);
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.3s ease' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Building2 size={24} style={{ color: 'var(--accent-color)' }} />
@@ -81,13 +81,13 @@ const Clients = () => {
         </div>
       </header>
 
-      <div className="card" style={{ overflow: 'visible' }}>
+      <div className="card generic-clients-card" style={{ overflow: 'visible' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
           <div style={{ position: 'relative', maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input
               type="text"
-              className="input-field"
+              className="input-field generic-clients-search-input"
               placeholder="Search clients..."
               value={searchTerm}
               onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
@@ -97,7 +97,7 @@ const Clients = () => {
         </div>
 
         <TopScrollSync>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+        <table className="generic-clients-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
@@ -115,7 +115,7 @@ const Clients = () => {
             ) : clients.length === 0 ? (
               <tr><td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No clients found</td></tr>
             ) : clients.map(client => (
-              <tr key={client.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
+              <tr key={client.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <td style={{ padding: '1rem' }}>
                   <div style={{ fontWeight: '500' }}>
                     <Link

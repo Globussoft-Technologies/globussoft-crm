@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Edit2, MapPin, Phone, Plus, Power, Receipt, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -27,7 +27,7 @@ const BILLING_TABLE_COLUMNS = [
   { label: 'Status', width: 120, minWidth: 90 },
   { label: 'Actions', width: 120, minWidth: 100 },
 ];
-const billingHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere', background: '#f3f4f6' };
+const billingHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';
@@ -70,6 +70,8 @@ export default function BillingPersons() {
   const [customerOptions, setCustomerOptions] = useState([]);
   const [plotOptions, setPlotOptions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -81,7 +83,9 @@ export default function BillingPersons() {
   );
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const initialLoad = !loadedRef.current;
+    if (initialLoad) setLoading(true);
+    else setRefreshing(true);
     try {
       const response = await fetchApi('/api/pickup-plot-inventory/billing-persons');
       setRows(Array.isArray(response?.billingPersons) ? response.billingPersons : []);
@@ -91,7 +95,9 @@ export default function BillingPersons() {
     } catch (error) {
       notify.error(error.message || 'Could not load billing persons.');
     } finally {
+      loadedRef.current = true;
       setLoading(false);
+      setRefreshing(false);
     }
   }, [notify]);
 
@@ -184,6 +190,7 @@ export default function BillingPersons() {
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}><Receipt size={28} /> Billing Persons</h1>
           <p style={{ color: 'var(--text-secondary)', margin: '0.4rem 0 0' }}>Create billing logins and manage the people responsible for invoices and payments.</p>
+          {refreshing && <span className="pickup-module-refresh-status" role="status">Refreshing data…</span>}
         </div>
         <div className="billing-directory-controls" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 500px', maxWidth: 720 }}>
           <input className="input-field" type="search" aria-label="Search billing persons" placeholder="Search billing persons..." value={search} onChange={(event) => setSearch(event.target.value)} style={{ flex: '1 1 220px', minWidth: 0, height: 44, boxSizing: 'border-box' }} />
@@ -194,9 +201,8 @@ export default function BillingPersons() {
         </div>
       </header>
 
-      {loading ? <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>Loading billing persons…</div> : (
-        <div
-          className="card pickup-plot-table-scroll"
+      <div
+          className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="billing-directory-table-scroll"
           style={{
             flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
@@ -205,7 +211,7 @@ export default function BillingPersons() {
           }}
         >
           <div data-testid="billing-persons-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-resizable-table" aria-label="Billing persons" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label="Billing persons" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={BILLING_TABLE_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead><tr>{BILLING_TABLE_COLUMNS.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={billingHeaderStyle}>{column.label}</ResizableTableHeader>)}</tr></thead>
             <tbody>
@@ -219,12 +225,12 @@ export default function BillingPersons() {
                 <td style={{ padding: '.55rem .65rem' }}><span style={{ display: 'inline-flex', padding: '.2rem .45rem', borderRadius: 6, fontSize: '.7rem', fontWeight: 800, color: row.isActive ? '#047857' : '#64748b', background: row.isActive ? 'rgba(16,185,129,.14)' : 'rgba(100,116,139,.14)' }}>{row.isActive ? 'Active' : 'Inactive'}</span></td>
                 <td style={{ padding: '.55rem .65rem' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button type="button" className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button type="button" className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggle(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
               </tr>)}
-              {visibleRows.length === 0 && <tr><td colSpan="8" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No billing persons found.</td></tr>}
+              {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading billing persons…</td></tr>}
+              {!loading && visibleRows.length === 0 && <tr><td colSpan="8" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No billing persons found.</td></tr>}
             </tbody>
           </table>
           </div>
         </div>
-      )}
 
       {editing && <BillingPersonModal form={form} setForm={setForm} editing={editing} staffUsers={staffUsers} customerOptions={customerOptions} plotOptions={plotOptions} saving={saving} onClose={() => setEditing(null)} onSave={save} />}
     </div>

@@ -224,7 +224,7 @@ const MODULE_DESCRIPTIONS = {
   web_forms:           'Embedded lead-capture forms and submissions.',
   transport_workspace: 'Assigned pickup and drop-off trips. Grant this to any generic CRM role that performs transport work.',
   broker_workspace:    'Assigned customer site visits and plot-selection work. Independent of the role name.',
-  billing_workspace:   'Assigned billing, invoice, and payment queue. Independent of the role name.',
+  billing_workspace:   'Customer pickup, plot, sales, and billing workflow visibility. Independent of the role name.',
 };
 
 // Per-vertical description overrides for COMMON modules where the
@@ -979,7 +979,11 @@ export default function RolesAdmin() {
       {createOpen && (
         <CreateRoleModal
           isTravel={isTravel}
+          isGeneric={tenantVertical === 'generic'}
+          vertical={tenantVertical}
           activeSubBrand={activeSubBrand}
+          modules={permissionModules}
+          domains={permissionDomains}
           onClose={() => setCreateOpen(false)}
           onSuccess={async () => {
             setCreateOpen(false);
@@ -1357,7 +1361,7 @@ function tmcParentRelation(row) {
 
 // ───────────────────────── Create role modal ─────────────────────────
 
-function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
+function CreateRoleModal({ isTravel, isGeneric, vertical, activeSubBrand, modules, domains, onClose, onSuccess }) {
   const [form, setForm] = useState({
     name: '',
     key: '',
@@ -1366,11 +1370,42 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
     landingPath: '',
     dataScope: 'ALL',
     subBrandScope: isTravel && activeSubBrand ? [activeSubBrand] : [],
+    permissions: [],
   });
+  const [pageCatalog, setPageCatalog] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [errors, setErrors] = useState({});
+  const [keyEdited, setKeyEdited] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const notify = useNotify();
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let cancelled = false;
+    fetchApi('/api/pages/catalog')
+      .then((res) => {
+        if (cancelled) return;
+        setPageCatalog(Array.isArray(res?.catalog) ? res.catalog : []);
+      })
+      .catch(() => {
+        if (!cancelled) setPageCatalog([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isGeneric]);
+  const landingPages = useMemo(() => {
+    const selected = new Set(
+      form.permissions.map(({ module, action }) => `${module}.${action}`),
+    );
+    return pageCatalog.filter((page) => {
+      const required = Array.isArray(page.requiredPermissions) ? page.requiredPermissions : [];
+      return required.length === 0 || required.every(
+        ({ module, action }) => selected.has(`${module}.${action}`),
+      );
+    });
+  }, [form.permissions, pageCatalog]);
 
   // Bug 6 — blur-time validation. The submit gate below still re-runs
   // validateRoleKey so a programmatic submit can't bypass it, but the
@@ -1395,12 +1430,15 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
     if (keyError) fieldErrors.key = keyError;
     const landingPathErr = validateLandingPathClient(form.landingPath);
     if (landingPathErr) fieldErrors.landingPath = landingPathErr;
+    if (isGeneric && form.permissions.length === 0) {
+      fieldErrors.permissions = 'Please give this role permission to at least one page before creating it.';
+    }
     setErrors(fieldErrors);
     if (Object.keys(fieldErrors).length) return;
 
     setIsLoading(true);
     try {
-      await fetchApi('/api/roles', {
+      const createdRole = await fetchApi('/api/roles', {
         method: 'POST',
         body: JSON.stringify({
           name: form.name.trim(),
@@ -1410,10 +1448,11 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
           landingPath: form.landingPath.trim() || null,
           dataScope: form.dataScope,
           subBrandScope: form.subBrandScope,
+          ...(isGeneric ? { permissions: form.permissions } : {}),
         }),
       });
       notify.success?.(`Role "${form.name.trim()}" created`);
-      onSuccess();
+      await onSuccess(createdRole);
     } catch (err) {
       setError(err.message || 'Could not create role');
     } finally {
@@ -1424,12 +1463,19 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
   return (
     <ModalShell title="Create a new role" onClose={onClose} width={520}>
       <form onSubmit={submit} noValidate>
-        <Field label="Display name" error={errors.name}>
+        <Field label="Display name" error={errors.name} required>
           <input
             type="text"
             className="input-field"
             value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            onChange={(e) => {
+              const name = e.target.value;
+              setForm((current) => ({
+                ...current,
+                name,
+                key: keyEdited ? current.key : name.trim().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase(),
+              }));
+            }}
             placeholder="e.g. Receptionist"
             disabled={isLoading}
             required
@@ -1439,12 +1485,16 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
           label="Key"
           error={errors.key}
           help={`Unique within this tenant. ${ROLE_KEY_DESCRIPTION}`}
+          required
         >
           <input
             type="text"
             className="input-field"
             value={form.key}
-            onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })}
+            onChange={(e) => {
+              setKeyEdited(true);
+              setForm({ ...form, key: e.target.value.toUpperCase() });
+            }}
             onBlur={handleKeyBlur}
             placeholder="e.g. RECEPTIONIST"
             disabled={isLoading}
@@ -1463,24 +1513,26 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
             style={{ resize: 'vertical', minHeight: 60 }}
           />
         </Field>
-        <Field label="User type" help="Which kind of user this role can be assigned to.">
+        <Field label="User type" help="Which kind of user this role can be assigned to." required>
           <select
             className="input-field"
             value={form.userType}
             onChange={(e) => setForm({ ...form, userType: e.target.value })}
             disabled={isLoading}
+            required
           >
             <option value="STAFF">Staff</option>
             <option value="CUSTOMER">Customer</option>
           </select>
         </Field>
-        <Field label="Data scope" help="How much data holders of this role can see by default.">
+        <Field label="Data scope" help="How much data holders of this role can see by default." required>
           <select
             className="input-field"
             aria-label="Data scope"
             value={form.dataScope}
             onChange={(e) => setForm({ ...form, dataScope: e.target.value })}
             disabled={isLoading}
+            required
           >
             {DATA_SCOPE_OPTIONS.map((scope) => (
               <option key={scope} value={scope}>
@@ -1519,11 +1571,35 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
             </div>
           </Field>
         )}
+        {isGeneric && (
+          <Field
+            label="Page permission"
+            error={errors.permissions}
+            help="Required. Add permission to at least one page before creating this role."
+            required
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setPermissionsOpen(true)}
+                disabled={isLoading}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <Shield size={15} /> Add permission
+              </button>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                {form.permissions.length} permission{form.permissions.length === 1 ? '' : 's'} selected
+              </span>
+            </div>
+          </Field>
+        )}
         <LandingPathField
           value={form.landingPath}
           onChange={(value) => setForm({ ...form, landingPath: value })}
           disabled={isLoading}
           error={errors.landingPath}
+          pagesOverride={isGeneric ? landingPages : undefined}
         />
         {error && (
           <div role="alert" style={errBoxStyle}>{error}</div>
@@ -1537,6 +1613,28 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
           </button>
         </ModalActions>
       </form>
+      {isGeneric && permissionsOpen && (
+        <PermissionsModal
+          role={{
+            name: form.name.trim() || 'New role',
+            permissions: form.permissions,
+            unavailablePermissions: [],
+          }}
+          modules={modules}
+          domains={domains}
+          readOnly={false}
+          vertical={vertical}
+          draftMode
+          onClose={() => setPermissionsOpen(false)}
+          onApply={(permissions) => {
+            setForm((current) => ({ ...current, permissions }));
+            if (permissions.length > 0) {
+              setErrors((current) => ({ ...current, permissions: undefined }));
+            }
+            setPermissionsOpen(false);
+          }}
+        />
+      )}
     </ModalShell>
   );
 }
@@ -1546,6 +1644,7 @@ function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
 function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   const [form, setForm] = useState({
     name: role.name || '',
+    key: role.key || '',
     description: role.description || '',
     landingPath: role.landingPath || '',
     dataScope: role.dataScope || 'ALL',
@@ -1555,12 +1654,17 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   const [error, setError] = useState('');
   const [errors, setErrors] = useState({});
   const notify = useNotify();
+  const canEditKey = !role.isSystem && role.userCount === 0;
 
   const submit = async (ev) => {
     ev.preventDefault();
     setError('');
     const fieldErrors = {};
     if (!form.name.trim()) fieldErrors.name = 'Required';
+    if (canEditKey) {
+      const keyError = validateRoleKey(form.key);
+      if (keyError) fieldErrors.key = keyError;
+    }
     const landingPathErr = validateLandingPathClient(form.landingPath);
     if (landingPathErr) fieldErrors.landingPath = landingPathErr;
     setErrors(fieldErrors);
@@ -1572,6 +1676,7 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
         method: 'PUT',
         body: JSON.stringify({
           name: form.name.trim(),
+          ...(canEditKey ? { key: form.key.trim() } : {}),
           description: form.description.trim() || null,
           landingPath: form.landingPath.trim() || null,
           dataScope: form.dataScope,
@@ -1590,12 +1695,12 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   return (
     <ModalShell
       title={`Edit role: ${role.name}`}
-      subtitle="Key + system flag are immutable. Permissions are edited separately."
+      subtitle="System role identity is fixed. Permissions are edited separately."
       onClose={onClose}
       width={520}
     >
       <form onSubmit={submit} noValidate>
-        <Field label="Display name" error={errors.name}>
+        <Field label="Display name" error={errors.name} required>
           <input
             type="text"
             className="input-field"
@@ -1605,14 +1710,15 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
             required
           />
         </Field>
-        <Field label="Key" help="Immutable — keys are part of the audit trail.">
+        <Field label="Key" error={errors.key} help={canEditKey ? `Editable until users are assigned. ${ROLE_KEY_DESCRIPTION}` : 'Locked for system roles and roles with assigned users.'} required>
           <input
             type="text"
             className="input-field"
-            value={role.key}
-            disabled
-            readOnly
-            style={{ opacity: 0.7 }}
+            value={form.key}
+            onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })}
+            disabled={isLoading || !canEditKey}
+            readOnly={!canEditKey}
+            style={!canEditKey ? { opacity: 0.7 } : undefined}
           />
         </Field>
         <Field label="Description (optional)">
@@ -1625,13 +1731,14 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
             style={{ resize: 'vertical', minHeight: 60 }}
           />
         </Field>
-        <Field label="Data scope" help="Default visibility for users assigned to this role.">
+        <Field label="Data scope" help="Default visibility for users assigned to this role." required>
           <select
             className="input-field"
             aria-label="Data scope"
             value={form.dataScope}
             onChange={(e) => setForm({ ...form, dataScope: e.target.value })}
             disabled={isLoading}
+            required
           >
             {DATA_SCOPE_OPTIONS.map((scope) => (
               <option key={scope} value={scope}>
@@ -1695,7 +1802,7 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
 
 // ───────────────────── Landing path field (shared) ───────────────────
 
-function LandingPathField({ value, onChange, disabled, error, roleId }) {
+function LandingPathField({ value, onChange, disabled, error, roleId, pagesOverride }) {
   // The dropdown is dynamically populated from /api/roles/:id/accessible-
   // pages — only pages this role has the required permissions for show
   // up. When roleId is undefined (Create flow, before the role exists),
@@ -1706,6 +1813,11 @@ function LandingPathField({ value, onChange, disabled, error, roleId }) {
   const [loadingPages, setLoadingPages] = useState(false);
 
   useEffect(() => {
+    if (Array.isArray(pagesOverride)) {
+      setPages(pagesOverride);
+      setLoadingPages(false);
+      return undefined;
+    }
     let cancelled = false;
     setLoadingPages(true);
     const endpoint = roleId
@@ -1730,7 +1842,7 @@ function LandingPathField({ value, onChange, disabled, error, roleId }) {
     return () => {
       cancelled = true;
     };
-  }, [roleId]);
+  }, [roleId, pagesOverride]);
 
   // If the currently-saved path isn't in the dropdown list (e.g. perms
   // were revoked since it was set), surface that to the admin instead of
@@ -1744,7 +1856,9 @@ function LandingPathField({ value, onChange, disabled, error, roleId }) {
       help={
         roleId
           ? "Pages users with this role land on after login. Only pages this role's permissions grant access to are listed."
-          : "Save the role first to pick from its accessible pages. For now the full catalog is shown."
+          : Array.isArray(pagesOverride)
+            ? "Choose where users with this role land after login. Only pages included in the selected page permission are listed."
+            : "Save the role first to pick from its accessible pages. For now the full catalog is shown."
       }
     >
       <SearchableSelect
@@ -1808,7 +1922,7 @@ function validateLandingPathClient(value) {
 
 // ──────────────────────── Permissions matrix modal ───────────────────
 
-function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose, onSaved }) {
+function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMode = false, onClose, onSaved, onApply }) {
   const matrix = Array.isArray(modules) ? modules : [];
   const domainList = Array.isArray(domains) ? domains : [];
   // Build the set of currently-catalogued "module.action" strings so we
@@ -1987,6 +2101,11 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
         const [module, action] = s.split('.');
         return { module, action };
       });
+      if (draftMode) {
+        setPendingSensitiveGrants(null);
+        onApply(body);
+        return;
+      }
       const res = await fetchApi(`/api/roles/${role.id}/permissions`, {
         method: 'PUT',
         body: JSON.stringify({ permissions: body }),
@@ -2536,21 +2655,23 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
         {/* Phase 5 — History entry point. Always available (read-
             gated by roles.read on the backend); the modal it opens
             shows a Restore button only when canManage is true. */}
-        <button
-          type="button"
-          onClick={() => setHistoryOpen(true)}
-          className="btn-secondary"
-          disabled={isLoading}
-          data-testid="open-permissions-history"
-        >
-          History
-        </button>
+        {!draftMode && (
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="btn-secondary"
+            disabled={isLoading}
+            data-testid="open-permissions-history"
+          >
+            History
+          </button>
+        )}
         <button type="button" onClick={onClose} className="btn-secondary" disabled={isLoading}>
           {readOnly ? 'Close' : 'Cancel'}
         </button>
         {!readOnly && (
           <button type="button" onClick={save} className="btn-primary" disabled={isLoading}>
-            {isLoading ? 'Saving…' : 'Save permissions'}
+            {isLoading ? 'Saving…' : draftMode ? 'Apply permissions' : 'Save permissions'}
           </button>
         )}
       </ModalActions>
@@ -2593,16 +2714,18 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
           Role Recovery section uses. Identical UI for every role
           (Admin / Customer / Manager / User / any custom role) and
           every version-count. */}
-      <RoleHistoryDialog
-        role={role}
-        canManage={!readOnly}
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-        onRestored={() => {
-          setHistoryOpen(false);
-          onSaved();
-        }}
-      />
+      {!draftMode && (
+        <RoleHistoryDialog
+          role={role}
+          canManage={!readOnly}
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          onRestored={() => {
+            setHistoryOpen(false);
+            onSaved();
+          }}
+        />
+      )}
       {/* Legacy in-page modal kept for now as a no-op rendering path;
           it's referenced by the function definition below but not
           mounted. Safe to delete in a follow-up sweep once the
@@ -3693,7 +3816,7 @@ function ModalActions({ children }) {
   );
 }
 
-function Field({ label, error, help, children }) {
+function Field({ label, error, help, required = false, children }) {
   return (
     <div style={{ marginBottom: '0.85rem' }}>
       <label
@@ -3706,6 +3829,15 @@ function Field({ label, error, help, children }) {
         }}
       >
         {label}
+        {required && (
+          <span
+            aria-hidden="true"
+            title="Required"
+            style={{ color: '#ef4444', marginLeft: '0.2rem' }}
+          >
+            *
+          </span>
+        )}
       </label>
       {children}
       {help && !error && (

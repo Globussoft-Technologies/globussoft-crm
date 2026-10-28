@@ -55,11 +55,11 @@ describe('<BillingPersons />', () => {
     await screen.findByText('Bina Shah');
 
     expect(screen.getByTestId('billing-directory-page')).toHaveStyle({ overflow: 'hidden', minHeight: '0' });
-    expect(screen.getByTestId('billing-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll');
+    expect(screen.getByTestId('billing-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('billing-directory-table-scroll')).toHaveStyle({ overflowX: 'auto', overflowY: 'auto', minHeight: '0' });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
-      position: 'sticky', top: '0px', color: 'var(--text-secondary)',
-      background: '#f3f4f6',
+      position: 'sticky', top: '0px', color: 'var(--text-primary)',
+      background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
     });
   });
 

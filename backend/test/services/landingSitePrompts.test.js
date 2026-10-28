@@ -36,6 +36,28 @@ describe('landingSitePrompts wellness sector', () => {
     expect(prompt.user).toContain('Event date: 12 August 2026');
     expect(prompt.system).toContain('editable structure');
     expect(prompt.system).toContain('Do not write vague filler');
+    expect(prompt.system).toContain('Any year in generated titles or copy must match that date');
+  });
+
+  it('passes the event date to generic prompts and treats it as authoritative', () => {
+    const staleYear = '2031';
+    const selectedYear = '2032';
+    const campaignName = `Education campaign ${staleYear}`;
+    const eventDate = `14 November ${selectedYear}`;
+    const alignedCampaignName = campaignName.replace(staleYear, selectedYear);
+    const prompt = buildGenericLandingSitePrompt({
+      sectorKey: 'education',
+      campaignName,
+      eventDate,
+      eventTime: '10:30 AM',
+      eventLocation: 'Education campus',
+    });
+
+    expect(prompt.user).toContain(`Campaign name: ${alignedCampaignName}`);
+    expect(prompt.user).toContain(`Event date: ${eventDate}`);
+    expect(prompt.user).toContain('Event time: 10:30 AM');
+    expect(prompt.user).toContain('Event location: Education campus');
+    expect(prompt.system).toContain('Any year in generated titles or copy must match that date');
   });
 
 
@@ -63,9 +85,27 @@ describe('landingSitePrompts wellness sector', () => {
     expect(prompt.user).toContain('Event date: 12 August 2026');
     expect(prompt.user).toContain('Event location: Main clinic branch');
     expect(prompt.system).toContain('requested layout: immersive');
+    expect(prompt.system).toContain('Any year in the campaign title or generated copy must match the year in eventDate');
     expect(prompt.wellnessLayout).toBe('immersive');
     expect(prompt.user).toContain('Generate the wellness landing page content now.');
 
+  });
+
+  it('aligns generated wellness titles with the selected event year', () => {
+    const staleYear = '2031';
+    const selectedYear = '2032';
+    const campaignName = `Wellness campaign ${staleYear}`;
+    const eventDate = `14 November ${selectedYear}`;
+    const blocks = buildWellnessRegistrationBlocks({
+      sectorKey: 'wellness',
+      campaignName,
+      heroTitleLine1: campaignName,
+      eventDate,
+    });
+
+    const body = JSON.stringify(blocks);
+    expect(body).toContain(`Wellness campaign ${selectedYear}`);
+    expect(body).not.toContain(`Wellness campaign ${staleYear}`);
   });
   it('buildWellnessRegistrationBlocks stays campaign-specific and avoids donor-only copy', () => {
     const blocks = buildWellnessRegistrationBlocks({

@@ -1,0 +1,255 @@
+/* Generic CRM laptop defaults for ordinary page content. Specialized data
+   grids and the Dashboard own their sizing; portal/mobile styles are untouched. */
+@media (min-width: 900px) and (max-width: 1919px) {
+  body[data-vertical="generic"] .app-main > main.generic-page-content {
+    --generic-laptop-body: clamp(0.78rem, calc(0.6rem + 0.22vw), 0.9rem);
+    --generic-laptop-control: clamp(0.75rem, calc(0.5rem + 0.25vw), 0.85rem);
+    --generic-laptop-cell: clamp(0.75rem, calc(0.52rem + 0.3vw), 0.875rem);
+    --generic-laptop-padding: clamp(0.75rem, 1.55vw, 2rem);
+    font-size: var(--generic-laptop-body);
+  }
+
+  body[data-vertical="generic"] [data-testid="staff-create-modal"] > .card {
+    font-size: var(--generic-laptop-body, 0.85rem);
+  }
+
+  body[data-vertical="generic"] [data-testid="staff-create-modal"] h3 {
+    font-size: clamp(1rem, calc(0.85rem + 0.2vw), 1.1rem) !important;
+  }
+
+  body[data-vertical="generic"] [data-testid="staff-create-modal"] label,
+  body[data-vertical="generic"] [data-testid="staff-create-modal"] p {
+    font-size: 0.74rem !important;
+  }
+
+  body[data-vertical="generic"] [data-testid="staff-create-modal"] :is(input, select, textarea, button, .input-field) {
+    font-size: 0.78rem !important;
+    line-height: 1.25;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page) h1 {
+    font-size: clamp(1.25rem, calc(0.95rem + 0.44vw), 1.75rem) !important;
+    line-height: 1.18;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    :is(.btn-primary, .btn-secondary, .input-field) {
+    font-size: var(--generic-laptop-control) !important;
+    line-height: 1.3;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    :is(.btn-primary, .btn-secondary) {
+    padding: clamp(0.45rem, 0.55vw, 0.6rem) clamp(0.65rem, 0.9vw, 1.25rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    .input-field {
+    padding-block: clamp(0.5rem, 0.7vw, 0.8rem) !important;
+    padding-inline: clamp(0.65rem, 0.9vw, 1.25rem) !important;
+    min-width: 0;
+  }
+
+  /* The Clients search icon is positioned inside its field; preserve the
+     intended text inset when the general laptop input padding is reduced. */
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    .generic-clients-card input.generic-clients-search-input {
+    padding-left: 2.5rem !important;
+  }
+
+  /* The general laptop input padding is important and more specific than
+     the component's inline style, so explicitly preserve the search icon gap. */
+  body[data-vertical="generic"] main.generic-page-content
+    .converted-leads-page .converted-leads__controls-card
+    .converted-leads__search-wrap > input.input-field {
+    padding-left: 2.5rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .staff-team-search > input.input-field {
+    padding-left: 2rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    :is(.btn-primary, .btn-secondary) > svg {
+    width: clamp(14px, 0.95vw, 18px);
+    height: clamp(14px, 0.95vw, 18px);
+    flex-shrink: 0;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    table.stable-table :is(th, td) {
+    font-size: var(--generic-laptop-cell) !important;
+    line-height: 1.3;
+    padding-block: clamp(0.35rem, 0.5vw, 0.625rem);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    .card[style*="padding: 2rem"] {
+    padding: var(--generic-laptop-padding) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    .card[style*="padding: 1.5rem"] {
+    padding: clamp(0.75rem, 1.15vw, 1.5rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    > :not(.dashboard-page):not(.leads-page-root--generic):not(.contacts-page)
+    .recharts-cartesian-axis-tick-value {
+    font-size: clamp(0.6875rem, calc(0.5rem + 0.3vw), 0.75rem) !important;
+  }
+
+  body[data-vertical="generic"] .settings-grid {
+    columns: clamp(300px, 24vw, 360px) 2;
+    column-gap: clamp(0.75rem, 1.2vw, 1.5rem);
+  }
+
+  body[data-vertical="generic"] .settings-grid > .card {
+    margin-bottom: clamp(0.75rem, 1.2vw, 1.5rem);
+  }
+
+  body[data-vertical="generic"] .reports-page__overview {
+    grid-template-columns: minmax(0, clamp(220px, 20vw, 320px)) minmax(0, 1fr);
+    gap: clamp(0.75rem, 1.5vw, 2rem);
+  }
+
+  body[data-vertical="generic"] .reports-page__chart-stage {
+    height: clamp(230px, 21vw, 280px) !important;
+    min-height: 0 !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .reports-page .reports-page__overview > .card {
+    padding: 1.25rem !important;
+  }
+
+  body[data-vertical="generic"] .reports-page__overview > .card:first-child {
+    gap: 1.2rem !important;
+  }
+
+  body[data-vertical="generic"] .reports-page__overview > .card:first-child label {
+    margin-bottom: 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] .reports-page__overview .report-aggregate-card {
+    padding: 1rem !important;
+  }
+
+  body[data-vertical="generic"] .reports-page__overview > .card:last-child > div:first-child {
+    margin-bottom: 1rem !important;
+  }
+
+  body[data-vertical="generic"] .reports-page__schedule {
+    margin-top: 1.25rem !important;
+  }
+
+  body[data-vertical="generic"] .agent-reports-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 32%) !important;
+  }
+
+  body[data-vertical="generic"] .agent-reports-layout > * {
+    min-width: 0;
+  }
+
+  body[data-vertical="generic"] .agent-reports-table :is(th, td) {
+    padding: 0.75rem 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .agent-reports-page .agent-reports-leaderboard.card {
+    min-width: 0;
+    padding: 1rem !important;
+  }
+
+  body[data-vertical="generic"] .agent-reports-leaderboard-header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  body[data-vertical="generic"] .agent-reports-leaderboard-header select {
+    max-width: 100%;
+  }
+
+  body[data-vertical="generic"] .marketing-campaign-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, clamp(250px, 22vw, 350px)), 1fr)) !important;
+    gap: clamp(0.75rem, 1.2vw, 1.5rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-search {
+    width: clamp(150px, 16vw, 210px) !important;
+    min-width: 0;
+    padding-left: 32px !important;
+    font-size: var(--generic-laptop-control) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar .deals-pipeline-search-wrap {
+    margin-left: 0 !important;
+  }
+
+  /* Dimension-only density: preserve the toolbar's existing layout while
+     scaling its controls, text, icons, and spacing on smaller viewports. */
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar > :is(button, label, div) {
+    font-size: clamp(0.62rem, 0.72vw, 0.8rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar :is(select, button) {
+    min-height: clamp(30px, 3.2vw, 44px) !important;
+    padding-block: clamp(0.2rem, 0.35vw, 0.5rem) !important;
+    padding-inline: clamp(0.3rem, 0.55vw, 0.7rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar > label > span {
+    white-space: nowrap;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content
+    .generic-deals-pipeline .generic-deals-toolbar > :is(button, label, div) > svg {
+    width: clamp(12px, 0.9vw, 16px) !important;
+    height: clamp(12px, 0.9vw, 16px) !important;
+  }
+
+
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-stage-title {
+    font-size: clamp(0.875rem, calc(0.72rem + 0.17vw), 1rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-stage-meta,
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-stage-badge,
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-card-probability,
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-card-footer {
+    font-size: clamp(0.6875rem, calc(0.62rem + 0.1vw), 0.75rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-card-title,
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-card-amount {
+    font-size: clamp(0.75rem, calc(0.68rem + 0.12vw), 0.8125rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-card-contact {
+    font-size: clamp(0.75rem, calc(0.64rem + 0.12vw), 0.8125rem) !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-card {
+    padding: clamp(0.625rem, 0.85vw, 0.875rem) !important;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1149px) {
+  body[data-vertical="generic"] .agent-reports-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

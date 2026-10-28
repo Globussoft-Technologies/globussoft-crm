@@ -41,6 +41,14 @@ export const dealFieldSections = [
 function personName(person) { return person?.name || [person?.firstName, person?.lastName].filter(Boolean).join(' ') || person?.email || ''; }
 function parseTags(value) { if (Array.isArray(value)) return value; if (!value) return undefined; try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : undefined; } catch { return undefined; } }
 function slug(value) { return String(value || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); }
+function parseGenericDealTypes(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    return [];
+  }
+}
 function relative(value) { if (!value) return EMPTY; const ms = Date.now() - new Date(value).getTime(); if (!Number.isFinite(ms)) return EMPTY; const days = Math.floor(ms / 86400000); if (days > 0) return `${days} day${days === 1 ? '' : 's'} ago`; const hours = Math.floor(ms / 3600000); return hours > 0 ? `${hours} hour${hours === 1 ? '' : 's'} ago` : 'Just now'; }
 function plainText(value) { return String(value || '').replace(/<[^>]*>/g, ''); }
 function openFullNote(value) {
@@ -328,22 +336,247 @@ function DealContactTable({ contact, returnTo }) {
   return <div className="deal-contacts-table-wrap"><table className="deal-contacts-table"><thead><tr><th>Name</th><th>Email</th><th>Last Contacted Time</th><th>Open Deals Amount</th><th>Won Deals Amount</th></tr></thead><tbody><tr><td><span className="deal-contact-person"><span className="deal-contact-avatar">{initials}</span><strong onClick={openContact} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openContact(); } }} role={contact.id != null ? 'link' : undefined} tabIndex={contact.id != null ? 0 : undefined}>{name}</strong></span></td><td>{contact.email || EMPTY}</td><td>{lastContacted ? formatDateTime(lastContacted) : EMPTY}</td><td>{formatMoney(total(openDeals), { currency: deals[0]?.currency || 'USD' })}</td><td>{formatMoney(total(wonDeals), { currency: deals[0]?.currency || 'USD' })}</td></tr></tbody></table></div>;
 }
 
+const dealDetailsLayoutStyles = `
+.generic-deal-details-page {
+  max-width: 1540px;
+  margin: 0 auto;
+  padding: 24px clamp(16px, 2vw, 32px) 40px;
+  background: var(--subtle-bg);
+}
+.generic-deal-details-page .deal-reference-header {
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 14px 16px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+}
+.generic-deal-details-page .deal-back-button {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary-color, var(--accent-color));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.generic-deal-details-page .deal-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  font-size: 18px;
+}
+.generic-deal-details-page .deal-reference-header h1 {
+  margin: 0 0 6px;
+  font-size: clamp(20px, 1.6vw, 26px);
+  line-height: 1.2;
+}
+.generic-deal-details-page .deal-reference-header .deal-meta {
+  font-size: 14px;
+}
+.generic-deal-details-page .deal-header-stage {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--surface-color));
+  color: var(--primary-color, var(--accent-color));
+  font-size: 12px;
+  font-weight: 700;
+}
+.generic-deal-details-page .deal-tag-line {
+  grid-column: 2 / -1;
+  padding: 0;
+  font-size: 13px;
+}
+.generic-deal-details-page .deal-reference-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(270px, .85fr);
+  grid-template-areas: 'overview status notes' 'related related related';
+  gap: 12px;
+  padding: 0;
+  background: transparent;
+  align-items: stretch;
+}
+.generic-deal-details-page .deal-reference-cards > .deal-info-card:first-child { grid-area: overview; }
+.generic-deal-details-page .deal-reference-cards > .deal-info-card:nth-child(2) { grid-area: status; }
+.generic-deal-details-page .deal-reference-cards > .deal-side-cards {
+  grid-area: related;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.generic-deal-details-page .deal-reference-cards > .deal-reference-notes {
+  grid-area: notes;
+  height: auto;
+  min-height: 170px;
+  align-self: stretch;
+  contain: none;
+}
+.generic-deal-details-page .deal-reference-cards .deal-info-card {
+  padding: 18px 20px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .03);
+}
+.generic-deal-details-page .deal-reference-cards .deal-side-cards .deal-info-card { margin: 0; }
+.generic-deal-details-page .deal-reference-cards .deal-info-card h2 {
+  margin: 0 0 12px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+.generic-deal-details-page .deal-reference-cards .deal-pair {
+  padding: 9px 24px 9px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.generic-deal-details-page .deal-reference-cards .deal-pair:last-child { border-bottom: 0; }
+.generic-deal-details-page .deal-reference-cards .deal-pair span,
+.generic-deal-details-page .deal-reference-cards .deal-pair strong { font-size: 13px; line-height: 1.4; }
+.generic-deal-details-page .deal-reference-cards .deal-pair strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.generic-deal-details-page .deal-reference-cards .deal-pair-edit { top: 17px; }
+.generic-deal-details-page .deal-side-cards .deal-empty,
+.generic-deal-details-page .deal-side-cards .deal-related { font-size: 13px; }
+.generic-deal-details-page .deal-reference-notes .deal-notes-list {
+  align-content: start;
+  max-height: 255px;
+}
+.generic-deal-details-page .deal-reference-notes .deal-link { font-size: 13px; }
+.generic-deal-details-page .deal-reference-notes .deal-notes-list > .deal-empty {
+  display: block;
+  padding: 18px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+  text-align: center;
+  font-size: 13px;
+}
+.generic-deal-details-page .deal-reference-tracker {
+  margin: 16px 0;
+  padding: 18px 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+.generic-deal-details-page .deal-progress-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.generic-deal-details-page .deal-progress-heading h2 { margin: 0; font-size: 16px; }
+.generic-deal-details-page .deal-progress-heading > span { display: none; }
+.generic-deal-details-page .deal-progress-heading span { color: var(--text-secondary); font-size: 13px; }
+.generic-deal-details-page .deal-reference-tracker .deal-age {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.generic-deal-details-page .deal-reference-tracker .deal-stages {
+  gap: 8px;
+  overflow-x: auto;
+  background: transparent;
+  border-radius: 0;
+}
+.generic-deal-details-page .deal-reference-tracker .deal-stage,
+.generic-deal-details-page .deal-reference-tracker .deal-stage:not(:first-child) {
+  min-width: 120px;
+  min-height: 42px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  clip-path: none;
+  background: var(--subtle-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+.generic-deal-details-page .deal-reference-tracker .deal-stage.done { background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color)); }
+.generic-deal-details-page .deal-reference-tracker .deal-stage.current {
+  border-color: var(--accent-color);
+  background: var(--accent-color);
+  color: #fff;
+}
+.generic-deal-details-page .deal-reference-workspace {
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  background: transparent;
+}
+.generic-deal-details-page .deal-reference-nav,
+.generic-deal-details-page .deal-reference-main {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-color);
+}
+.generic-deal-details-page .deal-reference-nav { padding: 18px 10px; }
+.generic-deal-details-page .deal-reference-nav h2 { margin: 0 0 10px; padding: 0 10px; }
+.generic-deal-details-page .deal-reference-nav button {
+  margin: 2px 0;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.generic-deal-details-page .deal-reference-main { padding: 20px; }
+.generic-deal-details-page .deal-details-toolbar { margin-bottom: 18px; }
+.generic-deal-details-page .deal-details-toolbar h2 { font-size: 20px; }
+.generic-deal-details-page .deal-reference-main .deal-field-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 20px;
+  padding: 4px 16px 12px;
+}
+.generic-deal-details-page .deal-reference-main .deal-field { padding: 12px 25px 12px 0; }
+.generic-deal-details-page .deal-reference-main .deal-field span { font-size: 12px; }
+.generic-deal-details-page .deal-reference-main .deal-field strong { font-size: 14px; line-height: 1.4; }
+.generic-deal-details-page .deal-reference-main .deal-field-section {
+  margin: 10px 0 16px;
+  border-radius: 10px;
+}
+.generic-deal-details-page .deal-reference-main .deal-section-heading { padding: 12px 16px; }
+@media (max-width: 1200px) {
+  .generic-deal-details-page .deal-reference-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: 'overview status' 'notes notes' 'related related';
+  }
+  .generic-deal-details-page .deal-reference-main .deal-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .generic-deal-details-page { padding: 12px; }
+  .generic-deal-details-page .deal-reference-header { grid-template-columns: 48px minmax(0, 1fr); padding: 18px; }
+  .generic-deal-details-page .deal-avatar { width: 48px; height: 48px; }
+  .generic-deal-details-page .deal-reference-actions { grid-column: 1 / -1; }
+  .generic-deal-details-page .deal-tag-line { grid-column: 1 / -1; }
+  .generic-deal-details-page .deal-reference-cards {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'overview' 'status' 'notes' 'related';
+  }
+  .generic-deal-details-page .deal-reference-cards > .deal-side-cards { grid-template-columns: minmax(0, 1fr); }
+  .generic-deal-details-page .deal-reference-workspace { grid-template-columns: minmax(0, 1fr); }
+  .generic-deal-details-page .deal-reference-nav { display: flex; gap: 4px; overflow-x: auto; padding: 8px; }
+  .generic-deal-details-page .deal-reference-nav h2 { display: none; }
+  .generic-deal-details-page .deal-reference-nav button { width: auto; white-space: nowrap; }
+  .generic-deal-details-page .deal-reference-main { padding: 16px; }
+}
+@media (max-width: 520px) {
+  .generic-deal-details-page .deal-reference-main .deal-field-grid { grid-template-columns: minmax(0, 1fr); }
+  .generic-deal-details-page .deal-reference-tracker .deal-age { display: grid; gap: 4px; }
+}
+`;
+
 function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, products, onStageSelect, stageError, activityPageData, activityPage, activityLoading, onActivitiesOpen, onActivitiesPageChange, dealTagCatalog = [], onCall, isGeneric, onOpenTags }) {
   const [tab, setTab] = useState('Deal details');
   const [query, setQuery] = useState('');
   const [showEmpty, setShowEmpty] = useState(false);
   const navigate = useNavigate();
-  useEffect(() => {
-    const header = document.querySelector('.deal-reference-header');
-    if (!header || header.querySelector('.deal-back-button')) return undefined;
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'deal-back-button'; button.textContent = '← Back';
-    button.style.cssText = 'position:absolute;top:8px;left:16px;border:0;background:none;color:var(--primary-color,var(--accent-color));font-size:11px;font-weight:700;cursor:pointer;padding:0';
-    button.addEventListener('click', () => navigate('/pipeline'));
-    header.style.position = 'relative'; header.prepend(button);
-    return () => button.remove();
-  }, [navigate]);
-  const visibleSections = dealFieldSections.map((section) => ({ ...section, fields: section.fields.filter(([, label]) => !query || label.toLowerCase().includes(query.toLowerCase())) })).filter((section) => section.fields.length);
+  const visibleSections = dealFieldSections.map((section) => ({ ...section, fields: section.fields.filter(([, label]) => !isGeneric || !['Pipeline', 'Deal name'].includes(label)).filter(([, label]) => !query || label.toLowerCase().includes(query.toLowerCase())) })).filter((section) => section.fields.length);
   const tags = parseTags(deal.tags || deal.contact?.tags || deal.contact?.tagsJson) || [];
   const tagColorMap = new Map(dealTagCatalog.map((record) => [tagKey(record.name), record.color || fallbackTagColor(record.name)]));
   const initials = String(deal.title || 'D').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -371,29 +604,6 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
     productCard.addEventListener('click', cardOpen); productTab.addEventListener('click', cardOpen);
     return () => { arrow.removeEventListener('click', open); arrow.remove(); productCard.removeEventListener('click', cardOpen); productTab.removeEventListener('click', cardOpen); };
   }, [products.length]);
-  useEffect(() => {
-    const stageElements = [...document.querySelectorAll('.deal-reference-tracker .deal-stage')];
-    if (!stageElements.length || typeof onStageSelect !== 'function') return undefined;
-    const handlers = stageElements.map((element, index) => {
-      const select = () => onStageSelect(stageRows[index]?.name);
-      const keydown = (event) => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); }
-      };
-      element.setAttribute('role', 'button');
-      element.setAttribute('tabindex', '0');
-      element.style.cursor = 'pointer';
-      element.addEventListener('click', select);
-      element.addEventListener('keydown', keydown);
-      return { select, keydown };
-    });
-    return () => stageElements.forEach((element, index) => {
-      element.removeEventListener('click', handlers[index].select);
-      element.removeEventListener('keydown', handlers[index].keydown);
-      element.removeAttribute('role');
-      element.removeAttribute('tabindex');
-      element.style.cursor = '';
-    });
-  }, [onStageSelect, stageRows]);
   useEffect(() => {
     const meetingCard = [...document.querySelectorAll('.deal-side-cards .deal-info-card')].find((card) => card.querySelector('h2')?.textContent === 'Upcoming meeting');
     if (!meetingCard || !deal.contact?.id) return undefined;
@@ -512,26 +722,27 @@ function ScreenshotLayout({ deal, pipeline, stageRows, activeIndex, latestNote, 
   }, [navigate, tab]);
 
   return <div className="deal-reference-layout generic-deal-details-page">
-    <style>{referenceStyles + genericDealDetailsStyles + editStyles + inlineEditStyles + stageChevronStyles + dealTagStyles}</style>
+    <style>{referenceStyles + genericDealDetailsStyles + editStyles + inlineEditStyles + stageChevronStyles + dealTagStyles + dealDetailsLayoutStyles}</style>
     <header className="deal-reference-header">
+      <button type="button" className="deal-back-button" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Deals and Pipelines</button>
       <div className="deal-avatar">{initials}</div>
-      <div><h1>{deal.title || 'Untitled deal'}</h1><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span>{deal.forecastCategory || deal.paymentStatus || EMPTY}</span></div></div>
+      <div><h1>{deal.dealType || deal.title || 'Untitled deal'}</h1><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span className="deal-header-stage">{stageRows[activeIndex]?.name || deal.stage}</span>{(deal.forecastCategory || deal.paymentStatus) && <span>{deal.forecastCategory || deal.paymentStatus}</span>}</div></div>
        <div className="deal-reference-actions"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button><button type="button" className="deal-primary" onClick={onCall} title={`Call ${personName(deal.contact) || 'associated contact'} via AI`}><Phone size={14} /> Call</button></div>
       <div className="deal-tag-line" onClick={(event) => { if (deal.contact?.id && !event.target.closest('.deal-tag-picker')) onOpenTags(); }}>{tags.length ? tags.map((tag) => { const name = String(tag); const color = tagColorMap.get(tagKey(name)) || fallbackTagColor(name); return <span className="cd-tag-chip" key={name} style={{ background: color, borderColor: color, color: tagTextColor(color) }}><span>{name}</span>{deal.contact?.id && <button type="button" aria-label={`Remove tag ${name}`} onClick={(event) => { event.stopPropagation(); window.dispatchEvent(new CustomEvent('deal-tag-remove', { detail: { name } })); }}>×</button>}</span>; }) : <span>Click to add tags</span>}{deal.contact?.id && <button type="button" className="deal-link deal-add-tag-button" aria-label="Add tag" onClick={(event) => { event.stopPropagation(); onOpenTags(); }}>+ Add tag</button>}</div>
     </header>
     <div className="deal-reference-cards">
-      <InfoCard title="Overview"><Pair label="Related account" value={deal.contact?.company} deal={deal} /><Pair label="Sales owner" value={personName(deal.owner)} deal={deal} /><Pair label="Expected close date" value={deal.expectedClose} type="date" deal={deal} /><Pair label="Deal value" value={deal.amount} type="currency" deal={deal} /><Pair label="Forecast category" value={deal.forecastCategory} deal={deal} /><Pair label="Pipeline" value={pipeline?.name} deal={deal} /></InfoCard>
+      <InfoCard title="Overview"><Pair label="Related account" value={deal.contact?.company} deal={deal} /><Pair label="Sales owner" value={personName(deal.owner)} deal={deal} /><Pair label="Expected close date" value={deal.expectedClose} type="date" deal={deal} /><Pair label="Deal value" value={deal.amount} type="currency" deal={deal} /><Pair label="Forecast category" value={deal.forecastCategory} deal={deal} />{!isGeneric && <Pair label="Pipeline" value={pipeline?.name} deal={deal} />}</InfoCard>
       <InfoCard title="Status and assignment"><Pair label="Related contact" value={personName(deal.contact)} deal={deal} /><Pair label="Deal type" value={deal.dealType} deal={deal} /><Pair label="Lost reason" value={deal.lostReason} deal={deal} /><Pair label="Closed date" value={deal.closedAt} type="date" deal={deal} /><Pair label="Payment status" value={deal.paymentStatus} deal={deal} /></InfoCard>
       <div className="deal-side-cards"><InfoCard title="Contacts by sales owner"><div className="deal-related"><Users size={16} /><span>{personName(deal.owner) || 'Unassigned'} ({deal.contact ? 1 : 0})</span></div></InfoCard><InfoCard title={`Products (${products.length})`}>{products.length ? products.map((product, index) => <div className="deal-product" key={`${product.name}-${index}`}><span>{product.name}</span><strong>{product.quantity}</strong></div>) : <span className="deal-empty">No products linked</span>}</InfoCard><InfoCard title="Upcoming meeting"><span className="deal-empty">{deal.upcomingMeeting?.title || 'No upcoming meeting'}</span>{deal.upcomingMeeting && <small>{formatDateTime(deal.upcomingMeeting.startAt)}</small>}</InfoCard></div>
       <InfoCard title="Notes" className="deal-reference-notes"><textarea aria-label="Deal note" placeholder="Type your note here..." readOnly onFocus={() => window.dispatchEvent(new Event('deal-note-open'))} /><div className="deal-note"><NotebookPen size={16} /><div><strong>{latestNote?.description || 'No notes available'}</strong>{latestNote && <small>Posted by {personName(latestNote.user) || 'CRM user'}, {relative(latestNote.createdAt)}</small>}</div></div></InfoCard>
     </div>
-    <section className="deal-reference-tracker"><div className="deal-age"><span>Created {relative(deal.createdAt)}</span><span>Expected close date: {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</span></div>{stageError ? <div className="deal-empty">{stageError}</div> : stageRows.length ? <div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div> : <div className="deal-empty">No stages configured for this pipeline.</div>}</section>
+    <section className="deal-reference-tracker"><div className="deal-progress-heading"><h2>Deal progress</h2><span>{pipeline?.name || 'Pipeline'}</span></div><div className="deal-age"><span>Created {relative(deal.createdAt)}</span><span>Expected close date: {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</span></div>{stageError ? <div className="deal-empty">{stageError}</div> : stageRows.length ? <div className="deal-stages">{stageRows.map((stage, index) => <button type="button" className={`deal-stage ${index < activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} aria-current={index === activeIndex ? 'step' : undefined} key={stage.id || stage.name} onClick={() => onStageSelect(stage.name)}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</button>)}</div> : <div className="deal-empty">No stages configured for this pipeline.</div>}</section>
     <div className="deal-reference-workspace"><nav className="deal-reference-nav"><h2>Overview</h2>{navItems.map((item) => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => selectTab(item)}>{item}</button>)}</nav><main className="deal-reference-main"><div className="deal-details-content"><div className="deal-details-toolbar"><div><h2>{tab === 'Deal details' ? 'Deal details' : tab}</h2><button type="button" className="deal-link"><Settings2 size={14} /> Manage fields</button></div><label><Search size={15} /><input aria-label="Search fields" placeholder="Search fields" value={query} onChange={(event) => setQuery(event.target.value)} /></label><label className="deal-switch"><input type="checkbox" checked={showEmpty} onChange={(event) => setShowEmpty(event.target.checked)} /> Show empty fields</label></div>{tab === 'Activities' && <div className="deal-activity-list">{(deal.activities || []).slice(0, 10).map((item) => <div key={`${item.type}-${item.id}`}><FileText size={15} /><span><strong>{item.type || 'Activity'}</strong>{['Email', 'Note'].includes(item.type) ? <RichTextNotePreview value={item.description} /> : plainText(item.description)}<small>{formatDate(item.createdAt)}</small></span></div>)}</div>}{tab === 'Deal details' && visibleSections.map((section) => <Section key={section.key} section={section} deal={deal} pipeline={pipeline} latestNote={latestNote} showEmpty={showEmpty} />)}{!['Deal details', 'Activities'].includes(tab) && <div className="deal-placeholder"><FileText size={25} /><h2>{tab}</h2><p>This workspace is ready for {tab.toLowerCase()} data when that module is enabled.</p></div>}</div></main></div>
   </div>;
 }
 
 export default function DealDetails() {
-  const { dealId } = useParams(); const navigate = useNavigate(); const [deal, setDeal] = useState(null); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [contacts, setContacts] = useState([]); const [dealTagCatalog, setDealTagCatalog] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [tab, setTab] = useState('Deal details'); const [query, setQuery] = useState(''); const [showEmpty, setShowEmpty] = useState(false);
+  const { dealId } = useParams(); const navigate = useNavigate(); const [deal, setDeal] = useState(null); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [contacts, setContacts] = useState([]); const [dealTagCatalog, setDealTagCatalog] = useState([]); const [genericDealTypes, setGenericDealTypes] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [tab, setTab] = useState('Deal details'); const [query, setQuery] = useState(''); const [showEmpty, setShowEmpty] = useState(false);
   const [stageError, setStageError] = useState('');
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [genericCallLead, setGenericCallLead] = useState(null);
@@ -546,10 +757,11 @@ export default function DealDetails() {
     setLoading(true);
     setError('');
     try {
-      const [dealResult, pipelinesResult, contactsResult] = await Promise.allSettled([
+      const [dealResult, pipelinesResult, contactsResult, dealTypesResult] = await Promise.allSettled([
         fetchApi(`/api/deals/${dealId}`),
         fetchApi('/api/pipelines?fields=summary', { silent: true }),
         fetchApi('/api/contacts?limit=200', { silent: true }),
+        isGeneric ? fetchApi('/api/tenant-settings/generic.dealTypes', { silent: true }) : Promise.resolve(null),
       ]);
       if (dealResult.status === 'rejected') throw dealResult.reason;
       const loadedDeal = dealResult.value;
@@ -567,12 +779,17 @@ export default function DealDetails() {
           : fetchApi('/api/pipeline_stages', { silent: true }),
       ]).then(([result]) => result);
       setDeal(loadedDeal);
+      setGenericDealTypes(
+        isGeneric && dealTypesResult.status === 'fulfilled'
+          ? parseGenericDealTypes(dealTypesResult.value?.value)
+          : [],
+      );
       if (stagesResult.status === 'fulfilled' && Array.isArray(stagesResult.value)) {
         setStages(stagesResult.value);
         setStageError('');
       } else {
         setStages([]);
-        setStageError(isGeneric && effectivePipelineId ? 'Unable to load stages for this pipeline.' : '');
+        setStageError(!isGeneric && effectivePipelineId ? 'Unable to load stages for this pipeline.' : '');
       }
       setPipelines(loadedPipelines);
       const contactRows = contactsResult.status === 'fulfilled' ? contactsResult.value : [];
@@ -589,15 +806,21 @@ export default function DealDetails() {
     if (deal.pipelineId) return pipelines.find((p) => String(p.id) === String(deal.pipelineId)) || null;
     return isGeneric ? pipelines.find((p) => p.isDefault) || null : null;
   }, [pipelines, deal, isGeneric]);
+  const dealTypeStages = useMemo(() => {
+    if (!isGeneric || !deal?.dealType) return [];
+    const selectedType = genericDealTypes.find((type) => String(type?.name || '') === String(deal.dealType));
+    return Array.isArray(selectedType?.stages) ? selectedType.stages.filter((stage) => stage?.name) : [];
+  }, [deal?.dealType, genericDealTypes, isGeneric]);
   const stageRows = useMemo(() => {
+    if (isGeneric && deal?.dealType) return dealTypeStages;
     if (stages.length) return stages;
     // Generic CRM must display the selected pipeline's assignments only. Do
     // not replace a missing assignment list with the deal's current stage.
     if (isGeneric) return [];
     return [{ name: deal?.stage || 'Current stage', color: 'var(--accent-color)' }];
-  }, [stages, deal, isGeneric]);
+  }, [dealTypeStages, stages, deal, isGeneric]);
   const latestNote = useMemo(() => { const note = (deal?.activities || []).find((a) => String(a.type || '').toLowerCase() === 'note') || (deal?.activities || [])[0]; return note ? { ...note, description: plainText(note.description) } : note; }, [deal]);
-  const visibleSections = dealFieldSections.map((section) => ({ ...section, fields: section.fields.filter(([, label]) => !query || label.toLowerCase().includes(query.toLowerCase())) })).filter((section) => section.fields.length);
+  const visibleSections = dealFieldSections.map((section) => ({ ...section, fields: section.fields.filter(([, label]) => !isGeneric || !['Pipeline', 'Deal name'].includes(label)).filter(([, label]) => !query || label.toLowerCase().includes(query.toLowerCase())) })).filter((section) => section.fields.length);
   const products = (deal?.quotes || []).flatMap((quote) => quote.lineItems || []).map((item) => ({ name: item.productName || item.name || 'Product', quantity: item.quantity || 1, setupFee: item.setupFee, unitPrice: item.unitPrice, discount: item.discount, currency: item.currency || deal?.currency }));
   const applyUpdatedDeal = (updated) => {
     setDeal((current) => ({ ...current, ...updated, contact: updated?.contact || current.contact, owner: updated?.owner || current.owner, activities: updated?.activities || current.activities, quotes: updated?.quotes || current.quotes }));
@@ -648,8 +871,8 @@ export default function DealDetails() {
   };
   if (loading) return <div className="deal-details-page"><div className="deal-loading"><div className="deal-skeleton" /><div className="deal-skeleton short" /><p>Loading deal details...</p></div></div>;
   if (error || !deal) return <div className="deal-details-page"><div className="deal-error"><h1>Deal not found</h1><p>{error || 'This deal is no longer available.'}</p><button type="button" className="deal-primary" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Back to Deals and Pipelines</button><button type="button" className="deal-link" onClick={load}>Try again</button></div></div>;
-  const current = slug(deal.stage); const activeIndex = stageRows.findIndex((stage) => deal.stageId != null ? String(stage.id) === String(deal.stageId) : slug(stage.name) === current); const notes = deal.activities || [];
-  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} onCall={openDealCall} onOpenTags={() => setTagEditorOpen(true)} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} /><DealTagEditor deal={deal} open={tagEditorOpen} setOpen={setTagEditorOpen} onCatalogChange={handleDealTagCatalogChange} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} />{isGeneric && genericCallLead && <CallifiedLeadCallDialog lead={genericCallLead} onClose={() => setGenericCallLead(null)} onCalled={() => notify.success('Call initiated successfully.')} />}</>;
+  const current = slug(deal.stage); const activeIndex = stageRows.findIndex((stage) => (deal.stageId != null && String(stage.id) === String(deal.stageId)) || slug(stage.name) === current); const notes = deal.activities || [];
+  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} onCall={openDealCall} isGeneric={isGeneric} onOpenTags={() => setTagEditorOpen(true)} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} /><DealTagEditor deal={deal} open={tagEditorOpen} setOpen={setTagEditorOpen} onCatalogChange={handleDealTagCatalogChange} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} />{isGeneric && genericCallLead && <CallifiedLeadCallDialog lead={genericCallLead} onClose={() => setGenericCallLead(null)} onCalled={() => notify.success('Call initiated successfully.')} />}</>;
   // return <div className="deal-details-page"><style>{styles}</style><div className="deal-breadcrumb"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Deals and Pipelines</button><span>/</span><span>{deal.title || 'Untitled deal'}</span></div><header className="deal-header"><div><div className="deal-title-row"><BriefcaseBusiness size={22} color="var(--accent-color)" /><h1>{deal.title || 'Untitled deal'}</h1></div><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span>{deal.forecastCategory || deal.paymentStatus || EMPTY}</span><span>{Array.isArray(deal.tags) && deal.tags.length ? deal.tags.join(', ') : 'Click to add tags'}</span></div></div><button type="button" className="deal-secondary" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button></header><div className="deal-top-grid"><InfoCard title="Overview"><Pair label="Related account" value={deal.contact?.company} deal={deal} /><Pair label="Sales owner" value={personName(deal.owner)} deal={deal} /><Pair label="Expected close date" value={deal.expectedClose} type="date" deal={deal} /><Pair label="Deal value" value={deal.amount} type="currency" deal={deal} /><Pair label="Forecast category" value={deal.forecastCategory} deal={deal} /><Pair label="Pipeline" value={pipeline?.name} deal={deal} /></InfoCard><InfoCard title="Status and assignment"><Pair label="Related contact" value={personName(deal.contact)} deal={deal} /><Pair label="Deal type" value={deal.dealType} deal={deal} /><Pair label="Lost reason" value={deal.lostReason} deal={deal} /><Pair label="Closed date" value={deal.closedAt} type="date" deal={deal} /><Pair label="Payment status" value={deal.paymentStatus} deal={deal} /></InfoCard><div className="deal-side-cards"><InfoCard title="Contacts by sales owner"><div className="deal-related"><Users size={16} /><span>{personName(deal.owner) || 'Unassigned'} ({deal.contact ? 1 : 0})</span></div></InfoCard><InfoCard title={`Products (${products.length})`}>{products.length ? products.map((p, i) => <div className="deal-product" key={`${p.name}-${i}`}><span>{p.name}</span><strong>{p.quantity}</strong></div>) : <span className="deal-empty">No products linked</span>}</InfoCard><InfoCard title="Upcoming meeting"><span className="deal-empty">{deal.upcomingMeeting?.title || 'No upcoming meeting'}</span>{deal.upcomingMeeting && <small>{formatDateTime(deal.upcomingMeeting.startAt)}</small>}</InfoCard></div></div><InfoCard title="Notes"><textarea aria-label="Deal note" placeholder="Type your note here..." readOnly /><div className="deal-note"><NotebookPen size={16} /><div><strong>{latestNote?.description || 'No notes available'}</strong>{latestNote && <small>Posted by {personName(latestNote.user) || 'CRM user'}, {relative(latestNote.createdAt)}</small>}</div></div><button type="button" className="deal-link">View all notes</button></InfoCard><section className="deal-tracker"><div className="deal-section-heading"><strong>Pipeline progress</strong><span>{pipeline?.name || 'Pipeline'}</span></div><div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div><div className="deal-age">Created {relative(deal.createdAt)} · Expected close {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</div></section><nav className="deal-tabs" aria-label="Deal workspace tabs">{tabs.map((item) => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</nav>{tab === 'Overview' && <div className="deal-overview-grid"><InfoCard title="Deal summary"><Pair label="Stage" value={deal.stage} deal={deal} /><Pair label="Probability" value={deal.probability} type="percent" deal={deal} /><Pair label="Created" value={deal.createdAt} type="date" deal={deal} /></InfoCard><InfoCard title="Latest activity">{notes.length ? <div className="deal-activity-list">{notes.slice(0, 5).map((item) => <div key={`${item.type}-${item.id}`}><FileText size={15} /><span><strong>{item.type || 'Activity'}</strong>{item.description}<small>{formatDate(item.createdAt)}</small></span></div>)}</div> : <span className="deal-empty">No activities available</span>}</InfoCard></div>}{tab === 'Deal details' && <div className="deal-details-content"><div className="deal-details-toolbar"><div><h2>Deal details</h2><button type="button" className="deal-link"><Settings2 size={14} /> Manage fields</button></div><label><Search size={15} /><input aria-label="Search fields" placeholder="Search fields" value={query} onChange={(e) => setQuery(e.target.value)} /></label><label className="deal-switch"><input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> Show empty fields</label></div>{visibleSections.map((section) => <Section key={section.key} section={section} deal={deal} pipeline={pipeline} latestNote={latestNote} showEmpty={showEmpty} />)}</div>}{!['Overview', 'Deal details'].includes(tab) && <div className="deal-placeholder"><FileText size={25} /><h2>{tab}</h2><p>This workspace is ready for {tab.toLowerCase()} data when that module is enabled.</p></div>}</div>;
 }
 

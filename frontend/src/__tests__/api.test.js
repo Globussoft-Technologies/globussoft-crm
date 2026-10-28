@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fetchApi, setAuthToken, clearAuthToken } from '../utils/api';
+import { fetchApi, setAuthToken, clearAuthToken, registerGlobalNotify } from '../utils/api';
 
 /**
  * frontend/src/utils/api.js — fetchApi wrapper contract
@@ -78,6 +78,7 @@ describe('utils/api — fetchApi', () => {
   });
 
   afterEach(() => {
+    registerGlobalNotify(null);
     vi.restoreAllMocks();
     restoreLocation();
     clearAuthToken();
@@ -207,6 +208,29 @@ describe('utils/api — fetchApi', () => {
       code: 'GATEWAY_UNAVAILABLE',
       status: 502,
     });
+  });
+
+  it('shows the Generic Leads Callified authentication error once per login session', async () => {
+    const notifyError = vi.fn();
+    registerGlobalNotify({ error: notifyError });
+    setAuthToken('first-login');
+    mockFetch({
+      status: 503,
+      body: {
+        error: 'Unable to authenticate with Callified. Check API key or email/password in Settings.',
+        code: 'CALLIFIED_AUTH_FAILED',
+      },
+    });
+
+    const request = () => fetchApi('/api/callified/campaigns/with-lead-counts');
+    await expect(request()).rejects.toMatchObject({ code: 'CALLIFIED_AUTH_FAILED' });
+    await expect(request()).rejects.toMatchObject({ code: 'CALLIFIED_AUTH_FAILED' });
+    expect(notifyError).toHaveBeenCalledTimes(1);
+
+    clearAuthToken();
+    setAuthToken('second-login');
+    await expect(request()).rejects.toMatchObject({ code: 'CALLIFIED_AUTH_FAILED' });
+    expect(notifyError).toHaveBeenCalledTimes(2);
   });
 
   it('shows a retry-shortly message (not the generic fallback) for a bodiless 502/503/504 — an infra-level failure, not a modeled app error', async () => {

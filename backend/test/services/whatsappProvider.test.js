@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import https from 'node:https';
 
 import whatsappProvider from '../../services/whatsappProvider.js';
-const { sendTemplate, sendText, verifyWebhook } = whatsappProvider;
+const { sendTemplate, sendText, verifyWebhook, deleteTemplateFromMeta } = whatsappProvider;
 
 // ---- https.request stub --------------------------------------------------
 // Replace https.request with a fake that captures options + payload and
@@ -84,6 +84,7 @@ describe('whatsappProvider — module shape', () => {
     expect(typeof sendTemplate).toBe('function');
     expect(typeof sendText).toBe('function');
     expect(typeof verifyWebhook).toBe('function');
+    expect(typeof deleteTemplateFromMeta).toBe('function');
   });
 });
 
@@ -628,6 +629,26 @@ describe('whatsappProvider — verifyWebhook security invariants', () => {
     expect(out.verified).toBe(true);
     // Cross-check: when mode is missing, refuse regardless.
     expect(verifyWebhook({ query: {} }, undefined)).toEqual({ verified: false });
+  });
+});
+
+describe('whatsappProvider - deleteTemplateFromMeta', () => {
+  test('deletes the named template from the WhatsApp business account', async () => {
+    respondNext(200, { success: true });
+
+    const out = await deleteTemplateFromMeta({
+      wabaId: 'WABA_42',
+      accessToken: 'EAA_test_token',
+      name: 'old notice',
+    });
+
+    expect(out).toEqual({ ok: true, data: { success: true }, status: 200 });
+    const { options, payload } = httpsState.lastRequest;
+    expect(options.hostname).toBe('graph.facebook.com');
+    expect(options.path).toBe(`/${whatsappProvider.GRAPH_API_VERSION}/WABA_42/message_templates?name=old%20notice`);
+    expect(options.method).toBe('DELETE');
+    expect(options.headers.Authorization).toBe('Bearer EAA_test_token');
+    expect(payload).toBe('');
   });
 });
 

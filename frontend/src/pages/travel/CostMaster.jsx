@@ -931,7 +931,9 @@ export default function CostMaster() {
             className="cost-master-table-scroll"
             onScroll={handleListScroll}
             style={{
-              maxHeight: "calc(100vh - 475px)",
+              height: "min(760px, max(320px, calc(100vh - 250px)))",
+              minHeight: 320,
+              maxHeight: "760px",
               overflowY: "auto",
               overflowX: "auto",
             }}

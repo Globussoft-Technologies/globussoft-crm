@@ -44,7 +44,7 @@ export default function ContactsDetail() {
   }
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease-out', maxWidth: '1000px', margin: '0 auto' }}>
+    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box', animation: 'fadeIn 0.3s ease-out' }}>
       <button 
         onClick={() => navigate('/contacts')} 
         style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '2rem', fontWeight: '500', transition: 'color 0.2s' }}

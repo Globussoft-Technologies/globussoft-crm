@@ -112,6 +112,33 @@ const RELEASE_MODES = [
   { value: "on_trip_completion", label: "On trip completion" },
 ];
 
+function openDatePicker(event) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // The native calendar icon remains available when showPicker is unsupported.
+  }
+}
+
+function preventDateTyping(event) {
+  if (event.key === "Tab") return;
+  event.preventDefault();
+  if (event.key === "Enter" || event.key === " ") openDatePicker(event);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (event) => event.preventDefault(),
+  onDrop: (event) => event.preventDefault(),
+};
+
+function nextCalendarDate(ymd) {
+  const date = new Date(`${ymd}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 // Style hint for the profile-type column badge.
 const PROFILE_TYPE_BADGE_BG = {
   flat_percent: "rgba(34, 197, 94, 0.18)",
@@ -596,6 +623,10 @@ export default function CommissionProfilesAdmin() {
       notify.error("Name is required");
       return;
     }
+    if (form.validFrom && form.validTo && form.validTo <= form.validFrom) {
+      notify.error("Valid to must be after Valid from");
+      return;
+    }
     const profileObj = buildProfileJson(form, notify.error);
     if (profileObj === null) return; // notify.error already fired
     setSaving(true);
@@ -857,7 +888,7 @@ export default function CommissionProfilesAdmin() {
       <div
         className="glass"
         style={{
-          padding: 12,
+          padding: 16,
           marginBottom: 16,
           display: "flex",
           alignItems: "center",
@@ -879,7 +910,9 @@ export default function CommissionProfilesAdmin() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 8,
+            minHeight: 38,
+            whiteSpace: "nowrap",
             fontSize: 13,
             color: "var(--text-secondary)",
             cursor: "pointer",
@@ -889,6 +922,7 @@ export default function CommissionProfilesAdmin() {
             type="checkbox"
             checked={activeOnly}
             onChange={(e) => setActiveOnly(e.target.checked)}
+            style={{ margin: 0 }}
             aria-label="Active profiles only"
           />
           Active only
@@ -903,15 +937,15 @@ export default function CommissionProfilesAdmin() {
           data-testid="commission-profile-form"
           className="glass"
           style={{
-            padding: 16,
+            padding: 20,
             marginBottom: 16,
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
-            gap: 10,
-            alignItems: "end",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
+            gap: 16,
+            alignItems: "start",
           }}
         >
-          <label style={fieldLabel}>
+          <label style={{ ...fieldLabel, gridColumn: "1 / -1" }}>
             <span>Profile name *</span>
             <input
               required
@@ -977,8 +1011,16 @@ export default function CommissionProfilesAdmin() {
             <input
               type="date"
               value={form.validFrom}
-              onChange={(e) => setForm({ ...form, validFrom: e.target.value })}
-              style={inputStyle}
+              onChange={(e) => {
+                const validFrom = e.target.value;
+                setForm((current) => ({
+                  ...current,
+                  validFrom,
+                  validTo: validFrom && current.validTo && current.validTo <= validFrom ? "" : current.validTo,
+                }));
+              }}
+              {...pickerOnlyProps}
+              style={{ ...inputStyle, cursor: "pointer" }}
               aria-label="Valid from"
             />
           </label>
@@ -988,7 +1030,9 @@ export default function CommissionProfilesAdmin() {
               type="date"
               value={form.validTo}
               onChange={(e) => setForm({ ...form, validTo: e.target.value })}
-              style={inputStyle}
+              min={form.validFrom ? nextCalendarDate(form.validFrom) : undefined}
+              {...pickerOnlyProps}
+              style={{ ...inputStyle, cursor: "pointer" }}
               aria-label="Valid to"
             />
           </label>
@@ -1757,6 +1801,10 @@ const th = {
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const inputStyle = {
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+  minHeight: 38,
   padding: "8px 10px",
   borderRadius: 6,
   border: "1px solid var(--border-color)",
@@ -1766,7 +1814,9 @@ const inputStyle = {
   outline: "none",
 };
 const selectStyle = {
-  padding: "6px 10px",
+  minHeight: 38,
+  boxSizing: "border-box",
+  padding: "8px 10px",
   borderRadius: 6,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)",
@@ -1777,7 +1827,8 @@ const selectStyle = {
 const fieldLabel = {
   display: "flex",
   flexDirection: "column",
-  gap: 4,
+  gap: 6,
+  minWidth: 0,
   fontSize: 12,
   color: "var(--text-secondary)",
 };
@@ -1798,6 +1849,7 @@ const secondaryBtn = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
+  minHeight: 38,
   padding: "8px 14px",
   borderRadius: 6,
   fontWeight: 600,

@@ -45,6 +45,8 @@ import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/
 import { useActiveSubBrand } from "../utils/subBrand";
 import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEffectiveBrand";
 import ProductTourSettings from "../components/ProductTourSettings";
+import GoogleMapsSettingsCard from "../components/GoogleMapsSettingsCard";
+import TwilioSettingsCard from "../components/TwilioSettingsCard";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -52,6 +54,36 @@ import ProductTourSettings from "../components/ProductTourSettings";
 // index.css.
 const DEFAULT_BRAND_COLOR = "#3b82f6";
 const DEFAULT_TRANSFER_PORT = { ftp: 21, ftps: 21, sftp: 22 };
+
+function LandingSitesSettingsCard() {
+  const [config, setConfig] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    fetchApi('/api/landing-sites/config')
+      .then(setConfig)
+      .catch((err) => setError(err?.message || 'Could not load landing-site configuration.'));
+  }, []);
+  return (
+    <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }} data-testid="landing-sites-settings-card">
+      <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <Globe2 size={20} color="var(--accent-color)" /> Landing Sites
+      </h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+        Generic landing-site generation uses the organization AI provider below and Pexels for campaign imagery. Secrets are read server-side and are never exposed in the browser.
+      </p>
+      {error ? <p style={{ color: 'var(--danger-color)', fontSize: '0.85rem' }}>{error}</p> : config && (
+        <div style={{ display: 'grid', gap: '0.55rem', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}><span>AI generation</span><strong style={{ color: config.aiConfigured ? '#059669' : '#d97706' }}>{config.aiConfigured ? 'Configured' : 'Needs configuration'}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}><span>Pexels images</span><strong style={{ color: config.pexelsConfigured ? '#059669' : '#d97706' }}>{config.pexelsConfigured ? 'Configured' : 'Missing backend key'}</strong></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}><span>Image source</span><strong>{config.imageProvider}</strong></div>
+        </div>
+      )}
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '1rem', marginBottom: 0 }}>
+        Configure tenant AI access in AI Settings. Configure <code>PEXELS_API_KEY</code> in the backend environment before publishing image-rich pages.
+      </p>
+    </div>
+  );
+}
 
 export default function Settings() {
   const notify = useNotify();
@@ -266,7 +298,9 @@ export default function Settings() {
         if (config) {
           setCallifiedConnected(!!config.isActive);
           setCallifiedUpdatedAt(config.updatedAt || null);
-          setCallifiedBaseUrl(config.baseUrl || "https://app.callified.ai");
+          // Generic CRM keeps the URL empty until an administrator enters it;
+          // the input placeholder explains what belongs there.
+          setCallifiedBaseUrl(config.isActive ? (config.baseUrl || "") : "");
           setCallifiedApiKey(config.apiKey || "");
           // Do not pre-fill email/password/webhookSecret from the DB; keep them blank.
         }
@@ -916,7 +950,7 @@ export default function Settings() {
       setCallifiedApiKey("");
       setCallifiedEmail("");
       setCallifiedPassword("");
-      setCallifiedBaseUrl("https://app.callified.ai");
+      setCallifiedBaseUrl(isGenericVertical ? "" : "https://app.callified.ai");
       setCallifiedWebhookSecret("");
       setCallifiedUpdatedAt(null);
       setCallifiedMsg("");
@@ -1121,6 +1155,7 @@ export default function Settings() {
           Below ~720px the columns collapse to a single column. */}
       <div className="settings-grid">
           {isGenericVertical && <ProductTourSettings />}
+          {isGenericVertical && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && <GoogleMapsSettingsCard />}
           {/* Organization Card */}
           <div
             className="card"
@@ -2276,7 +2311,7 @@ export default function Settings() {
               <input
                 type="text"
                 className="input-field"
-                placeholder="https://app.callified.ai"
+                placeholder="Enter the URL"
                 value={callifiedBaseUrl}
                 onChange={(e) => { setCallifiedBaseUrl(e.target.value); setCallifiedDirty(true); }}
                 disabled={callifiedSaving}
@@ -2631,6 +2666,7 @@ export default function Settings() {
               AI provider resolver state so every tenant can either configure
               BYOK or request CRM-managed AI access from one place. */}
           {hasPermission("settings", "manage") && <OrganizationAiSettingsCard />}
+          {hasPermission("settings", "manage") && isGenericVertical && <LandingSitesSettingsCard />}
 
           {/* WhatsApp / Meta Configuration — per-tenant Meta Cloud API
               credentials. Every organization connects its OWN WhatsApp
@@ -2641,6 +2677,13 @@ export default function Settings() {
               transports have their own separate surfaces. */}
           {hasPermission("settings", "manage") && isGenericVertical && (
             <WhatsAppMetaConfigCard />
+          )}
+
+          {/* Twilio remains available under Communication Channels; this is
+              the same per-tenant configuration surfaced in Generic CRM
+              Settings for administrators who manage integrations here. */}
+          {hasPermission("settings", "manage") && isGenericVertical && (
+            <TwilioSettingsCard />
           )}
 
           {hasPermission("settings", "manage") && (isGenericVertical || ctxTenant?.vertical === "travel") && (

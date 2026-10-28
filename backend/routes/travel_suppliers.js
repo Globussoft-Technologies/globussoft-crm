@@ -475,6 +475,23 @@ const SUPPLIER_IMPORT_HEADERS = [
   "upiId",
   "notes",
 ];
+// The starter template stays focused on fields operators need to create a
+// supplier. The importer continues accepting the full import schema below,
+// including Accounts and payment configuration fields.
+const SUPPLIER_IMPORT_TEMPLATE_HEADERS = [
+  "subBrand",
+  "name",
+  "supplierCategory",
+  "contactPerson",
+  "phone",
+  "email",
+  "gstin",
+  "addressLine",
+  "beneficiaryName",
+  "bankName",
+  "bankAccountNumber",
+  "ifscCode",
+];
 const SUPPLIER_IMPORT_REQUIRED_PAYMENT_FIELDS = [
   "beneficiaryName",
   "bankName",
@@ -507,54 +524,6 @@ const SUPPLIER_EXPORT_HEADERS = [
   "notes",
 ];
 const SUPPLIER_IMPORT_TEMPLATE_ROWS = [
-  {
-    subBrand: "# Required: subBrand, name, supplierCategory, beneficiaryName, bankName, bankAccountNumber, ifscCode",
-    name: "# Optional: contactPerson, phone, email, gstin, addressLine",
-    supplierCategory: "# Optional: status, paymentTermsKind, paymentTermsDays",
-    contactPerson: "# Optional: creditLimit, creditCurrency, taxRegimeCode",
-    phone: "# Optional: primaryContactRole, commissionPercent, notes",
-    email: "# Valid subBrand: tmc, rfu, travelstall, visasure",
-    gstin: "# Valid supplierCategory: hotel, flight, transport, visa-consul, other",
-    addressLine: "# Leave optional cells blank for minimum bulk add",
-    status: "",
-    paymentTermsKind: "",
-    paymentTermsDays: "",
-    creditLimit: "",
-    creditCurrency: "",
-    taxRegimeCode: "",
-    primaryContactRole: "",
-    commissionPercent: "",
-    beneficiaryName: "# Required: accounts payee name",
-    bankName: "# Required: beneficiary bank name",
-    bankAccountNumber: "# Required: bank account number",
-    ifscCode: "# Required: 11-character IFSC (e.g. HDFC0001234)",
-    upiId: "# Accounts: optional UPI ID",
-    notes: "",
-  },
-  {
-    subBrand: "tmc",
-    name: "Ramesh Travel",
-    supplierCategory: "transport",
-    contactPerson: "",
-    phone: "",
-    email: "",
-    gstin: "",
-    addressLine: "",
-    status: "active",
-    paymentTermsKind: "",
-    paymentTermsDays: "",
-    creditLimit: "",
-    creditCurrency: "",
-    taxRegimeCode: "",
-    primaryContactRole: "",
-    commissionPercent: "",
-    beneficiaryName: "Ramesh Travel",
-    bankName: "HDFC Bank",
-    bankAccountNumber: "001234567890",
-    ifscCode: "HDFC0001234",
-    upiId: "",
-    notes: "",
-  },
 ];
 
 function assertValidSupplierCategory(c) {
@@ -678,9 +647,9 @@ function parseSupplierImportBuffer(file) {
 
 function buildSupplierTemplateBuffer(format) {
   if (format === "xlsx") {
-    return toXlsxBuffer(SUPPLIER_IMPORT_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS, "Suppliers");
+    return toXlsxBuffer(SUPPLIER_IMPORT_TEMPLATE_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS, "Suppliers");
   }
-  return withBom(toCsv(SUPPLIER_IMPORT_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS));
+  return withBom(toCsv(SUPPLIER_IMPORT_TEMPLATE_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS));
 }
 
 function buildSupplierExportRows(rows) {
@@ -4629,7 +4598,7 @@ router.get(
 );
 
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
-// Required: description, amount. Optional: quoteId, poNumber, currency, dueDate, notes, status.
+// Required: description, amount. Optional: quoteId, tripId (TMC), poNumber, currency, dueDate, notes, status.
 router.post(
   "/suppliers/:id/payables",
   verifyToken,
@@ -4641,7 +4610,7 @@ router.post(
       if (!supplier) return;
 
       const {
-        quoteId, description, amount, poNumber, currency, dueDate, notes, status,
+        quoteId, tripId, description, amount, poNumber, currency, dueDate, notes, status,
       } = req.body || {};
 
       if (!description || !String(description).trim() || amount == null) {
@@ -4657,6 +4626,17 @@ router.post(
       if (parsedQuoteId != null && !Number.isFinite(parsedQuoteId)) {
         return res.status(400).json({ error: "quoteId must be a valid Quote ID", code: "INVALID_QUOTE_ID" });
       }
+      const parsedTripId = tripId == null || tripId === "" ? null : Number(tripId);
+      if (parsedTripId != null) {
+        if (supplier.subBrand !== "tmc" || !Number.isInteger(parsedTripId) || parsedTripId <= 0 || parsedQuoteId != null) {
+          return res.status(400).json({ error: "Select a valid TMC trip", code: "INVALID_TRIP_ID" });
+        }
+        const trip = await prisma.tmcTrip.findFirst({
+          where: { id: parsedTripId, tenantId: req.travelTenant.id, NOT: { tripCode: { startsWith: "QUOTE-" } } },
+          select: { id: true },
+        });
+        if (!trip) return res.status(404).json({ error: "TMC trip not found", code: "TRIP_NOT_FOUND" });
+      }
       const storedNotes = parsedQuoteId != null
         ? `QUOTE_ID:${parsedQuoteId}${notes ? `\n${String(notes)}` : ""}`
         : (notes ? String(notes) : null);
@@ -4664,6 +4644,7 @@ router.post(
         data: {
           tenantId: req.travelTenant.id,
           supplierId: supplier.id,
+          tripId: parsedTripId,
           description: String(description).trim(),
           amount: String(amount),
           poNumber: poNumber ? String(poNumber) : null,

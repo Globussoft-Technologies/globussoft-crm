@@ -176,7 +176,7 @@ export default function Approvals() {
   });
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.4s ease-out' }}>
+    <div style={{ width: '100%', minWidth: 0, maxWidth: '100%', padding: '2rem', minHeight: '100%', overflowX: 'clip', animation: 'fadeIn 0.4s ease-out' }}>
       {/* ── Header ──────────────────────────────────────────── */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
@@ -210,7 +210,7 @@ export default function Approvals() {
       </div>
 
       {/* ── Filters ─────────────────────────────────────────── */}
-      <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+      <div className="card" style={{ minWidth: 0, padding: '0.85rem 1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
           <Filter size={14} /> Filters:
         </span>
@@ -218,7 +218,7 @@ export default function Approvals() {
           className="input-field"
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
-          style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem', minWidth: '140px' }}
+          style={{ width: '180px', maxWidth: '100%', padding: '0.4rem 0.6rem', fontSize: '0.8rem', minWidth: '140px' }}
         >
           <option value="">All Statuses</option>
           <option value="PENDING">Pending</option>
@@ -229,7 +229,7 @@ export default function Approvals() {
           className="input-field"
           value={filterEntity}
           onChange={(e) => setFilterEntity(e.target.value)}
-          style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem', minWidth: '140px' }}
+          style={{ width: '180px', maxWidth: '100%', padding: '0.4rem 0.6rem', fontSize: '0.8rem', minWidth: '140px' }}
         >
           <option value="">All Entities</option>
           {entityOptions.map((e) => <option key={e} value={e}>{e}</option>)}
@@ -249,7 +249,7 @@ export default function Approvals() {
       </div>
 
       {/* ── Table ───────────────────────────────────────────── */}
-      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+      <div className="card" style={{ minWidth: 0, padding: 0, overflow: 'visible' }}>
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading approvals...</div>
         ) : requests.length === 0 ? (

@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import BrokerCustomerWorkspace from '../components/BrokerCustomerWorkspace';
 
 vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
+vi.mock('../components/CallifiedCallDialog', () => ({
+  default: ({ customer, endpoints, historyHref, onClose }) => (
+    <div role="dialog" aria-label={`Call ${customer.name}`} data-manual-endpoint={endpoints.manualCall} data-history-href={historyHref}>
+      <span>Call Customer</span>
+      <button type="button" onClick={onClose}>Close call dialog</button>
+    </div>
+  ),
+}));
 import { fetchApi } from '../utils/api';
 
 const response = {
@@ -13,10 +22,10 @@ const response = {
       plot: { id: 30, name: 'Plot 24', plotNumber: 'A-24', address: 'North Avenue' },
       plotOptions: [
         { id: 30, name: 'Plot 24', plotNumber: 'A-24', availability: 'AVAILABLE' },
-        { id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'AVAILABLE' },
       ],
       tripCompleted: true, tripMessage: 'Trip completed', tripCompletedAt: '2026-10-06T10:00:00.000Z',
-      brokerWorkflow: { status: 'READY_TO_SCHEDULE', updatedAt: null, visitScheduledAt: null },
+      pickupAt: '2026-10-06T09:15:00.000Z', dropOffAt: '2026-10-06T10:00:00.000Z',
+      brokerWorkflow: { status: 'VISIT_SCHEDULED', updatedAt: null, visitScheduledAt: '2026-10-06T10:00:00.000Z' },
     },
     {
       id: 62, assignmentKey: 'customer-62-plot-31', name: 'Priyanka Mehta', phone: '9000033333', company: 'Acme India',
@@ -72,17 +81,18 @@ describe('<BrokerCustomerWorkspace />', () => {
         })),
       })
       .mockResolvedValueOnce({
-        customerId: 61, status: 'VISIT_SCHEDULED', statusUpdatedAt: '2026-10-06T12:00:00.000Z', visitScheduledAt: '2026-10-10T05:00:00.000Z',
+        customerId: 61, status: 'PLOT_SHOWN', statusUpdatedAt: '2026-10-06T12:00:00.000Z', visitScheduledAt: '2026-10-06T10:00:00.000Z',
       });
     render(<BrokerCustomerWorkspace />);
     expect((await screen.findAllByText('Assigned to Sanjeev')).length).toBeGreaterThan(0);
     expect(screen.queryByText('Site Visit Management')).toBeNull();
     expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
-    fireEvent.change(screen.getByLabelText('Visit date and time for Li Wei'), { target: { value: '2026-10-10T10:30' } });
-    fireEvent.click(screen.getByRole('button', { name: /schedule visit/i }));
+    expect(screen.queryByLabelText('Visit date and time for Li Wei')).toBeNull();
+    expect(screen.queryByRole('button', { name: /schedule visit/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /mark plot shown/i }));
     await waitFor(() => expect(fetchApi).toHaveBeenLastCalledWith(
       '/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow?assignedProfileId=51',
-      { method: 'PATCH', body: JSON.stringify({ status: 'VISIT_SCHEDULED', visitScheduledAt: '2026-10-10T10:30' }) },
+      { method: 'PATCH', body: JSON.stringify({ status: 'PLOT_SHOWN' }) },
     ));
   });
 
@@ -95,9 +105,15 @@ describe('<BrokerCustomerWorkspace />', () => {
     expect(screen.getByText('Priyanka Mehta')).toBeInTheDocument();
     expect(screen.getAllByText('Trip completed').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Trip not completed').length).toBeGreaterThan(0);
+    expect(screen.getByText('Trip is not started yet.')).toBeInTheDocument();
+    expect(screen.getByText(/Pickup time:.*2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Site visit time:.*2026/)).toBeInTheDocument();
+    expect(screen.getAllByText('Pickup time: Pending')).toHaveLength(1);
+    expect(screen.getAllByText('Site visit time: Pending')).toHaveLength(1);
     expect(screen.queryByText('Picked up')).toBeNull();
     expect(screen.getByText(/customer is ready for site visit management/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Schedule visit/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Schedule visit/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Mark plot shown/i })).toBeEnabled();
     expect(screen.getAllByText('Site visit process')).toHaveLength(1);
   });
 
@@ -120,22 +136,58 @@ describe('<BrokerCustomerWorkspace />', () => {
     expect(screen.queryByText('Li Wei')).toBeNull();
   });
 
-  it('schedules a completed customer site visit with its date and time', async () => {
-    fetchApi
-      .mockResolvedValueOnce(response)
-      .mockResolvedValueOnce({ customerId: 61, status: 'VISIT_SCHEDULED', statusUpdatedAt: '2026-10-06T12:00:00.000Z', visitScheduledAt: '2026-10-10T05:00:00.000Z' });
-    render(<BrokerCustomerWorkspace />);
-    fireEvent.change(await screen.findByLabelText('Visit date and time for Li Wei'), { target: { value: '2026-10-10T10:30' } });
-    fireEvent.click(screen.getByRole('button', { name: /Schedule visit/i }));
-    expect(await screen.findByText('Visit scheduled')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Confirm visit/i })).toBeInTheDocument();
-    expect(fetchApi).toHaveBeenLastCalledWith(
-      '/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow',
-      { method: 'PATCH', body: JSON.stringify({ status: 'VISIT_SCHEDULED', visitScheduledAt: '2026-10-10T10:30' }) },
-    );
+  it('opens the full email composer and the in-place Callified dialog over Sales Workspace', async () => {
+    fetchApi.mockResolvedValueOnce(response);
+    render(<MemoryRouter><BrokerCustomerWorkspace /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Email Li Wei' }));
+    expect(await screen.findByRole('heading', { name: 'New Message' })).toBeInTheDocument();
+    expect(screen.getByLabelText('To:')).toHaveValue('li@example.com');
+    expect(screen.getByTestId('broker-customer-workspace')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Call Li Wei' }));
+    const callDialog = screen.getByRole('dialog', { name: 'Call Li Wei' });
+    expect(callDialog).toHaveAttribute('data-manual-endpoint', '/api/pickup-plot-inventory/calling/customers/61/manual-call');
+    expect(callDialog).toHaveAttribute('data-history-href', '/callified-data');
   });
 
-  it('records attendance or a no-show after the reminder', async () => {
+  it('sends from the embedded composer and then opens Inbox', async () => {
+    fetchApi.mockResolvedValueOnce(response).mockResolvedValue([]);
+    render(<MemoryRouter><BrokerCustomerWorkspace /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Email Li Wei' }));
+    fireEvent.change(await screen.findByLabelText('Subject:'), { target: { value: 'Site visit follow-up' } });
+    fireEvent.change(screen.getByLabelText('Message:'), { target: { value: 'Your selected plot is ready.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Email' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/communications/send-email',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          to: 'li@example.com',
+          cc: '',
+          bcc: '',
+          subject: 'Site visit follow-up',
+          body: 'Your selected plot is ready.',
+        }),
+      },
+    ));
+    expect(window.location.pathname).toBe('/inbox');
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('uses the transport drop-off as the read-only site visit time', async () => {
+    fetchApi.mockResolvedValueOnce(response);
+    render(<BrokerCustomerWorkspace />);
+    expect(await screen.findByText(/Site visit time:.*2026/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Visit date and time for Li Wei')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Schedule visit/i })).toBeNull();
+    expect(screen.getByText('Ready to show plot')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Mark plot shown/i })).toBeInTheDocument();
+  });
+
+  it('shows Mark plot shown directly after assignment instead of attendance controls', async () => {
     const decisionResponse = {
       ...response,
       customers: response.customers.map((customer) => customer.id === 61
@@ -144,20 +196,31 @@ describe('<BrokerCustomerWorkspace />', () => {
     };
     fetchApi
       .mockResolvedValueOnce(decisionResponse)
-      .mockResolvedValueOnce({ customerId: 61, status: 'ATTENDED', handedToBilling: false });
+      .mockResolvedValueOnce({ customerId: 61, status: 'PLOT_SHOWN', handedToBilling: false });
     render(<BrokerCustomerWorkspace />);
-    expect(await screen.findByRole('button', { name: /Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /No-show/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Attendance/i }));
-    await waitFor(() => expect(screen.getByText('Attended')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /Mark plot shown/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Mark plot shown/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Attendance/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /No-show/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Mark plot shown/i }));
+    await waitFor(() => expect(screen.getByText('Plot shown')).toBeInTheDocument());
+    expect(fetchApi).toHaveBeenLastCalledWith(
+      '/api/pickup-plot-inventory/brokers/me/assignments/customer-61-plot-30/workflow',
+      { method: 'PATCH', body: JSON.stringify({ status: 'PLOT_SHOWN' }) },
+    );
   });
 
-  it('requires a plot selection and sends the selected plot number to billing', async () => {
+  it('shows every customer-assigned plot and sends the selected one to billing', async () => {
     const plotShownResponse = {
       ...response,
       customers: response.customers.map((customer) => customer.id === 61
-        ? { ...customer, brokerWorkflow: { status: 'PLOT_SHOWN', updatedAt: null } }
+        ? {
+          ...customer,
+          plotOptions: [
+            ...customer.plotOptions,
+            { id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'AVAILABLE' },
+          ],
+          brokerWorkflow: { status: 'PLOT_SHOWN', updatedAt: null },
+        }
         : customer),
     };
     fetchApi
@@ -166,13 +229,15 @@ describe('<BrokerCustomerWorkspace />', () => {
         customerId: 61,
         status: 'PLOT_SELECTED',
         handedToBilling: true,
-        plot: { id: 31, name: 'Plot 25', plotNumber: 'B-25', availability: 'RESERVED' },
+        plot: { id: 30, name: 'Plot 24', plotNumber: 'A-24', availability: 'RESERVED' },
       });
 
     render(<BrokerCustomerWorkspace />);
     const plotSelect = await screen.findByLabelText('Selected plot for Li Wei');
     expect(screen.getByRole('option', { name: 'Plot 24 — Plot No. A-24' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Plot 25 — Plot No. B-25' })).toBeInTheDocument();
+    expect(plotSelect).toHaveValue('30');
+    expect(screen.getAllByRole('option')).toHaveLength(3);
     fireEvent.change(plotSelect, { target: { value: '31' } });
     fireEvent.click(screen.getByRole('button', { name: /Mark plot selected/i }));
 

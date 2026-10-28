@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   Bell,
@@ -312,6 +313,7 @@ async function api(path, { token, method = "GET", body, basePath = "/api/portal/
 }
 
 export default function TmcTeacherPortal() {
+  const navigate = useNavigate();
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [contact, setContact] = useState(null);
   const [tenant, setTenant] = useState(null);
@@ -328,6 +330,7 @@ export default function TmcTeacherPortal() {
   const [activeView, setActiveView] = useState(() => readTmcPortalView(TEACHER_PORTAL_VIEWS));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [login, setLogin] = useState({ email: "", password: "" });
   const [themeMode, setThemeMode] = useState(readTheme);
 
@@ -344,6 +347,15 @@ export default function TmcTeacherPortal() {
     window.addEventListener("popstate", restoreView);
     return () => window.removeEventListener("popstate", restoreView);
   }, []);
+
+  useEffect(() => {
+    if (!showLogoutConfirm) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setShowLogoutConfirm(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showLogoutConfirm]);
 
   const openView = (view) => {
     persistTmcPortalView(view, TEACHER_PORTAL_VIEWS, "dashboard", "push");
@@ -372,7 +384,8 @@ export default function TmcTeacherPortal() {
     persistTmcPortalView("dashboard", TEACHER_PORTAL_VIEWS);
     setActiveView("dashboard");
     setError(message);
-  }, []);
+    navigate("/login", { replace: true });
+  }, [navigate]);
 
   const loadTrips = useCallback(async (activeToken = token) => {
     setLoading(true);
@@ -554,7 +567,7 @@ export default function TmcTeacherPortal() {
               <span>{contact?.name || "Teacher"}</span>
               <ChevronDown size={14} aria-hidden />
             </button>
-            <button type="button" onClick={() => logout()} style={styles.logoutButton} title="Sign out" aria-label="Sign out"><LogOut size={16} /></button>
+            <button type="button" onClick={() => setShowLogoutConfirm(true)} style={styles.logoutButton} title="Sign out" aria-label="Sign out"><LogOut size={16} /></button>
           </div>
         </header>
         <main style={styles.main}>
@@ -603,6 +616,21 @@ export default function TmcTeacherPortal() {
           </div>
         </main>
       </div>
+      {showLogoutConfirm && (
+        <div
+          style={styles.logoutDialogBackdrop}
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setShowLogoutConfirm(false); }}
+        >
+          <section role="alertdialog" aria-modal="true" aria-labelledby="teacher-logout-title" aria-describedby="teacher-logout-description" style={styles.logoutDialog}>
+            <h2 id="teacher-logout-title" style={styles.logoutDialogTitle}>Sign out?</h2>
+            <p id="teacher-logout-description" style={styles.logoutDialogDescription}>Are you sure you want to sign out of your account?</p>
+            <div style={styles.logoutDialogActions}>
+              <button type="button" onClick={() => setShowLogoutConfirm(false)} style={styles.logoutCancelButton} autoFocus>Cancel</button>
+              <button type="button" onClick={() => { setShowLogoutConfirm(false); logout(); }} style={styles.logoutConfirmButton}>Sign out</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -1119,6 +1147,13 @@ const styles = {
   profilePillActive: { background: "var(--tmc-profile-bg)" },
   headerAvatar: { display: "grid", placeItems: "center", width: 28, height: 28, flex: "0 0 auto", borderRadius: "50%", background: "var(--tmc-primary)", color: "var(--tmc-primary-contrast)", fontSize: 12, fontWeight: 700 },
   logoutButton: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, border: "1px solid var(--tmc-border-strong)", borderRadius: 9, padding: 0, background: "var(--tmc-surface)", color: "var(--tmc-subtle-text)", cursor: "pointer" },
+  logoutDialogBackdrop: { position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 20, background: "rgba(0, 0, 0, 0.48)", backdropFilter: "blur(3px)" },
+  logoutDialog: { width: "min(100%, 440px)", boxSizing: "border-box", padding: "26px 24px 22px", borderRadius: 12, background: "var(--tmc-surface)", color: "var(--tmc-text)", boxShadow: "0 20px 60px rgba(0, 0, 0, 0.24)" },
+  logoutDialogTitle: { margin: 0, color: "var(--tmc-heading)", fontSize: 18, lineHeight: 1.35 },
+  logoutDialogDescription: { margin: "10px 0 22px", color: "var(--tmc-subtle-text)", fontSize: 14, lineHeight: 1.5 },
+  logoutDialogActions: { display: "flex", justifyContent: "flex-end", gap: 9 },
+  logoutCancelButton: { minHeight: 38, padding: "0 16px", border: "1px solid var(--tmc-border-strong)", borderRadius: 8, background: "var(--tmc-surface)", color: "var(--tmc-text)", cursor: "pointer", font: "inherit", fontSize: 13 },
+  logoutConfirmButton: { minHeight: 38, padding: "0 16px", border: "1px solid #ef5149", borderRadius: 8, background: "#ef5149", color: "#fff", cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 700 },
   main: { minWidth: 0, minHeight: 0, height: "100%", overflow: "hidden" },
   contentScroll: { width: "100%", minHeight: 0, height: "100%", boxSizing: "border-box", padding: 32, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" },
   dashboard: { display: "grid", gap: 18 },

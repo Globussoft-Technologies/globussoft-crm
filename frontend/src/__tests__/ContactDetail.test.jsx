@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -60,6 +61,15 @@ function makeFetchImpl(overrides = {}) {
     sms: { kind: 'ok', data: [{ id: 601, contactId: 42, body: 'Hello from SMS', direction: 'INBOUND', fromNumber: '+919000000002', contactName: 'Priya Sharma', createdAt: '2026-05-23T10:00:00.000Z' }] },
     emailThreads: { kind: 'ok', data: [{ subject: 'Renewal', messages: [{ id: 701, contactId: 42, body: 'Sent renewal quote', direction: 'OUTBOUND', to: BASE_CONTACT.email, contactName: 'Priya Sharma', createdAt: '2026-05-22T10:00:00.000Z' }] }] },
     staff: { kind: 'ok', data: [] },
+    workflow: { kind: 'ok', data: {
+      customers: [{
+        contactId: 42,
+        pickupAddress: 'Kursakanta, Bihar, India',
+        assignedPlots: [{ id: 301, name: 'Green Meadows', plotNumber: 'A-17' }],
+        currentStage: 'transport',
+        currentStatus: 'awaiting_transport',
+      }],
+    } },
     ...overrides,
   };
   const resolve = (slot) => {
@@ -72,6 +82,7 @@ function makeFetchImpl(overrides = {}) {
     if (/^\/api\/contacts\/\d+\/activities\?/.test(url)) return resolve(options.activities);
     if (/^\/api\/sms\/messages\?/.test(url)) return resolve(options.sms);
     if (url === '/api/email/threads') return resolve(options.emailThreads);
+    if (url === '/api/pickup-plot-inventory/lead-status?contactIds=42') return resolve(options.workflow);
     if (/^\/api\/contacts\/\d+$/.test(url) && method === 'GET') return resolve(options.contact);
     return Promise.resolve([]);
   };
@@ -86,12 +97,15 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state, vertical, user } = {}) {
+function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts' } = {}) {
+  const detailPath = `/${listType}/${contactId}`;
   const page = (
-    <MemoryRouter initialEntries={[state ? { pathname: `/contacts/${contactId}`, state } : `/contacts/${contactId}`]}>
+    <MemoryRouter initialEntries={[state ? { pathname: detailPath, state } : detailPath]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
+        <Route path="/leads/:id" element={<ContactDetail />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
+        <Route path="/leads" element={<div data-testid="leads-list-stub">Leads list stub</div>} />
         <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
       </Routes>
     </MemoryRouter>
@@ -156,6 +170,47 @@ describe('ContactDetail — current profile contract', () => {
     expect(await screen.findByTestId('contacts-list-stub')).toBeInTheDocument();
   });
 
+  it('keeps the Generic Leads page behind a profile opened from /leads', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ listType: 'leads', vertical: 'generic' });
+
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Leads' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
+  });
+
+  it('keeps Generic CRM neighbor navigation in Leads and labels it as leads', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?status=Lead&limit=200') {
+        return Promise.resolve([{ id: 42 }, { id: 43 }]);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic' });
+
+    const profile = await getProfile();
+    expect(profile.getByRole('button', { name: 'Previous lead' })).toBeInTheDocument();
+    fireEvent.click(profile.getByRole('button', { name: 'Next lead' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Lead&limit=200', { silent: true });
+    });
+    expect(await screen.findByRole('heading', { name: 'Leads' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
+  });
+
+  it('sends the lead sequence action to Marketing Campaign sequences', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ listType: 'leads', vertical: 'generic' });
+
+    expect(await screen.findByRole('link', { name: 'Add to a sequence' }))
+      .toHaveAttribute('href', '/marketing?tab=campaigns');
+  });
+
   it('shows the current lifecycle stage and score for the contact', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();
@@ -194,7 +249,27 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getAllByRole('button', { name: 'Add deal' }).length).toBeGreaterThan(0);
   });
 
-  it('shows Generic web-form Page URL and Location in Contact details', async () => {
+  it('uses the normal action-button colour for Add deal in Generic CRM only', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    const genericPage = renderPage({ vertical: 'generic' });
+    await getProfile();
+
+    const genericActionBar = genericPage.container.querySelector('.cp-actions-bar');
+    const genericAddDeal = within(genericActionBar).getByRole('button', { name: 'Add deal' });
+    expect(genericAddDeal).toHaveClass('cp-action-btn');
+    expect(genericAddDeal).not.toHaveClass('cp-action-primary');
+
+    genericPage.unmount();
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    const wellnessPage = renderPage({ vertical: 'wellness' });
+    await getProfile();
+
+    const wellnessActionBar = wellnessPage.container.querySelector('.cp-actions-bar');
+    expect(within(wellnessActionBar).getByRole('button', { name: 'Add appointment' }))
+      .toHaveClass('cp-action-primary');
+  });
+
+  it('shows Generic Customize-table fields and web-form tracking in Contact details', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();
     const profile = await getProfile();
@@ -205,7 +280,20 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('https://example.com/pricing')).toBeInTheDocument();
     expect(profile.getByText('Location')).toBeInTheDocument();
     expect(profile.getByText('Koramangala, Bengaluru, Karnataka, 560034, India')).toBeInTheDocument();
-    expect(profile.queryByText('Website URL')).toBeNull();
+    expect(profile.getByText('Website URL')).toBeInTheDocument();
+    expect(profile.getByText('Source')).toBeInTheDocument();
+    expect(profile.getByText('Medium')).toBeInTheDocument();
+    expect(profile.getByText('Pickup Location')).toBeInTheDocument();
+    expect(await profile.findByText('Kursakanta, Bihar, India')).toBeInTheDocument();
+    expect(profile.getByText('Plot Assign')).toBeInTheDocument();
+    expect(profile.getByText('A-17')).toBeInTheDocument();
+    expect(profile.getByText('Overall Status')).toBeInTheDocument();
+    expect(profile.getByText('Transport: Awaiting Transport')).toBeInTheDocument();
+    expect(profile.getByText('Callified Campaign')).toBeInTheDocument();
+    expect(profile.getByText('Call Status')).toBeInTheDocument();
+    expect(profile.getByText('Callified Score')).toBeInTheDocument();
+    expect(profile.getByText('First Touch Source')).toBeInTheDocument();
+    expect(profile.getByText('Last Touch Source')).toBeInTheDocument();
   });
 
   it.each(['wellness', 'travel'])('preserves Website URL outside Generic CRM (%s)', async (vertical) => {
@@ -230,7 +318,30 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('Hello from SMS')).toBeInTheDocument();
     expect(profile.getByText('Sent renewal quote')).toBeInTheDocument();
     expect(profile.getAllByText('Priya Sharma', { exact: true }).length).toBeGreaterThan(0);
-    expect(profile.queryByRole('button', { name: /WhatsApp/i })).toBeNull();
+    expect(profile.getAllByRole('button', { name: 'WhatsApp' })).toHaveLength(2);
+    expect(profile.getByRole('button', { name: 'New WhatsApp' })).toBeInTheDocument();
+  });
+
+  it('shows the Generic CRM SMS delivery status and provider error', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      sms: { kind: 'ok', data: [{
+        id: 602,
+        contactId: 42,
+        body: 'Queued follow-up',
+        direction: 'OUTBOUND',
+        to: '+919000000001',
+        status: 'FAILED',
+        errorMessage: 'The From phone number is not a valid Twilio sender.',
+        createdAt: '2026-05-23T10:00:00.000Z',
+      }] },
+      emailThreads: { kind: 'ok', data: [] },
+    }));
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Conversation' }));
+
+    expect(await profile.findByText(/sms.*FAILED/i)).toBeInTheDocument();
+    expect(profile.getByText(/Delivery failed: The From phone number is not a valid Twilio sender/i)).toBeInTheDocument();
   });
 
   it('shows inbox-style email previews and opens the complete message', async () => {
@@ -278,6 +389,58 @@ describe('ContactDetail — current profile contract', () => {
     fireEvent.click(profile.getByRole('button', { name: 'Activities' }));
     expect(await profile.findByText('No activities recorded yet.')).toBeInTheDocument();
   });
+
+  it('opens the note editor from the pencil and persists the updated note', async () => {
+    const note = {
+      id: 81,
+      type: 'Note',
+      description: 'Original note',
+      createdAt: '2026-10-21T06:00:00.000Z',
+      contactId: 42,
+      userId: 7,
+    };
+    const baseFetch = makeFetchImpl({
+      activities: { kind: 'ok', data: { data: [note], total: 1, page: 1, limit: 5, totalPages: 1 } },
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42/activities/81' && opts?.method === 'PATCH') {
+        return Promise.resolve({ ...note, description: 'Updated note' });
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage();
+    const profile = await getProfile();
+
+    fireEvent.click(await profile.findByRole('button', { name: 'Edit note Original note' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit note' });
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    await waitFor(() => expect(editor).toHaveTextContent('Original note'));
+    editor.textContent = 'Updated note';
+    fireEvent.input(editor);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/42/activities/81',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ description: 'Updated note' }) }),
+    ));
+    expect(await profile.findByText('Updated note')).toBeInTheDocument();
+    expect(notifyObj.success).toHaveBeenCalledWith('Note updated.');
+  });
+
+  it('keeps immediately typed text in the generic note composer', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+    const user = userEvent.setup();
+
+    await user.click(profile.getByRole('button', { name: /^Note$/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add note' });
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    await user.type(editor, 'Follow up tomorrow');
+
+    expect(editor).toHaveTextContent('Follow up tomorrow');
+    expect(editor).toHaveFocus();
+  });
 });
 
 describe('Generic CRM contact details', () => {
@@ -293,6 +456,7 @@ describe('Generic CRM contact details', () => {
       webFormSubmissions: [{
         id: 92,
         submittedAt: '2026-10-14T04:30:00.000Z',
+        webForm: { id: 8, name: 'October Lead Form' },
         payloadJson: JSON.stringify({
           _meta: { tracking: { pageUrl: 'https://example.com/offer', referrerUrl: 'https://search.example/referrer', utm_source: 'meta', utm_campaign: 'October leads' } },
         }),
@@ -333,10 +497,12 @@ describe('Generic CRM contact details', () => {
 
     fireEvent.click(within(tabs).getByRole('tab', { name: 'Ad Information' }));
     expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
+    expect(screen.getByText('https://search.example/referrer')).toBeInTheDocument();
     expect(screen.queryByText('SEO')).toBeNull();
 
     fireEvent.click(within(tabs).getByRole('tab', { name: 'All details' }));
     expect(screen.getByText('October leads')).toBeInTheDocument();
+    expect(screen.getByText('October Lead Form')).toBeInTheDocument();
     expect(screen.getByText('SEO')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
   });
@@ -374,5 +540,6 @@ describe('Generic CRM contact details', () => {
 
     expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
     expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/contacts/tags')).toBe(false);
+    expect(fetchApiMock.mock.calls.some(([url]) => String(url).startsWith('/api/pickup-plot-inventory/lead-status'))).toBe(false);
   });
 });

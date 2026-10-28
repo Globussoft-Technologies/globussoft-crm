@@ -14,7 +14,7 @@
  * Funnel page (stage-by-stage conversion, velocity, rep performance):
  *
  *   1. Page chrome: heading "Sales Funnel" + subtitle copy + date-range
- *      inputs + pipeline filter <select> render synchronously.
+ *      inputs + deal type filter <select> render synchronously.
  *   2. Initial-mount fetches: on mount the page fires SIX GETs in
  *      parallel — /api/pipelines (in a separate effect) plus the five
  *      funnel endpoints: stages, conversion-by-source, by-rep, velocity,
@@ -141,6 +141,11 @@ const PIPELINES = [
   { id: 'pipe-2', name: 'Enterprise' },
 ];
 
+const DEAL_TYPES = [
+  { id: 'deal-type-1', name: 'New Business' },
+  { id: 'deal-type-2', name: 'Renewal' },
+];
+
 // Default tenant — USD so $ symbols are deterministic for assertions
 // (formatMoney reads localStorage.tenant.defaultCurrency).
 function seedTenant() {
@@ -158,9 +163,11 @@ function buildFetchApi({
   velocity = VELOCITY,
   trend = TREND,
   pipelines = PIPELINES,
+  dealTypes = DEAL_TYPES,
 } = {}) {
   return (url) => {
     if (url === '/api/pipelines') return Promise.resolve(pipelines);
+    if (url === '/api/tenant-settings/generic.dealTypes') return Promise.resolve({ value: JSON.stringify(dealTypes) });
     if (url.startsWith('/api/funnel/stages')) return Promise.resolve(stages);
     if (url.startsWith('/api/funnel/conversion-by-source')) return Promise.resolve(bySource);
     if (url.startsWith('/api/funnel/by-rep')) return Promise.resolve(byRep);
@@ -181,7 +188,7 @@ afterEach(() => {
 });
 
 describe('<Funnel /> — page chrome + initial fetches', () => {
-  it('renders heading + subtitle + date filters + pipeline filter synchronously', async () => {
+  it('renders heading + subtitle + date filters + deal type filter synchronously', async () => {
     fetchApiMock.mockImplementation(buildFetchApi());
     render(<Funnel />);
 
@@ -197,27 +204,27 @@ describe('<Funnel /> — page chrome + initial fetches', () => {
     const dateInputs = document.querySelectorAll('input[type="date"]');
     expect(dateInputs.length).toBe(2);
 
-    // Pipeline filter <select> with "All Pipelines" default option.
-    const pipelineSel = screen.getByRole('combobox');
-    expect(pipelineSel).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /All Pipelines/i })).toBeInTheDocument();
+    // Generic CRM uses a deal type filter with an "All Deal Types" default option.
+    const dealTypeSel = screen.getByRole('combobox');
+    expect(dealTypeSel).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /All Deal Types/i })).toBeInTheDocument();
 
     // Let pending mock promises settle (avoids dangling-promise pollution).
     await waitFor(() =>
       expect(fetchApiMock).toHaveBeenCalledWith(
         expect.stringContaining('/api/funnel/stages'),
+        expect.anything(),
       ),
     );
   });
 
-  it('fires /api/pipelines + the five funnel GETs on mount with NO ?from / ?to / ?pipelineId', async () => {
+  it('fires the funnel GETs on mount with no date or deal type filter', async () => {
     fetchApiMock.mockImplementation(buildFetchApi());
     render(<Funnel />);
 
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
-      // Pipelines lookup (separate useEffect).
-      expect(urls).toContain('/api/pipelines');
+      expect(urls).toContain('/api/tenant-settings/generic.dealTypes');
       // Five funnel endpoints — on first mount, with no filters set,
       // /stages + /conversion-by-source + /by-rep carry NO query string;
       // /velocity carries none either; /trend always carries ?months=6.
@@ -340,7 +347,9 @@ describe('<Funnel /> — empty + populated payloads', () => {
     expect(await screen.findByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.getByText('Rahul Mehta')).toBeInTheDocument();
     // The Rep Performance heading exists.
-    expect(screen.getByRole('heading', { name: /Rep Performance/i })).toBeInTheDocument();
+    const repHeading = screen.getByRole('heading', { name: /Rep Performance/i });
+    expect(repHeading).toBeInTheDocument();
+    expect(repHeading.closest('.funnel-table-card')?.querySelector('.funnel-table-scroll')).toBeInTheDocument();
   });
 
   it('renders one row per source in the Conversion by Source table', async () => {
@@ -352,19 +361,21 @@ describe('<Funnel /> — empty + populated payloads', () => {
     expect(screen.getByText('referral')).toBeInTheDocument();
     expect(screen.getByText('cold-email')).toBeInTheDocument();
     // The "Conversion by Source" heading exists.
-    expect(screen.getByRole('heading', { name: /Conversion by Source/i })).toBeInTheDocument();
+    const sourceHeading = screen.getByRole('heading', { name: /Conversion by Source/i });
+    expect(sourceHeading).toBeInTheDocument();
+    expect(sourceHeading.closest('.funnel-table-card')?.querySelector('.funnel-table-scroll')).toBeInTheDocument();
   });
 
-  it('populates pipeline filter <select> with options from /api/pipelines', async () => {
+  it('populates the deal type filter with options from tenant settings', async () => {
     fetchApiMock.mockImplementation(buildFetchApi());
     render(<Funnel />);
 
-    // Both seeded pipeline options render after /api/pipelines resolves.
+    // Generic deal types render after the tenant setting resolves.
     expect(
-      await screen.findByRole('option', { name: /Default Pipeline/i }),
+      await screen.findByRole('option', { name: /New Business/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('option', { name: /Enterprise/i }),
+      screen.getByRole('option', { name: /Renewal/i }),
     ).toBeInTheDocument();
   });
 });
@@ -375,7 +386,7 @@ describe('<Funnel /> — filter refires', () => {
     render(<Funnel />);
 
     // Wait for the initial mount fetch to settle.
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/funnel/stages'));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/funnel/stages', expect.anything()));
 
     fetchApiMock.mockClear();
 
@@ -401,32 +412,30 @@ describe('<Funnel /> — filter refires', () => {
     });
   });
 
-  it('changing the pipeline filter refires /api/funnel/stages with pipelineId=N', async () => {
+  it('changing the deal type filter refires /api/funnel/stages with dealType', async () => {
     fetchApiMock.mockImplementation(buildFetchApi());
     render(<Funnel />);
 
-    // Wait for pipelines to populate so the <option> exists.
+    // Wait for deal types to populate so the <option> exists.
     await waitFor(() =>
       expect(
-        screen.queryByRole('option', { name: /Default Pipeline/i }),
+        screen.queryByRole('option', { name: /New Business/i }),
       ).toBeInTheDocument(),
     );
 
     fetchApiMock.mockClear();
 
-    // Change the pipeline select to pipe-1.
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pipe-1' } });
+    // Change the deal type select to New Business.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'New Business' } });
 
-    // The /stages refetch carries pipelineId=pipe-1. Per source, only
-    // the stages endpoint forwards pipelineId — the other funnel endpoints
-    // don't, so we only assert on /stages.
+    // The /stages refetch carries the selected deal type.
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
       expect(
         urls.some(
           (u) =>
             u.startsWith('/api/funnel/stages')
-            && u.includes('pipelineId=pipe-1'),
+            && u.includes('dealType=New%20Business'),
         ),
       ).toBe(true);
     });
@@ -436,8 +445,8 @@ describe('<Funnel /> — filter refires', () => {
     fetchApiMock.mockImplementation(buildFetchApi());
     render(<Funnel />);
 
-    // Wait for initial mount + pipelines to settle.
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/pipelines'));
+    // Wait for initial mount + deal types to settle.
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.dealTypes', expect.anything()));
 
     // Pre-state: NO Clear button (no filters set).
     expect(screen.queryByRole('button', { name: /Clear/i })).not.toBeInTheDocument();
@@ -467,9 +476,9 @@ describe('<Funnel /> — filter refires', () => {
 });
 
 describe('<Funnel /> — error handling', () => {
-  it('does NOT crash when /api/pipelines rejects (best-effort fetch)', async () => {
+  it('does NOT crash when the Generic CRM deal type setting rejects', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/pipelines') return Promise.reject(new Error('boom'));
+      if (url === '/api/tenant-settings/generic.dealTypes') return Promise.reject(new Error('boom'));
       if (url.startsWith('/api/funnel/stages')) return Promise.resolve({ stages: [] });
       return Promise.resolve([]);
     });
@@ -480,14 +489,12 @@ describe('<Funnel /> — error handling', () => {
       await screen.findByRole('heading', { name: /Sales Funnel/i }),
     ).toBeInTheDocument();
     expect(await screen.findByText(/No deals yet\./i)).toBeInTheDocument();
-    // The pipeline filter <select> still renders even if /api/pipelines
-    // failed (defaults to [] via the .catch branch).
+    // The deal type filter still renders even if its setting fails.
     expect(screen.getByRole('combobox')).toBeInTheDocument();
   });
 
   it('does NOT crash when /api/funnel/stages rejects (per-endpoint .catch fallbacks)', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/pipelines') return Promise.resolve([]);
       if (url.startsWith('/api/funnel/stages')) return Promise.reject(new Error('stages boom'));
       return Promise.resolve([]);
     });

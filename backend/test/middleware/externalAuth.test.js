@@ -60,6 +60,28 @@ function makeReqResNext({ headers = {} } = {}) {
 }
 
 describe('externalAuth', () => {
+  test.each([
+    ['GET', '/api/v1/external/plot-inventory?limit=1', true],
+    ['GET', '/api/v1/external/contacts', false],
+    ['POST', '/api/v1/external/plot-inventory', false],
+    ['GET', '/api/v1/external/plot-inventory-extra', false],
+    ['POST', '/api/v1/flight-plugin/quotes', false],
+  ])('restricts inventory key for %s %s', async (method, url, allowed) => {
+    findUniqueMock.mockResolvedValueOnce({
+      id: 1, tenantId: 7, userId: 4, purpose: 'plot-inventory-read',
+      tenant: { id: 7, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({ headers: { 'x-api-key': 'glbs_' + 'a'.repeat(48) } });
+    req.method = method;
+    req.originalUrl = url;
+    await externalAuth(req, res, next);
+    if (allowed) expect(next).toHaveBeenCalled();
+    else {
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.body.code).toBe('WRONG_KEY_PURPOSE');
+      expect(next).not.toHaveBeenCalled();
+    }
+  });
   test('returns 401 when no X-API-Key header', async () => {
     const { req, res, next } = makeReqResNext();
     await externalAuth(req, res, next);

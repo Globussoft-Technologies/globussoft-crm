@@ -1,49 +1,173 @@
 import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Label, LineChart, Line } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
-import { formatMoney, currencySymbol } from '../utils/money';
+import { formatMoney, formatMoneyCompact, currencySymbol, tenantCurrency, tenantLocale } from '../utils/money';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
-import { Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { readDateRange, setDateRangeParams } from '../utils/dateRangeNavigation';
 
-import { PieChart as PieChartIcon, Upload, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
+import { PieChart as PieChartIcon, CircleDot, Upload, Filter, Calendar, Table, BarChart3, AreaChart as AreaChartIcon, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
+const STAGE_COLORS = {
+  lead: '#3b82f6', 'new-lead': '#3b82f6', contacted: '#0891b2', negotiation: '#7c3aed',
+  proposal: '#f59e0b', 'proposal-sent': '#f59e0b', won: '#10b981', 'closed-won': '#10b981',
+  lost: '#ef4444', 'closed-lost': '#ef4444',
+};
+function chartColor(name, index) {
+  return STAGE_COLORS[String(name || '').toLowerCase().trim().replace(/\s+/g, '-')] || COLORS[index % COLORS.length];
+}
+function normalizeReportStage(name) {
+  const key = String(name || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+  if (key === 'proposal' || key === 'proposal-sent') return 'PROPOSAL-SENT';
+  if (key === 'won' || key === 'closed-won') return 'WON';
+  if (key === 'lost' || key === 'closed-lost') return 'LOST';
+  return name;
+}
+function reportStageKey(name) {
+  return String(normalizeReportStage(name) || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+}
+const REPORT_STAGE_ORDER = ['NEW-LEAD', 'LEAD', 'CONTACTED', 'NEGOTIATION', 'PROPOSAL-SENT', 'WON', 'LOST'];
+const INVOICE_STATUS_VALUES = new Set(['UNPAID', 'PAID', 'OVERDUE', 'VOIDED']);
+
+function openDatePicker(event) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // Unsupported browsers still retain the native calendar button.
+  }
+}
+
+function preventManualDateEntry(event) {
+  if (event.key === 'Tab' || event.key === 'Escape') return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openDatePicker(event);
+    return;
+  }
+  event.preventDefault();
+}
 
 // #127 followup: respect tenant currency rather than hard-coding "$".
 const METRIC_OPTIONS = [
   { value: 'revenue', label: `Revenue (${currencySymbol()})`, group: 'Deals' },
-  { value: 'count', label: 'Deal Count (#)', group: 'Deals' },
-  { value: 'win_rate', label: 'Win Rate', group: 'Deals' },
-  { value: 'tasks', label: 'Task Status', group: 'Activity' },
-  { value: 'contacts_by_source', label: 'Contacts by Source', group: 'Contacts' },
-  { value: 'contacts_by_status', label: 'Contacts by Status', group: 'Contacts' },
+  { value: 'count', label: 'Deal Count', group: 'Deals' },
+  { value: 'win_rate', label: 'Win/Loss Rate', group: 'Deals' },
   { value: 'invoices', label: 'Invoice Status', group: 'Financial' },
-  { value: 'expenses', label: 'Expenses by Category', group: 'Financial' },
 ];
 
-const GROUPBY_OPTIONS = [
-  { value: 'stage', label: 'Pipeline Stage' },
-  { value: 'probability', label: 'Probability Score' },
+const PIE_VISUALIZATION_OPTIONS = [
+  { value: 'pie', label: 'Pie Chart', Icon: PieChartIcon },
+  { value: 'donut', label: 'Donut Chart', Icon: CircleDot },
 ];
+
+const VISUALIZATION_OPTIONS_BY_METRIC = {
+  revenue: [
+    { value: 'bar', label: 'Bar Chart', Icon: BarChart3 },
+    { value: 'line', label: 'Line Chart', Icon: AreaChartIcon },
+    { value: 'horizontal_bar', label: 'Horizontal Bar', Icon: BarChart3, iconStyle: { transform: 'rotate(90deg)' } },
+    ...PIE_VISUALIZATION_OPTIONS,
+  ],
+  count: [
+    { value: 'bar', label: 'Bar Chart', Icon: BarChart3 },
+    { value: 'line', label: 'Line Chart', Icon: AreaChartIcon },
+    { value: 'horizontal_bar', label: 'Horizontal Bar', Icon: BarChart3, iconStyle: { transform: 'rotate(90deg)' } },
+    ...PIE_VISUALIZATION_OPTIONS,
+  ],
+  win_rate: [
+    { value: 'line', label: 'Line Chart', Icon: AreaChartIcon },
+    { value: 'bar', label: 'Bar Chart', Icon: BarChart3 },
+    ...PIE_VISUALIZATION_OPTIONS,
+  ],
+  contacts_by_source: [
+    { value: 'pie', label: 'Pie Chart', Icon: PieChartIcon },
+    { value: 'bar', label: 'Bar Chart', Icon: BarChart3 },
+    { value: 'horizontal_bar', label: 'Horizontal Bar', Icon: BarChart3, iconStyle: { transform: 'rotate(90deg)' } },
+    { value: 'donut', label: 'Donut Chart', Icon: CircleDot },
+  ],
+  invoices: [
+    { value: 'pie', label: 'Pie Chart', Icon: PieChartIcon },
+    { value: 'bar', label: 'Bar Chart', Icon: BarChart3 },
+    { value: 'donut', label: 'Donut Chart', Icon: CircleDot },
+  ],
+};
 
 const DETAIL_TYPES = [
   { value: 'deals', label: 'Deals' },
   { value: 'contacts', label: 'Contacts' },
-  { value: 'tasks', label: 'Tasks' },
   { value: 'calls', label: 'Call Logs' },
   { value: 'invoices', label: 'Invoices' },
   { value: 'expenses', label: 'Expenses' },
 ];
 
+const REPORT_DATE_PRESETS = [
+  { value: 'all', label: 'All time' },
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'last30', label: 'Last 30 days' },
+  { value: 'last90', label: 'Last 90 days' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'thisYear', label: 'This year' },
+  { value: 'custom', label: 'Custom range...' },
+];
+
+function formatReportDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function reportPresetRange(preset) {
+  if (preset === 'all') return { from: '', to: '' };
+
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  start.setHours(0, 0, 0, 0);
+
+  if (preset === 'last7') start.setDate(start.getDate() - 6);
+  if (preset === 'last30') start.setDate(start.getDate() - 29);
+  if (preset === 'last90') start.setDate(start.getDate() - 89);
+  if (preset === 'thisMonth') start.setDate(1);
+  if (preset === 'thisYear') start.setMonth(0, 1);
+
+  return { from: formatReportDate(start), to: formatReportDate(end) };
+}
+
+function reportDatePresetForRange(from, to) {
+  if (!from && !to) return 'all';
+  if (!from || !to) return 'custom';
+  const matchingPreset = REPORT_DATE_PRESETS.find(({ value }) => {
+    if (value === 'custom') return false;
+    const range = reportPresetRange(value);
+    return range.from === from && range.to === to;
+  });
+  return matchingPreset?.value || 'custom';
+}
+
 export default function Reports() {
   const notify = useNotify();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { from: startDate, to: endDate } = readDateRange(searchParams);
+  const [datePreset, setDatePreset] = useState(() => reportDatePresetForRange(startDate, endDate));
+  const updateDate = (key, value) => setSearchParams(
+    setDateRangeParams(searchParams, { from: startDate, to: endDate, [key]: value }),
+    { replace: true },
+  );
+  const updateDatePreset = (preset) => {
+    setDatePreset(preset);
+    if (preset === 'custom') return;
+    setSearchParams(setDateRangeParams(searchParams, reportPresetRange(preset)), { replace: true });
+  };
   const [data, setData] = useState([]);
   const [metric, setMetric] = useState('revenue');
-  const [groupBy, setGroupBy] = useState('stage');
+  const groupBy = 'stage';
+  const [dealType, setDealType] = useState('');
+  const [dealTypes, setDealTypes] = useState([]);
+  const [currencies, setCurrencies] = useState([]);
+  const [displayCurrency, setDisplayCurrency] = useState(() => tenantCurrency());
   const [chartType, setChartType] = useState('bar');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('chart'); // chart | table
   const [detailType, setDetailType] = useState('deals');
@@ -65,6 +189,31 @@ export default function Reports() {
   // these now, but bailing on the client also avoids spurious red flashes.
   const rangeInverted = !!(startDate && endDate && new Date(startDate) > new Date(endDate));
 
+  useEffect(() => {
+    fetchApi('/api/tenant-settings/generic.dealTypes', { silent: true })
+      .then(setting => {
+        try {
+          const parsed = typeof setting?.value === 'string' ? JSON.parse(setting.value) : setting?.value;
+          setDealTypes(Array.isArray(parsed) ? parsed.filter(type => type?.name) : []);
+        } catch {
+          setDealTypes([]);
+        }
+      })
+      .catch(() => setDealTypes([]));
+  }, []);
+
+  useEffect(() => {
+    fetchApi('/api/currencies', { silent: true })
+      .then(result => {
+        const rows = Array.isArray(result) ? result.filter(currency => currency?.code) : [];
+        setCurrencies(rows);
+        if (rows.length) {
+          setDisplayCurrency(current => rows.some(currency => currency.code === current) ? current : rows[0].code);
+        }
+      })
+      .catch(() => setCurrencies([]));
+  }, []);
+
   const dateParams = () => {
     if (rangeInverted) return '';
     // #117: backend reports endpoints accept ?from= / ?to= (and the legacy
@@ -79,9 +228,13 @@ export default function Reports() {
   };
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    fetchApi(`/api/reports/query?metric=${metric}&groupBy=${groupBy}${dateParams()}`)
+    const dealTypeParam = needsGroupBy && dealType ? `&dealType=${encodeURIComponent(dealType)}` : '';
+    const currencyParam = metric === 'revenue' || metric === 'invoices' ? `&currency=${encodeURIComponent(displayCurrency)}` : '';
+    fetchApi(`/api/reports/query?metric=${metric}&groupBy=${groupBy}${dealTypeParam}${currencyParam}${dateParams()}`)
       .then(res => {
+        if (cancelled) return;
         // Pre-fix the empty-response branch injected a fake
         // [Lead, Contacted, Proposal, Won] dataset so the chart looked
         // alive on a new tenant. That fabricated stages the tenant doesn't
@@ -90,16 +243,50 @@ export default function Reports() {
         // Dormant) — the chart silently lied about its data model.
         // Empty now stays empty; the empty-state placeholder below the
         // chart explains the situation to the user.
-        setData(Array.isArray(res) ? res : []);
+        const rows = Array.isArray(res) ? res : [];
+        const isDealMetric = metric === 'revenue' || metric === 'count';
+        if (groupBy === 'stage' && isDealMetric) {
+          const merged = new Map();
+          rows.forEach((row) => {
+            const stage = normalizeReportStage(row.name);
+            const key = reportStageKey(stage);
+            const current = merged.get(key) || { ...row, name: stage, value: 0 };
+            current.value += Number(row.value || 0);
+            merged.set(key, current);
+          });
+          const selectedType = dealTypes.find(type => type.name === dealType);
+          const configuredStages = dealType ? (selectedType?.stages || []) : [];
+          const stageData = configuredStages.length
+            ? [
+                ...configuredStages.map(stage => {
+                  const existing = merged.get(reportStageKey(stage.name));
+                  return existing || { name: stage.name, value: 0 };
+                }),
+                ...[...merged.entries()]
+                  .filter(([key]) => !configuredStages.some(stage => reportStageKey(stage.name) === key))
+                  .map(([, value]) => value),
+              ]
+            : [...merged.values()];
+          setData(configuredStages.length ? stageData : stageData.sort((a, b) => {
+            const ai = REPORT_STAGE_ORDER.indexOf(String(a.name).toUpperCase());
+            const bi = REPORT_STAGE_ORDER.indexOf(String(b.name).toUpperCase());
+            return (ai < 0 ? REPORT_STAGE_ORDER.length : ai) - (bi < 0 ? REPORT_STAGE_ORDER.length : bi);
+          }));
+        } else if (metric === 'invoices') {
+          setData(rows.filter(row => INVOICE_STATUS_VALUES.has(String(row.name || '').toUpperCase())));
+        } else setData(rows);
         setLoading(false);
       })
       .catch(err => {
+        if (cancelled) return;
         console.error(err);
+        notify.error(err.message || 'Could not load the report.');
         setData([]);
         setLoading(false);
       });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
-  }, [metric, groupBy, startDate, endDate]);
+  }, [metric, groupBy, dealType, dealTypes, startDate, endDate, displayCurrency]);
 
   useEffect(() => {
     if (viewMode === 'table') {
@@ -190,6 +377,16 @@ export default function Reports() {
   };
 
   const totalValue = data.reduce((sum, item) => sum + (item.value || 0), 0);
+  const isMoneyMetric = metric === 'revenue' || metric === 'invoices';
+  const sourceCurrency = tenantCurrency();
+  const conversionCurrencies = currencies.length ? currencies : [{ code: sourceCurrency, exchangeRate: 1 }];
+  const convertedTotalValue = totalValue;
+  const formattedTotalValue = isMoneyMetric
+    ? formatMoney(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
+    : totalValue;
+  const donutTotalValue = isMoneyMetric
+    ? formatMoneyCompact(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
+    : totalValue;
 
   const exportFile = (format) => {
     const token = getAuthToken();
@@ -199,7 +396,7 @@ export default function Reports() {
     const endpoint = format === 'pdf' ? 'export-pdf' : 'export-csv';
     const params = viewMode === 'table'
       ? `type=${detailType}${dateParams()}`
-      : `metric=${metric}&groupBy=${groupBy}${dateParams()}`;
+      : `${format === 'pdf' ? 'type=chart&' : ''}metric=${metric}&groupBy=${groupBy}&currency=${encodeURIComponent(displayCurrency)}${needsGroupBy && dealType ? `&dealType=${encodeURIComponent(dealType)}` : ''}${dateParams()}`;
     fetch(`/api/reports/${endpoint}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => {
         if (!res.ok) throw new Error(`${format.toUpperCase()} export failed`);
@@ -215,47 +412,34 @@ export default function Reports() {
       .catch(() => notify.error(`Failed to export ${format.toUpperCase()}`));
   };
 
-  const needsGroupBy = metric === 'revenue' || metric === 'count';
+  const needsGroupBy = metric === 'revenue' || metric === 'count' || metric === 'win_rate';
+  const visualizationOptions = VISUALIZATION_OPTIONS_BY_METRIC[metric] || VISUALIZATION_OPTIONS_BY_METRIC.revenue;
+
+  useEffect(() => {
+    const options = VISUALIZATION_OPTIONS_BY_METRIC[metric] || VISUALIZATION_OPTIONS_BY_METRIC.revenue;
+    if (!options.some(option => option.value === chartType)) setChartType(options[0].value);
+  }, [metric, chartType]);
 
   return (
-    <div className="reports-page" style={{ padding: '2rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          marginBottom: '1rem',
-        }}
-      >
-        <Link
-          to="/dashboard"
-          className="btn-secondary"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            textDecoration: 'none',
-            padding: '0.5rem 1rem',
-            fontSize: '0.85rem',
-          }}
-        >
-          ←  Back  to Dashboard
-        </Link>
-      </div>
-
-
-      <header className="reports-page__header" style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="reports-page" style={{ padding: '0 2rem 0.5rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="reports-page__header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Reports & Analytics</h1>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>Reports & Analytics</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Business intelligence dashboard — real-time revenue, pipeline, and deal analytics.</p>
         </div>
         <div className="reports-page__header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div className="reports-page__date-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
-            <div className="reports-page__date-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Calendar size={16} color="var(--text-secondary)" />
-              <input type="date" className="input-field" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
-              <span style={{ color: 'var(--text-secondary)' }}>to</span>
-              <input type="date" className="input-field" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
-            </div>
+            <select aria-label="Date range" value={datePreset} onChange={e => updateDatePreset(e.target.value)} className="input-field" style={{ padding: '0.5rem', fontSize: '0.8rem', minWidth: '150px' }}>
+              {REPORT_DATE_PRESETS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            {datePreset === 'custom' && (
+              <div className="reports-page__date-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Calendar size={16} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+                <input type="date" className="input-field" aria-label="Start date" aria-invalid={rangeInverted} value={startDate} onChange={e => { setDatePreset('custom'); updateDate('from', e.target.value); }} onClick={openDatePicker} onKeyDown={preventManualDateEntry} onPaste={e => e.preventDefault()} onDrop={e => e.preventDefault()} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+                <span style={{ color: 'var(--text-secondary)' }}>to</span>
+                <input type="date" className="input-field" aria-label="End date" aria-invalid={rangeInverted} value={endDate} onChange={e => { setDatePreset('custom'); updateDate('to', e.target.value); }} onClick={openDatePicker} onKeyDown={preventManualDateEntry} onPaste={e => e.preventDefault()} onDrop={e => e.preventDefault()} style={{ padding: '0.5rem', fontSize: '0.8rem', borderColor: rangeInverted ? '#ef4444' : undefined }} />
+              </div>
+            )}
             {rangeInverted && (
               <span className="report-error-text" style={{ fontSize: '0.7rem', alignSelf: 'flex-start' }}>
                 Start date must be on or before end date
@@ -275,53 +459,73 @@ export default function Reports() {
       </header>
 
       {/* View Mode Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-        <button onClick={() => setViewMode('chart')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'chart' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'chart' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
-          <BarChart3 size={16} /> Charts
-        </button>
-        <button onClick={() => setViewMode('table')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'table' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'table' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
-          <Table size={16} /> Detailed Data
-        </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={() => setViewMode('chart')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'chart' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'chart' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
+            <BarChart3 size={16} /> Charts
+          </button>
+          <button onClick={() => setViewMode('table')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'table' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'table' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
+            <Table size={16} /> Detailed Data
+          </button>
+        </div>
+
+        {viewMode === 'chart' && needsGroupBy && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600', whiteSpace: 'nowrap' }}>Deal Type</label>
+            <select className="input-field" value={dealType} onChange={e => setDealType(e.target.value)} style={{ padding: '0.65rem 0.75rem', background: 'var(--input-bg)', minWidth: '150px', outline: 'none' }}>
+              <option value="">All Deal Types</option>
+              {dealTypes.map(type => <option key={type.id || type.name} value={type.name}>{type.name}</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
       {viewMode === 'chart' ? (
         <div className="reports-page__overview">
           {/* Controls Sidebar */}
-          <div className="card" style={{ minWidth: 0, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+          <div className="card" style={{ minWidth: 0, padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Filter size={20} color="var(--primary-color, var(--accent-color))" /> Query Builder
             </h3>
 
             <div>
-              <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>1. Select Metric</label>
-              <select className="input-field" value={metric} onChange={e => setMetric(e.target.value)} style={{ padding: '0.75rem', background: 'var(--input-bg)', width: '100%', outline: 'none' }}>
-                {METRIC_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
-
-            {needsGroupBy && (
-              <div>
-                <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>2. Group By</label>
-                <select className="input-field" value={groupBy} onChange={e => setGroupBy(e.target.value)} style={{ padding: '0.75rem', background: 'var(--input-bg)', width: '100%', outline: 'none' }}>
-                  {GROUPBY_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
-                </select>
+              <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Select Metric</label>
+              <div role="group" aria-label="Select Metric" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
+                {METRIC_OPTIONS.map(m => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    aria-pressed={metric === m.value}
+                    onClick={() => setMetric(m.value)}
+                    style={{
+                      padding: '0.7rem 0.6rem',
+                      borderRadius: '8px',
+                      border: `1px solid ${metric === m.value ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+                      background: metric === m.value ? 'var(--primary-color, var(--accent-color))' : 'var(--input-bg)',
+                      color: metric === m.value ? '#fff' : 'var(--text-primary)',
+                      cursor: 'pointer',
+                      fontWeight: metric === m.value ? '600' : '500',
+                      fontSize: '0.8rem',
+                      minHeight: '42px',
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
               </div>
-            )}
-
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>{needsGroupBy ? '3' : '2'}. Visualization</label>
-              <select className="input-field" value={chartType} onChange={e => setChartType(e.target.value)} style={{ padding: '0.75rem', background: 'var(--input-bg)', width: '100%', outline: 'none' }}>
-                <option value="bar">Bar Chart</option>
-                <option value="pie">Donut Chart</option>
-                <option value="area">Area Chart</option>
-              </select>
             </div>
-
             <div className="report-aggregate-card" style={{ marginTop: 'auto', padding: '1.5rem', borderRadius: '12px' }}>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Aggregate Total</p>
-              <h2 style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--accent-color)' }}>
-                {metric === 'revenue' || metric === 'invoices' || metric === 'expenses' ? formatMoney(totalValue) : totalValue}
-              </h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: '0 0 0.75rem' }}>Aggregate Total</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0, flexWrap: 'wrap' }}>
+                {isMoneyMetric && currencies.length > 1 && (
+                  <select aria-label="Display currency" value={displayCurrency} onChange={e => setDisplayCurrency(e.target.value)} style={{ flex: '0 0 auto', padding: '0.3rem 0.35rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '0.7rem' }}>
+                    {conversionCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code}</option>)}
+                  </select>
+                )}
+                <h2 style={{ minWidth: 0, margin: 0, whiteSpace: 'nowrap', fontSize: '1.1rem', letterSpacing: '-0.03em', fontWeight: 'bold', color: 'var(--accent-color)' }}>
+                  {formattedTotalValue}
+                </h2>
+              </div>
             </div>
           </div>
 
@@ -338,15 +542,50 @@ export default function Reports() {
               width without forcing a -1 measurement. Mirrors the
               OwnerDashboard.jsx revenue-trend pattern (`<div style={{ height: 220 }}>`). */}
           <div className="card" style={{ minWidth: 0, padding: '2rem', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <PieChartIcon size={20} color="var(--success-color)" /> Data Projection
               </h3>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div role="group" aria-label="Visualization" style={{ display: 'flex', gap: '0.5rem' }}>
+                    {visualizationOptions.map(({ value, label, Icon, iconStyle }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-label={label}
+                        aria-pressed={chartType === value}
+                        title={label}
+                        onClick={() => setChartType(value)}
+                        style={{
+                          width: '42px',
+                          height: '42px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderRadius: '8px',
+                          border: `1px solid ${chartType === value ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+                          background: chartType === value ? 'var(--primary-color, var(--accent-color))' : 'var(--input-bg)',
+                          color: chartType === value ? '#fff' : 'var(--text-primary)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Icon size={18} style={iconStyle} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="reports-page__chart-scroll">
             <div className="reports-page__chart-stage" style={{ position: 'relative', height: '450px', minHeight: '350px', minWidth: 0 }}>
-              {loading ? (
+              {loading && data.length > 0 && (
+                <div style={{ position: 'absolute', top: '0.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 2, padding: '0.35rem 0.7rem', borderRadius: '999px', background: 'var(--surface-color)', color: 'var(--text-secondary)', fontSize: '0.75rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)', pointerEvents: 'none' }}>
+                  Refreshing data...
+                </div>
+              )}
+              {loading && data.length === 0 ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>Crunching metrics...</div>
               ) : data.length === 0 ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>No data available for this query.</div>
@@ -360,41 +599,78 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={92} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val, { currency: displayCurrency }) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
                         ))}
                       </Bar>
                     </BarChart>
-                  ) : chartType === 'pie' ? (
-                    <PieChart>
-                      <Pie data={data} innerRadius={80} outerRadius={140} paddingAngle={5} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                  ) : chartType === 'horizontal_bar' ? (
+                    <BarChart layout="vertical" data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" horizontal={false} />
+                      <XAxis type="number" stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val, { currency: displayCurrency }) : val} />
+                      <YAxis type="category" dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={120} />
+                      <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
+                      <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                         {data.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  ) : chartType === 'pie' || chartType === 'donut' ? (
+                    <PieChart>
+                      <Pie data={data} cx="36%" cy="50%" innerRadius={chartType === 'donut' ? 112 : 0} outerRadius={165} paddingAngle={5} dataKey="value" nameKey="name" label={false}>
+                        {data.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
                         ))}
                       </Pie>
+                      {chartType === 'donut' && (
+                        <Label
+                          position="center"
+                          content={({ viewBox }) => {
+                            const { cx, cy } = viewBox || {};
+                            if (cx == null || cy == null) return null;
+                            return (
+                              <g>
+                                <text x={cx} y={cy - 7} textAnchor="middle" fill="var(--text-secondary)" fontSize="11">Total</text>
+                                <text x={cx} y={cy + 15} textAnchor="middle" fill="var(--text-primary)" fontSize="16" fontWeight="700">{donutTotalValue}</text>
+                              </g>
+                            );
+                          }}
+                        />
+                      )}
+                      <Legend
+                        layout="vertical"
+                        align="right"
+                        verticalAlign="middle"
+                        wrapperStyle={{ fontSize: '0.8rem', maxWidth: '42%', overflow: 'hidden' }}
+                        formatter={(name) => {
+                          const row = data.find((entry) => String(entry.name) === String(name));
+                          const value = Math.max(0, Number(row?.value) || 0);
+                          const total = data.reduce((sum, entry) => sum + Math.max(0, Number(entry.value) || 0), 0);
+                          const percent = total > 0 ? Math.round((value / total) * 100) : 0;
+                          const groupLabel = 'Deal Stage';
+                          const label = `${groupLabel}: ${String(name || 'Unknown')}`;
+                          const shortLabel = label.length > 30 ? `${label.slice(0, 29)}…` : label;
+                          return `${shortLabel}${total > 0 ? ` (${percent}%)` : ''}`;
+                        }}
+                      />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                     </PieChart>
                   ) : (
-                    <AreaChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <defs>
-                        <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
+                    <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                       <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
                       {/* #462 follow-up: mirror the #439 OwnerDashboard fix —
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={92} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={104} tickMargin={8} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoneyCompact(val, { currency: displayCurrency }) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
-                      <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
-                    </AreaChart>
+                      <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} />
+                    </LineChart>
                   )}
                 </ResponsiveContainer>
               )}
@@ -911,7 +1187,7 @@ export default function Reports() {
       )}
 
       {/* Scheduled Reports Section */}
-      {(schedules.length > 0 || schedTotal > 0) && (
+      {viewMode === 'table' && (schedules.length > 0 || schedTotal > 0) && (
         <div className="reports-page__schedule" style={{ marginTop: '2rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
@@ -946,14 +1222,14 @@ export default function Reports() {
               minWidth: 0,
             }}>
               <colgroup>
-                <col style={{ width: '15%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '13%' }} />
                 <col style={{ width: '12%' }} />
-                <col style={{ width: '10%' }} />
-                <col style={{ width: '8%' }} />
-                <col style={{ width: '20%' }} />
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '10%' }} />
-                <col style={{ width: '10%' }} />
               </colgroup>
 
               <thead style={{

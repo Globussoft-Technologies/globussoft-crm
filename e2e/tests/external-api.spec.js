@@ -237,6 +237,7 @@ test.describe('External API — auth gate', () => {
     ['GET',   '/api/v1/external/services'],
     ['GET',   '/api/v1/external/staff'],
     ['GET',   '/api/v1/external/locations'],
+    ['GET',   '/api/v1/external/plot-inventory'],
     ['GET',   '/api/v1/external/appointments'],
     ['POST',  '/api/v1/external/appointments'],
     ['PATCH', '/api/v1/external/leads/1/stage'],

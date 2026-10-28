@@ -8,6 +8,7 @@ import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
+import './WinLoss.css';
 import {
   BadgePercent, Trophy, X, IndianRupee, Plus, Trash2,
 } from 'lucide-react';
@@ -109,7 +110,7 @@ export default function WinLoss() {
   const lossReasons = byReason.filter(r => r.type === 'lost').slice(0, 8);
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="win-loss-analysis-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
@@ -219,7 +220,7 @@ export default function WinLoss() {
       </div>
 
       {/* Recent closed deals */}
-      <div className="card" style={{ padding: 0, overflow: 'visible', marginBottom: '2rem' }}>
+      <div className="card win-loss-closed-deals-card" style={{ padding: 0, overflow: 'visible', marginBottom: '2rem' }}>
         <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--glass-border)' }}>
           <h3 style={{ margin: 0 }}>Recent Closed Deals</h3>
         </div>
@@ -228,8 +229,8 @@ export default function WinLoss() {
         ) : closedDeals.length === 0 ? (
           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No closed deals in this range.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <TopScrollSync verticalOverflow="auto">
+          <table className="win-loss-closed-deals-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <th style={th}>Deal</th>

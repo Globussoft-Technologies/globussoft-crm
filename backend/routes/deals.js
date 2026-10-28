@@ -12,6 +12,7 @@ const { formatMoney } = require("../utils/formatMoney");
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 const { canonicaliseChannel, CHANNEL_ALIASES } = require("../lib/intakePayloadValidators");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { DEFAULTS, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
@@ -48,6 +49,15 @@ function addDealSearch(where, rawSearch) {
   return where;
 }
 
+function canonicalDealStage(stage) {
+  const value = String(stage || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
+  if (value === 'won' || value === 'closed-won') return 'closed-won';
+  if (value === 'lost' || value === 'closed-lost') return 'closed-lost';
+  if (value === 'proposal' || value === 'proposal-sent') return 'proposal-sent';
+  if (value === 'lead' || value === 'new') return 'new-lead';
+  return value;
+}
+
 router.use(verifyToken);
 
 // #188: short-circuit non-numeric :id so requests like GET /api/deals/funnel
@@ -67,18 +77,42 @@ async function audit(action, entityId, userId, tenantId, details) {
   return writeAudit("Deal", action, entityId, userId, tenantId, details);
 }
 
+async function legacyDealTypeName(tenantId) {
+  const setting = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key: KEYS.GENERIC_DEAL_TYPES } },
+    select: { value: true },
+  });
+  let types;
+  try { types = JSON.parse(setting?.value || DEFAULTS[KEYS.GENERIC_DEAL_TYPES]); }
+  catch (_error) { types = JSON.parse(DEFAULTS[KEYS.GENERIC_DEAL_TYPES]); }
+  const list = Array.isArray(types) ? types : [];
+  return (list.find((type) => type.id === 'new-business') || list.find((type) => type.isDefault) || list[0])?.name || 'New Business';
+}
+
+async function addDealTypeFilter(where, tenantId, dealType) {
+  const selected = String(dealType);
+  if (selected === await legacyDealTypeName(tenantId)) {
+    where.AND = [...(where.AND || []), { OR: [{ dealType: selected }, { dealType: null }] }];
+  } else {
+    where.dealType = selected;
+  }
+}
+
 // ─── GET / — list deals with filters ─────────────────────────────────
 // #167: soft-deleted deals are hidden by default. Pass ?includeDeleted=true
 // for admin/audit views. The /stats endpoint and aggregations are NOT yet
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, contactId, subBrand, from, to, channel, search } = req.query;
+    const { stage, ownerId, pipelineId, dealType, contactId, subBrand, from, to, channel, search } = req.query;
     let where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
     if (ownerId) where.ownerId = parseInt(ownerId);
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
+    if (dealType) {
+      await addDealTypeFilter(where, req.user.tenantId, dealType);
+    }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
     // missing column on legacy tenants — Prisma matches by exact value.
@@ -242,8 +276,16 @@ router.get("/stats", async (req, res) => {
     let where = { tenantId: tid, deletedAt: null };
     if (req.query.stage) where.stage = String(req.query.stage);
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
+    if (req.query.dealType) {
+      await addDealTypeFilter(where, tid, req.query.dealType);
+    }
     if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
     if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
+    if (req.query.from || req.query.to) {
+      where.createdAt = {};
+      if (req.query.from) where.createdAt.gte = new Date(req.query.from);
+      if (req.query.to) where.createdAt.lte = new Date(req.query.to);
+    }
     addDealSearch(where, req.query.search);
     if (req.user.role === "USER") where.ownerId = req.user.userId;
 
@@ -257,41 +299,66 @@ router.get("/stats", async (req, res) => {
       };
     }
     const deals = await prisma.deal.findMany({ where });
+    const tenantCurrency = await prisma.tenant.findUnique({ where: { id: tid }, select: { defaultCurrency: true } });
+    const reportingCurrency = String(req.query.currency || tenantCurrency?.defaultCurrency || 'USD').toUpperCase();
+    const configuredCurrencies = await prisma.currency.findMany({ where: { tenantId: tid }, select: { code: true, exchangeRate: true } });
+    const rates = Object.fromEntries(configuredCurrencies.map((currency) => [String(currency.code).toUpperCase(), Number(currency.exchangeRate)]));
+    const targetRate = rates[reportingCurrency];
+    const convertedAmount = (deal) => {
+      const amount = Number(deal.amount || 0);
+      const source = String(deal.currency || reportingCurrency).toUpperCase();
+      const sourceRate = rates[source];
+      if (source === reportingCurrency && !sourceRate) return amount;
+      if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return null;
+      return amount * targetRate / sourceRate;
+    };
+    const missingRateCount = deals.filter((deal) => convertedAmount(deal) === null).length;
+    const sumAmounts = (rows) => rows.some((deal) => convertedAmount(deal) === null)
+      ? null : rows.reduce((sum, deal) => sum + convertedAmount(deal), 0);
 
     const totalDeals = deals.length;
-    const totalValue = deals.reduce((s, d) => s + (d.amount || 0), 0);
-    const avgDealSize = totalDeals ? totalValue / totalDeals : 0;
+    const totalValue = sumAmounts(deals);
+    const avgDealSize = totalValue === null ? null : (totalDeals ? totalValue / totalDeals : 0);
 
-    const wonDeals = deals.filter((d) => d.stage === "won");
-    const lostDeals = deals.filter((d) => d.stage === "lost");
+    const wonDeals = deals.filter((d) => canonicalDealStage(d.stage) === "closed-won");
+    const lostDeals = deals.filter((d) => canonicalDealStage(d.stage) === "closed-lost");
     const won = wonDeals.length;
     const lost = lostDeals.length;
     const closed = won + lost;
     const winRate = closed ? Math.round((won / closed) * 100) : 0;
 
     const wonCount = won;
-    const wonValue = wonDeals.reduce((s, d) => s + (d.amount || 0), 0);
+    const wonValue = sumAmounts(wonDeals);
     const lostCount = lost;
-    const lostValue = lostDeals.reduce((s, d) => s + (d.amount || 0), 0);
+    const lostValue = sumAmounts(lostDeals);
 
-    // #567: probability-weighted pipeline value. Mirrors the per-stage weights
-    // Dashboard.jsx used pre-fix so the rendered "Expected Revenue" tile lines
-    // up with what users saw before — but computed over the FULL population
-    // server-side, not the newest 100 rows. Stages outside this map contribute
-    // 0 (negotiation/lost have no expected uplift).
-    const probs = { lead: 0.1, contacted: 0.3, proposal: 0.7, won: 1.0 };
-    const expectedValue = deals.reduce(
-      (s, d) => s + ((d.amount || 0) * (probs[d.stage] || 0)),
-      0
-    );
+    // Forecast only open deals. Each deal's saved probability takes priority;
+    // stage defaults cover older deals without a probability value.
+    const defaultProbability = { 'new-lead': 10, contacted: 30, 'proposal-sent': 70, negotiation: 80 };
+    const openDealExpectedValue = (deal) => {
+      const stage = canonicalDealStage(deal.stage);
+      if (stage === 'closed-won' || stage === 'closed-lost') return 0;
+      const savedProbability = deal.probability === null || deal.probability === undefined || deal.probability === ''
+        ? NaN : Number(deal.probability);
+      const probability = Number.isFinite(savedProbability) && savedProbability >= 0 && savedProbability <= 100
+        ? savedProbability : (defaultProbability[stage] ?? 50);
+      const amount = convertedAmount(deal);
+      return amount === null ? null : amount * probability / 100;
+    };
+    const openDeals = deals.filter((deal) => !['closed-won', 'closed-lost'].includes(canonicalDealStage(deal.stage)));
+    const expectedValue = openDeals.some((deal) => openDealExpectedValue(deal) === null)
+      ? null : openDeals.reduce((sum, deal) => sum + openDealExpectedValue(deal), 0);
 
     // Group by stage
     const stageMap = {};
     deals.forEach((d) => {
-      if (!stageMap[d.stage]) stageMap[d.stage] = { stage: d.stage, count: 0, value: 0, expectedValue: 0 };
-      stageMap[d.stage].count++;
-      stageMap[d.stage].value += d.amount || 0;
-      stageMap[d.stage].expectedValue += (d.amount || 0) * (Number(d.probability || 0) / 100);
+      const stageKey = canonicalDealStage(d.stage);
+      if (!stageMap[stageKey]) stageMap[stageKey] = { stage: stageKey, count: 0, value: 0, expectedValue: 0 };
+      stageMap[stageKey].count++;
+      const value = convertedAmount(d);
+      const expected = openDealExpectedValue(d);
+      stageMap[stageKey].value = value === null || stageMap[stageKey].value === null ? null : stageMap[stageKey].value + value;
+      stageMap[stageKey].expectedValue = expected === null ? null : (stageMap[stageKey].expectedValue === null ? null : stageMap[stageKey].expectedValue + expected);
     });
     const byStage = Object.values(stageMap);
 
@@ -314,6 +381,8 @@ router.get("/stats", async (req, res) => {
       lostCount,
       lostValue,
       expectedValue,
+      currency: reportingCurrency,
+      fx: { missingRateCount },
     });
   } catch (error) {
     console.error("[deals] stats error:", error.message);
@@ -410,7 +479,31 @@ const slugifyStageName = (name) =>
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "");
 
-async function getAllowedStagesForTenant(tenantId) {
+async function getAllowedStagesForTenant(tenantId, dealType) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { vertical: true },
+  });
+  if (tenant?.vertical === "generic" && dealType) {
+    const setting = await prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId, key: "generic.dealTypes" } },
+      select: { value: true },
+    });
+    try {
+      const types = JSON.parse(String(setting?.value || DEFAULTS[KEYS.GENERIC_DEAL_TYPES]));
+      const selected = Array.isArray(types)
+        ? types.find((type) => String(type?.name || "") === String(dealType))
+        : null;
+      const configured = new Set(
+        (Array.isArray(selected?.stages) ? selected.stages : [])
+          .map((stage) => slugifyStageName(stage?.name))
+          .filter(Boolean),
+      );
+      if (configured.size) return configured;
+    } catch (_error) {
+      // Fall through to the tenant pipeline stages for legacy records.
+    }
+  }
   const rows = await prisma.pipelineStage.findMany({
     where: { tenantId },
     select: { name: true },
@@ -424,7 +517,7 @@ async function getAllowedStagesForTenant(tenantId) {
 
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
-async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false } = {}) {
+async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false, allowLegacyStages = false } = {}) {
   if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
     const e = ensureNumberInRange(body.amount, { min: 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
     if (e) return e;
@@ -434,7 +527,8 @@ async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false }
     if (e) return e;
   }
   if (body.stage !== undefined && body.stage !== null && body.stage !== "") {
-    const allowed = await getAllowedStagesForTenant(tenantId);
+    const allowed = await getAllowedStagesForTenant(tenantId, body.dealType);
+    if (allowLegacyStages) for (const stage of LEGACY_DEAL_STAGES) allowed.add(stage);
     const e = ensureEnum(body.stage, allowed, { field: "stage", code: "INVALID_STAGE" });
     if (e) return e;
   }
@@ -447,7 +541,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: false });
@@ -458,6 +552,7 @@ router.post("/", async (req, res) => {
       amount: parseFloat(amount) || 0,
       probability: parseInt(probability) || 50,
       stage: stage || "lead",
+      dealType: dealType || null,
       ownerId: req.user.userId,
       tenantId: req.user.tenantId,
     };
@@ -520,10 +615,21 @@ router.put("/:id", async (req, res) => {
 
     // #464: strip write-restricted fields per the caller's role.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.
-    const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: true });
+    const validationBody = {
+      ...req.body,
+      dealType: dealType === undefined ? (existing.dealType || (stage !== undefined ? await legacyDealTypeName(req.user.tenantId) : null)) : dealType,
+      ...(dealType !== undefined && stage === undefined ? { stage: existing.stage } : {}),
+    };
+    const inputErr = await validateDealInput(validationBody, {
+      tenantId: req.user.tenantId,
+      isUpdate: true,
+      // Untyped deals predate deal-type configuration and retain their
+      // historical stage contract unless explicitly assigned a type.
+      allowLegacyStages: !existing.dealType && dealType === undefined,
+    });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     // #173: terminal-stage state machine. Once a deal is `won` or
@@ -548,6 +654,7 @@ router.put("/:id", async (req, res) => {
     if (amount !== undefined) data.amount = parseFloat(amount);
     if (probability !== undefined) data.probability = parseInt(probability);
     if (stage !== undefined) data.stage = stage;
+    if (dealType !== undefined) data.dealType = dealType ? String(dealType) : null;
     if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
     if (pipelineId !== undefined) data.pipelineId = pipelineId ? parseInt(pipelineId) : null;
     if (expectedClose !== undefined) data.expectedClose = expectedClose ? new Date(expectedClose) : null;

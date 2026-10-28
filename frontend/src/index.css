@@ -390,6 +390,125 @@ body,
   overflow-x: hidden !important;
 }
 
+/* Generic CRM pages share the same fluid inset as the Deals and Pipelines
+   reference view. Keep verticalized modules on their existing page spacing. */
+.app-main > main.generic-page-content {
+  padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 3vw, 2rem);
+}
+
+/* Generic Leads must be able to grow beyond a short laptop viewport. Layout
+   intentionally locks the generic Leads main pane while the old table used
+   its own viewport; the natural-height Leads grid now needs the page pane to
+   own vertical scrolling so the final row and pagination cannot be clipped. */
+.app-main > main.generic-page-content:has(.leads-page-root--generic) {
+  overflow-y: auto !important;
+}
+
+/* Pickup & Plot module (Generic CRM): keep the workspace stable while its
+   background refresh completes. Transport and Site Visits already use this
+   non-remounting presentation; apply the same shell rule to every sibling
+   page in the module without affecting Wellness or Travel. */
+.app-main > main.generic-page-content:has(.pickup-customers-page),
+.app-main > main.generic-page-content:has(.pickup-inventory-page),
+.app-main > main.generic-page-content:has(.pickup-plot-inventory-page),
+.app-main > main.generic-page-content:has(.pickup-person-directory-page),
+.app-main > main.generic-page-content:has(.transport-workspace),
+.app-main > main.generic-page-content:has([data-testid="staff-work-assignment-page"]),
+.app-main > main.generic-page-content:has(.generic-billing-page),
+.app-main > main.generic-page-content:has(.billing-directory-page) {
+  animation: none !important;
+}
+
+/* Hard stop for nested module effects as well. Some Pickup/Plot controls have
+   local inline transitions or spinner animations, so disabling only the page
+   root is not sufficient for a fully static workspace. */
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-customers-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-inventory-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-plot-inventory-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-person-directory-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.transport-workspace) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has([data-testid="staff-work-assignment-page"]) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.generic-billing-page) *,
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.billing-directory-page) * {
+  animation: none !important;
+  transition: none !important;
+}
+
+body[data-vertical="generic"] .pickup-inventory-page,
+body[data-vertical="generic"] .pickup-plot-inventory-page,
+body[data-vertical="generic"] .pickup-person-directory-page,
+body[data-vertical="generic"] .pickup-customers-page,
+body[data-vertical="generic"] .billing-directory-page,
+body[data-vertical="generic"] .generic-billing-page,
+body[data-vertical="generic"] .transport-workspace,
+body[data-vertical="generic"] [data-testid="staff-work-assignment-page"] {
+  animation: none !important;
+}
+
+.pickup-module-refresh-status {
+  position: sticky;
+  top: 8px;
+  z-index: 3;
+  width: max-content;
+  max-width: 100%;
+  margin: 8px 8px 0 auto;
+  padding: .25rem .55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  font-size: .7rem;
+  pointer-events: none;
+}
+
+/* Refresh status must not take a row/table-space slot. Keeping it over the
+   existing scroll viewport prevents a refresh from shifting the table down
+   and back up while the response is in flight. */
+body[data-vertical="generic"] .card.pickup-plot-table-scroll {
+  position: relative;
+}
+
+body[data-vertical="generic"] .card.pickup-plot-table-scroll > .pickup-module-refresh-status[role="status"] {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+}
+
+.invoice-ledger-loading {
+  padding: 2.5rem 1.5rem;
+  color: var(--text-secondary);
+  text-align: center;
+  background: var(--subtle-bg-2);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+}
+
+/* Page components have accumulated their own centered max-width wrappers and
+   horizontal padding over time. Normalize only the first page-content root;
+   dialogs and nested cards retain their intentional sizing. */
+.app-main > main.generic-page-content > :nth-child(1 of :not(style)) {
+  width: 100% !important;
+  min-width: 0;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  margin-top: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  padding-top: 0 !important;
+  box-sizing: border-box;
+}
+
+/* Let the app's main viewport scroll Deal Insights while clipping any
+   horizontal card overflow without creating another scroll container. */
+body[data-vertical="generic"] .deal-insights-page {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: clip;
+}
+
 .expenses-page > .card,
 .expenses-page .card {
   max-width: 100%;
@@ -1519,9 +1638,21 @@ button {
 
 .tally-sync-card table {
   width: 100%;
-  min-width: 850px;
+  min-width: 0;
+  table-layout: fixed;
   border-collapse: collapse;
 }
+
+/* Keep the header and body on the same grid even when party/reference values
+   or the optional Mapping/Retry actions are longer than usual. */
+.tally-sync-card .tally-col-reference { width: 12%; }
+.tally-sync-card .tally-col-date { width: 10%; }
+.tally-sync-card .tally-col-type { width: 11%; }
+.tally-sync-card .tally-col-trip { width: 9%; }
+.tally-sync-card .tally-col-party { width: 16%; }
+.tally-sync-card .tally-col-amount { width: 14%; }
+.tally-sync-card .tally-col-status { width: 14%; }
+.tally-sync-card .tally-col-actions { width: 14%; }
 
 .tally-sync-card th {
   padding: 0.8rem 1rem;
@@ -1540,6 +1671,11 @@ button {
   color: var(--text-primary);
   font-size: 0.86rem;
   vertical-align: middle;
+}
+
+.tally-sync-card th,
+.tally-sync-card td {
+  overflow: hidden;
 }
 
 .tally-sync-card tbody tr {
@@ -1585,7 +1721,18 @@ button {
 .tally-row-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
   gap: 0.4rem;
+}
+
+.tally-sync-card th:last-child,
+.tally-sync-card td:last-child {
+  text-align: center;
+}
+
+.tally-sync-card td:last-child {
+  vertical-align: middle;
 }
 
 .tally-row-actions .btn-secondary {
@@ -1771,6 +1918,7 @@ button {
   .tally-history-modal {
     padding: 1rem;
   }
+
 }
 
 /* Glassmorphism Classes */
@@ -1999,6 +2147,10 @@ button {
   transition: var(--transition);
 }
 
+main[data-testid="staff-work-assignment-page"] .pickup-plot-work-search {
+  padding-left: 48px !important;
+}
+
 .input-field:focus {
   outline: none;
   border-color: var(--accent-color);
@@ -2060,6 +2212,24 @@ body[data-vertical="generic"] .generic-clients-page-size:focus {
   outline: none;
   border-color: var(--accent-color);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+}
+
+body[data-vertical="generic"] .generic-clients-table tbody tr:hover,
+body[data-vertical="generic"] .generic-clients-table tbody tr:hover > td {
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+body[data-vertical="generic"] .generic-clients-card:hover {
+  transform: none !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+  border-color: var(--border-color) !important;
+}
+
+body[data-vertical="generic"] .generic-clients-card:hover::before {
+  left: -100% !important;
+  transition: none !important;
 }
 
 .pipelines-modal-only > :not(:last-child) {
@@ -2352,6 +2522,7 @@ aside.glass.app-sidebar {
 }
 
 .app-sidebar {
+  --sidebar-nav-font-size: 0.85rem;
   contain: layout paint style;
   transition: none;
   /* NOTE: `will-change: transform` is intentionally NOT here on the outer
@@ -2629,16 +2800,117 @@ body[data-vertical="travel"] .travel-nav-section-items .nav-link {
   font-size: 0.72rem;
 }
 
-body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
-  content: "";
-  position: absolute;
-  left: -1.7rem;
-  top: 50%;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, #d7dceb);
-  transform: translateY(-50%);
+/* Generic desktop navigation uses the same inline accordion pattern as the
+   Travel sidebar while keeping the active product theme's colors. */
+body[data-vertical="generic"] .generic-nav-section {
+  margin: 0.22rem 0;
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--sidebar-nav-font-size, 0.85rem);
+  font-weight: 400;
+  text-align: left;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger:hover {
+  background: var(--surface-hover);
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger.is-open,
+body[data-vertical="generic"] .generic-nav-section-trigger.is-active {
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color));
+}
+
+body[data-vertical="generic"] .generic-nav-section-label {
+  flex: 1;
+  min-width: 0;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger > svg:last-child {
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger > svg:last-child.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+body[data-vertical="generic"] .generic-nav-section-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+body[data-vertical="generic"] .generic-nav-section-trigger.is-open .generic-nav-section-icon,
+body[data-vertical="generic"] .generic-nav-section-trigger.is-active .generic-nav-section-icon {
+  color: var(--accent-color);
+}
+
+body[data-vertical="generic"] .generic-nav-section-items {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  margin: 0.15rem 0 0.3rem 1.15rem;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent-color) 24%, var(--border-color));
+}
+
+body[data-vertical="generic"] .generic-nav-section-items .nav-link {
+  min-height: 34px;
+  padding: 0.32rem 0.5rem !important;
+  border-radius: 6px;
+}
+
+body[data-vertical="generic"] .generic-nav-section-items .nav-link:hover,
+body[data-vertical="generic"] .generic-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color));
+  color: var(--accent-color) !important;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger {
+  background: transparent;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger:hover,
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger:focus-visible {
+  background: var(--surface-hover);
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger.is-open,
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-trigger.is-active {
+  background: color-mix(in srgb, var(--accent-color) 22%, var(--surface-color));
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-items {
+  border-left-color: color-mix(in srgb, var(--accent-color) 32%, var(--border-color));
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-items .nav-link:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] .generic-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--accent-color) 20%, var(--surface-color));
 }
 
 body[data-vertical="travel"] .travel-nav-section-items .nav-link:hover,
@@ -2743,10 +3015,6 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
 [data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link.active {
   background: color-mix(in srgb, var(--accent-color) 20%, var(--surface-color));
   color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
-}
-
-[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
-  background: color-mix(in srgb, var(--accent-color) 35%, var(--surface-color));
 }
 
 [data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger,
@@ -2855,6 +3123,14 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
   box-sizing: border-box;
 }
 
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .landing-pages-page .landing-pages-search.input-field {
+  padding-left: 2.75rem !important;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-forms-page .meeting-form-switcher > button {
+  padding: 11px 14px !important;
+}
+
 @media (max-width: 899px) {
   .travel-content-frame > * {
     max-width: none !important;
@@ -2949,6 +3225,30 @@ table.stable-table tbody tr:hover td {
   border-width: inherit;
   font-weight: inherit;
 }
+
+/* Keep the Currencies page still while the pointer moves across its cards and table. */
+.currencies-page .card::before,
+.currencies-page .btn-primary::after {
+  display: none;
+}
+.currencies-page .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+.currencies-page table.stable-table tbody tr:hover {
+  background-color: transparent;
+}
+.currencies-page .btn-primary:hover {
+  transform: none;
+  box-shadow: 0 4px 15px var(--accent-glow);
+}
+.currencies-page .btn-secondary:hover {
+  background: var(--surface-color);
+  border-color: var(--border-color);
+  transform: none;
+  box-shadow: none;
+}
 table.stable-table th,
 table.stable-table td {
   overflow: hidden;
@@ -3005,6 +3305,35 @@ table.stable-table td {
     width: 760px !important;
     min-width: 760px !important;
     max-width: none !important;
+  }
+}
+
+/* Staff Directory responsive fit mode.
+ *
+ * The directory has a dense, action-heavy table. At smaller widths its old
+ * fixed table minimum and bounded table viewport made the browser show a
+ * second scrollbar instead of allowing the whole directory to scale with the
+ * available space. Keep the desktop density unchanged, then progressively
+ * reduce the complete directory (type, controls, buttons, icons and spacing)
+ * and let the page own vertical scrolling on narrow screens.
+ */
+@media (max-width: 900px) {
+  .staff-directory-page,
+  .travel-staff-page,
+  .wellness-staff-page {
+    zoom: clamp(0.76, calc(100vw / 1120), 1);
+    width: calc(100% / clamp(0.76, calc(100vw / 1120), 1));
+    padding: clamp(0.75rem, 3vw, 2rem) !important;
+  }
+
+  /* Generic CRM columns previously forced a 1000px table. At this size the
+   * scaled cells are allowed to share the available width instead. */
+  .staff-directory-page .staff-generic-resizable-table {
+    min-width: 0 !important;
+  }
+
+  .staff-directory-page .staff-generic-resizable-table th {
+    width: auto !important;
   }
 }
 
@@ -3144,7 +3473,7 @@ html[data-theme="dark"] [data-tour-surface="true"] {
 /* The multicolumn minimum is useful on desktop but overflows the app content
    area in a local browser or narrow laptop window. Stack cards before the two
    360px columns can force horizontal clipping. */
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .settings-grid {
     columns: 1;
   }
@@ -3289,6 +3618,15 @@ html[data-theme="dark"] .travel-flight-details-box {
   background: rgba(128, 128, 128, 0.9);
   border: 2px solid transparent;
   background-clip: padding-box;
+}
+
+/* Generic CRM pickup/plot directories keep the complete column-header row
+   visually separate from the scrolling records. The viewport and sticky
+   table mechanics stay unchanged; only the vertical scrollbar rail is
+   inset by the shared header height so it runs beside the body rows. */
+body[data-vertical="generic"]
+  .pickup-plot-table-body-scroll::-webkit-scrollbar-track-piece:vertical {
+  margin-top: 44px;
 }
 
 .top-scroll-sync__bottom--hidden-scrollbar {
@@ -3797,30 +4135,30 @@ table.leads-table thead th {
   background-color: var(--modal-bg);
 }
 
-/* Freshsales-style Generic CRM grid: the page chrome stays fixed while the
-   records own the available viewport and scroll inside their table shell. */
+/* Other verticals retain their existing page-owned overflow. The Generic CRM
+   override below gives its records grid a bounded viewport. */
 .leads-split-table--no-topbar {
   max-height: none !important;
   overflow-x: clip !important;
-  overflow-y: auto !important;
+  overflow-y: visible !important;
 }
 
 .leads-page-root--generic {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  height: auto;
+  min-height: 100%;
   padding: 1.25rem !important;
   overflow-x: hidden;
-  overflow-y: hidden;
+  overflow-y: auto;
   background: var(--bg-color);
 }
 
 .leads-page-root--generic .leads-content-shell {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: auto;
   gap: 0 !important;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .leads-page-root--generic .leads-toolbar-shell {
@@ -3834,49 +4172,34 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-split-table--no-topbar {
-  flex: 1 1 auto;
-  height: auto;
-  min-height: 0;
-  max-height: none !important;
+  flex: 0 0 auto;
+  height: clamp(300px, calc(100dvh - 24rem), 640px);
+  min-height: 300px;
+  max-height: 640px !important;
   box-sizing: border-box;
   border-radius: 0 !important;
   border-top: 0 !important;
   box-shadow: none;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
 }
 
-/* Keep the single Generic CRM horizontal scrollbar at the bottom of the
-   fixed records viewport, including pages with fewer rows. */
+/* The records viewport owns vertical scrolling. Its two sticky table headers
+   keep every column name fixed while rows move, and the synchronized
+   horizontal scrollbar stays pinned to the viewport bottom. */
 .leads-page-root--generic .leads-split-table--no-topbar {
   align-items: stretch;
 }
 
-/* Below a partial page of Generic CRM leads, keep the unused fixed-height
-   viewport as one clean surface. The real Name-column border still ends with
-   the last lead row, without visually splitting the empty area in two. */
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-frozen-pane {
-  background-color: var(--modal-bg);
-  border-right-color: transparent;
-}
-
-/* A short result set leaves most of the fixed records viewport unused. Use
-   one opaque surface across both panes so the nested frozen pane does not
-   double-blend the translucent card color and appear as a different shade. */
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty),
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-scroll-pane,
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-scroll-pane
-  > .top-scroll-sync,
-.leads-page-root--generic
-  .leads-split-table--sparse:not(.leads-split-table--empty)
-  .leads-table-scroll-pane
-  .top-scroll-sync__bottom {
-  background-color: var(--modal-bg);
+/* Generic CRM only: collapse short result pages to their natural content
+   height. Ten comfortable rows fill the regular viewport, while ten compact
+   rows need this rule to avoid leaving an empty strip below the last row. */
+.leads-page-root--generic .leads-split-table--compact-count {
+  height: auto;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: visible !important;
+  overscroll-behavior: auto;
 }
 
 /* Generic CRM only: keep the zero-record message inside the visible table
@@ -3915,9 +4238,8 @@ table.leads-table thead th {
 }
 
 .leads-page-root--generic .leads-table-scroll-pane .top-scroll-sync__bottom {
-  /* Grow to fill short pages, but never shrink below the table's natural
-     height on 15/25/50/100-row pages. Shrinking clipped the scrollable half
-     while the frozen Name pane continued rendering every row. */
+  /* Preserve the two split-table halves at the same natural row height while
+     their shared outer viewport handles vertical scrolling. */
   flex: 1 0 auto;
 }
 
@@ -3955,6 +4277,7 @@ table.leads-table thead th {
 
 .leads-page-root--generic .leads-toolbar-shell .crm-search-input {
   height: 34px !important;
+  padding-left: 2.5rem !important;
   border-radius: 6px;
   background: var(--surface-color) !important;
 }
@@ -4072,8 +4395,8 @@ table.leads-table thead th {
   .leads-split-table--density-comfortable
   .generic-overall-status-content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-template-areas: "status date action";
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "status action";
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
@@ -4116,14 +4439,6 @@ table.leads-table thead th {
 
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table tbody tr {
   height: 40px;
-}
-
-.leads-page-root--generic
-  .leads-split-table--density-compact.leads-split-table--sparse
-  table.leads-table
-  tbody
-  tr {
-  height: 48px;
 }
 
 .leads-page-root--generic .leads-split-table--density-compact table.leads-table th,
@@ -4174,9 +4489,7 @@ table.leads-table thead th {
   .generic-overall-status-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "status action"
-    "date action";
+  grid-template-areas: "status action";
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
@@ -4750,6 +5063,51 @@ body[data-vertical="generic"] .contacts-page-card > .contacts-split-table--gener
   max-height: none;
 }
 
+/* Generic CRM keeps the page chrome, filters, column headings, and pagination
+   in place. Only the records viewport scrolls when the current page contains
+   more rows than fit in the available app-shell height. */
+body[data-vertical="generic"] .contacts-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .contacts-page > .contacts-page__header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .contacts-page > .contacts-page-card {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+body[data-vertical="generic"]
+  .contacts-page-card
+  > .contacts-split-table {
+  min-height: 0;
+  max-height: none;
+  overscroll-behavior-y: contain;
+}
+
+/* In generic CRM, horizontal movement is applied to the table content rather
+   than by making it a nested scroll container. This lets the column headings
+   stay sticky against the outer records viewport while only the body rows
+   move vertically. The existing top scrollbar remains the horizontal control. */
+body[data-vertical="generic"]
+  .contacts-table-scroll-pane
+  .top-scroll-sync__bottom {
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+}
+
+body[data-vertical="generic"]
+  .contacts-table-scroll-pane
+  .top-scroll-sync__sticky-bottom {
+  display: none;
+}
+
 .contacts-pagination-legacy {
   display: none !important;
 }
@@ -4994,6 +5352,37 @@ table.stable-table {
 
 .contacts-split-table table.stable-table tbody tr:hover td {
   background-color: var(--surface-hover);
+}
+
+/* Generic Contacts rows are intentionally static: pointer movement must not
+   recolor either half of the split table. Other verticals retain the shared
+   hover treatment above. */
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  tr,
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  td {
+  transition: none;
+}
+
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  tr:hover,
+body[data-vertical="generic"]
+  .contacts-split-table
+  table.stable-table
+  tbody
+  tr:hover
+  td {
+  background-color: var(--surface-color);
+  box-shadow: none;
 }
 
 table.leads-table--fit {
@@ -5402,22 +5791,60 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   padding: 0.95rem 1rem 0.8rem;
   border-bottom: 1px solid var(--border-color);
   display: grid;
-  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
   gap: 1rem;
   align-items: center;
 }
 
 .converted-leads__search-wrap {
   position: relative;
-  width: min(100%, 380px);
+  width: 100%;
+  min-width: 0;
+}
+
+.search-with-leading-icon {
+  position: relative;
+  display: block !important;
+  min-width: 0;
+}
+
+.search-with-leading-icon > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  z-index: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-secondary);
+}
+
+.search-with-leading-icon > input {
+  width: 100%;
+  min-width: 0;
+  padding-left: 40px !important;
+  text-indent: 20px !important;
+}
+
+.search-with-leading-icon > input[type="search"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-with-leading-icon > input[type="search"]::-webkit-search-decoration,
+.search-with-leading-icon > input[type="search"]::-webkit-search-cancel-button,
+.search-with-leading-icon > input[type="search"]::-webkit-search-results-button,
+.search-with-leading-icon > input[type="search"]::-webkit-search-results-decoration {
+  display: none;
+  -webkit-appearance: none;
+}
+
+.converted-leads__search-wrap > .input-field {
+  padding-left: 3.25rem !important;
 }
 
 .converted-leads__search-icon {
-  position: absolute;
-  left: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
   color: var(--text-secondary);
+  flex: 0 0 auto;
 }
 
 .converted-leads__controls-actions {
@@ -5425,7 +5852,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   align-items: center;
   justify-content: flex-end;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
 }
 
@@ -5444,7 +5871,76 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   overflow: hidden;
 }
 
-@media (max-width: 1180px) {
+.calendar-attendee-picker__options {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.calendar-attendee-picker__option:hover,
+.calendar-attendee-picker__option:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+
+@media (min-width: 900px) and (max-width: 1919px) {
+  body[data-vertical="generic"] .converted-leads__overview-card {
+    padding: 0.8rem !important;
+  }
+
+  body[data-vertical="generic"] .converted-leads__overview-grid {
+    grid-template-columns: minmax(190px, 0.75fr) minmax(0, 1.25fr);
+    column-gap: clamp(0.65rem, 1vw, 1rem);
+    align-items: center;
+  }
+
+  body[data-vertical="generic"] .converted-leads__lifecycle-panel {
+    max-width: none;
+    min-height: 0;
+    gap: 0.45rem;
+    justify-content: center;
+  }
+
+  body[data-vertical="generic"] .converted-leads__lifecycle-select {
+    margin-top: 0;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.78rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__lifecycle-label {
+    margin-bottom: 0;
+    font-size: 0.74rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-header {
+    gap: 0.45rem;
+    margin-bottom: 0.35rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-title {
+    font-size: 0.82rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-description {
+    font-size: 0.66rem;
+    line-height: 1.35;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-grid {
+    overflow-x: hidden;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-button {
+    min-height: 42px;
+    padding: 0.35rem 0.52rem;
+    font-size: 0.68rem;
+  }
+
+  body[data-vertical="generic"] .converted-leads__status-count {
+    font-size: 0.6rem;
+  }
+}
+
+@media (max-width: 899px) {
   .converted-leads__overview-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5458,7 +5954,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 899px) {
   .converted-leads__controls-row {
     grid-template-columns: 1fr;
   }
@@ -5470,6 +5966,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 
   .converted-leads__controls-actions {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 
@@ -5478,10 +5975,33 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   min-height: 100%;
 }
 
+/* Reports is a static analytics surface; keep its cards and controls stable
+   while the pointer moves across the page. */
+.reports-page .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+.reports-page .card:hover::before {
+  left: -100%;
+}
+
+.reports-page button:hover {
+  transform: none;
+  box-shadow: none;
+  filter: none;
+}
+
+.reports-page .btn-secondary:hover {
+  background: var(--surface-color);
+  border-color: var(--border-color);
+}
+
 .reports-page__overview {
   display: grid;
-  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
-  gap: 2rem;
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+  gap: 1.5rem;
   align-items: start;
 }
 
@@ -5500,6 +6020,25 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .reports-page__schedule-table td {
   white-space: nowrap;
 }
+
+/* Reports tables are read-only views; keep rows visually steady on hover. */
+.reports-page__table-shell table.stable-table tbody tr,
+.reports-page__table-shell table.stable-table tbody tr:hover,
+.reports-page__table-shell table.stable-table tbody tr:hover > td {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+.reports-page__table-shell.card::before {
+  display: none;
+}
+
+.reports-page__table-shell.card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
 
 /* Keep every Reports table inside its card. The report grids have fixed
    columns, while a long value (or a numeric cell's minimum width) can force
@@ -5537,7 +6076,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 899px) {
   .reports-page__overview {
     grid-template-columns: 1fr;
   }
@@ -6541,7 +7080,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .workflow-webhook-footer > span {
   flex: 1;
 }
-@media (max-width: 1000px) {
+@media (max-width: 899px) {
   .workflow-layout {
     grid-template-columns: 230px minmax(0, 1fr);
   }
@@ -6559,7 +7098,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
     justify-self: end;
   }
 }
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .workflow-history-panel {
     width: 100%;
   }
@@ -7016,6 +7555,218 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   background: var(--subtle-bg);
 }
 
+/* Generic CRM only: keep the Active Priority Queue at a stable height and
+   let its records scroll beneath the stationary section heading. */
+body[data-vertical="generic"] .tasks-active-queue-card {
+  display: flex;
+  flex-direction: column;
+  height: clamp(360px, calc(100dvh - 15rem), 640px);
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .tasks-active-queue-card > h3 {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .tasks-active-queue-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 0.35rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Generic CRM Document Tracking is a viewport-height workspace. Page chrome
+   stays still while only the tracked-document records scroll inside the card. */
+body[data-vertical="generic"] .document-tracking-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"]
+  .document-tracking-page
+  > :is(.document-tracking-header, .document-tracking-stats) {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .document-tracking-table-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .document-tracking-table-card > h3 {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .document-tracking-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .document-tracking-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-color);
+}
+
+body[data-vertical="generic"]
+  :is(.document-tracking-table-empty, .document-tracking-table-status) {
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+body[data-vertical="generic"] .document-tracking-table-empty {
+  display: grid;
+  place-items: center;
+}
+
+/* Generic CRM CPQ is a fixed-height workspace. Keep the page and panel chrome
+   stationary and confine movement to the deal data and builder content. */
+body[data-vertical="generic"] .cpq-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .cpq-page-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .cpq-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"]
+  :is(.cpq-deal-panel, .cpq-builder-panel) {
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .cpq-deal-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"]
+  :is(.cpq-deal-list, .cpq-builder-panel) {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .cpq-deal-list {
+  flex: 1 1 auto;
+  padding-right: 0.25rem;
+}
+
+/* CPQ deal picker card styling. Keep the panel compact and scannable while
+   making each deal feel like a deliberate selectable surface. */
+body[data-vertical="generic"] .cpq-deal-panel {
+  padding: 1rem !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+  border-radius: 18px !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-color) 96%, white), var(--surface-color));
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header {
+  padding: 0.15rem 0.25rem 0.8rem;
+  margin-bottom: 0.7rem !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header h2 {
+  font-size: 0.95rem !important;
+  letter-spacing: -0.01em;
+}
+
+body[data-vertical="generic"] .cpq-deal-panel-header span {
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.72rem !important;
+  font-weight: 600;
+}
+
+body[data-vertical="generic"] .cpq-deal-list {
+  gap: 0.5rem !important;
+  padding: 0.1rem 0.15rem 0.35rem 0.1rem;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button {
+  min-height: 56px;
+  padding: 0.7rem 0.75rem !important;
+  border-radius: 12px !important;
+  background: color-mix(in srgb, var(--surface-color) 88%, var(--bg-color)) !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent) !important;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color)) !important;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > div:first-child {
+  min-width: 0;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > div:first-child > div:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > div:first-child > div:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 0.2rem;
+  font-size: 0.7rem !important;
+  line-height: 1.2;
+}
+
+body[data-vertical="generic"] .cpq-deal-list > button > svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0.25rem;
+  box-sizing: content-box;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
 @media (max-width: 700px) {
   .tasks-filterbar__search {
     max-width: none;
@@ -7271,6 +8022,141 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   align-items: flex-start;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+.lead-reports-page__overview-workspace {
+  display: grid;
+  grid-template-columns: minmax(210px, 250px) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.lead-reports-page__query-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  align-self: start;
+}
+
+.lead-reports-page__query-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.lead-reports-page__query-title svg {
+  color: var(--primary-color, var(--accent-color));
+}
+
+.lead-reports-page__query-label {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.lead-reports-page__metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.lead-reports-page__metric-button {
+  width: 100%;
+  min-height: 38px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.lead-reports-page__metric-button--active {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--primary-color, var(--accent-color));
+  color: #fff;
+}
+
+.lead-reports-page__aggregate {
+  margin-top: 0;
+  padding-top: 1.2rem;
+  text-align: center;
+}
+
+.lead-reports-page__aggregate span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.lead-reports-page__aggregate strong {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--primary-color, var(--accent-color));
+  font-size: 1.65rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lead-reports-page__aggregate small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.lead-reports-page__chart-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.lead-reports-page__chart-type {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.lead-reports-page__chart-type:hover,
+.lead-reports-page__chart-type:focus-visible {
+  border-color: var(--primary-color, var(--accent-color));
+  color: var(--primary-color, var(--accent-color));
+}
+
+.lead-reports-page__chart-type--active {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--primary-color, var(--accent-color));
+  color: #fff;
+}
+
+.lead-reports-page__chart-type--active:hover,
+.lead-reports-page__chart-type--active:focus-visible {
+  color: #fff;
+}
+
+@media (max-width: 820px) {
+  .lead-reports-page__overview-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .lead-reports-page__metric-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
 }
 
 .lead-reports-page__panel-title {
@@ -7616,7 +8502,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   white-space: nowrap;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899px) {
   .lead-reports-page {
     padding: 1.25rem;
   }
@@ -8199,4 +9085,293 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 
 .card.pickup-plot-table-scroll:hover {
   transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+/* Generic CRM Pickup & Plot tables intentionally keep their resting visual
+   state on pointer hover. Row click handlers (for example Customer Status
+   selection) remain active, and the selected-row class keeps its highlight. */
+body[data-vertical="generic"] table.pickup-plot-leads-table {
+  width: 100%;
+  background-color: var(--surface-color);
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
+body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
+  /* Sticky headers overlap scrolling rows, so they need an opaque themed
+     surface rather than the glass/translucent table-header token. */
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
+  color: var(--text-primary) !important;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table th,
+body[data-vertical="generic"] table.pickup-plot-leads-table td {
+  box-sizing: border-box;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--surface-color);
+  background-clip: padding-box;
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table th:first-child,
+body[data-vertical="generic"] table.pickup-plot-leads-table td:first-child {
+  border-left: 1px solid var(--border-color);
+}
+
+body[data-vertical="generic"] table.pickup-plot-leads-table th:last-child,
+body[data-vertical="generic"] table.pickup-plot-leads-table td:last-child {
+  border-right: 0;
+}
+
+body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr {
+  transition: none !important;
+}
+
+body[data-vertical="generic"] .billing-directory-page,
+body[data-vertical="generic"] .billing-directory-page table,
+body[data-vertical="generic"] .billing-directory-page tbody tr,
+body[data-vertical="generic"] .billing-directory-page tbody tr > td {
+  animation: none !important;
+  transition: none !important;
+}
+
+body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-selected):hover,
+body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-selected):hover > td {
+  background-color: transparent !important;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+/* Public Generic CRM pickup/plot selection */
+.public-selection-page { min-height: 100vh; display: grid; place-items: center; padding: 2rem 1rem; background: var(--app-bg, var(--background-color, #f5f7fb)); color: var(--text-primary, #172033); }
+.public-selection-card { width: min(100%, 620px); padding: clamp(1.5rem, 4vw, 2.75rem); border: 1px solid var(--border-color, #d9deea); border-radius: 18px; background: var(--card-bg, #fff); box-shadow: 0 18px 50px rgba(15, 23, 42, .12); }
+.public-selection-card h1 { margin: 0 0 .65rem; color: var(--text-primary, #172033); }
+.public-selection-intro { margin: 0 0 1.5rem; color: var(--text-secondary, #64748b); }
+.public-selection-card form { display: grid; gap: 1.15rem; }
+.public-selection-card label { display: grid; gap: .45rem; font-weight: 600; }
+.public-selection-card select { width: 100%; min-height: 2.8rem; padding: .65rem .8rem; border: 1px solid var(--border-color, #cbd5e1); border-radius: 10px; background: var(--input-bg, #fff); color: var(--text-primary, #172033); }
+.public-selection-card button { min-height: 2.8rem; border: 0; border-radius: 10px; background: var(--primary-color, var(--accent-color, #4f46e5)); color: var(--button-text, #fff); font-weight: 700; cursor: pointer; }
+.public-selection-card button:disabled { opacity: .65; cursor: wait; }
+.public-selection-error { margin: 0; color: var(--danger-color, #b42318); }
+
+/* Generic CRM funnel tables keep their card and column headers stationary;
+   only the data viewport scrolls when additional rows are present. */
+body[data-vertical="generic"] .funnel-table-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(320px, calc(100dvh - 16rem), 560px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .funnel-table-card > h3 {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .funnel-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .funnel-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--popover-bg, var(--modal-bg, var(--surface-color)));
+}
+
+body[data-vertical="generic"] .funnel-table-empty {
+  display: grid;
+  flex: 1 1 auto;
+  margin: 0;
+  place-items: center;
+}
+
+/* Generic CRM Agent Reports keeps the performance card and headers fixed;
+   the agent rows own both vertical and horizontal overflow. */
+body[data-vertical="generic"] .agent-reports-table-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(320px, calc(100dvh - 21rem), 560px);
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] .agent-reports-table-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .agent-reports-table-viewport,
+body[data-vertical="generic"] .agent-reports-table-viewport > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+body[data-vertical="generic"] .agent-reports-table-viewport .top-scroll-sync__bottom {
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .agent-reports-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--table-header-bg, var(--popover-bg, var(--surface-color)));
+}
+
+/* Generic CRM Developer Ecosystem keeps the live-activity panel and its
+   column headers fixed while new activity rows scroll inside the card. */
+body[data-vertical="generic"] .developer-activity-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(180px, 28dvh, 320px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .developer-activity-card__title {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .developer-activity-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] .developer-activity-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--popover-bg, var(--modal-bg, var(--surface-color)));
+}
+
+body[data-vertical="generic"] .developer-activity-card__empty {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+}
+
+body[data-vertical="generic"] .developer-api-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: clamp(380px, 48dvh, 520px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .developer-api-card > :not(.developer-api-data-scroll) {
+  flex-shrink: 0;
+}
+
+body[data-vertical="generic"] .developer-api-data-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.25rem;
+  scrollbar-gutter: stable;
+}
+
+/* Keep the deals toolbar controls on one shared height. */
+.generic-deals-toolbar select[aria-label="Date range"] {
+  height: 38px !important;
+}
+
+.generic-deals-toolbar > div:last-child > button[aria-label="Deal settings"] {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 8px !important;
+}
+
+/* Generic Lead Routing is a fixed workspace: the page and column headings
+   stay in place while only the API-backed rule rows scroll. Other verticals
+   retain the shared page/card behavior. */
+.lead-routing-page--generic {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (min-width: 769px) {
+  .app-main > main.generic-page-content:has(.lead-routing-page--generic) {
+    overflow-y: hidden !important;
+  }
+}
+
+.lead-routing-page--generic > header {
+  flex: 0 0 auto;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic {
+  flex: 1 1 auto;
+  min-height: 0;
+  transform: none !important;
+  transition: none !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic::before {
+  display: none !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic:hover {
+  transform: none !important;
+  border-color: var(--border-color) !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic > .top-scroll-sync,
+.lead-routing-page--generic .lead-routing-table-card--generic .top-scroll-sync__bottom {
+  height: 100%;
+  min-height: 0;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic .top-scroll-sync__bottom {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-color) !important;
+  box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic tbody tr,
+.lead-routing-page--generic .lead-routing-table-card--generic tbody td {
+  animation: none !important;
+  transition: none !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic tbody tr:hover,
+.lead-routing-page--generic .lead-routing-table-card--generic tbody tr:hover > td {
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
 }

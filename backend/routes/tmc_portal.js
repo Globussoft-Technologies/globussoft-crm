@@ -482,6 +482,33 @@ function buildTeacherReportPdfUrl(diagnostic) {
   return `/api/travel/diagnostics/public/readiness-report/${id}-${token.toLowerCase()}.pdf`;
 }
 
+async function ensureTeacherReportPdfUrl(diagnostic) {
+  const existingUrl = buildTeacherReportPdfUrl(diagnostic);
+  if (existingUrl) return existingUrl;
+  const reportSlugToken = crypto.randomBytes(8).toString("hex");
+  const result = await prisma.travelDiagnostic.updateMany({
+    where: {
+      id: diagnostic.id,
+      tenantId: diagnostic.tenantId,
+      contactId: diagnostic.contactId,
+      subBrand: "tmc",
+      reportSlugToken: null,
+    },
+    data: { reportSlugToken },
+  });
+  if (result.count) return buildTeacherReportPdfUrl({ ...diagnostic, reportSlugToken });
+  const current = await prisma.travelDiagnostic.findFirst({
+    where: {
+      id: diagnostic.id,
+      tenantId: diagnostic.tenantId,
+      contactId: diagnostic.contactId,
+      subBrand: "tmc",
+    },
+    select: { id: true, reportSlugToken: true },
+  });
+  return buildTeacherReportPdfUrl(current);
+}
+
 async function loadParentReviewTrip(req, res) {
   const tripId = Number(req.params.tripId);
   if (!Number.isInteger(tripId) || tripId <= 0) {
@@ -1930,9 +1957,7 @@ router.post(
       // The existing readiness-report endpoint validates this random slug
       // against the tenant-scoped diagnostic before rendering. Do not expose
       // the generated /api/uploads filename directly from the teacher portal.
-      const reportPdfUrl = recommendations.length === 0
-        ? buildTeacherReportPdfUrl({ id: diag.id, reportSlugToken })
-        : null;
+      const reportPdfUrl = buildTeacherReportPdfUrl({ id: diag.id, reportSlugToken });
       const reportReady = recommendations.length === 0;
       res.status(201).json({
         id: diag.id,
@@ -1964,8 +1989,8 @@ router.post(
 // The TMC diagnostic submit/report engine already exists in the travel
 // diagnostic routes. This endpoint gives a teacher an authenticated history
 // surface for reports submitted from this portal. New dynamic-form reports
-// use the same signed report slug as the customer flow; older rows without a
-// public-form token retain their legacy report link.
+// use the same signed report slug as the customer flow; older rows receive a
+// signed slug when the teacher opens their report history.
 router.get(
   "/teacher/diagnostics",
   verifyPortalToken,
@@ -1990,6 +2015,8 @@ router.get(
           take: limit,
           select: {
             id: true,
+            tenantId: true,
+            contactId: true,
             engineState: true,
             createdAt: true,
             curriculumFitJson: true,
@@ -2002,19 +2029,17 @@ router.get(
         tenantId,
         diagnosticIds: diagnostics.map((diagnostic) => diagnostic.id),
       });
-      const history = diagnostics.map((diagnostic) => {
+      const history = await Promise.all(diagnostics.map(async (diagnostic) => {
         const chosenInterests = chosenByDiagnostic.get(diagnostic.id) || null;
         return {
           id: diagnostic.id,
           engineState: diagnostic.engineState,
           createdAt: diagnostic.createdAt,
-          reportPdfUrl: chosenInterests
-            ? buildTeacherReportPdfUrl(diagnostic)
-            : null,
+          reportPdfUrl: await ensureTeacherReportPdfUrl(diagnostic),
           reportReady: Boolean(chosenInterests),
           hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
         };
-      });
+      }));
       const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
       res.json({
         diagnostics: history,
@@ -2106,9 +2131,7 @@ router.get(
           classificationLabel: "Routed by TMC Engine",
           recommendedTier: "engine",
           createdAt: diagnostic.createdAt,
-          reportPdfUrl: chosenInterests
-            ? buildTeacherReportPdfUrl(diagnostic)
-            : null,
+          reportPdfUrl: await ensureTeacherReportPdfUrl(diagnostic),
           reportReady: Boolean(chosenInterests),
           recommendations: recommendationPayloadFromDiagnostic(
             diagnostic,

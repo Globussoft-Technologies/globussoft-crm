@@ -189,6 +189,20 @@ describe('<LeadRouting /> — page surface', () => {
     expect(screen.getByText(/User: Alice Reed/i)).toBeInTheDocument();
   });
 
+  it('uses a fixed Generic workspace with only the rule data viewport scrollable', async () => {
+    renderLeadRouting();
+    await screen.findByText('India Web Leads');
+
+    const page = document.querySelector('.lead-routing-page--generic');
+    const card = document.querySelector('.lead-routing-table-card--generic');
+    const dataViewport = card.querySelector('.top-scroll-sync__bottom');
+    expect(page).not.toBeNull();
+    expect(page).toHaveStyle({ animation: 'none' });
+    expect(card).not.toBeNull();
+    expect(dataViewport).toHaveStyle({ overflowY: 'auto' });
+    expect(screen.getByRole('columnheader', { name: 'Priority' })).toBeInTheDocument();
+  });
+
   it('condition chips use OP_LABELS human phrasing — "is not", "contains", "in" — not raw DSL tokens', async () => {
     renderLeadRouting();
     await screen.findByText('India Web Leads');

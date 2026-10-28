@@ -149,8 +149,14 @@ export function formatCurrency(amount, currency = '₹') {
   return `${currency}${amount}`;
 }
 
-function isGenericLandingSite(landingPage) {
-  return typeof landingPage?.templateType === 'string' && landingPage.templateType.startsWith('generic-site-');
+export function isGenericLandingSite(landingPage) {
+  const type = String(landingPage?.templateType || '').toLowerCase();
+  return type.startsWith('generic-campaign-') || (type.startsWith('generic-site-') && !/^generic-site-(wellness|health|hospital|fitness)(?:-|$)/.test(type));
+}
+
+export function isWellnessLandingSite(landingPage) {
+  const type = String(landingPage?.templateType || '').toLowerCase();
+  return type.startsWith('wellness-site-') || /^generic-site-(wellness|health|hospital|fitness)(?:-|$)/.test(type);
 }
 
 function getLandingPageIdentifier(landingPage) {
@@ -192,7 +198,13 @@ export function getLandingPageSharePath(landingPage) {
   }
 
   if (isGenericLandingSite(landingPage)) {
-    return slug ? `/landing-sites/${slug}` : '/landing-sites/';
+    const tenantId = landingPage?.tenantId != null ? String(landingPage.tenantId) : '';
+    return slug && tenantId ? `/landing-sites/${tenantId}/${slug}` : '/landing-sites/';
+  }
+
+  if (isWellnessLandingSite(landingPage)) {
+    const tenantId = landingPage?.tenantId != null ? String(landingPage.tenantId) : '';
+    return slug && tenantId ? `/wellness/landing-sites/${tenantId}/${slug}` : '/wellness/landing-sites/';
   }
 
   if (isTravelLandingPage(landingPage)) {

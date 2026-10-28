@@ -1,6 +1,4 @@
 import { CheckCircle2, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { fetchApi } from '../utils/api';
 import {
   PICKUP_STAGE_LABELS,
   formatPickupStatus,
@@ -72,34 +70,7 @@ function StatusDetail({ label, value }) {
   </div>;
 }
 
-export default function PickupCustomerStatusDialog({ customer: initialCustomer, onClose }) {
-  const [customer, setCustomer] = useState(initialCustomer);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const requestId = useRef(0);
-  useEffect(() => {
-    requestId.current += 1;
-    setCustomer(initialCustomer);
-    setLoading(false);
-    setError('');
-    return () => { requestId.current += 1; };
-  }, [initialCustomer]);
-  const loadHistoryPage = async (page) => {
-    const id = ++requestId.current;
-    setLoading(true);
-    setError('');
-    try {
-      const result = await fetchApi(`/api/pickup-plot-inventory/lead-status?contactIds=${customer.contactId}&historyPage=${page}`);
-      if (id !== requestId.current) return;
-      const updated = result.customers?.find((row) => row.contactId === customer.contactId);
-      if (!updated) throw new Error('Customer workflow is no longer accessible.');
-      setCustomer(updated);
-    } catch (err) {
-      if (id === requestId.current) setError(err.message || 'Could not load history.');
-    } finally {
-      if (id === requestId.current) setLoading(false);
-    }
-  };
+export default function PickupCustomerStatusDialog({ customer, onClose }) {
   if (!customer) return null;
   return (
     <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>
@@ -119,17 +90,13 @@ export default function PickupCustomerStatusDialog({ customer: initialCustomer, 
             <StatusDetail label="Assigned plot" value={customer.assignedPlot?.name} />
             <StatusDetail label="Plot address" value={customer.assignedPlot?.address} />
             <StatusDetail label="Transport person" value={customer.workflow?.transport?.assignee?.name || customer.transportPerson?.name} />
+            <StatusDetail label="Pickup time" value={formatPickupStatusDate(customer.workflow?.transport?.pickupAt || customer.workflow?.transport?.scheduledPickupAt || customer.pickupAt || customer.scheduledPickupAt)} />
+            <StatusDetail label="Site visit / drop-off time" value={formatPickupStatusDate(customer.workflow?.transport?.dropOffAt || customer.workflow?.transport?.scheduledDropOffAt || customer.dropOffAt || customer.scheduledDropOffAt)} />
             <StatusDetail label="Sales Executive" value={customer.workflow?.broker?.assignee?.name} />
             <StatusDetail label="Overall status" value={`${PICKUP_STAGE_LABELS[customer.currentStage] || 'Transport'}: ${formatPickupStatus(customer.currentStatus || customer.status)}`} />
             <StatusDetail label="Last updated" value={formatPickupStatusDate(customer.currentStatusUpdatedAt || customer.statusUpdatedAt)} />
           </div>
           <h3 style={{ margin: '18px 0 12px', fontSize: '1rem' }}>Workflow progress</h3>
-          {customer.workflowHistoryPagination && <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button type="button" disabled={loading || customer.workflowHistoryPagination.page <= 1} onClick={() => loadHistoryPage(customer.workflowHistoryPagination.page - 1)}>Newer history</button>
-            <span>History page {customer.workflowHistoryPagination.page} (up to 50 events, newest first)</span>
-            <button type="button" disabled={loading || !customer.workflowHistoryPagination.hasMore} onClick={() => loadHistoryPage(customer.workflowHistoryPagination.page + 1)}>Older history</button>
-          </div>}
-          {error && <p role="alert">{error}</p>}
           <div data-testid="workflow-timeline" style={{ padding: '2px 0 4px 2px' }}>
             {workflowTimeline(customer).map((item, index, timeline) => {
               const firstInStage = index === 0 || timeline[index - 1].stage !== item.stage;

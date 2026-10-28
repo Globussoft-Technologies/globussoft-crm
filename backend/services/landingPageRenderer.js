@@ -38,6 +38,7 @@
 const { normalizeVideoEmbedUrl, isDirectVideoFile } = require("../lib/videoUrl");
 const { getPreset: getRegistrationPreset } = require("../lib/travelRegistrationPresets");
 const { resolveWellnessLandingTheme, resolveWellnessLandingLayout } = require("./wellnessLandingThemes");
+const { normalizeLandingContentYears } = require("./landingSitePrompts");
 
 const SAFE_FALLBACK = {
   'image-src': '',
@@ -116,6 +117,20 @@ function firstBlockText(content, ids = []) {
   return fallback?.props?.text || '';
 }
 
+function campaignDateText(components) {
+  const dateBlock = collectBlocks(components).find((block) => (
+    block?.id === 'detail-date-value'
+    && typeof block?.props?.text === 'string'
+    && block.props.text.trim()
+  ));
+  return dateBlock?.props?.text || '';
+}
+
+function normalizeCampaignDateYears(components) {
+  const eventDate = campaignDateText(components);
+  return eventDate ? normalizeLandingContentYears(components, eventDate) : components;
+}
+
 function firstBlockForm(content, ids = []) {
   const flat = collectBlocks(content);
   for (const id of ids) {
@@ -138,7 +153,7 @@ function getWellnessFormFields(fields) {
 
 function hasWellnessRoot(components) {
   return Array.isArray(components)
-    ? components.some((block) => block && block.type === 'columns' && block.props?.variant === 'wellness-campaign-page')
+    ? components.some((block) => block && block.type === 'columns' && ['wellness-campaign-page', 'generic-campaign-page'].includes(block.props?.variant))
     : false;
 }
 
@@ -150,7 +165,7 @@ function normalizeWellnessCampaignComponents(components) {
     return components;
   }
 
-  const page = next.find((block) => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
+  const page = next.find((block) => block?.type === 'columns' && ['wellness-campaign-page', 'generic-campaign-page'].includes(block.props?.variant));
   if (!page) return next;
 
   const findRow = (variant) => (page.props?.columns || [])
@@ -420,6 +435,23 @@ function buildWellnessCampaignPage(landingPage = {}, content = []) {
       ] },
     ], '24px', { themeId: wellnessTheme, layoutId: wellnessLayout, customColors: landingPage.wellnessCustomColors || landingPage.customColors || undefined, customBaseThemeId: landingPage.wellnessCustomBaseThemeId || undefined }),
   ];
+}
+
+// Generic landing sites intentionally use the same visual block grammar as
+// wellness pages, but a different root marker. That lets the renderer reuse
+// the proven responsive CSS without allowing generic records to be identified
+// as wellness records by the vertical guards.
+function buildGenericCampaignPage(landingPage = {}, content = []) {
+  const built = buildWellnessCampaignPage({
+    ...landingPage,
+    sectorLabel: landingPage.sectorLabel || 'Business',
+  }, content);
+  return built.map((block) => {
+    if (block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page') {
+      return { ...block, props: { ...block.props, variant: 'generic-campaign-page' } };
+    }
+    return block;
+  });
 }
 
 function tplStr(template, vars) {
@@ -762,7 +794,7 @@ function renderComponent(component, slug, options = {}) {
       const columns = props.columns || [];
       const gap = props.gap || "24px";
       const variant = props.variant || "";
-      const isWellnessCampaignPage = variant === "wellness-campaign-page";
+      const isWellnessCampaignPage = ['wellness-campaign-page', 'generic-campaign-page'].includes(variant);
       const isWellnessHeaderRow = variant === "wellness-header-row";
       const isWellnessHeroRow = variant === "wellness-hero-row";
       const isWellnessDetailsStrip = variant === "wellness-details-strip";
@@ -1572,19 +1604,34 @@ function renderPage(landingPage, options = {}) {
   // `.map` doesn't crash. Phase D1 dispatcher above handles the
   // common case; this guard is the belt-and-braces for misconfig.
   if (!Array.isArray(components)) components = [];
-  const isWellnessLandingPage = require('./wellnessLandingThemes').isWellnessLandingPage(landingPage, components);
-  if (isWellnessLandingPage && !hasWellnessRoot(components)) {
-    components = buildWellnessCampaignPage(landingPage, components);
+  const verticalContracts = require('../lib/landingPageVertical');
+  const isWellnessLandingPage = verticalContracts.isWellnessLandingPage(landingPage, components);
+  const isGenericLandingPage = verticalContracts.isGenericLandingPage(landingPage, components);
+  const isCampaignLandingPage = isWellnessLandingPage || isGenericLandingPage;
+  if (isCampaignLandingPage && !hasWellnessRoot(components)) {
+    components = isGenericLandingPage
+      ? buildGenericCampaignPage(landingPage, components)
+      : buildWellnessCampaignPage(landingPage, components);
   }
-  if (isWellnessLandingPage) {
+  if (isCampaignLandingPage) {
     components = normalizeWellnessCampaignComponents(components);
+    // Existing pages may already contain AI copy with a stale year. The
+    // detail-date block is the persisted source of truth for those pages.
+    // This correction is scoped to generic/wellness campaign roots and never
+    // runs for travel pages.
+    components = normalizeCampaignDateYears(components);
   }
 
-  const wellnessRoot = components.find((block) => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
-  const wellnessTheme = isWellnessLandingPage
+  const campaignDate = isCampaignLandingPage ? campaignDateText(components) : '';
+  const renderedTitle = normalizeLandingContentYears(title, campaignDate);
+  const renderedMetaTitle = normalizeLandingContentYears(metaTitle, campaignDate);
+  const renderedMetaDescription = normalizeLandingContentYears(metaDescription, campaignDate);
+
+  const wellnessRoot = components.find((block) => block?.type === 'columns' && ['wellness-campaign-page', 'generic-campaign-page'].includes(block.props?.variant));
+  const wellnessTheme = isCampaignLandingPage
     ? resolveWellnessLandingTheme(wellnessRoot?.props?.themeId || landingPage.wellnessTheme || landingPage.themeId, wellnessRoot?.props?.customColors || landingPage.wellnessCustomColors)
     : null;
-  const wellnessLayout = isWellnessLandingPage
+  const wellnessLayout = isCampaignLandingPage
     ? resolveWellnessLandingLayout(wellnessRoot?.props?.layoutId || landingPage.wellnessLayout || landingPage.layoutId)
     : null;
   const wellnessVars = wellnessTheme
@@ -1604,8 +1651,8 @@ function renderPage(landingPage, options = {}) {
     : '';
   const renderOptions = wellnessTheme ? { ...options, wellnessTheme, wellnessLayout } : options;
   const bodyHtml = components.map((c) => renderComponent(c, slug, renderOptions)).join("\n");
-  const pageTitle = escapeHtml(metaTitle || title);
-  const pageDescription = metaDescription ? `<meta name="description" content="${escapeHtml(metaDescription)}" />` : "";
+  const pageTitle = escapeHtml(renderedMetaTitle || renderedTitle);
+  const pageDescription = renderedMetaDescription ? `<meta name="description" content="${escapeHtml(renderedMetaDescription)}" />` : "";
   const overrides = cssOverrides ? `<style>${cssOverrides}</style>` : "";
 
   const isTravel = isTravelDestinationPage(landingPage, components);
@@ -1614,7 +1661,7 @@ function renderPage(landingPage, options = {}) {
   // lp-container padding) so the hero / city grids span edge-to-edge.
   const wrapperOpen = isTravel
     ? `<div class="trips-page">`
-    : `<div class="lp-container${isWellnessLandingPage ? ' lp-container--wellness' : ''}"${wellnessTheme ? ` style="${wellnessVars}"` : ''}>`;
+    : `<div class="lp-container${isCampaignLandingPage ? ' lp-container--wellness' : ''}"${wellnessTheme ? ` style="${wellnessVars}"` : ''}>`;
   const wrapperClose = `</div>`;
 
   return `<!DOCTYPE html>
@@ -1948,6 +1995,7 @@ function renderPage(landingPage, options = {}) {
 module.exports = {
   renderPage,
   buildWellnessCampaignPage,
+  buildGenericCampaignPage,
   safeUrl,
   renderComponent,
   isTravelDestinationPage,

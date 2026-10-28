@@ -78,6 +78,7 @@ export default function CalendarRangePicker({
   width = 182,
   height = 46,
   compact = false,
+  openRequest = 0,
 }) {
   const state = value || { from: '', to: '' };
   const committedFrom = parseIso(state.from);
@@ -93,6 +94,10 @@ export default function CalendarRangePicker({
   const [draftEnd, setDraftEnd] = useState(committedTo);
   const [hoverDate, setHoverDate] = useState(null);
   const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (openRequest > 0) setOpen(true);
+  }, [openRequest]);
 
   // Re-sync draft state from the committed value whenever the popover
   // (re)opens, so a Cancel-via-outside-click doesn't leave stale drafts.
@@ -221,7 +226,7 @@ export default function CalendarRangePicker({
             background: 'var(--bg-color)', color: 'var(--text-primary)',
             border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
             borderRadius: 12, boxShadow: 'var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.4))',
-            padding: '0.85rem', width: 300,
+            padding: '0.85rem', width: 'min(300px, calc(100vw - 32px))', boxSizing: 'border-box',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>

@@ -55,6 +55,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import Currencies from '../pages/Currencies';
+import { AuthContext } from '../appContexts';
 
 const persistedCurrencies = [
   { id: 1, code: 'USD', symbol: '$',  name: 'US Dollar',    exchangeRate: 1.0,    isBase: true },
@@ -71,11 +72,19 @@ const previewCurrencies = [
 const samplePivot = {
   baseCode: 'USD',
   totalInBase: 12345.67,
+  reportingCode: 'USD',
+  totalInReporting: 12345.67,
   dealCount: 5,
   byCurrency: {
     USD: { count: 3, amount: 10000 },
     INR: { count: 2, amount: 200000 },
   },
+};
+
+const sampleCatalog = {
+  baseCode: 'USD',
+  asOf: '2026-10-19',
+  currencies: [{ code: 'JPY', symbol: '¥', name: 'Japanese Yen', exchangeRate: 149.5 }],
 };
 
 function defaultFetchMock(url, opts) {
@@ -84,6 +93,9 @@ function defaultFetchMock(url, opts) {
   }
   if (url === '/api/currencies/pivot/deals') {
     return Promise.resolve(samplePivot);
+  }
+  if (url === '/api/currencies/catalog') {
+    return Promise.resolve(sampleCatalog);
   }
   return Promise.resolve(null);
 }
@@ -104,6 +116,23 @@ describe('<Currencies /> — page surface', () => {
     notifySuccess.mockReset();
     notifyConfirm.mockReset();
     notifyConfirm.mockResolvedValue(true);
+  });
+
+  it('labels stored base rates explicitly when reporting currency differs and rejects zero', async () => {
+    render(<MemoryRouter><AuthContext.Provider value={{ tenant: { defaultCurrency: 'INR' }, setTenant: vi.fn() }}><Currencies /></AuthContext.Provider></MemoryRouter>);
+    await screen.findByText('Euro');
+    const eurRow = screen.getByText('Euro').closest('tr');
+    fireEvent.click(eurRow.querySelector('[title="Edit rate"]'));
+    const input = screen.getByLabelText('Stored rate: 1 USD = X EUR (table displays per INR)');
+    expect(Number(input.value)).toBe(0.92);
+    expect(screen.getByText('US Dollar').closest('tr').querySelector('[title="Edit rate"]')).toBeNull();
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    expect(notifyError).toHaveBeenCalledWith('Enter an exchange rate greater than zero');
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+    fireEvent.change(input, { target: { value: '0.95' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/currencies/3', expect.objectContaining({ body: JSON.stringify({ exchangeRate: 0.95 }) })));
   });
 
   it('renders heading "Currencies" + Refresh + Add Currency CTAs', async () => {
@@ -198,17 +227,17 @@ describe('<Currencies /> — page surface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Add Currency/i }));
 
-    // Modal renders inputs.
+    // Selecting a published currency fills its details and rate.
+    await screen.findByRole('option', { name: /Japanese Yen \(JPY\)/i });
+    fireEvent.change(screen.getByRole('combobox', { name: /Select currency/i }), { target: { value: 'JPY' } });
     const codeInput = screen.getByPlaceholderText(/Code \(e\.g\. JPY\)/i);
     const symbolInput = screen.getByPlaceholderText(/Symbol \(e\.g\. ¥\)/i);
     const nameInput = screen.getByPlaceholderText(/Name \(e\.g\. Japanese Yen\)/i);
     const rateInput = screen.getByPlaceholderText(/Exchange rate/i);
-    expect(codeInput).toBeInTheDocument();
-
-    fireEvent.change(codeInput, { target: { value: 'jpy' } }); // tests upper-casing
-    fireEvent.change(symbolInput, { target: { value: '¥' } });
-    fireEvent.change(nameInput, { target: { value: 'Japanese Yen' } });
-    fireEvent.change(rateInput, { target: { value: '149.50' } });
+    expect(codeInput).toHaveValue('JPY');
+    expect(symbolInput).toHaveValue('¥');
+    expect(nameInput).toHaveValue('Japanese Yen');
+    expect(rateInput).toHaveValue(149.5);
 
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
 
@@ -218,11 +247,10 @@ describe('<Currencies /> — page surface', () => {
       );
       expect(createCall).toBeTruthy();
       const body = JSON.parse(createCall[1].body);
-      // Code is upper-cased on input (pinned in onChange handler).
       expect(body.code).toBe('JPY');
       expect(body.symbol).toBe('¥');
       expect(body.name).toBe('Japanese Yen');
-      // exchangeRate is parsed via parseFloat (number, not string).
+      // Published rate is saved as a number.
       expect(body.exchangeRate).toBe(149.5);
       expect(body.isBase).toBe(false);
     });
@@ -247,6 +275,20 @@ describe('<Currencies /> — page surface', () => {
       ([u, o]) => u === '/api/currencies' && o?.method === 'POST',
     );
     expect(postCall).toBeUndefined();
+  });
+
+  it('allows manual entry when the currency lookup is unavailable', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/currencies/catalog') return Promise.reject(new Error('Unavailable'));
+      return defaultFetchMock(url, opts);
+    });
+    renderCurrencies();
+    await screen.findByText('US Dollar');
+    fireEvent.click(screen.getByRole('button', { name: /Add Currency/i }));
+    expect(await screen.findByText(/Currency lookup is unavailable/i)).toBeInTheDocument();
+    const codeInput = screen.getByRole('textbox', { name: /Currency code/i });
+    fireEvent.change(codeInput, { target: { value: 'jpy' } });
+    expect(codeInput).toHaveValue('JPY');
   });
 
   it('clicking "Set as base" on a non-base row POSTs /api/currencies/:id/set-base', async () => {

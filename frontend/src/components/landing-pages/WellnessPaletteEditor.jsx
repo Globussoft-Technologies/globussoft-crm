@@ -1,16 +1,16 @@
 import { WELLNESS_LANDING_COLOR_FIELDS, getWellnessColorOverrides, normalizeWellnessHexColor, resolveWellnessLandingTheme } from '../../utils/wellnessLandingThemes';
 
-function ColorField({ field, value, onChange, disabled }) {
+function ColorField({ field, value, onChange, disabled, vertical }) {
   const safeValue = normalizeWellnessHexColor(value);
   return (
     <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-      <label htmlFor={`wellness-color-${field.key}`} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+      <label htmlFor={`${vertical}-color-${field.key}`} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
         {field.label}
         <small style={{ display: 'block', marginTop: 2, lineHeight: 1.3 }}>{field.description}</small>
       </label>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         <input
-          id={`wellness-color-${field.key}`}
+          id={`${vertical}-color-${field.key}`}
           type="color"
           value={safeValue}
           onChange={(event) => onChange(event.target.value)}
@@ -32,7 +32,8 @@ function ColorField({ field, value, onChange, disabled }) {
   );
 }
 
-export default function WellnessPaletteEditor({ theme, baseThemeId = 'botanical', onChange, onReset, disabled = false }) {
+export default function WellnessPaletteEditor({ theme, baseThemeId = 'botanical', onChange, onReset, disabled = false, vertical = 'wellness' }) {
+  const isGeneric = vertical === 'generic';
   const baseTheme = resolveWellnessLandingTheme(baseThemeId);
   const draft = resolveWellnessLandingTheme('custom', theme || getWellnessColorOverrides(baseTheme));
   const update = (key, value) => {
@@ -44,8 +45,12 @@ export default function WellnessPaletteEditor({ theme, baseThemeId = 'botanical'
     <div style={{ border: '1px solid var(--border-color)', borderRadius: 12, padding: '0.9rem', background: 'rgba(255,255,255,0.6)', opacity: disabled ? 0.8 : 1 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.6rem' }}>
         <div>
-          <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>Custom wellness colors</div>
-          <div style={{ marginTop: 3, fontSize: '0.76rem', lineHeight: 1.45, color: 'var(--text-secondary)' }}>Fine-tune the page background, text, buttons, accents, and card surfaces without changing the content or travel CRM theme.</div>
+          <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{isGeneric ? 'Custom campaign colors' : 'Custom wellness colors'}</div>
+          <div style={{ marginTop: 3, fontSize: '0.76rem', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+            {isGeneric
+              ? 'Fine-tune the page background, text, buttons, accents, and card surfaces without changing the campaign content or other CRM verticals.'
+              : 'Fine-tune the page background, text, buttons, accents, and card surfaces without changing the content or travel CRM theme.'}
+          </div>
         </div>
         {onReset && (
           <button type="button" onClick={onReset} disabled={disabled} style={{ flexShrink: 0, padding: '0.35rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'transparent', color: 'var(--text-primary)', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.78rem' }}>
@@ -61,11 +66,13 @@ export default function WellnessPaletteEditor({ theme, baseThemeId = 'botanical'
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 175px), 1fr))', gap: '0.7rem', marginTop: '0.9rem' }}>
         {WELLNESS_LANDING_COLOR_FIELDS.map((field) => (
-          <ColorField key={field.key} field={field} value={draft[field.key]} onChange={(value) => update(field.key, value)} disabled={disabled} />
+          <ColorField key={field.key} field={field} value={draft[field.key]} onChange={(value) => update(field.key, value)} disabled={disabled} vertical={vertical} />
         ))}
       </div>
       <div style={{ marginTop: '0.75rem', fontSize: '0.74rem', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
-        Custom colors are saved inside this wellness campaign only. Travel palettes and other CRM pages are not affected.
+        {isGeneric
+          ? 'Custom colors are saved inside this generic campaign only. Wellness and travel CRM pages are not affected.'
+          : 'Custom colors are saved inside this wellness campaign only. Travel palettes and other CRM pages are not affected.'}
       </div>
     </div>
   );

@@ -161,6 +161,7 @@ describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () =>
       byMethod: {},
       totalAmount: 0,
       successfulAmount: 0,
+      successfulAmountByCurrency: {},
       lastPaymentAt: null,
     });
   });
@@ -217,7 +218,19 @@ describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () =>
     const res = await request(app).get('/api/payments/stats');
     expect(res.status).toBe(200);
     expect(res.body.successfulAmount).toBe(350.5);
+    expect(res.body.successfulAmountByCurrency).toEqual({ USD: 350.5 });
     expect(res.body.totalAmount).toBe(525.49);
+  });
+
+  test('8b. successful amounts are also grouped by currency for safe UI conversion', async () => {
+    prisma.payment.findMany.mockResolvedValue([
+      { status: 'SUCCESS', gateway: 'razorpay', amount: 8000, currency: 'INR', createdAt: new Date() },
+      { status: 'CAPTURED', gateway: 'stripe', amount: 100, currency: 'usd', createdAt: new Date() },
+      { status: 'PENDING', gateway: 'stripe', amount: 50, currency: 'EUR', createdAt: new Date() },
+    ]);
+    const res = await request(makeApp()).get('/api/payments/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.successfulAmountByCurrency).toEqual({ INR: 8000, USD: 100 });
   });
 
   test('9. lastPaymentAt is ISO of the MAX createdAt across rows', async () => {
@@ -261,6 +274,26 @@ describe('GET /api/payments/stats — pin tenant-wide aggregate envelope', () =>
     expect(where.createdAt.lte).toBeInstanceOf(Date);
     expect(where.createdAt.gte.toISOString()).toBe('2026-01-01T00:00:00.000Z');
     expect(where.createdAt.lte.toISOString()).toBe('2026-05-26T23:59:59.999Z');
+  });
+
+  test('payment-date and gateway filters match the Generic CRM payments dashboard', async () => {
+    prisma.payment.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/payments/stats?dateBasis=payment&gateway=RazorPay&from=2026-10-01T00:00:00.000Z&to=2026-10-31T23:59:59.999Z'
+    );
+    expect(res.status).toBe(200);
+    const query = prisma.payment.findMany.mock.calls[0][0];
+    expect(query.where.tenantId).toBe(1);
+    expect(query.where.gateway).toBe('razorpay');
+    expect(query.where.createdAt).toBeUndefined();
+    expect(query.where.OR).toEqual([
+      { paidAt: expect.objectContaining({ gte: expect.any(Date), lte: expect.any(Date) }) },
+      { paidAt: null, createdAt: expect.objectContaining({ gte: expect.any(Date), lte: expect.any(Date) }) },
+    ]);
+    expect(query.select).toEqual({
+      status: true, gateway: true, amount: true, currency: true, paidAt: true, createdAt: true,
+    });
   });
 
   test('12. Defensive — null amount treated as 0 (does NOT NaN the aggregate)', async () => {

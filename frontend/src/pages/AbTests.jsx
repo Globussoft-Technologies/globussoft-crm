@@ -88,10 +88,10 @@ function CreateModal({ onClose, onCreated, campaigns }) {
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+      position: 'fixed', inset: 0, background: 'var(--overlay-bg)',
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
     }}>
-      <div style={{ ...glassCard, width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: 'rgba(20,20,30,0.95)' }}>
+      <div style={{ ...glassCard, width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: 'var(--modal-bg)', backdropFilter: 'none' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h2 style={{ margin: 0, color: 'var(--text-primary)' }}>Create A/B Test</h2>
           <button onClick={onClose} aria-label="Close create A/B test dialog" title="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
@@ -108,8 +108,8 @@ function CreateModal({ onClose, onCreated, campaigns }) {
               placeholder="Summer Promo – Subject Line Test"
               style={{
                 width: '100%', padding: '0.6rem 0.85rem',
-                background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)',
-                border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', outline: 'none',
+                background: 'var(--input-bg)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)', borderRadius: '10px', outline: 'none',
               }}
             />
           </div>
@@ -121,8 +121,8 @@ function CreateModal({ onClose, onCreated, campaigns }) {
               onChange={(e) => setCampaignId(e.target.value)}
               style={{
                 width: '100%', padding: '0.6rem 0.85rem',
-                background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)',
-                border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', outline: 'none',
+                background: 'var(--input-bg)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)', borderRadius: '10px', outline: 'none',
               }}
             >
               <option value="">— None —</option>
@@ -141,8 +141,8 @@ function CreateModal({ onClose, onCreated, campaigns }) {
                 spellCheck={false}
                 style={{
                   width: '100%', minHeight: 180, padding: '0.6rem 0.85rem',
-                  background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)',
-                  border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', outline: 'none',
+                  background: 'var(--input-bg)', color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)', borderRadius: '10px', outline: 'none',
                   fontFamily: 'monospace', fontSize: '0.85rem', resize: 'vertical',
                 }}
               />
@@ -155,8 +155,8 @@ function CreateModal({ onClose, onCreated, campaigns }) {
                 spellCheck={false}
                 style={{
                   width: '100%', minHeight: 180, padding: '0.6rem 0.85rem',
-                  background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)',
-                  border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', outline: 'none',
+                  background: 'var(--input-bg)', color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)', borderRadius: '10px', outline: 'none',
                   fontFamily: 'monospace', fontSize: '0.85rem', resize: 'vertical',
                 }}
               />
@@ -170,7 +170,7 @@ function CreateModal({ onClose, onCreated, campaigns }) {
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-            <button onClick={onClose} style={{ padding: '0.6rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', cursor: 'pointer' }}>Cancel</button>
+            <button onClick={onClose} style={{ padding: '0.6rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: '10px', cursor: 'pointer' }}>Cancel</button>
             <button
               onClick={handleSubmit}
               disabled={saving}
@@ -201,10 +201,10 @@ function DetailModal({ test, onClose, onAction }) {
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+      position: 'fixed', inset: 0, background: 'var(--overlay-bg)',
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
     }}>
-      <div style={{ ...glassCard, width: 'min(900px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: 'rgba(20,20,30,0.95)' }}>
+      <div style={{ ...glassCard, width: 'min(900px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: 'var(--modal-bg)', backdropFilter: 'none' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', gap: '1rem' }}>
           <div>
             <h2 style={{ margin: 0, color: 'var(--text-primary)' }}>{test.name}</h2>
@@ -260,17 +260,17 @@ function DetailModal({ test, onClose, onAction }) {
         </div>
 
         {/* Chart */}
-        <div style={{ ...glassCard, marginBottom: '1.25rem', background: 'rgba(255,255,255,0.03)' }}>
+        <div style={{ ...glassCard, marginBottom: '1.25rem', background: 'var(--subtle-bg-3)' }}>
           <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <BarChart3 size={16} /> Variant Performance
           </h3>
           <div style={{ height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                 <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
                 <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} />
+                <Tooltip contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)' }} />
                 <Legend />
                 <Bar dataKey="Sent" fill="#3b82f6" radius={[6, 6, 0, 0]} />
                 <Bar dataKey="Clicked" fill="#10b981" radius={[6, 6, 0, 0]} />
@@ -282,25 +282,25 @@ function DetailModal({ test, onClose, onAction }) {
 
         {/* Variant JSON */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-          <div style={{ ...glassCard, background: 'rgba(255,255,255,0.03)' }}>
+          <div style={{ ...glassCard, background: 'var(--subtle-bg-3)' }}>
             <h4 style={{ margin: '0 0 0.5rem', color: '#3b82f6' }}>Variant A</h4>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
               Sent: <b style={{ color: 'var(--text-primary)' }}>{stats.variantA.sent}</b> &nbsp;·&nbsp;
               Clicked: <b style={{ color: 'var(--text-primary)' }}>{stats.variantA.clicked}</b> &nbsp;·&nbsp;
               CTR: <b style={{ color: 'var(--text-primary)' }}>{stats.variantA.ctr}%</b>
             </div>
-            <pre style={{ margin: 0, padding: '0.75rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', color: 'var(--text-primary)', fontSize: '0.8rem', overflowX: 'auto' }}>
+            <pre style={{ margin: 0, padding: '0.75rem', background: 'var(--input-bg)', borderRadius: '8px', color: 'var(--text-primary)', fontSize: '0.8rem', overflowX: 'auto' }}>
 {prettyJson(test.variantA)}
             </pre>
           </div>
-          <div style={{ ...glassCard, background: 'rgba(255,255,255,0.03)' }}>
+          <div style={{ ...glassCard, background: 'var(--subtle-bg-3)' }}>
             <h4 style={{ margin: '0 0 0.5rem', color: '#a855f7' }}>Variant B</h4>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
               Sent: <b style={{ color: 'var(--text-primary)' }}>{stats.variantB.sent}</b> &nbsp;·&nbsp;
               Clicked: <b style={{ color: 'var(--text-primary)' }}>{stats.variantB.clicked}</b> &nbsp;·&nbsp;
               CTR: <b style={{ color: 'var(--text-primary)' }}>{stats.variantB.ctr}%</b>
             </div>
-            <pre style={{ margin: 0, padding: '0.75rem', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', color: 'var(--text-primary)', fontSize: '0.8rem', overflowX: 'auto' }}>
+            <pre style={{ margin: 0, padding: '0.75rem', background: 'var(--input-bg)', borderRadius: '8px', color: 'var(--text-primary)', fontSize: '0.8rem', overflowX: 'auto' }}>
 {prettyJson(test.variantB)}
             </pre>
           </div>

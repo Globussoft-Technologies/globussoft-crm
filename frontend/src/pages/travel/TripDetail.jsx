@@ -53,19 +53,14 @@ const TABS = [
 
 const PARTICIPANT_IMPORT_SCHEMA = [
   { key: "fullName", required: true, description: "Student / participant name" },
-  { key: "parentName", description: "Parent or guardian name" },
-  { key: "parentPhone", description: "10-digit Indian mobile or E.164 number" },
-  { key: "parentEmail", description: "Parent email; used when matching rows" },
+  { key: "parentName", required: true, description: "Parent or guardian full name" },
+  { key: "parentPhone", required: true, description: "10-digit Indian mobile or E.164 number; format as text in Excel" },
+  { key: "parentEmail", required: true, description: "Valid parent email; used when matching rows" },
   { key: "applicationStatus", description: "pending, approved, rejected, or waitlisted" },
   { key: "passportNumber", description: "Passport number (international trips)" },
   { key: "passportExpiry", description: "ISO date, e.g. 2027-02-21" },
   { key: "aadhaarLast4", description: "Exactly 4 digits; never upload full Aadhaar" },
   { key: "medicalNotes", description: "Medical notes" },
-  { key: "consentCapturedAt", description: "ISO date/time" },
-  { key: "passportExtractedAt", description: "ISO date/time" },
-  { key: "passportVerifiedAt", description: "ISO date/time" },
-  { key: "passportRejectedAt", description: "ISO date/time" },
-  { key: "passportDocId", description: "Existing ContactAttachment ID" },
   { key: "reviewNotes", description: "Operator review notes" },
 ];
 
@@ -171,7 +166,7 @@ export default function TripDetail() {
   );
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+    <div className="travel-trip-detail-page" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
@@ -186,7 +181,7 @@ export default function TripDetail() {
       </div>
 
       {/* Tab strip */}
-      <div role="tablist" aria-label="Trip sections" style={{
+      <div className="travel-trip-detail-tabs" role="tablist" aria-label="Trip sections" style={{
         display: "flex", gap: 4, borderBottom: "1px solid var(--border-color)",
         marginTop: 20, marginBottom: 16, flexWrap: "wrap",
       }}>
@@ -723,13 +718,15 @@ const APP_STATUS_STYLES = {
   waitlisted: { label: "WAITLISTED",     bg: "rgba(38,88,85,0.16)",   color: "#265855" },
 };
 
-function StatusPill() {
+function StatusPill({ hasFirstPayment }) {
+  const paid = Boolean(hasFirstPayment);
   return (
     <span style={{
-      background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
+      background: paid ? "rgba(47,122,77,0.14)" : "rgba(200,154,78,0.18)",
+      color: paid ? "#2F7A4D" : "#9A6F2E",
       padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
       letterSpacing: 0.4, whiteSpace: "nowrap",
-    }}>REGISTERED</span>
+    }}>{paid ? "REGISTERED" : "AWAITING FIRST PAYMENT"}</span>
   );
 }
 
@@ -821,6 +818,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
     const fd = new FormData();
     fd.append("file", bulkFile);
+    setBulkImportResult(null);
     setBulkImporting(true);
     try {
       const token = getAuthToken();
@@ -1013,10 +1011,22 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
-  // Registrations are the source of the uploaded document records. Keep
-  // completed registrations in this single participant surface so conversion
-  // into TripParticipant does not make the documents disappear.
-  const reviewableRegs = pendingRegs;
+  // Completed registrations already have participant rows. Show only work in
+  // progress here, and use the converted record for its uploaded documents.
+  const normalizeName = (value) => String(value || "").trim().toLowerCase();
+  const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+  const normalizePhone = (value) => String(value || "").replace(/\D/g, "");
+  const alreadyRegistered = (registration) => (trip.participants || []).some((participant) =>
+    String(participant.applicationStatus || "").toLowerCase() !== "rejected"
+    && normalizeName(participant.fullName) === normalizeName(registration.studentName)
+    && Boolean((registration.parentEmail && normalizeEmail(participant.parentEmail) === normalizeEmail(registration.parentEmail))
+      || (registration.parentPhone && normalizePhone(participant.parentPhone) === normalizePhone(registration.parentPhone)))
+  );
+  const reviewableRegs = pendingRegs.filter((r) => !["CONVERTED", "REJECTED"].includes(r.status) && !alreadyRegistered(r));
+  const convertedRegsByParticipantId = new Map(
+    pendingRegs.filter((r) => r.status === "CONVERTED" && r.convertedToParticipantId)
+      .map((r) => [Number(r.convertedToParticipantId), r]),
+  );
   const consentDocumentsByEmail = new Map(
     (trip.parentConsentDocuments || []).map((row) => [
       String(row.parentEmail || "").trim().toLowerCase(),
@@ -1074,8 +1084,13 @@ function ParticipantsTab({ trip, onChange, notify }) {
               Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
             </div>
             {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                First issue: row {bulkImportResult.errors[0].row || "?"} - {bulkImportResult.errors[0].reason || "Unknown error"}
+              <div style={{ fontSize: 12, color: "var(--danger-color, #b91c1c)" }}>
+                <strong>Rows with errors</strong>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                  {bulkImportResult.errors.map((item, index) => (
+                    <li key={`${item.row}-${index}`}>Row {item.row || "?"}: {item.reason || "Unknown error"}</li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
@@ -1119,7 +1134,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   Import Participants from CSV / Excel
                 </h2>
                 <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
-                  Upload a CSV or Excel (XLSX) file using the exact column names below.
+                  Download a template and enter one participant per row. Keep the first row of column names unchanged.
                   Existing rows are updated additively and blank cells never clear stored data.
                 </p>
               </div>
@@ -1156,7 +1171,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                <code style={{ color: "var(--text-primary)" }}>fullName</code> is required. Use the exact headers shown; aliases <code style={{ color: "var(--text-primary)" }}>name</code> and <code style={{ color: "var(--text-primary)" }}>status</code> are also accepted.
+                Templates contain only the required columns: <code style={{ color: "var(--text-primary)" }}>fullName</code>, <code>parentName</code>, <code>parentPhone</code>, and <code>parentEmail</code>. Keep phone numbers as text in Excel.
               </div>
               <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
                 <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -1181,7 +1196,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 </table>
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                Matching uses <code style={{ color: "var(--text-primary)" }}>fullName + parentPhone + parentEmail</code>. Leave unused optional cells blank. Never include a full Aadhaar number; only the last four digits are accepted.
+                Matching uses <code style={{ color: "var(--text-primary)" }}>fullName + parentPhone + parentEmail</code>. Optional columns can still be added using their exact names. Never include a full Aadhaar number; only the last four digits are accepted.
               </div>
             </div>
 
@@ -1255,8 +1270,8 @@ function ParticipantsTab({ trip, onChange, notify }) {
         <div style={{ background: "var(--surface-color, #fff)", borderRadius: 14, border: "1px solid var(--border-color)", overflow: "hidden", marginBottom: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)" }} data-testid="pending-registrations-list">
           <div style={{ ...participantTableHeader, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Registered participants</div>
-              <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Registration is automatic. Uploaded documents are available below.</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Pending registrations</div>
+              <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Completed registrations and their documents appear in the participant list below.</div>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, color: "#2F7A4D", background: "rgba(47,122,77,0.12)", padding: "6px 10px", borderRadius: 999 }}>{reviewableRegs.length} total</span>
           </div>
@@ -1303,7 +1318,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         padding: "2px 8px", borderRadius: 999, textTransform: "uppercase",
                       }}
                     >
-                      Registered
+                      {r.status === "DRAFT" ? "Draft" : r.status === "OTP_VERIFIED" ? "Verified" : r.status === "APPROVED" ? "Approved" : String(r.status || "Pending").replaceAll("_", " ")}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
@@ -1385,7 +1400,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 }}>
-                  Registered automatically
+                  Awaiting completion
                 </div>
               </div>
             );
@@ -1426,14 +1441,19 @@ function ParticipantsTab({ trip, onChange, notify }) {
             const parentDocuments = p.parentDocuments?.length
               ? p.parentDocuments
               : parentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || [];
+            const convertedReg = convertedRegsByParticipantId.get(Number(p.id));
+            let registrationDocs = {};
+            try { registrationDocs = JSON.parse(convertedReg?.extrasJson || "{}")?.documents || {}; } catch { registrationDocs = {}; }
+            const registrationConsentType = ["parentConsent", "consentLetter", "medicalConsent"]
+              .find((type) => registrationDocs[type]);
             return (
               <div key={p.id} style={row}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
-                    <StatusPill />
+                    <StatusPill hasFirstPayment={p.hasFirstPayment} />
                   </div>
-                  {(p.parentName || p.parentPhone) && (
+                  {(p.parentName || p.parentPhone || p.parentEmail) && (
                     <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
                       {p.parentName && (
                         <span>
@@ -1441,6 +1461,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         </span>
                       )}
                       {p.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.parentPhone}</span>}
+                      {p.parentEmail && <span>{p.parentEmail}</span>}
                     </div>
                   )}
                   {p.reviewNotes && (
@@ -1471,11 +1492,24 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     >
                       <FileText size={11} aria-hidden /> Consent form - View
                     </button>
+                  ) : registrationConsentType ? (
+                    <button type="button" style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12 }}
+                      onClick={() => viewRegistrationDoc(convertedReg.id, registrationConsentType)}>
+                      <FileText size={11} aria-hidden /> Consent form - View
+                    </button>
                   ) : (
                     <span style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "var(--text-secondary)", cursor: "default" }} data-testid={`participant-consent-missing-${p.id}`}>
                       <FileText size={11} aria-hidden /> Consent form not uploaded
                     </span>
                   )}
+                  {convertedReg && ["passport", "aadhaar"].filter((type) => registrationDocs[type]).map((type) => (
+                    <button key={type} type="button"
+                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12 }}
+                      onClick={() => viewRegistrationDoc(convertedReg.id, type)}
+                      data-testid={`view-participant-registration-${type}-${p.id}`}>
+                      <FileText size={11} aria-hidden /> {type === "aadhaar" ? "Aadhaar" : "Registration passport"} - View
+                    </button>
+                  ))}
                   {/* Approve/Reject CTAs — visible only when an action makes sense.
                       Pending → both. Approved → "Reject" so a wrongly-approved
                       row can be reversed. Rejected → "Approve" so a re-review

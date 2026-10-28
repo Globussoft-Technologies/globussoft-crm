@@ -64,11 +64,11 @@ describe('<TransportPersons />', () => {
     await screen.findByText('Ravi Kumar');
 
     expect(screen.getByTestId('transport-directory-page')).toHaveStyle({ overflow: 'hidden', minHeight: '0' });
-    expect(screen.getByTestId('transport-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll');
+    expect(screen.getByTestId('transport-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('transport-directory-table-scroll')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
-      position: 'sticky', top: '0px', color: 'var(--text-secondary)',
-      background: '#f3f4f6',
+      position: 'sticky', top: '0px', color: 'var(--text-primary)',
+      background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
     });
   });
 
@@ -516,11 +516,11 @@ describe('<PlotBrokers />', () => {
     await screen.findByText('Asha Rao');
 
     expect(screen.getByTestId('broker-directory-page')).toHaveStyle({ overflow: 'hidden', minHeight: '0' });
-    expect(screen.getByTestId('broker-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll');
+    expect(screen.getByTestId('broker-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('broker-directory-table-scroll')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
-      position: 'sticky', top: '0px', color: 'var(--text-secondary)',
-      background: '#f3f4f6',
+      position: 'sticky', top: '0px', color: 'var(--text-primary)',
+      background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
     });
   });
 

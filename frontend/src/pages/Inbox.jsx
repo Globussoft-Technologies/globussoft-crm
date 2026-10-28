@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Mail,
   Search,
@@ -268,31 +268,32 @@ function formatStaffOptionLabel(staff) {
   return staff?.email ? `${name} — ${staff.email}` : name;
 }
 
-export default function Inbox() {
+export default function Inbox({
+  composeOnly = false,
+  initialComposeTo: embeddedComposeTo = "",
+  initialComposeContactId: embeddedComposeContactId = "",
+  onComposeClose,
+  onComposeSent,
+} = {}) {
   const navigate = useNavigate();
+  const [routeParams] = useSearchParams();
   const notify = useNotify();
   const { user, tenant } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === "travel";
   const isWellness = tenant?.vertical === "wellness";
   const isGeneric = !isTravel && !isWellness;
-  const travelComposeTo = isTravel && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("travelComposeTo")
+  const genericComposeTo = isGeneric
+    ? embeddedComposeTo || routeParams.get("composeTo") || ""
     : "";
-  const wellnessComposeTo = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessComposeTo")
+  const genericComposeContactId = isGeneric
+    ? String(embeddedComposeContactId || routeParams.get("composeContactId") || "")
     : "";
-  const wellnessComposeReturnTo = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessComposeReturnTo")
-    : "";
-  const travelScheduleContactId = isTravel && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("travelScheduleContactId")
-    : "";
-  const wellnessScheduleContactId = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessScheduleContactId")
-    : "";
-  const wellnessScheduleReturnTo = isWellness && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("wellnessScheduleReturnTo")
-    : "";
+  const travelComposeTo = isTravel ? routeParams.get("travelComposeTo") || "" : "";
+  const wellnessComposeTo = isWellness ? routeParams.get("wellnessComposeTo") || "" : "";
+  const wellnessComposeReturnTo = isWellness ? routeParams.get("wellnessComposeReturnTo") || "" : "";
+  const travelScheduleContactId = isTravel ? routeParams.get("travelScheduleContactId") || "" : "";
+  const wellnessScheduleContactId = isWellness ? routeParams.get("wellnessScheduleContactId") || "" : "";
+  const wellnessScheduleReturnTo = isWellness ? routeParams.get("wellnessScheduleReturnTo") || "" : "";
   const scheduleContactId = travelScheduleContactId || wellnessScheduleContactId;
   const canAssignMeetingStaff = user?.role === "ADMIN";
   const [emails, setEmails] = useState([]);
@@ -302,15 +303,16 @@ export default function Inbox() {
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
 
-  const [showCompose, setShowCompose] = useState(Boolean((isTravel && travelComposeTo) || (isWellness && wellnessComposeTo)));
+  const initialComposeTo = genericComposeTo || travelComposeTo || wellnessComposeTo;
+  const [showCompose, setShowCompose] = useState(Boolean(initialComposeTo));
   const [composeData, setComposeData] = useState(() => ({
-    to: travelComposeTo || wellnessComposeTo || "",
+    to: initialComposeTo,
     cc: "",
     bcc: "",
     subject: "",
     body: "",
   }));
-  const [composeContactId, setComposeContactId] = useState("");
+  const [composeContactId, setComposeContactId] = useState(genericComposeContactId);
   const [composeTone, setComposeTone] = useState("professional");
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false);
@@ -358,14 +360,15 @@ export default function Inbox() {
   const [detail, setDetail] = useState(null);
 
   useEffect(() => {
-    const composeTo = isTravel ? travelComposeTo : wellnessComposeTo;
-    if ((!isTravel && !isWellness) || !composeTo) return;
+    const composeTo = genericComposeTo || travelComposeTo || wellnessComposeTo;
+    if (!composeTo) return;
     setComposeData((current) => ({
       ...current,
       to: composeTo,
     }));
+    if (isGeneric) setComposeContactId(genericComposeContactId);
     setShowCompose(true);
-  }, [isTravel, isWellness, travelComposeTo, wellnessComposeTo]);
+  }, [genericComposeContactId, genericComposeTo, isGeneric, travelComposeTo, wellnessComposeTo]);
 
   useEffect(() => {
     const contactId = isTravel ? travelScheduleContactId : wellnessScheduleContactId;
@@ -512,7 +515,7 @@ export default function Inbox() {
         setLoading(true);
         if (canAssignMeetingStaff) setStaffLoading(true);
         const [, contactData, patientData, staffData] = await Promise.all([
-          loadEmailsPage({ page: 1, reset: true }),
+          composeOnly ? Promise.resolve([]) : loadEmailsPage({ page: 1, reset: true }),
           fetchApi("/api/contacts"),
           fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
           canAssignMeetingStaff
@@ -540,7 +543,7 @@ export default function Inbox() {
     return () => {
       cancelled = true;
     };
-  }, [loadEmailsPage, canAssignMeetingStaff]);
+  }, [loadEmailsPage, canAssignMeetingStaff, composeOnly]);
 
   useEffect(() => {
     if (!didInitialLoadRef.current) return;
@@ -573,6 +576,7 @@ export default function Inbox() {
     setComposeContactId("");
     setComposeAttachments([]);
     composeFileInputRef.current = null;
+    if (composeOnly) onComposeClose?.();
     if (returnToOrigin && isWellness && wellnessComposeReturnTo?.startsWith("/")) {
       navigate(wellnessComposeReturnTo);
     }
@@ -670,10 +674,11 @@ export default function Inbox() {
         border: "1px solid var(--border-color)",
         borderRadius: "12px",
         background: email.read ? "var(--subtle-bg-4)" : "var(--subtle-bg-3)",
-        display: "flex",
+        display: "grid",
+        gridTemplateColumns: "40px minmax(0, 1fr) auto",
+        alignItems: "start",
         gap: "1.5rem",
         minWidth: 0,
-        flexWrap: "wrap",
         cursor: "pointer",
         transition: "background 0.18s ease, border-color 0.18s ease",
       }}
@@ -682,9 +687,9 @@ export default function Inbox() {
         <User size={20} color="#fff" />
         <span className="inbox-email-row__avatar-letter" aria-hidden="true">{participantLabel.charAt(0).toUpperCase()}</span>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="inbox-email-row__meta" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginBottom: "0.5rem" }}>
-          <p className="inbox-email-row__address" style={{ fontWeight: "bold", fontSize: "1.05rem", overflowWrap: "anywhere" }}>
+      <div style={{ minWidth: 0, overflow: "hidden", display: "grid", gridTemplateRows: "auto auto auto", alignContent: "start" }}>
+        <div className="inbox-email-row__meta" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", justifyContent: "normal", gap: "1rem", marginBottom: "0.5rem", minWidth: 0 }}>
+          <p className="inbox-email-row__address" style={{ minWidth: 0, margin: 0, fontWeight: "bold", fontSize: "1.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             <span className="inbox-email-row__desktop-address">{email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}</span>
             <span className="inbox-email-row__mobile-participant" title={participantLabel}>{participantLabel}</span>
           </p>
@@ -693,8 +698,8 @@ export default function Inbox() {
             <span className="inbox-email-row__mobile-date">{formatMobileInboxDate(email.createdAt)}</span>
           </span>
         </div>
-        <h4 className="inbox-email-row__subject" style={{ fontWeight: "600", marginBottom: "0.5rem", color: "var(--text-primary)", overflowWrap: "anywhere" }}>{email.subject}</h4>
-        <p className="inbox-email-row__preview" style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "anywhere" }}>
+        <h4 className="inbox-email-row__subject" style={{ margin: "0 0 0.5rem", fontWeight: "600", lineHeight: "1.35", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", overflowWrap: "normal" }}>{email.subject}</h4>
+        <p className="inbox-email-row__preview" style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "normal", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {isGeneric ? getInboxPreviewText(email.body) : email.body}
         </p>
       </div>
@@ -893,7 +898,11 @@ export default function Inbox() {
 
       notify.success("Email sent successfully.");
       closeCompose(false);
-      await loadEmailsPage({ page: 1, reset: true });
+      if (composeOnly) {
+        onComposeSent?.();
+      } else {
+        await loadEmailsPage({ page: 1, reset: true });
+      }
     } catch (err) {
       console.error(err);
       notify.error("Failed to send email. Please try again.");
@@ -1107,17 +1116,18 @@ export default function Inbox() {
   return (
     <div
       data-testid="inbox-page-shell"
-      className={isGeneric ? "inbox-page-shell--generic" : undefined}
+      className={`inbox-page-shell${isGeneric ? " inbox-page-shell--generic" : ""}`}
       style={{
         width: "100%",
-        maxWidth: 1480,
-        margin: "0 auto",
-        padding: "2rem",
+        maxWidth: isGeneric ? "100%" : 1480,
+        margin: isGeneric ? 0 : "0 auto",
+        padding: isGeneric ? 0 : "2rem",
         boxSizing: "border-box",
         overflowX: "hidden",
         animation: "fadeIn 0.5s ease-out",
       }}
     >
+      <div style={{ display: composeOnly ? "none" : "contents" }}>
       <header
         style={{
           display: "flex",
@@ -1125,7 +1135,7 @@ export default function Inbox() {
           alignItems: "center",
           flexWrap: "wrap",
           gap: "1rem",
-          marginBottom: "2.25rem",
+          marginBottom: isGeneric ? "1rem" : "2.25rem",
         }}
       >
         <div style={{ minWidth: 0, flex: "1 1 240px" }}>
@@ -1154,15 +1164,15 @@ export default function Inbox() {
       </header>
 
       <div
-        className={isGeneric ? "card inbox-list-card--generic" : "card"}
+        className={`card inbox-list-card${isGeneric ? " inbox-list-card--generic" : ""}`}
         data-testid="inbox-list-card"
-        ref={isGeneric ? undefined : inboxScrollRef}
-        onScroll={isGeneric ? undefined : handleInboxScroll}
+        ref={inboxScrollRef}
+        onScroll={handleInboxScroll}
         style={{
           width: "100%",
           flex: isGeneric ? "1 1 auto" : "0 0 auto",
           maxHeight: "calc(100vh - 320px)",
-          overflowY: "auto",
+          overflowY: isGeneric ? "visible" : "auto",
           overflowX: "hidden",
           padding: "1.25rem",
         }}
@@ -1179,9 +1189,9 @@ export default function Inbox() {
           </p>
         ) : (
           <div className={isGeneric ? "inbox-list-content" : undefined} style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <div className={isGeneric ? "inbox-toolbar--generic" : undefined} style={{ position: "sticky", top: "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: "-1.25rem 0 0", padding: "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
+            <div className={`inbox-toolbar${isGeneric ? " inbox-toolbar--generic" : ""}`} style={{ position: "sticky", top: isGeneric ? 0 : "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: isGeneric ? 0 : "-1.25rem 0 0", padding: isGeneric ? "0 0 0.75rem" : "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
               <>
-                <div className={isGeneric ? "inbox-search--generic" : undefined} style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
+                <div className={`inbox-search${isGeneric ? " inbox-search--generic" : ""}`} style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
                   <Search size={18} color="var(--text-secondary)" />
                   <input
                     type="search"
@@ -1189,11 +1199,11 @@ export default function Inbox() {
                     placeholder="Search mail"
                     value={inboxSearch}
                     onChange={(event) => setInboxSearch(event.target.value)}
-                    style={{ width: "min(100%, 460px)", border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: "0.9rem" }}
+                    style={{ width: "100%", minWidth: 0, border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: "0.9rem" }}
                   />
                 </div>
               {!showMeet && (
-                <div className={isGeneric ? "inbox-date-filter--generic" : undefined} aria-label="Filter mail by date" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flex: "0 1 auto", order: 2, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
+                <div className={`inbox-date-filter${isGeneric ? " inbox-date-filter--generic" : ""}`} aria-label="Filter mail by date" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flex: "0 1 auto", order: 2, color: "var(--text-secondary)", fontSize: "0.8rem" }}>
                   <span>From</span>
                   <input
                     type="date"
@@ -1222,6 +1232,7 @@ export default function Inbox() {
               <div
                 role="tablist"
                 aria-label="Email folder"
+                className="inbox-folder-tabs"
                 style={{ display: "flex", gap: "0.25rem", padding: "0.3rem", background: "var(--subtle-bg-2)", border: "1px solid var(--border-color)", borderRadius: "12px", alignSelf: "flex-start", order: 1 }}
               >
               {[
@@ -1237,7 +1248,7 @@ export default function Inbox() {
                   style={{
                     padding: "0.4rem 1rem",
                     border: "none",
-                    background: emailFolder === folder.id ? "var(--accent-color)" : "transparent",
+                    background: emailFolder === folder.id ? (isTravel ? "#8f1109" : "var(--accent-color)") : "transparent",
                     color: emailFolder === folder.id ? "#fff" : "var(--text-secondary)",
                     fontWeight: emailFolder === folder.id ? 600 : 500,
                     borderRadius: "6px",
@@ -1249,7 +1260,7 @@ export default function Inbox() {
                 </button>
               ))}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
+              <div className="inbox-toolbar-actions" style={{ display: "flex", alignItems: "center", gap: "0.25rem", order: 3 }}>
                   <button type="button" aria-label="Refresh inbox" onClick={() => loadEmailsPage({ page: 1, reset: true })} disabled={markingAllRead} title="Refresh" style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: markingAllRead ? "not-allowed" : "pointer", opacity: markingAllRead ? 0.5 : 1, padding: "0.45rem" }}><RefreshCw size={17} /></button>
                   <div ref={inboxActionsRef} style={{ position: "relative" }}>
                     <button type="button" aria-label="More inbox actions" title="More" onClick={() => setShowInboxActions((visible) => !visible)} style={{ border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: "0.45rem" }}><MoreVertical size={17} /></button>
@@ -1271,8 +1282,6 @@ export default function Inbox() {
 
             <div
               className={isGeneric ? "inbox-message-scroll--generic" : undefined}
-              ref={isGeneric ? inboxScrollRef : undefined}
-              onScroll={isGeneric ? handleInboxScroll : undefined}
               style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
             >
             {emails.length === 0 ? (
@@ -1302,14 +1311,14 @@ export default function Inbox() {
                     }
                   }}
                   style={{
-                    padding: "1.5rem",
+                    padding: "1rem 1.25rem",
                     border: "1px solid var(--border-color)",
                     borderRadius: "12px",
                     background: email.read ? "var(--subtle-bg-4)" : "var(--subtle-bg-3)",
                     display: "flex",
-                    gap: "1.5rem",
+                    gap: "1rem",
                     minWidth: 0,
-                    flexWrap: "wrap",
+                    flexWrap: "nowrap",
                     cursor: "pointer",
                     transition: "background 0.18s ease, border-color 0.18s ease",
                   }}
@@ -1329,16 +1338,17 @@ export default function Inbox() {
                     <User size={20} color="#fff" />
                   </div>
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
                     <div
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
                         gap: "1rem",
                         marginBottom: "0.5rem",
+                        minWidth: 0,
                       }}
                     >
-                      <p style={{ fontWeight: "bold", fontSize: "1.05rem", overflowWrap: "anywhere" }}>
+                      <p style={{ margin: 0, minWidth: 0, fontWeight: "bold", fontSize: "1.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}
                       </p>
                       <span
@@ -1355,9 +1365,11 @@ export default function Inbox() {
                     <h4
                       style={{
                         fontWeight: "600",
-                        marginBottom: "0.5rem",
+                        margin: "0 0 0.5rem",
                         color: "var(--text-primary)",
-                        overflowWrap: "anywhere",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {email.subject}
@@ -1368,7 +1380,10 @@ export default function Inbox() {
                         color: "var(--text-secondary)",
                         fontSize: "0.9rem",
                         lineHeight: "1.5",
-                        overflowWrap: "anywhere",
+                        margin: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {isGeneric && isRichTextMarkup(email.body) ? <RichText as="span" value={email.body} /> : email.body}
@@ -1398,6 +1413,7 @@ export default function Inbox() {
             </div>
           </div>
         )}
+      </div>
       </div>
 
       {showCompose && (

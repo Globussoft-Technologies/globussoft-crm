@@ -45,6 +45,7 @@ import ThreadDetail from './whatsapp/ThreadDetail';
 import MessageContextMenu from './whatsapp/MessageContextMenu';
 import UnblockModal from './whatsapp/UnblockModal';
 import NewMessageModal from './whatsapp/NewMessageModal';
+import './whatsapp/threads.css';
 
 function explainWhatsAppSendError(error, isMeta) {
   const message = String(error?.message || '');
@@ -55,7 +56,7 @@ function explainWhatsAppSendError(error, isMeta) {
 }
 
 // `showThreadList` — render the left conversation rail (list + search + status
-// filter + unread toggle + the "+ New" and Templates buttons). OFF by default:
+// filter + unread toggle + the "+ New" button). OFF by default:
 // the rail was dropped from this page in 3f3ff602 and wellness has run without
 // it since, so only the generic mount opts back in. Wellness keeps the
 // rail-less layout it has today.
@@ -103,6 +104,9 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   // with hint about templates so the user knows the path forward.
   const [showNewModal, setShowNewModal] = useState(false);
   const [newPhone, setNewPhone] = useState('');
+  // Generic CRM can address one outbound message to several selected leads.
+  // Other verticals continue to use the existing single `newPhone` value.
+  const [newRecipients, setNewRecipients] = useState([]);
   const [newBody, setNewBody] = useState('');
   const [newSending, setNewSending] = useState(false);
   const [newError, setNewError] = useState(null);
@@ -293,13 +297,13 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   // Open the first available conversation on load so the chat pane is never an
   // empty shell on arrival. LOAD-BEARING wherever showThreadList is false
   // (wellness): with no rail there is nothing else to select a thread with.
-  // Where the rail IS shown (generic) it is just a convenience. Either way it
-  // only fires while nothing is selected, so it never fights a user's click.
+  // When the rail is shown, leave the list visible until an agent selects a
+  // conversation. This also lets the mobile Back button return to the list.
   useEffect(() => {
-    if (loadingList || selectedId) return;
+    if (showThreadList || loadingList || selectedId) return;
     const firstThread = threads.find((t) => !t._blocked);
     if (firstThread) setSelectedId(firstThread.id);
-  }, [threads, loadingList, selectedId]);
+  }, [threads, loadingList, selectedId, showThreadList]);
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
@@ -557,10 +561,16 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       setTemplateParams([]);
       return;
     }
+    if (isMeta) {
+      // Generic CRM resolves approved-template variables from the selected
+      // CRM contact on the backend. Wellness keeps its manual parameter flow.
+      setTemplateParams([]);
+      return;
+    }
     const tpl = templates.find((t) => t.name === selectedTemplateName);
     const n = countPlaceholders(tpl?.body || '');
     setTemplateParams(Array(n).fill(''));
-  }, [selectedTemplateName, templates]);
+  }, [isMeta, selectedTemplateName, templates]);
 
   // --- Load detail when selection changes --------------------
   useEffect(() => {
@@ -731,48 +741,84 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   const sendNewMessage = async () => {
     setNewError(null);
     const phoneTrim = newPhone.trim();
-    if (!phoneTrim) {
+    const recipientPhones = isMeta && newRecipients.length > 0
+      ? newRecipients.map((recipient) => recipient.phone.trim())
+      : [phoneTrim];
+    const seenPhones = new Set();
+    const recipients = recipientPhones.filter((phone) => {
+      const key = phone.replace(/\D/g, '');
+      if (!key || seenPhones.has(key)) return false;
+      seenPhones.add(key);
+      return true;
+    });
+
+    if (recipients.length === 0) {
       setNewError('Phone is required.');
       return;
     }
 
-    let payload;
+    let template;
+    let bodyTrim;
     if (useTemplate) {
       if (!selectedTemplateName) {
         setNewError('Pick a template to send.');
         return;
       }
       // Require all placeholders filled
-      if (templateParams.some((p) => !p.trim())) {
+      if (!isMeta && templateParams.some((p) => !p.trim())) {
         setNewError('Fill in every template variable before sending.');
         return;
       }
-      const tpl = templates.find((t) => t.name === selectedTemplateName);
-      payload = {
-        to: phoneTrim,
-        templateName: selectedTemplateName,
-        language: tpl?.language || 'en_US',
-        parameters: templateParams,
-      };
+      template = templates.find((t) => t.name === selectedTemplateName);
     } else {
-      const bodyTrim = newBody.trim();
+      bodyTrim = newBody.trim();
       if (!bodyTrim) {
         setNewError('Message body is required.');
         return;
       }
-      payload = { to: phoneTrim, body: bodyTrim };
     }
 
     setNewSending(true);
-    try {
-      const resp = await fetchApi(`${sendBase}/send`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-        silent: isMeta,
-      });
-      notify.info(useTemplate ? 'Template message sent.' : 'Message sent.');
+    const responses = [];
+    const failures = [];
+    for (const recipientPhone of recipients) {
+      const phoneKey = recipientPhone.replace(/\D/g, '');
+      const selectedContact = isMeta
+        ? contactOptions.find((option) => option.source === 'contact' && option.phone.replace(/\D/g, '') === phoneKey)
+        : null;
+      const selectedContactId = selectedContact
+        ? Number(String(selectedContact.id).replace(/^c-/, ''))
+        : null;
+      const payload = useTemplate
+        ? {
+            to: recipientPhone,
+            templateName: selectedTemplateName,
+            language: template?.language || 'en_US',
+            ...(!isMeta ? { parameters: templateParams } : {}),
+            ...(Number.isInteger(selectedContactId) && selectedContactId > 0 ? { contactId: selectedContactId } : {}),
+          }
+        : { to: recipientPhone, body: bodyTrim };
+
+      try {
+        const response = await fetchApi(`${sendBase}/send`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          silent: isMeta,
+        });
+        responses.push({ phone: recipientPhone, response });
+      } catch (error) {
+        failures.push({ phone: recipientPhone, error });
+      }
+    }
+
+    if (failures.length === 0) {
+      const sentLabel = recipients.length === 1
+        ? (useTemplate ? 'Template message sent.' : 'Message sent.')
+        : `${useTemplate ? 'Template message' : 'Message'} sent to ${recipients.length} recipients.`;
+      notify.info(sentLabel);
       setShowNewModal(false);
       setNewPhone('');
+      setNewRecipients([]);
       setNewBody('');
       setSelectedTemplateName('');
       setTemplateParams([]);
@@ -781,8 +827,8 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       // Meta's async send endpoint returns the created thread as a top-level
       // threadId (not resp.thread.id). Keep this scoped to the generic Meta
       // inbox; WhatsApp Web has its own transport and existing flow.
-      if (isMeta && resp?.threadId) {
-        const threadId = Number(resp.threadId);
+      if (isMeta && responses.length === 1 && responses[0].response?.threadId) {
+        const threadId = Number(responses[0].response.threadId);
         setSelectedId(threadId);
         try {
           const fresh = await fetchApi(`/api/whatsapp/threads/${threadId}`);
@@ -792,12 +838,21 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
           // The normal selected-thread effect/polling will retry loading it.
         }
       }
-    } catch (err) {
-      const msg = explainWhatsAppSendError(err, isMeta);
+    } else {
+      const msg = explainWhatsAppSendError(failures[0].error, isMeta);
+      if (responses.length > 0 && isMeta) {
+        const failedKeys = new Set(failures.map(({ phone }) => phone.replace(/\D/g, '')));
+        setNewRecipients((current) => current.filter((recipient) => failedKeys.has(recipient.phone.replace(/\D/g, ''))));
+        await loadList({ background: true });
+      }
       if (msg.includes('CONTACT_OPTED_OUT')) {
-        setNewError('This contact has opted out of WhatsApp messages.');
+        setNewError(responses.length > 0
+          ? `Sent to ${responses.length} recipient${responses.length === 1 ? '' : 's'}. A remaining contact has opted out of WhatsApp messages.`
+          : 'This contact has opted out of WhatsApp messages.');
       } else {
-        setNewError(msg);
+        setNewError(responses.length > 0
+          ? `Sent to ${responses.length} recipient${responses.length === 1 ? '' : 's'}. ${msg}`
+          : msg);
       }
     }
     setNewSending(false);
@@ -1005,6 +1060,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
   const forwardMessage = (msg) => {
     if (!msg) return;
     setNewPhone('');
+    setNewRecipients([]);
     setNewBody(msg.body || '');
     setUseTemplate(false);
     setNewError(null);
@@ -1194,6 +1250,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
     // New message modal state
     showNewModal,
     newPhone,
+    newRecipients,
     newBody,
     newSending,
     newError,
@@ -1227,6 +1284,7 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
     setRenameSaving,
     setShowNewModal,
     setNewPhone,
+    setNewRecipients,
     setNewBody,
     setNewSending,
     setNewError,
@@ -1273,11 +1331,17 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
     // sent to the wellness path gets bounced, so pick by transport — meta is the
     // generic mount, web is the wellness one. (Travel passes its own Wati path.)
     templatesPath: isMeta ? '/whatsapp/templates' : '/wellness/whatsapp/templates',
+    // Generic CRM manages templates from Marketing Sequences, so its inbox
+    // should not duplicate that navigation button. Other hosts keep it.
+    showTemplatesButton: !isMeta,
+    // The Meta inbox is the Generic CRM mount. Shared WhatsApp components use
+    // this flag for Generic-only presentation without affecting other verticals.
+    isGeneric: isMeta,
   };
 
   return (
     <WhatsAppThreadsContext.Provider value={contextValue}>
-      <div style={{
+      <div className="whatsapp-threads-page" style={{
         display: 'flex', flexDirection: 'column',
         height: '100%', minHeight: 0,
         animation: 'fadeIn 0.4s ease-out',
@@ -1298,7 +1362,10 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
           />
         )}
 
-        <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
+        <div
+          className={`whatsapp-inbox${showThreadList ? ' whatsapp-inbox--with-list' : ''}${selectedId ? ' whatsapp-inbox--selected' : ''}`}
+          style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}
+        >
           {showThreadList && <ThreadList />}
           <ThreadDetail />
         </div>

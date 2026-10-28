@@ -13,6 +13,8 @@ export default function NewMessageModal() {
     setShowNewModal,
     newPhone,
     setNewPhone,
+    newRecipients = [],
+    setNewRecipients = () => {},
     newBody,
     setNewBody,
     newSending,
@@ -32,9 +34,11 @@ export default function NewMessageModal() {
     // route the "manage templates" links to their own templates surface.
     // Wellness's WhatsAppThreads.jsx doesn't set it → default preserved.
     templatesPath,
+    isGeneric = false,
   } = useWhatsAppThreads();
 
   const tplPath = templatesPath || '/wellness/whatsapp/templates';
+  const recipientKey = (recipient) => recipient.phone.replace(/\D/g, '');
 
   if (!showNewModal) return null;
 
@@ -53,9 +57,9 @@ export default function NewMessageModal() {
         style={{
           width: '100%', maxWidth: 480,
           padding: '1.5rem', borderRadius: 12,
-          background: 'var(--surface-color)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
+          background: isGeneric ? 'var(--modal-bg, #fff)' : 'var(--surface-color)',
+          backdropFilter: isGeneric ? 'none' : 'blur(20px)',
+          WebkitBackdropFilter: isGeneric ? 'none' : 'blur(20px)',
           color: 'var(--text-primary)',
           border: '1px solid var(--border-color)',
         }}
@@ -82,17 +86,53 @@ export default function NewMessageModal() {
           has messaged you in the last 24 hours — otherwise use an approved template.
         </p>
 
-        <label style={{ display: 'block', marginBottom: '0.75rem', position: 'relative' }}>
-          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
-            Phone or pick a contact
-          </span>
+        <div style={{ display: 'block', marginBottom: '0.75rem', position: 'relative' }}>
+          <label htmlFor="new-whatsapp-recipient" style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
+            {isGeneric ? 'Phone or pick contacts' : 'Phone or pick a contact'}{isGeneric && <span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span>}
+          </label>
+          {isGeneric && newRecipients.length > 0 && (
+            <div
+              aria-label="Selected recipients"
+              style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}
+            >
+              {newRecipients.map((recipient) => (
+                <span
+                  key={recipient.id}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    maxWidth: '100%', padding: '4px 7px', borderRadius: 6,
+                    background: 'rgba(79,70,229,0.1)', color: 'var(--text-primary)',
+                    fontSize: '0.76rem',
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {recipient.name} ({recipient.phone})
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${recipient.name}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setNewRecipients((current) => current.filter((item) => recipientKey(item) !== recipientKey(recipient)))}
+                    disabled={newSending}
+                    style={{
+                      display: 'flex', padding: 0, border: 0, background: 'transparent',
+                      color: 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0,
+                    }}
+                  >
+                    <X size={13} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <input
+            id="new-whatsapp-recipient"
             type="text"
             value={newPhone}
             onChange={(e) => { setNewPhone(e.target.value); setPickerOpen(true); }}
             onFocus={() => setPickerOpen(true)}
             onBlur={() => setTimeout(() => setPickerOpen(false), 150)}
-            placeholder="Type a name or phone…"
+            placeholder={isGeneric && newRecipients.length > 0 ? 'Add another contact…' : 'Type a name or phone…'}
             className="input-field"
             style={{ width: '100%', fontSize: '0.9rem' }}
             disabled={newSending}
@@ -118,10 +158,23 @@ export default function NewMessageModal() {
                 {filtered.map((o) => (
                   <div
                     key={o.id}
-                    onMouseDown={(e) => {
-                      e.preventDefault(); // prevent blur before click registers
-                      setNewPhone(o.phone);
-                      setPickerOpen(false);
+                    role={isGeneric ? 'option' : undefined}
+                    aria-selected={isGeneric ? newRecipients.some((recipient) => recipientKey(recipient) === recipientKey(o)) : undefined}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (isGeneric) {
+                        setNewRecipients((current) => {
+                          const selected = current.some((recipient) => recipientKey(recipient) === recipientKey(o));
+                          return selected
+                            ? current.filter((recipient) => recipientKey(recipient) !== recipientKey(o))
+                            : [...current, o];
+                        });
+                        setNewPhone('');
+                        setPickerOpen(true);
+                      } else {
+                        setNewPhone(o.phone);
+                        setPickerOpen(false);
+                      }
                     }}
                     style={{
                       padding: '0.55rem 0.8rem',
@@ -148,14 +201,14 @@ export default function NewMessageModal() {
                       color: o.source === 'patient' ? '#10b981' : '#3b82f6',
                       textTransform: 'uppercase', letterSpacing: '0.04em',
                     }}>
-                      {o.source}
+                      {isGeneric && newRecipients.some((recipient) => recipientKey(recipient) === recipientKey(o)) ? 'Selected' : o.source}
                     </span>
                   </div>
                 ))}
               </div>
             );
           })()}
-        </label>
+        </div>
 
         {/* Use Template toggle */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.75rem' }}>
@@ -179,7 +232,7 @@ export default function NewMessageModal() {
           <>
             <label style={{ display: 'block', marginBottom: '0.75rem' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
-                Approved Template
+                Approved Template{isGeneric && <span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span>}
               </span>
               <select
                 value={selectedTemplateName}
@@ -209,10 +262,10 @@ export default function NewMessageModal() {
                   <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.6rem 0.8rem', marginBottom: '0.75rem', fontSize: '0.82rem', whiteSpace: 'pre-wrap' }}>
                     {tpl.body}
                   </div>
-                  {templateParams.map((val, idx) => (
+                  {!isGeneric && templateParams.map((val, idx) => (
                     <label key={idx} style={{ display: 'block', marginBottom: '0.5rem' }}>
                       <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
-                        Variable {`{{${idx + 1}}}`}
+                        Variable {`{{${idx + 1}}}`}{isGeneric && <span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span>}
                       </span>
                       <input
                         value={val}
@@ -234,7 +287,7 @@ export default function NewMessageModal() {
         ) : (
           <label style={{ display: 'block', marginBottom: '0.75rem' }}>
             <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>
-              Message
+              Message{isGeneric && <span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span>}
             </span>
             <textarea
               value={newBody}
@@ -272,14 +325,14 @@ export default function NewMessageModal() {
             onClick={sendNewMessage}
             disabled={
               newSending ||
-              !newPhone.trim() ||
+              (isGeneric ? newRecipients.length === 0 && !newPhone.trim() : !newPhone.trim()) ||
               // Template mode validates the picked template + every
               // {{n}} variable; free-form mode validates the body. Mirrors
               // the same checks in sendNewMessage. The old condition always
               // required newBody, so template sends (body empty by design)
               // left the button permanently disabled.
               (useTemplate
-                ? (!selectedTemplateName || templateParams.some((p) => !p.trim()))
+                ? (!selectedTemplateName || (!isGeneric && templateParams.some((p) => !p.trim())))
                 : !newBody.trim())
             }
             style={{

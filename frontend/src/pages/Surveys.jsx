@@ -442,7 +442,7 @@ export default function Surveys() {
       return { score: String(i), count: Number(entry) || 0 };
     });
     return (
-      <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.4s ease-out' }}>
+      <div style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.4s ease-out' }}>
         <button
           onClick={closeSurvey}
           className="btn-secondary"
@@ -780,7 +780,7 @@ export default function Surveys() {
 
   // ── List view ────────────────────────────────────────────────
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -1274,7 +1274,7 @@ function MultiQuestionDetail({ survey, stats, submissions, onBack, onSend, onExp
   // navigates back to the survey list (and stays scoped per-survey).
   const [openSubmission, setOpenSubmission] = useState(null);
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.4s ease-out' }}>
+    <div style={{ padding: '2rem', minWidth: 0, maxWidth: '100%', animation: 'fadeIn 0.4s ease-out' }}>
       <button
         onClick={onBack}
         className="btn-secondary"

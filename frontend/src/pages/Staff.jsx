@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useContext, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPortal } from "react-dom";
 import { fetchApi } from "../utils/api";
@@ -311,6 +311,24 @@ function GenericStaffActionsMenu({
   onDelete,
   onPermissions,
 }) {
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!anchor || !menuRef.current) return;
+    const gap = 4;
+    const margin = 8;
+    const menu = menuRef.current.getBoundingClientRect();
+    const availableBelow = window.innerHeight - anchor.bottom - gap - margin;
+    const availableAbove = anchor.top - gap - margin;
+    const openAbove = menu.height > availableBelow && availableAbove > availableBelow;
+    const top = openAbove ? anchor.top - menu.height - gap : anchor.bottom + gap;
+    setMenuPosition({
+      top: Math.max(margin, Math.min(top, window.innerHeight - menu.height - margin)),
+      left: Math.max(margin, Math.min(anchor.left, window.innerWidth - menu.width - margin)),
+    });
+  }, [anchor]);
+
   const run = (callback) => {
     onClose();
     callback();
@@ -318,17 +336,19 @@ function GenericStaffActionsMenu({
 
   return (
     <div
+      ref={menuRef}
       role="menu"
       aria-label={`Actions for ${member.name || member.email}`}
       data-staff-generic-actions="true"
       onMouseDown={(event) => event.stopPropagation()}
       style={{
         position: "fixed",
-        top: (anchor?.bottom || 0) + 4,
-        left: anchor?.left || 0,
+        top: menuPosition?.top ?? (anchor?.bottom || 0) + 4,
+        left: menuPosition?.left ?? anchor?.left ?? 0,
+        visibility: menuPosition ? "visible" : "hidden",
         zIndex: 2000,
         minWidth: "9.5rem",
-        maxHeight: "min(70vh, 20rem)",
+        maxHeight: "min(70vh, 20rem, calc(100dvh - 16px))",
         overflowY: "auto",
         display: "flex",
         flexDirection: "column",
@@ -1368,8 +1388,9 @@ export default function Staff() {
       style={{
         padding: "2rem",
         height: "100%",
+        boxSizing: "border-box",
         minWidth: isTravel ? 0 : undefined,
-        overflowY: "auto",
+        overflowY: isTravel || isWellness ? "auto" : "visible",
         overflowX: isTravel ? "hidden" : undefined,
         animation: "fadeIn 0.5s ease-out",
       }}
@@ -1793,7 +1814,7 @@ export default function Staff() {
       <div
         className={isTravel ? "card travel-staff-card" : "card staff-team-card"}
         style={{
-          padding: "2rem",
+          padding: "clamp(0.75rem, 2vw, 2rem)",
           minWidth: isTravel ? 0 : undefined,
           overflow: isTravel ? "hidden" : undefined,
         }}
@@ -2107,25 +2128,27 @@ export default function Staff() {
             style={isTravel || isWellness ? {
               width: "100%",
               minWidth: 0,
-              maxHeight: "calc(100vh - 28rem)",
-              overflowY: "auto",
-              overflowX: isTravel ? "hidden" : "auto",
+              maxHeight: filteredStaff.length > STAFF_PAGE_SIZE ? "min(60dvh, 560px)" : "none",
+              // The row window advances when this container scrolls, so it
+              // must have a bounded height whenever more rows are available.
+              overflowY: isTravel || isWellness ? "auto" : "visible",
+              overflowX: "hidden",
             } : {
               width: "100%",
               minWidth: 0,
-              maxHeight: "min(60dvh, 560px)",
+              maxHeight: filteredStaff.length > STAFF_PAGE_SIZE ? "min(60dvh, 560px)" : "none",
               overflowX: "auto",
-              overflowY: "auto",
+              overflowY: filteredStaff.length > STAFF_PAGE_SIZE ? "auto" : "clip",
               overscrollBehavior: "contain",
             }}
           >
             {!isTravel && !isWellness && <style>{genericStaffTableStyles}</style>}
             <table
-              className={!isTravel && !isWellness ? "staff-generic-resizable-table" : undefined}
+              className={isWellness ? "staff-wellness-table" : !isTravel ? "staff-generic-resizable-table" : undefined}
               style={{
                 width: "100%",
                 minWidth: !isTravel && !isWellness ? 1000 : undefined,
-                tableLayout: !isTravel && !isWellness ? "fixed" : undefined,
+                tableLayout: isWellness || (!isTravel && !isWellness) ? "fixed" : undefined,
                 borderCollapse: "collapse",
                 fontSize: "0.875rem",
               }}
@@ -2267,6 +2290,7 @@ export default function Staff() {
                                   setGenericActionsAnchor(null);
                                 } else {
                                   setGenericActionsAnchor({
+                                    top: rect.top,
                                     bottom: rect.bottom,
                                     left: rect.left,
                                   });
@@ -2471,7 +2495,7 @@ export default function Staff() {
           same overlay/card chrome. On success the new user can log in with
           the chosen email + password; their role decides the dashboard
           variant rendered on first nav to /dashboard. */}
-      {creating && (
+      {creating && typeof document !== "undefined" && createPortal(
         <div
           data-testid="staff-create-modal"
           onClick={(e) => {
@@ -2747,7 +2771,8 @@ export default function Staff() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Reset-password modal. Keeps the existing email reset-link flow and

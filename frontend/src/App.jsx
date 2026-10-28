@@ -45,18 +45,17 @@ import {
   VALID_THEME_VALUES,
   resolveThemePreference,
 } from "./utils/themePreference";
-// Pickup/Plot pages are kept in the main authenticated bundle so navigating
-// between this workflow's sections never replaces the mounted Layout with the
-// global Suspense fallback while a page chunk downloads.
-import PickupPlotInventory from "./pages/PickupPlotInventory";
-import PickupInventory from "./pages/PickupInventory";
-import TransportPersons from "./pages/TransportPersons";
-import PlotBrokers from "./pages/PlotBrokers";
-import BillingPersons from "./pages/BillingPersons";
-import PickupCustomers from "./pages/PickupCustomers";
-import PickupPlotWorkAssignments from "./pages/PickupPlotWorkAssignments";
-import TransportDriverWorkspace from "./components/TransportDriverWorkspace";
-import BrokerCustomerWorkspace from "./components/BrokerCustomerWorkspace";
+// Layout owns the route-content Suspense boundary, so page chunks can load
+// independently without unmounting the navigation shell.
+const PickupPlotInventory = lazy(() => import("./pages/PickupPlotInventory"));
+const PickupInventory = lazy(() => import("./pages/PickupInventory"));
+const TransportPersons = lazy(() => import("./pages/TransportPersons"));
+const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
+const BillingPersons = lazy(() => import("./pages/BillingPersons"));
+const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
+const PickupPlotWorkAssignments = lazy(() => import("./pages/PickupPlotWorkAssignments"));
+const TransportDriverWorkspace = lazy(() => import("./components/TransportDriverWorkspace"));
+const BrokerCustomerWorkspace = lazy(() => import("./components/BrokerCustomerWorkspace"));
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
 
 const Landing = lazy(() => import("./pages/Landing"));

@@ -109,6 +109,9 @@ prisma.payment = prisma.payment || {};
 prisma.payment.create = vi.fn();
 prisma.payment.findMany = vi.fn();
 prisma.payment.aggregate = vi.fn();
+prisma.plotInvoiceItem.findMany = vi.fn();
+prisma.plotSite.findMany = vi.fn();
+prisma.plotBooking.findMany = vi.fn();
 
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
@@ -151,6 +154,9 @@ beforeEach(() => {
   prisma.payment.create.mockReset();
   prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.aggregate.mockReset();
+  prisma.plotInvoiceItem.findMany.mockReset().mockResolvedValue([]);
+  prisma.plotSite.findMany.mockReset().mockResolvedValue([]);
+  prisma.plotBooking.findMany.mockReset().mockResolvedValue([]);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.fieldPermission.findMany.mockReset().mockResolvedValue([]);
@@ -418,12 +424,25 @@ describe('catch-all delegation through billingRouter', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
+    expect(prisma.plotInvoiceItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, invoiceId: { in: [1, 2] }, itemType: 'PLOT' } }));
     // Tenant-scoping pin survives the router-as-handler indirection.
     expect(prisma.invoice.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tenantId: 42 },
       })
     );
+  });
+
+  test('GET / hydrates plot invoices through the v1 alias using tenant-scoped queries', async () => {
+    prisma.invoice.findMany.mockResolvedValue([{ id: 1, tenantId: 42, amount: 100, status: 'UNPAID' }]);
+    prisma.plotInvoiceItem.findMany.mockResolvedValue([{ invoiceId: 1, plotBookingId: 5, itemId: 8, description: 'North Avenue' }]);
+    prisma.plotSite.findMany.mockResolvedValue([{ id: 8, name: 'North Avenue', plotNumber: '24' }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{ id: 5, bookingNumber: 'BOOK-5', plotSiteId: 8 }]);
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/v1/invoices');
+    expect(res.status).toBe(200);
+    expect(res.body[0].plotDetails).toMatchObject({ plotId: 8, plotNumber: '24', siteName: 'North Avenue', bookingId: 5, bookingNumber: 'BOOK-5' });
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, id: { in: [8] } } }));
+    expect(prisma.plotBooking.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 42, id: { in: [5] } } }));
   });
 
   test('GET /:id returns tenant-scoped invoice (billing.GET /:id handler)', async () => {

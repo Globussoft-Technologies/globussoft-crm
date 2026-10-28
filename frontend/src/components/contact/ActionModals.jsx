@@ -5,6 +5,7 @@ import { fetchApi } from '../../utils/api';
 import './ContactProfile.css';
 import { useNotify } from '../../utils/notify';
 import { tenantCurrency } from '../../utils/money';
+import { generatedDealName } from '../../utils/dealDisplay';
 import {
   createDeal, createTask, postActivity, sendEmail, sendSms, sendWhatsapp,
   syncMeetingToCalendar, updateDeal,
@@ -685,6 +686,9 @@ export function MeetingModal({ contact, onClose, onDone }) {
     setSaving(true);
     try {
       const details = [
+        `Meeting: ${title.trim()}`,
+        `Scheduled: ${fromDate}${fromTime ? ` ${fromTime}` : ''}`,
+        attendeeList.length ? `Attendees: ${attendeeList.map((item) => item.label).join(', ')}` : '',
         description.trim(),
         outcome.trim() ? `Outcome: ${outcome.trim()}` : '',
         meetingNotes.trim() ? `Meeting notes: ${meetingNotes.trim()}` : '',
@@ -1077,7 +1081,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const [account, setAccount] = useState(initialContact?.company || '');
   const [accountTouched, setAccountTouched] = useState(false);
   const [dealType, setDealType] = useState(deal?.dealType || (isGeneric ? 'New Business' : ''));
-  const [title, setTitle] = useState(deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? 'New Deal' : '')));
+  const [title, setTitle] = useState(deal && isGeneric ? generatedDealName(deal) : (deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? 'New Deal' : ''))));
   const [titleTouched, setTitleTouched] = useState(Boolean(deal?.title));
   const [currency, setCurrency] = useState(deal?.currency || tenantCurrency());
   const [amount, setAmount] = useState(deal?.amount ?? '');
@@ -1279,6 +1283,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
         probability: Number(probability) || 50,
         currency,
       };
+      if (!editing && isGeneric) payload.autoName = true;
       if (dealType) payload.dealType = dealType;
       if (contactId) payload.contactId = contactId;
       if (pipelineId) payload.pipelineId = Number(pipelineId);

@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Label, LineChart, Line } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, formatMoneyCompact, currencySymbol, tenantCurrency, tenantLocale } from '../utils/money';
+import { convertCurrency } from '../utils/currency';
+import { getReportMetricOptions } from '../utils/reportMetrics';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
 import { useSearchParams } from "react-router-dom";
 import { readDateRange, setDateRangeParams } from '../utils/dateRangeNavigation';
+import { AuthContext } from '../App';
 
-import { PieChart as PieChartIcon, CircleDot, Upload, Filter, Calendar, Table, BarChart3, AreaChart as AreaChartIcon, Clock, Mail } from 'lucide-react';
+import { PieChart as PieChartIcon, CircleDot, Upload, Filter, Calendar, Table, BarChart3, AreaChart as AreaChartIcon, Clock, Mail, ArrowLeft } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 const STAGE_COLORS = {
@@ -17,6 +20,20 @@ const STAGE_COLORS = {
 };
 function chartColor(name, index) {
   return STAGE_COLORS[String(name || '').toLowerCase().trim().replace(/\s+/g, '-')] || COLORS[index % COLORS.length];
+}
+function pieSliceLabel({ cx, cy, midAngle, outerRadius, name }) {
+  const angle = (-midAngle * Math.PI) / 180;
+  const labelRadius = outerRadius + 18;
+  const x = cx + labelRadius * Math.cos(angle);
+  const y = cy + labelRadius * Math.sin(angle);
+  const text = String(name || 'Unknown');
+  const label = text.length > 22 ? `${text.slice(0, 21)}…` : text;
+
+  return (
+    <text x={x} y={y} textAnchor={x >= cx ? 'start' : 'end'} dominantBaseline="central" fill="var(--text-primary)" fontSize="11">
+      {label}
+    </text>
+  );
 }
 function normalizeReportStage(name) {
   const key = String(name || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
@@ -48,14 +65,6 @@ function preventManualDateEntry(event) {
   }
   event.preventDefault();
 }
-
-// #127 followup: respect tenant currency rather than hard-coding "$".
-const METRIC_OPTIONS = [
-  { value: 'revenue', label: `Revenue (${currencySymbol()})`, group: 'Deals' },
-  { value: 'count', label: 'Deal Count', group: 'Deals' },
-  { value: 'win_rate', label: 'Win/Loss Rate', group: 'Deals' },
-  { value: 'invoices', label: 'Invoice Status', group: 'Financial' },
-];
 
 const PIE_VISUALIZATION_OPTIONS = [
   { value: 'pie', label: 'Pie Chart', Icon: PieChartIcon },
@@ -148,6 +157,8 @@ function reportDatePresetForRange(from, to) {
 
 export default function Reports() {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const [searchParams, setSearchParams] = useSearchParams();
   const { from: startDate, to: endDate } = readDateRange(searchParams);
   const [datePreset, setDatePreset] = useState(() => reportDatePresetForRange(startDate, endDate));
@@ -255,19 +266,37 @@ export default function Reports() {
             merged.set(key, current);
           });
           const selectedType = dealTypes.find(type => type.name === dealType);
-          const configuredStages = dealType ? (selectedType?.stages || []) : [];
-          const stageData = configuredStages.length
+          // Generic CRM's "All Deal Types" view must include the complete
+          // stage vocabulary across every configured deal type, including
+          // stages that currently have no records. Keep the configured order
+          // and append any legacy/custom stages returned by the API.
+          const configuredStages = isGeneric
+            ? (dealType
+              ? (selectedType?.stages || [])
+              : dealTypes.flatMap(type => Array.isArray(type?.stages) ? type.stages : []))
+            : [];
+          const configuredStageMap = new Map();
+          configuredStages.forEach(stage => {
+            const stageName = typeof stage === 'string' ? stage : stage?.name;
+            const key = reportStageKey(stageName);
+            if (stageName && !configuredStageMap.has(key)) {
+              configuredStageMap.set(key, { name: stageName, value: 0 });
+            }
+          });
+          const includeUnconfiguredStages = !dealType;
+          const stageData = configuredStageMap.size
             ? [
-                ...configuredStages.map(stage => {
-                  const existing = merged.get(reportStageKey(stage.name));
-                  return existing || { name: stage.name, value: 0 };
+                ...Array.from(configuredStageMap.entries()).map(([key, stage]) => {
+                  return merged.get(key) || stage;
                 }),
-                ...[...merged.entries()]
-                  .filter(([key]) => !configuredStages.some(stage => reportStageKey(stage.name) === key))
-                  .map(([, value]) => value),
+                ...(includeUnconfiguredStages
+                  ? [...merged.entries()]
+                    .filter(([key]) => !configuredStageMap.has(key))
+                    .map(([, value]) => value)
+                  : []),
               ]
             : [...merged.values()];
-          setData(configuredStages.length ? stageData : stageData.sort((a, b) => {
+          setData(configuredStageMap.size ? stageData : stageData.sort((a, b) => {
             const ai = REPORT_STAGE_ORDER.indexOf(String(a.name).toUpperCase());
             const bi = REPORT_STAGE_ORDER.indexOf(String(b.name).toUpperCase());
             return (ai < 0 ? REPORT_STAGE_ORDER.length : ai) - (bi < 0 ? REPORT_STAGE_ORDER.length : bi);
@@ -384,9 +413,18 @@ export default function Reports() {
   const formattedTotalValue = isMoneyMetric
     ? formatMoney(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
     : totalValue;
+  const aggregateTotalValue = isMoneyMetric && formattedTotalValue.length > 15
+    ? formatMoneyCompact(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
+    : formattedTotalValue;
   const donutTotalValue = isMoneyMetric
     ? formatMoneyCompact(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
     : totalValue;
+  const chartMinWidth = (chartType === 'bar' || chartType === 'line') && data.length > 6
+    ? `${Math.max(900, data.length * 92)}px`
+    : 0;
+  const stageAxisTick = data.length > 6
+    ? { fontSize: 11, angle: -32, textAnchor: 'end' }
+    : { fontSize: 11 };
 
   const exportFile = (format) => {
     const token = getAuthToken();
@@ -414,6 +452,11 @@ export default function Reports() {
 
   const needsGroupBy = metric === 'revenue' || metric === 'count' || metric === 'win_rate';
   const visualizationOptions = VISUALIZATION_OPTIONS_BY_METRIC[metric] || VISUALIZATION_OPTIONS_BY_METRIC.revenue;
+  const isPieVisualization = chartType === 'pie' || chartType === 'donut';
+  const visualizationData = isPieVisualization
+    ? data.filter(entry => Number(entry.value) > 0)
+    : data;
+  const aggregateAmountFontSize = `${Math.max(0.65, Math.min(0.9, 9.5 / Math.max(aggregateTotalValue.length, 1)))}rem`;
 
   useEffect(() => {
     const options = VISUALIZATION_OPTIONS_BY_METRIC[metric] || VISUALIZATION_OPTIONS_BY_METRIC.revenue;
@@ -421,10 +464,14 @@ export default function Reports() {
   }, [metric, chartType]);
 
   return (
-    <div className="reports-page" style={{ padding: '0 2rem 0.5rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="reports-page" style={{ padding: 'clamp(1rem, 3vw, 2rem) 2rem 0.5rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header className="reports-page__header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>Reports & Analytics</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {isGeneric && <button type="button" aria-label="Go back" onClick={() => window.history.back()} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer' }}><ArrowLeft size={16} /></button>}
+            <BarChart3 size={22} color="var(--primary-color, var(--accent-color))" aria-hidden="true" />
+            <h1 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>Reports & Analytics</h1>
+          </div>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Business intelligence dashboard — real-time revenue, pipeline, and deal analytics.</p>
         </div>
         <div className="reports-page__header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -491,7 +538,7 @@ export default function Reports() {
             <div>
               <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Select Metric</label>
               <div role="group" aria-label="Select Metric" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
-                {METRIC_OPTIONS.map(m => (
+                {getReportMetricOptions(displayCurrency).map(m => (
                   <button
                     key={m.value}
                     type="button"
@@ -514,16 +561,16 @@ export default function Reports() {
                 ))}
               </div>
             </div>
-            <div className="report-aggregate-card" style={{ marginTop: 'auto', padding: '1.5rem', borderRadius: '12px' }}>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: '0 0 0.75rem' }}>Aggregate Total</p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0, flexWrap: 'wrap' }}>
+            <div className="report-aggregate-card" style={{ '--report-aggregate-font-size': aggregateAmountFontSize, alignSelf: 'stretch', width: '100%', boxSizing: 'border-box', margin: 'auto 0', padding: '1.5rem', borderRadius: '12px', textAlign: 'center', overflow: 'hidden' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', margin: '0 0 0.75rem', textAlign: 'center' }}>Aggregate Total</p>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', minWidth: 0, width: '100%' }}>
                 {isMoneyMetric && currencies.length > 1 && (
-                  <select aria-label="Display currency" value={displayCurrency} onChange={e => setDisplayCurrency(e.target.value)} style={{ flex: '0 0 auto', padding: '0.3rem 0.35rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '0.7rem' }}>
+                  <select aria-label="Display currency" value={displayCurrency} onChange={e => setDisplayCurrency(e.target.value)} style={{ display: 'block', alignSelf: 'center', width: '76px', height: '30px', padding: '0 0.3rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '0.68rem' }}>
                     {conversionCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code}</option>)}
                   </select>
                 )}
-                <h2 style={{ minWidth: 0, margin: 0, whiteSpace: 'nowrap', fontSize: '1.1rem', letterSpacing: '-0.03em', fontWeight: 'bold', color: 'var(--accent-color)' }}>
-                  {formattedTotalValue}
+                <h2 style={{ alignSelf: 'center', display: 'block', boxSizing: 'border-box', width: '100%', minWidth: 0, maxWidth: '100%', margin: 0, padding: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip', lineHeight: 1.15, fontSize: aggregateAmountFontSize, letterSpacing: '-0.04em', fontWeight: 'bold', color: 'var(--accent-color)', textAlign: 'center' }}>
+                  {aggregateTotalValue}
                 </h2>
               </div>
             </div>
@@ -579,7 +626,7 @@ export default function Reports() {
             </div>
 
             <div className="reports-page__chart-scroll">
-            <div className="reports-page__chart-stage" style={{ position: 'relative', height: '450px', minHeight: '350px', minWidth: 0 }}>
+            <div className="reports-page__chart-stage" style={{ position: 'relative', height: '450px', minHeight: '350px', minWidth: chartMinWidth }}>
               {loading && data.length > 0 && (
                 <div style={{ position: 'absolute', top: '0.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 2, padding: '0.35rem 0.7rem', borderRadius: '999px', background: 'var(--surface-color)', color: 'var(--text-secondary)', fontSize: '0.75rem', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)', pointerEvents: 'none' }}>
                   Refreshing data...
@@ -587,14 +634,14 @@ export default function Reports() {
               )}
               {loading && data.length === 0 ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>Crunching metrics...</div>
-              ) : data.length === 0 ? (
+              ) : visualizationData.length === 0 ? (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>No data available for this query.</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   {chartType === 'bar' ? (
                     <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                      <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
+                      <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} interval={0} height={data.length > 6 ? 62 : 30} tick={stageAxisTick} />
                       {/* #462 follow-up: mirror the #439 OwnerDashboard fix —
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
@@ -621,8 +668,19 @@ export default function Reports() {
                     </BarChart>
                   ) : chartType === 'pie' || chartType === 'donut' ? (
                     <PieChart>
-                      <Pie data={data} cx="36%" cy="50%" innerRadius={chartType === 'donut' ? 112 : 0} outerRadius={165} paddingAngle={5} dataKey="value" nameKey="name" label={false}>
-                        {data.map((entry, index) => (
+                      <Pie
+                        data={visualizationData}
+                        cx="36%"
+                        cy="50%"
+                        innerRadius={chartType === 'donut' ? 112 : 0}
+                        outerRadius={165}
+                        paddingAngle={0}
+                        dataKey="value"
+                        nameKey="name"
+                        label={visualizationData.length <= 6 ? pieSliceLabel : false}
+                        labelLine={visualizationData.length <= 6}
+                      >
+                        {visualizationData.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={chartColor(entry.name, index)} />
                         ))}
                       </Pie>
@@ -641,15 +699,16 @@ export default function Reports() {
                           }}
                         />
                       )}
-                      <Legend
+                      {visualizationData.length > 0 && (
+                        <Legend
                         layout="vertical"
                         align="right"
                         verticalAlign="middle"
                         wrapperStyle={{ fontSize: '0.8rem', maxWidth: '42%', overflow: 'hidden' }}
                         formatter={(name) => {
-                          const row = data.find((entry) => String(entry.name) === String(name));
+                          const row = visualizationData.find((entry) => String(entry.name) === String(name));
                           const value = Math.max(0, Number(row?.value) || 0);
-                          const total = data.reduce((sum, entry) => sum + Math.max(0, Number(entry.value) || 0), 0);
+                          const total = visualizationData.reduce((sum, entry) => sum + Math.max(0, Number(entry.value) || 0), 0);
                           const percent = total > 0 ? Math.round((value / total) * 100) : 0;
                           const groupLabel = 'Deal Stage';
                           const label = `${groupLabel}: ${String(name || 'Unknown')}`;
@@ -657,12 +716,13 @@ export default function Reports() {
                           return `${shortLabel}${total > 0 ? ` (${percent}%)` : ''}`;
                         }}
                       />
+                      )}
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                     </PieChart>
                   ) : (
                     <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                      <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
+                      <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} interval={0} height={data.length > 6 ? 62 : 30} tick={stageAxisTick} />
                       {/* #462 follow-up: mirror the #439 OwnerDashboard fix —
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
@@ -720,8 +780,8 @@ export default function Reports() {
             ) : detailData.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No records found for the selected period.</div>
             ) : (
-              <table className="stable-table" style={{ width: '100%', minWidth: 0, borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                <thead>
+              <table className="stable-table reports-page__detail-table" style={{ width: '100%', minWidth: '760px', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', textAlign: 'left', fontSize: '0.85rem', backgroundColor: 'var(--modal-bg, #fff)' }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 20, display: 'table-header-group', backgroundColor: 'var(--modal-bg, #fff)', opacity: 1 }}>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
                       <th

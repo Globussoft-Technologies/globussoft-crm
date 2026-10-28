@@ -1000,8 +1000,13 @@ export default function Settings() {
   };
 
   useEffect(() => {
+    if (isGenericVertical) {
+      setStagesLoading(false);
+      return undefined;
+    }
     fetchStages();
-  }, []);
+    return undefined;
+  }, [isGenericVertical]);
 
   const handleAddStage = async (e) => {
     e.preventDefault();
@@ -1803,8 +1808,9 @@ export default function Settings() {
             <WellnessRoleTypesCard notify={notify} />
           )}
 
-          {/* Pipeline Stages Card */}
-          <div
+          {/* Pipeline Stages are configured dynamically per deal type in
+              Generic CRM. The legacy flat editor remains for other verticals. */}
+          {!isGenericVertical && <div
             className="card settings-pipeline-stages-card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
@@ -1999,7 +2005,7 @@ export default function Settings() {
                 <Plus size={16} /> Add Stage
               </button>
             </form>
-          </div>
+          </div>}
 
           {/* Invite User Card */}
           <div

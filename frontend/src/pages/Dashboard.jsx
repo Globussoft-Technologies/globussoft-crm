@@ -379,7 +379,7 @@ export default function Dashboard() {
       <div className="dashboard-panels" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
         <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Deals Analytics'}</h3>
           </div>
           <div ref={pipelineChartRef} className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px', minWidth: 0, minHeight: '260px' }}>
             {!hasPipelineData ? (

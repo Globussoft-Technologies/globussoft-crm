@@ -311,6 +311,89 @@ async function hydrateWellnessInvoiceRows(invoices, tenantId) {
   });
 }
 
+async function hydrateGenericPlotInvoiceRows(invoices, tenantId) {
+  if (!Array.isArray(invoices) || invoices.length === 0) return invoices;
+  if (
+    !prisma.plotInvoiceItem?.findMany ||
+    !prisma.plotSite?.findMany ||
+    !prisma.plotBooking?.findMany
+  ) {
+    return invoices;
+  }
+
+  const invoiceIds = invoices.map((invoice) => invoice.id).filter(Boolean);
+  if (invoiceIds.length === 0) return invoices;
+
+  const items = await prisma.plotInvoiceItem.findMany({
+    where: {
+      tenantId,
+      invoiceId: { in: invoiceIds },
+      itemType: "PLOT",
+    },
+    select: {
+      invoiceId: true,
+      plotBookingId: true,
+      itemId: true,
+      description: true,
+    },
+  });
+  if (items.length === 0) return invoices;
+
+  const plotIds = [...new Set(
+    items
+      .map((item) => Number(item.itemId))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )];
+  const bookingIds = [...new Set(
+    items
+      .map((item) => Number(item.plotBookingId))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )];
+  const [plots, bookings] = await Promise.all([
+    plotIds.length
+      ? prisma.plotSite.findMany({
+          where: { tenantId, id: { in: plotIds } },
+          select: {
+            id: true,
+            name: true,
+            plotNumber: true,
+            block: true,
+            referenceCode: true,
+          },
+        })
+      : [],
+    bookingIds.length
+      ? prisma.plotBooking.findMany({
+          where: { tenantId, id: { in: bookingIds } },
+          select: { id: true, bookingNumber: true, plotSiteId: true },
+        })
+      : [],
+  ]);
+  const plotById = new Map(plots.map((plot) => [plot.id, plot]));
+  const bookingById = new Map(bookings.map((booking) => [booking.id, booking]));
+  const itemByInvoiceId = new Map(items.map((item) => [item.invoiceId, item]));
+
+  return invoices.map((invoice) => {
+    const item = itemByInvoiceId.get(invoice.id);
+    if (!item) return invoice;
+    const booking = bookingById.get(item.plotBookingId);
+    const plot = plotById.get(Number(item.itemId) || booking?.plotSiteId);
+    return {
+      ...invoice,
+      plotDetails: {
+        plotId: plot?.id || item.itemId || booking?.plotSiteId || null,
+        plotNumber: plot?.plotNumber || null,
+        siteName: plot?.name || null,
+        block: plot?.block || null,
+        referenceCode: plot?.referenceCode || null,
+        bookingId: booking?.id || item.plotBookingId || null,
+        bookingNumber: booking?.bookingNumber || null,
+        description: item.description || null,
+      },
+    };
+  });
+}
+
 // A wellness visit stores the final amount charged separately from the active
 // service catalogue. When an invoice is created from that visit, preserve the
 // itemized catalogue rows while reconciling the service row to the persisted
@@ -791,6 +874,9 @@ router.get("/", verifyToken, async (req, res) => {
     }
     if (isWellnessRequest(req) && !isSummary) {
       invoices = await hydrateWellnessInvoiceRows(invoices, req.user.tenantId);
+    }
+    if (isGenericRequest(req) && !isSummary) {
+      invoices = await hydrateGenericPlotInvoiceRows(invoices, req.user.tenantId);
     }
     if (!isSummary && invoices.length > 0) {
       const payments = (await prisma.payment.findMany({

@@ -150,7 +150,8 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/dashboards', label: 'Dashboards', description: 'Drag-and-drop dashboard builder', managerOnly: true, sidebarHidden: true },
   { path: '/custom-reports', label: 'Custom Reports', description: 'Build custom data reports', managerOnly: true, sidebarHidden: true },
   { path: '/approvals', label: 'Approvals', description: 'Pending approvals queue', managerOnly: true, sidebarHidden: true },
-  { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
+  // Generic CRM: Lead Routing is intentionally removed from search/navigation.
+  // { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
   { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, requiredPermission: { module: 'territories', action: 'read' }, parent: 'Team & Territories' },
   { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing', description: 'One-shot marketing campaigns', managerOnly: true },
@@ -214,7 +215,7 @@ const GENERIC_PAGE_PERMISSION_FALLBACK = {
   '/dashboards': ['dashboards', 'read'],
   '/custom-reports': ['reports', 'write'],
   '/approvals': ['staff', 'manage'],
-  '/lead-routing': ['leads', 'read'],
+  // '/lead-routing': ['leads', 'read'], // Generic CRM page intentionally hidden.
   '/lead-scoring': ['lead_scoring', 'read'],
   '/lead-reports': ['reports', 'read'],
   '/marketing': ['marketing', 'read'],
@@ -314,6 +315,11 @@ const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
   '/gmail',
 ]);
 
+// Entries returned by /api/pages/me are merged with the local catalogue.
+// Keep this deny-list Generic-only so a stale/server-provided entry cannot
+// make the intentionally hidden Lead Routing page appear in search again.
+const GENERIC_HIDDEN_PAGE_PATHS = new Set(['/lead-routing']);
+
 export function isTenantPageHidden(path, hiddenPagePaths = []) {
   if (!path || !Array.isArray(hiddenPagePaths)) return false;
   return hiddenPagePaths.some(
@@ -399,6 +405,9 @@ export function filterSidebarPages(
 ) {
   if (!Array.isArray(pages)) return [];
   const tenantVisiblePages = pages.filter((page) => !isTenantPageHidden(page?.path, hiddenPagePaths));
+  if (vertical === 'generic' || vertical == null) {
+    return tenantVisiblePages.filter((page) => !GENERIC_HIDDEN_PAGE_PATHS.has(page?.path));
+  }
   if (vertical !== 'travel') return tenantVisiblePages;
 
   const normalizedSubBrandAccess = normalizeSubBrandAccess(subBrandAccess);

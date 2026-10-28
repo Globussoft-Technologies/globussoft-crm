@@ -157,6 +157,8 @@
 .pickup-assigned-plot-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:.8rem .9rem; border:1px solid var(--border-color); border-radius:10px; }
 .pickup-assigned-plot-item span { min-width:0; overflow-wrap:anywhere; }
 .pickup-assigned-plot-item strong { white-space:nowrap; }
+.pickup-assigned-plots-header-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
+.pickup-assigned-plots-header-actions button { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
 .pickup-plot-help { margin:0; color:var(--text-secondary); font-size:.8rem; }
 .pickup-plot-options { display:grid; gap:8px; max-height:360px; overflow:auto; padding:2px; }
 .pickup-plot-option { display:flex; align-items:center; gap:10px; padding:.75rem; border:1px solid var(--border-color); border-radius:10px; cursor:pointer; }

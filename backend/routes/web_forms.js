@@ -1435,6 +1435,25 @@ async function loadLeadFieldDefinitions(tenantId) {
   });
 }
 
+async function buildPublicFormPayload(form, origin) {
+  const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
+  const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
+  if (supportsAdvancedWebFormFeatures(form.scope || "generic")) {
+    const recaptchaSiteKey = form.scope === "travel"
+      ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
+      : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
+    const recaptchaSiteFallback = form.scope === "travel"
+      ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
+      : process.env.RECAPTCHA_SITE_KEY || "";
+    const tenantRecaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, {
+      coerce: String,
+      fallback: recaptchaSiteFallback,
+    }));
+    publicPayload.settings.recaptchaSiteKey = tenantRecaptchaSiteKey || recaptchaSiteFallback;
+  }
+  return publicPayload;
+}
+
 router.get("/public/:slug", async (req, res) => {
   try {
     const scope = normalizeScope(req.query?.scope);
@@ -1454,25 +1473,7 @@ router.get("/public/:slug", async (req, res) => {
     // Form configuration is editable by CRM users. Do not let an embedded
     // browser reuse an older public configuration after a successful save.
     res.set("Cache-Control", "no-store");
-    const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
-    const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
-    // The builder can enable reCAPTCHA in an unsaved preview draft. Return the
-    // public site key for advanced public forms even when the stored form has
-    // CAPTCHA disabled, so the preview can render the draft widget.
-    if (supportsAdvancedWebFormFeatures(form.scope || "generic")) {
-      const recaptchaSiteKey = form.scope === "travel"
-        ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
-        : KEYS.GENERIC_RECAPTCHA_SITE_KEY;
-      const recaptchaSiteFallback = form.scope === "travel"
-        ? process.env.TRAVEL_RECAPTCHA_SITE_KEY || ""
-        : process.env.RECAPTCHA_SITE_KEY || "";
-      const tenantRecaptchaSiteKey = textOr(await getSetting(form.tenantId, recaptchaSiteKey, {
-        coerce: String,
-        fallback: recaptchaSiteFallback,
-      }));
-      // An empty tenant override should not mask a valid server-level key.
-      publicPayload.settings.recaptchaSiteKey = tenantRecaptchaSiteKey || recaptchaSiteFallback;
-    }
+    const publicPayload = await buildPublicFormPayload(form, origin);
     res.json(publicPayload);
   } catch (err) {
     console.error("[web-forms/public] load error:", err && err.message);
@@ -2656,3 +2657,5 @@ module.exports.defaultSettings = defaultSettings;
 module.exports.normalizeFields = normalizeFields;
 
 module.exports.isConditionalFieldVisible = isConditionalFieldVisible;
+
+module.exports.buildPublicFormPayload = buildPublicFormPayload;

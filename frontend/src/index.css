@@ -7823,6 +7823,141 @@ body[data-vertical="generic"] .cpq-deal-list {
   flex-wrap: wrap;
 }
 
+.lead-reports-page__overview-workspace {
+  display: grid;
+  grid-template-columns: minmax(210px, 250px) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.lead-reports-page__query-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  align-self: start;
+}
+
+.lead-reports-page__query-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.lead-reports-page__query-title svg {
+  color: var(--primary-color, var(--accent-color));
+}
+
+.lead-reports-page__query-label {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.lead-reports-page__metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.lead-reports-page__metric-button {
+  width: 100%;
+  min-height: 38px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.lead-reports-page__metric-button--active {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--primary-color, var(--accent-color));
+  color: #fff;
+}
+
+.lead-reports-page__aggregate {
+  margin-top: 0;
+  padding-top: 1.2rem;
+  text-align: center;
+}
+
+.lead-reports-page__aggregate span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.lead-reports-page__aggregate strong {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--primary-color, var(--accent-color));
+  font-size: 1.65rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lead-reports-page__aggregate small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.lead-reports-page__chart-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.lead-reports-page__chart-type {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.lead-reports-page__chart-type:hover,
+.lead-reports-page__chart-type:focus-visible {
+  border-color: var(--primary-color, var(--accent-color));
+  color: var(--primary-color, var(--accent-color));
+}
+
+.lead-reports-page__chart-type--active {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--primary-color, var(--accent-color));
+  color: #fff;
+}
+
+.lead-reports-page__chart-type--active:hover,
+.lead-reports-page__chart-type--active:focus-visible {
+  color: #fff;
+}
+
+@media (max-width: 820px) {
+  .lead-reports-page__overview-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .lead-reports-page__metric-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+}
+
 .lead-reports-page__panel-title {
   font-size: 1.05rem;
   font-weight: 600;
@@ -8958,4 +9093,76 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   width: 38px !important;
   height: 38px !important;
   border-radius: 8px !important;
+}
+
+/* Generic Lead Routing is a fixed workspace: the page and column headings
+   stay in place while only the API-backed rule rows scroll. Other verticals
+   retain the shared page/card behavior. */
+.lead-routing-page--generic {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (min-width: 769px) {
+  .app-main > main.generic-page-content:has(.lead-routing-page--generic) {
+    overflow-y: hidden !important;
+  }
+}
+
+.lead-routing-page--generic > header {
+  flex: 0 0 auto;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic {
+  flex: 1 1 auto;
+  min-height: 0;
+  transform: none !important;
+  transition: none !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic::before {
+  display: none !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic:hover {
+  transform: none !important;
+  border-color: var(--border-color) !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic > .top-scroll-sync,
+.lead-routing-page--generic .lead-routing-table-card--generic .top-scroll-sync__bottom {
+  height: 100%;
+  min-height: 0;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic .top-scroll-sync__bottom {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-color) !important;
+  box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic tbody tr,
+.lead-routing-page--generic .lead-routing-table-card--generic tbody td {
+  animation: none !important;
+  transition: none !important;
+}
+
+.lead-routing-page--generic .lead-routing-table-card--generic tbody tr:hover,
+.lead-routing-page--generic .lead-routing-table-card--generic tbody tr:hover > td {
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
 }

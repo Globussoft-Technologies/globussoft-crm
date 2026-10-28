@@ -2768,7 +2768,10 @@ function renderGenericNav({
         <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly requiredPermission={{ module: "lead_scoring", action: "read" }} />
-        <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} />
+        {/* Generic CRM: Lead Routing is intentionally hidden. Keep the page
+            implementation and API intact so this can be re-enabled without
+            affecting Callified's separate assigning-staff controls. */}
+        {/* <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} /> */}
         <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
       </>, "leads-group")}
 

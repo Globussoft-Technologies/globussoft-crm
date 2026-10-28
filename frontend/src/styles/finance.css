@@ -222,18 +222,79 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
   margin-left: 0 !important;
 }
 
-/* Generic CRM invoice content follows normal page flow so the ledger rows and
-   pagination remain visible without a nested vertical scrollbar. */
+/* Generic CRM keeps the invoice workspace inside the available viewport.
+   Only the live API-backed table rows scroll; Wellness and Travel retain
+   their existing layouts. */
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page {
-  display: block;
-  height: auto;
-  min-height: calc(100dvh - 64px) !important;
-  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+@media (min-width: 769px) {
+  /* The app shell normally lets <main> scroll. On Generic invoices the
+     ledger owns vertical scrolling, so suppress the redundant page bar. */
+  .app-main > main.generic-page-content:has(.invoices-mobile-page.invoices-generic-page) {
+    overflow-y: hidden !important;
+  }
 }
 
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header,
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-summary-controls {
-  flex: initial;
+  flex: 0 0 auto;
+}
+
+/* Match the compact page hierarchy used by Generic CRM list pages (Leads,
+   Pipeline, Contacts) without changing the shared Wellness/Travel markup. */
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header {
+  margin-bottom: 0.75rem !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header h1 {
+  gap: 0.625rem !important;
+  font-size: 1.5rem !important;
+  font-weight: 600 !important;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header h1 > svg {
+  width: 24px !important;
+  height: 24px !important;
+  color: var(--text-primary) !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > header p {
+  margin-top: 0.2rem !important;
+  font-size: 0.875rem;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-summary-controls {
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
+  :is(.invoice-summary-badges > span, .invoice-filter-pill, .invoice-create-button) {
+  min-height: 34px;
+  box-sizing: border-box;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow, 0 2px 8px rgba(15, 23, 42, 0.08));
+}
+
+html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
+  > .invoice-ledger-card > h3 {
+  font-size: 1rem !important;
+  margin-bottom: 0.75rem !important;
 }
 
 /* Fluid invoice toolbar density for laptop/tablet widths. Keep the KPI chips
@@ -330,29 +391,31 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .inv
 }
 
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .invoice-ledger-card {
-  display: block;
-  flex: initial;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
-  overflow: visible !important;
+  overflow: hidden !important;
 }
 
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-ledger-card > h3,
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-pagination {
-  flex: initial;
+  flex: 0 0 auto;
 }
 
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll,
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll > .top-scroll-sync {
-  display: block;
-  flex: initial;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
 }
 
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page .invoice-table-scroll .top-scroll-sync__bottom {
-  flex: initial;
-  max-height: none;
+  flex: 1 1 auto;
+  max-height: 100%;
   min-height: 0;
-  overflow-y: visible !important;
+  overflow-y: auto !important;
 }
 
 .invoices-mobile-page.invoices-generic-page .invoice-ledger-card table.stable-table tbody tr:hover,

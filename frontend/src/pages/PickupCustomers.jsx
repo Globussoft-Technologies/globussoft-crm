@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { BadgeIndianRupee, Building2, Copy, ExternalLink, Eye, Link2, MapPin, Pencil, Plus, RefreshCw, Search, UserRound, WalletCards, X } from "lucide-react";
 import { AuthContext } from "../appContexts";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
+import PickupLocationSelect from "../components/PickupLocationSelect";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import {
@@ -309,7 +310,7 @@ function CustomerDetails({ customer, isAdmin, commissionUpdatingId, onUpdateComm
       <header className="pickup-detail-header">
         <div className="pickup-customer-title"><span className="pickup-customer-avatar"><UserRound size={22} /></span><div><p>Selected customer</p><h2>{customer.contact?.name || "Customer"}</h2><span style={pickupTripStatusStyle(journeyStatus)}>{formatPickupStatus(journeyStatus)}</span></div></div>
         <div className="pickup-detail-actions">
-          <button type="button" className="btn-secondary" onClick={onEdit} aria-label={`Edit ${customer.contact?.name || "customer"} pickup location`} title="Edit pickup"><Pencil size={14} /><span className="pickup-action-label">Edit pickup</span></button>
+          <button type="button" className="btn-secondary" onClick={onEdit} aria-label={`${customer.pickupAddress ? "Edit" : "Assign"} ${customer.contact?.name || "customer"} pickup location`} title={customer.pickupAddress ? "Edit pickup" : "Assign pickup"}>{customer.pickupAddress ? <Pencil size={14} /> : <Plus size={14} />}<span className="pickup-action-label">{customer.pickupAddress ? "Edit pickup" : "Assign pickup"}</span></button>
           {assignedPlots.length ? <button type="button" className="btn-secondary" onClick={onViewAssignedPlots} aria-label={`View plots for ${customer.contact?.name || "customer"}`} title="View plots"><Eye size={14} /><span className="pickup-action-label">View plots</span></button> : <button type="button" className="btn-secondary" onClick={onAssignPlots} aria-label={`Assign plots to ${customer.contact?.name || "customer"}`} title="Assign plots"><Plus size={14} /><span className="pickup-action-label">Assign plots</span></button>}
           <button type="button" className="btn-secondary" onClick={onViewStatus} aria-label={`View all status for ${customer.contact?.name || "customer"}`} title="Full workflow"><Eye size={14} /><span className="pickup-action-label">Full workflow</span></button>
         </div>
@@ -338,6 +339,7 @@ export default function PickupCustomers() {
   const isAdmin = user?.role === "ADMIN";
   const [customers, setCustomers] = useState([]);
   const [plots, setPlots] = useState([]);
+  const [pickupLocations, setPickupLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
@@ -345,7 +347,13 @@ export default function PickupCustomers() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [viewingCustomer, setViewingCustomer] = useState(null);
   const [viewingAssignedPlots, setViewingAssignedPlots] = useState(null);
+  const [changingPlotAssignment, setChangingPlotAssignment] = useState(null);
+  const [editingPlotName, setEditingPlotName] = useState("");
+  const [originalEditingPlotName, setOriginalEditingPlotName] = useState("");
+  const [replacementPlotIds, setReplacementPlotIds] = useState([]);
+  const [changingPlot, setChangingPlot] = useState(false);
   const [editAddress, setEditAddress] = useState("");
+  const [selectedPickupLocationId, setSelectedPickupLocationId] = useState("");
   const [saving, setSaving] = useState(false);
   const [assigningCustomer, setAssigningCustomer] = useState(null);
   const [selectedPlotIds, setSelectedPlotIds] = useState([]);
@@ -375,6 +383,7 @@ export default function PickupCustomers() {
       const rows = Array.isArray(response?.customers) ? response.customers : [];
       setCustomers(rows);
       setPlots(Array.isArray(response?.plots) ? response.plots : []);
+      setPickupLocations(Array.isArray(response?.pickupLocations) ? response.pickupLocations : []);
       setSelectedCustomerId((current) => rows.some((row) => row.id === current) ? current : rows[0]?.id ?? null);
     } catch (error) {
       notify.error(error.message || "Could not load customer pickup status.");
@@ -452,7 +461,64 @@ export default function PickupCustomers() {
       });
     return [...byNumber.values()];
   }, [availablePlots, selectedPlotName]);
-  const openEdit = (row) => { setEditingCustomer(row); setEditAddress(row.pickupAddress || ""); };
+  const replacementAssignedPlotIds = useMemo(() => new Set(
+    (
+      changingPlotAssignment?.customer?.customerAssignedPlotIds
+      || changingPlotAssignment?.customer?.assignedPlots?.map((plot) => plot.id)
+      || []
+    ).map(Number).filter(Number.isInteger),
+  ), [changingPlotAssignment]);
+  const editingPlotNameOptions = useMemo(() => [...new Map([
+    ...(changingPlotAssignment?.customer?.assignedPlots?.length
+      ? changingPlotAssignment.customer.assignedPlots
+      : [changingPlotAssignment?.customer?.assignedPlot].filter(Boolean)),
+    ...availablePlots,
+  ].map((plot) => [String(plot.name || "").trim().toLowerCase(), String(plot.name || "").trim()])).values()].filter(Boolean), [availablePlots, changingPlotAssignment]);
+  const replacementPlotChoices = useMemo(() => {
+    if (!changingPlotAssignment?.customer) return [];
+    const uniquePlots = new Map();
+    availablePlots.forEach((plot) => {
+      if (String(plot.name || "").trim().toLowerCase() !== editingPlotName.trim().toLowerCase()) return;
+      const key = `${String(plot.name || "").trim().toLowerCase()}::${String(plot.plotNumber || "").trim().toLowerCase()}`;
+      if (!uniquePlots.has(key) && !replacementAssignedPlotIds.has(Number(plot.id))) uniquePlots.set(key, plot);
+    });
+    return [...uniquePlots.values()]
+      .sort((left, right) => String(left.plotNumber || "").localeCompare(
+        String(right.plotNumber || ""),
+        undefined,
+        { numeric: true, sensitivity: "base" },
+      ))
+      .map((plot) => ({ plot, canSelect: true }));
+  }, [availablePlots, changingPlotAssignment, editingPlotName, replacementAssignedPlotIds]);
+  const editingAssignedPlotIds = useMemo(() => (
+    changingPlotAssignment?.customer?.assignedPlots?.length
+      ? changingPlotAssignment.customer.assignedPlots
+      : [changingPlotAssignment?.customer?.assignedPlot].filter(Boolean)
+  ).filter((plot) => String(plot.name || "").trim().toLowerCase() === editingPlotName.trim().toLowerCase()).map((plot) => Number(plot.id)), [changingPlotAssignment, editingPlotName]);
+  const allEditingAssignedPlotIds = useMemo(() => (
+    changingPlotAssignment?.customer?.assignedPlots?.length
+      ? changingPlotAssignment.customer.assignedPlots
+      : [changingPlotAssignment?.customer?.assignedPlot].filter(Boolean)
+  ).map((plot) => Number(plot.id)), [changingPlotAssignment]);
+  const editingComparisonIds = editingPlotName.trim().toLowerCase() !== originalEditingPlotName.trim().toLowerCase()
+    ? allEditingAssignedPlotIds
+    : editingAssignedPlotIds;
+  const hasEditingPlotChanges = editingComparisonIds.length !== replacementPlotIds.length
+    || editingComparisonIds.some((id) => !replacementPlotIds.includes(id));
+  const openEdit = (row) => {
+    const currentAddress = String(row.pickupAddress || "").trim().toLowerCase();
+    const currentLocation = pickupLocations.find((location) => (
+      String(location.address || "").trim().toLowerCase() === currentAddress
+    ));
+    setEditingCustomer(row);
+    setEditAddress(currentLocation?.address || "");
+    setSelectedPickupLocationId(currentLocation ? String(currentLocation.id) : "");
+  };
+  const selectPickupLocation = (locationId) => {
+    const selectedLocation = pickupLocations.find((location) => String(location.id) === String(locationId));
+    setSelectedPickupLocationId(locationId);
+    setEditAddress(selectedLocation?.address || "");
+  };
   const openPlotAssignment = (row) => {
     const assignedName = String(row.assignedPlots?.[0]?.name || "").trim();
     const firstAvailableName = availablePlotNames[0] || "";
@@ -463,9 +529,102 @@ export default function PickupCustomers() {
     setSelectedPlotName(assignedNameHasAvailablePlots ? assignedName : firstAvailableName);
     setSelectedPlotIds([]);
   };
+  const openAssignedPlotsEditor = (customer) => {
+    const assignedPlots = (customer.assignedPlots?.length
+      ? customer.assignedPlots
+      : [customer.assignedPlot]).filter(Boolean);
+    const firstEditablePlot = assignedPlots.find((plot) => (
+      plot.id
+      && String(plot.availability || "").trim().toUpperCase() !== "SOLD"
+    ));
+    if (!firstEditablePlot || customer.transportPerson) return;
+    setViewingAssignedPlots(null);
+    setChangingPlotAssignment({ customer });
+    const firstPlotName = String(firstEditablePlot.name || "").trim() || availablePlotNames[0] || "";
+    setEditingPlotName(firstPlotName);
+    setOriginalEditingPlotName(firstPlotName);
+    setReplacementPlotIds(assignedPlots.filter((plot) => String(plot.name || "").trim().toLowerCase() === firstPlotName.toLowerCase()).map((plot) => Number(plot.id)));
+  };
+  const closePlotReplacement = () => {
+    if (changingPlot) return;
+    setChangingPlotAssignment(null);
+    setEditingPlotName("");
+    setOriginalEditingPlotName("");
+    setReplacementPlotIds([]);
+  };
+  const toggleReplacementPlot = (plotId, checked) => {
+    const numericId = Number(plotId);
+    setReplacementPlotIds((current) => (
+      checked ? [...current, numericId] : current.filter((id) => id !== numericId)
+    ));
+  };
+  const replaceAssignedPlot = async (event) => {
+    event.preventDefault();
+    const customer = changingPlotAssignment?.customer;
+    const allAssignedPlots = (customer?.assignedPlots?.length ? customer.assignedPlots : [customer?.assignedPlot]).filter(Boolean);
+    const changingPlotType = editingPlotName.trim().toLowerCase() !== originalEditingPlotName.trim().toLowerCase();
+    const selectedTypeAssignedPlots = allAssignedPlots
+      .filter((plot) => String(plot.name || "").trim().toLowerCase() === editingPlotName.trim().toLowerCase());
+    const assignedIds = selectedTypeAssignedPlots.map((plot) => Number(plot.id));
+    const additionalPlots = replacementPlotChoices
+      .filter(({ plot }) => replacementPlotIds.includes(Number(plot.id)) && !assignedIds.includes(Number(plot.id)))
+      .map(({ plot }) => plot);
+    const removedPlots = (changingPlotType ? allAssignedPlots : selectedTypeAssignedPlots)
+      .filter((plot) => !replacementPlotIds.includes(Number(plot.id)));
+    if (!customer?.contact?.id || (!additionalPlots.length && !removedPlots.length)) return;
+    const customerName = customer.contact.name || "this customer";
+    const addedNumbers = additionalPlots.map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`).join(", ");
+    const removedNumbers = removedPlots.map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`).join(", ");
+    const confirmed = await notify.confirm({
+      title: "Confirm plot assignments",
+      message: `Are you sure you want to update ${customerName}'s ${editingPlotName} plots?${addedNumbers ? ` Assign ${addedNumbers}.` : ""}${removedNumbers ? ` Deselect ${removedNumbers}.` : ""}`,
+      confirmText: "Save changes",
+      cancelText: "Edit",
+    });
+    if (!confirmed) return;
+    setChangingPlot(true);
+    try {
+      for (const plot of removedPlots) {
+        await fetchApi(`/api/pickup-plot-inventory/customer-pickups/${customer.contact.id}/plots/${plot.id}`, {
+          method: "DELETE",
+        });
+      }
+      const plotsBySite = new Map();
+      additionalPlots.forEach((plot) => {
+        const key = String(plot.name || "").trim().toLowerCase();
+        plotsBySite.set(key, [...(plotsBySite.get(key) || []), Number(plot.id)]);
+      });
+      for (const plotSiteIds of plotsBySite.values()) {
+        await fetchApi(`/api/pickup-plot-inventory/customer-pickups/${customer.contact.id}/plots`, {
+          method: "POST",
+          body: JSON.stringify({ plotSiteIds }),
+        });
+      }
+      notify.success("Plot assignments updated.");
+      setChangingPlotAssignment(null);
+      setEditingPlotName("");
+      setOriginalEditingPlotName("");
+      setReplacementPlotIds([]);
+      await load();
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || "Could not assign the selected plots.");
+    } finally {
+      setChangingPlot(false);
+    }
+  };
   const assignPlots = async (event) => {
     event.preventDefault();
     if (!assigningCustomer?.contact?.id || !selectedPlotIds.length) return;
+    const selectedPlots = assignablePlots.filter((plot) => selectedPlotIds.includes(Number(plot.id)));
+    const plotNumbers = selectedPlots.map((plot) => `Plot ${plot.plotNumber}`).join(", ");
+    const customerName = assigningCustomer.contact.name || "this customer";
+    const confirmed = await notify.confirm({
+      title: "Confirm plot assignment",
+      message: `Are you sure you want to assign ${plotNumbers || `${selectedPlotIds.length} selected plot${selectedPlotIds.length === 1 ? "" : "s"}`} from ${selectedPlotName} to ${customerName}?`,
+      confirmText: "Assign plots",
+      cancelText: "Edit",
+    });
+    if (!confirmed) return;
     setAssigningPlots(true);
     try {
       await fetchApi(`/api/pickup-plot-inventory/customer-pickups/${assigningCustomer.contact.id}/plots`, {
@@ -662,7 +821,7 @@ export default function PickupCustomers() {
           {loading ? <div className="pickup-detail-placeholder">Loading customer details…</div> : selectedCustomer ? <CustomerDetails key={selectedCustomer.id} customer={selectedCustomer} isAdmin={isAdmin} commissionUpdatingId={commissionUpdatingId} onUpdateCommission={updateCommissionStatus} onUpdateCommissionRate={updateCommissionRate} onEdit={() => openEdit(selectedCustomer)} onAssignPlots={() => openPlotAssignment(selectedCustomer)} onViewAssignedPlots={() => setViewingAssignedPlots(selectedCustomer)} onViewStatus={() => setViewingCustomer(selectedCustomer)} onGeneratePayment={() => openPayment(selectedCustomer)} onAddInstallment={() => openInstallment(selectedCustomer)} onInitiateInstallment={(installment) => openPayment(selectedCustomer, installment)} /> : <div className="pickup-detail-placeholder"><UserRound size={34} /><strong>Select a customer</strong><span>Their details will appear here.</span></div>}
         </section>
       </div>
-      {editingCustomer && <div role="presentation" className="pickup-modal-backdrop"><form role="dialog" aria-modal="true" aria-labelledby="edit-pickup-title" className="card pickup-edit-dialog" onSubmit={savePickupLocation}><div className="pickup-dialog-header"><h2 id="edit-pickup-title">Edit pickup location</h2><button type="button" className="btn-secondary" aria-label="Close edit pickup location" onClick={() => setEditingCustomer(null)}><X size={17} /></button></div><p className="pickup-muted">{editingCustomer.contact?.name || "Customer"}</p><label className="pickup-edit-label">Pickup location<textarea className="input-field" aria-label="Pickup location" required rows="4" value={editAddress} onChange={(event) => setEditAddress(event.target.value)} /></label><div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={() => setEditingCustomer(null)}>Cancel</button><button type="submit" className="btn-primary" disabled={saving}>{saving ? "Saving…" : "Save changes"}</button></div></form></div>}
+      {editingCustomer && <div role="presentation" className="pickup-modal-backdrop"><form role="dialog" aria-modal="true" aria-labelledby="edit-pickup-title" className="card pickup-edit-dialog" onSubmit={savePickupLocation}><div className="pickup-dialog-header"><h2 id="edit-pickup-title">{editingCustomer.pickupAddress ? "Edit pickup location" : "Assign pickup location"}</h2><button type="button" className="btn-secondary" aria-label="Close pickup location dialog" onClick={() => setEditingCustomer(null)}><X size={17} /></button></div><p className="pickup-muted">{editingCustomer.contact?.name || "Customer"}</p><label className="pickup-edit-label">Pickup location<PickupLocationSelect value={selectedPickupLocationId} onChange={selectPickupLocation} options={pickupLocations} disabled={saving} ariaLabel="Pickup location" /></label>{pickupLocations.length === 0 && <p className="pickup-muted">No active pickup locations are available. Add one in Pickup Inventory first.</p>}<div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={() => setEditingCustomer(null)}>Cancel</button><button type="submit" className="btn-primary" disabled={saving || !selectedPickupLocationId}>{saving ? "Saving…" : editingCustomer.pickupAddress ? "Save changes" : "Assign pickup"}</button></div></form></div>}
       {assigningCustomer && (
         <div role="presentation" className="pickup-modal-backdrop">
           <form role="dialog" aria-modal="true" aria-labelledby="assign-plots-title" className="card pickup-edit-dialog pickup-plot-dialog" onSubmit={assignPlots}>
@@ -740,11 +899,39 @@ export default function PickupCustomers() {
       {viewingAssignedPlots && (
         <div role="presentation" className="pickup-modal-backdrop">
           <section role="dialog" aria-modal="true" aria-labelledby="view-assigned-plots-title" className="card pickup-edit-dialog pickup-assigned-plots-dialog">
-            <div className="pickup-dialog-header"><div><h2 id="view-assigned-plots-title">Assigned plots</h2><p className="pickup-muted">{viewingAssignedPlots.contact?.name || "Customer"}</p></div><button type="button" className="btn-secondary" aria-label="Close assigned plots" onClick={() => setViewingAssignedPlots(null)}><X size={17} /></button></div>
+            <div className="pickup-dialog-header"><div><h2 id="view-assigned-plots-title">Assigned plots</h2><p className="pickup-muted">{viewingAssignedPlots.contact?.name || "Customer"}</p></div><div className="pickup-assigned-plots-header-actions">{!viewingAssignedPlots.transportPerson && (viewingAssignedPlots.assignedPlots?.length ? viewingAssignedPlots.assignedPlots : [viewingAssignedPlots.assignedPlot]).filter(Boolean).some((plot) => plot.id && String(plot.availability || "").trim().toUpperCase() !== "SOLD") && <button type="button" className="btn-secondary" aria-label={`Edit assigned plots for ${viewingAssignedPlots.contact?.name || "customer"}`} onClick={() => openAssignedPlotsEditor(viewingAssignedPlots)}><Pencil size={13} /> Edit</button>}<button type="button" className="btn-secondary" aria-label="Close assigned plots" onClick={() => setViewingAssignedPlots(null)}><X size={17} /></button></div></div>
             <div className="pickup-assigned-plot-list" aria-label="Assigned plot list">
               {(viewingAssignedPlots.assignedPlots?.length ? viewingAssignedPlots.assignedPlots : [viewingAssignedPlots.assignedPlot]).filter(Boolean).map((assignedPlot) => <div className="pickup-assigned-plot-item" key={assignedPlot.id}><span>{assignedPlot.name || "Unnamed plot"}</span><strong>{assignedPlot.plotNumber ? `Plot ${assignedPlot.plotNumber}` : "Plot number unavailable"}</strong></div>)}
             </div>
           </section>
+        </div>
+      )}
+      {changingPlotAssignment && (
+        <div role="presentation" className="pickup-modal-backdrop">
+          <form role="dialog" aria-modal="true" aria-labelledby="edit-assigned-plot-title" className="card pickup-edit-dialog pickup-plot-dialog" onSubmit={replaceAssignedPlot}>
+            <div className="pickup-dialog-header"><div><h2 id="edit-assigned-plot-title">Edit assigned plot</h2><p className="pickup-muted">{changingPlotAssignment.customer.contact?.name || "Customer"}</p></div><button type="button" className="btn-secondary" aria-label="Close edit assigned plot" onClick={closePlotReplacement} disabled={changingPlot}><X size={17} /></button></div>
+            <p className="pickup-plot-help">
+              Select or deselect plots for this Plot / Site. Choosing a different Plot / Site replaces the previous assignments.
+            </p>
+            <label className="pickup-edit-label">Plot / Site
+              <select className="input-field" aria-label="Edit plot or site name" value={editingPlotName} disabled={changingPlot} onChange={(event) => { const name = event.target.value; setEditingPlotName(name); setReplacementPlotIds((changingPlotAssignment.customer.assignedPlots || []).filter((plot) => String(plot.name || "").trim().toLowerCase() === name.trim().toLowerCase()).map((plot) => Number(plot.id))); }}>
+                {editingPlotNameOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            <div className="pickup-plot-options" role="group" aria-label="Assigned and available plots">
+              {(changingPlotAssignment.customer.assignedPlots?.length ? changingPlotAssignment.customer.assignedPlots : [changingPlotAssignment.customer.assignedPlot]).filter((assignedPlot) => assignedPlot && String(assignedPlot.name || "").trim().toLowerCase() === editingPlotName.trim().toLowerCase()).map((assignedPlot) => {
+                const checked = replacementPlotIds.includes(Number(assignedPlot.id));
+                const locked = String(assignedPlot.availability || "").trim().toUpperCase() === "SOLD";
+                return <label key={assignedPlot.id} className={`pickup-plot-option${locked ? " is-unavailable" : ""}`}><input type="checkbox" value={assignedPlot.id} checked={checked} disabled={changingPlot || locked} onChange={(event) => toggleReplacementPlot(assignedPlot.id, event.target.checked)} /><span><strong>Plot {assignedPlot.plotNumber || "number unavailable"}</strong><small>{assignedPlot.name || "Unnamed plot"}{assignedPlot.block ? ` · Block ${assignedPlot.block}` : ""} · {locked ? "Sold" : "Assigned"}</small></span></label>;
+              })}
+              {replacementPlotChoices.filter(({ canSelect }) => canSelect).map(({ plot: plotOption }) => {
+                const checked = replacementPlotIds.includes(Number(plotOption.id));
+                return <label key={plotOption.id} className="pickup-plot-option"><input type="checkbox" value={plotOption.id} checked={checked} disabled={changingPlot} onChange={(event) => toggleReplacementPlot(plotOption.id, event.target.checked)} /><span><strong>Plot {plotOption.plotNumber}</strong><small>{plotOption.name}{plotOption.block ? ` · Block ${plotOption.block}` : ""} · Available</small></span></label>;
+              })}
+              {!replacementPlotChoices.some(({ canSelect }) => canSelect) && <div className="pickup-payment-empty"><strong>No additional plots available</strong><span>Every available plot is already assigned or unavailable.</span></div>}
+            </div>
+            <div className="pickup-dialog-actions"><button type="button" className="btn-secondary" onClick={closePlotReplacement} disabled={changingPlot}>Cancel</button><button type="submit" className="btn-primary" disabled={!hasEditingPlotChanges || changingPlot}>{changingPlot ? "Saving…" : "Save changes"}</button></div>
+          </form>
         </div>
       )}
       {viewingCustomer && <PickupCustomerStatusDialog customer={viewingCustomer} onClose={() => setViewingCustomer(null)} />}

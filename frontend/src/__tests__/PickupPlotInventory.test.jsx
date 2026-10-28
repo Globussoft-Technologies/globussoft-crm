@@ -61,6 +61,7 @@ beforeEach(() => {
   googleAddressSuggestMock.mockReset();
   googleAddressSuggestMock.mockResolvedValue([]);
   Object.values(notify).forEach((mock) => mock.mockReset());
+  notify.confirm.mockResolvedValue(true);
 });
 
 describe('<PickupPlotInventory />', () => {
@@ -332,6 +333,13 @@ describe('<PickupPlotInventory />', () => {
     expect(selected).toHaveTextContent('South Gate');
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
+    await waitFor(() => expect(notify.confirm).toHaveBeenCalledWith({
+      title: 'Confirm new plot',
+      message: 'Are you sure you want to add Plot B-10 to Plot B-10?',
+      confirmText: 'Add plot',
+      cancelText: 'Cancel',
+    }));
+
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/plots',
       expect.objectContaining({ method: 'POST' }),
@@ -395,12 +403,32 @@ describe('<PickupPlotInventory />', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit Plot A-9' }));
     expect(screen.queryByTestId('boundary-editor')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() => expect(notify.confirm).toHaveBeenCalledWith({
+      title: 'Confirm plot changes',
+      message: 'Are you sure you want to save changes to Plot A-9 in Plot A-9?',
+      confirmText: 'Save changes',
+      cancelText: 'Cancel',
+    }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/plots/9',
       expect.objectContaining({ method: 'PUT' }),
     ));
     const update = fetchApiMock.mock.calls.find(([url]) => url === '/api/pickup-plot-inventory/plots/9');
     expect(JSON.parse(update[1].body).boundary).toHaveLength(3);
+  });
+
+  it('keeps the edit dialog open and does not update when confirmation is cancelled', async () => {
+    notify.confirm.mockResolvedValueOnce(false);
+    renderPage();
+    await screen.findByText('Plot A-9');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Plot A-9' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => expect(notify.confirm).toHaveBeenCalled());
+    expect(screen.getByRole('dialog', { name: 'Edit Plot / Site' })).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url, options]) => (
+      url === '/api/pickup-plot-inventory/plots/9' && options?.method === 'PUT'
+    ))).toBe(false);
   });
 
   it('activates or deactivates a plot through the status endpoint', async () => {

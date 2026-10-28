@@ -12,6 +12,10 @@ import { fetchApi } from '../utils/api';
 const responsiveCss = readFileSync(resolve(process.cwd(), 'src/pages/PickupCustomers.css'), 'utf8');
 
 const payload = {
+  pickupLocations: [
+    { id: 4, name: 'Lake View', address: '42 Lake View Road, Bengaluru' },
+    { id: 5, name: 'Residency Road', address: '55 Residency Road, Bengaluru' },
+  ],
   plots: [
     { id: 30, name: 'North Avenue', plotNumber: '24', block: 'B', availability: 'RESERVED' },
     { id: 31, name: 'North Avenue', plotNumber: '25', block: 'B', availability: 'AVAILABLE' },
@@ -610,7 +614,9 @@ describe('<PickupCustomers />', () => {
     await screen.findByRole('button', { name: 'Priya Shah' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit Priya Shah pickup location' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Pickup location' }), { target: { value: '55 Residency Road, Bengaluru' } });
+    expect(screen.getByRole('dialog', { name: 'Edit pickup location' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup location' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Select Residency Road pickup location' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
@@ -620,6 +626,21 @@ describe('<PickupCustomers />', () => {
         body: JSON.stringify({ pickupAddress: '55 Residency Road, Bengaluru', sourceTranscriptId: '789', sourceExcerpt: null }),
       }),
     ));
+  });
+
+  it('shows an assign pickup action and all available locations when none is assigned', async () => {
+    fetchApi.mockResolvedValue({
+      ...payload,
+      customers: [{ ...payload.customers[0], pickupAddress: null }],
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Priya Shah' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assign Priya Shah pickup location' }));
+    expect(screen.getByRole('dialog', { name: 'Assign pickup location' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pickup location' }));
+    expect(screen.getByRole('option', { name: 'Select Lake View pickup location' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Select Residency Road pickup location' })).toBeInTheDocument();
   });
 
   it('assigns multiple available plot numbers beside the edit pickup action', async () => {
@@ -649,10 +670,37 @@ describe('<PickupCustomers />', () => {
     fireEvent.click(within(dialog).getByRole('checkbox', { name: /Plot 107/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Assign 2 plots' }));
 
+    const confirmation = await screen.findByRole('dialog', { name: 'Confirm plot assignment' });
+    expect(within(confirmation).getByText(
+      'Are you sure you want to assign Plot 25, Plot 107 from North Avenue to Amit Rao?',
+    )).toBeInTheDocument();
+    expect(within(confirmation).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(fetchApi.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Assign plots' }));
+
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
       '/api/pickup-plot-inventory/customer-pickups/62/plots',
       { method: 'POST', body: JSON.stringify({ plotSiteIds: [31, 32] }) },
     ));
+  });
+
+  it('keeps the selected plots unchanged when the user returns to edit them', async () => {
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Amit Rao' });
+    fireEvent.click(screen.getByRole('button', { name: 'Amit Rao' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Assign plots to Amit Rao' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Assign plots' });
+    const plot = within(dialog).getByRole('checkbox', { name: /Plot 25/ });
+    fireEvent.click(plot);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Assign 1 plot' }));
+
+    const confirmation = await screen.findByRole('dialog', { name: 'Confirm plot assignment' });
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Edit' }));
+
+    expect(screen.getByRole('dialog', { name: 'Assign plots' })).toBeInTheDocument();
+    expect(plot).toBeChecked();
+    expect(fetchApi.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
   });
 
   it('shows API-provided available plots even when the availability label casing differs', async () => {
@@ -690,6 +738,103 @@ describe('<PickupCustomers />', () => {
     const dialog = screen.getByRole('dialog', { name: 'Assigned plots' });
     expect(within(dialog).getByText('North Avenue')).toBeInTheDocument();
     expect(within(dialog).getByText('Plot 25')).toBeInTheDocument();
+  });
+
+  it('uses one site-filtered list to add and deselect multiple plots', async () => {
+    const secondAssignedPlot = {
+      id: 36, name: 'North Avenue', plotNumber: '23', block: 'B', availability: 'RESERVED',
+    };
+    const assignedCustomer = {
+      ...payload.customers[1],
+      assignedPlot: payload.plots[0],
+      assignedPlots: [payload.plots[0], secondAssignedPlot],
+      customerAssignedPlotIds: [30, 36],
+    };
+    fetchApi.mockImplementation(async (url, options = {}) => {
+      if (options.method === 'POST') return { changed: true };
+      return { ...payload, plots: [...payload.plots, secondAssignedPlot], customers: [assignedCustomer] };
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Amit Rao' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Amit Rao' }));
+    const assignedDialog = screen.getByRole('dialog', { name: 'Assigned plots' });
+    expect(within(assignedDialog).getAllByRole('button')).toHaveLength(2);
+    expect(within(assignedDialog).getByText('Plot 24')).toBeInTheDocument();
+    expect(within(assignedDialog).getByText('Plot 23')).toBeInTheDocument();
+    fireEvent.click(within(assignedDialog).getByRole('button', { name: 'Edit assigned plots for Amit Rao' }));
+
+    const editDialog = screen.getByRole('dialog', { name: 'Edit assigned plot' });
+    const plotList = within(editDialog).getByRole('group', { name: 'Assigned and available plots' });
+    expect(within(plotList).getByRole('checkbox', { name: /Plot 24/ })).toBeChecked();
+    expect(within(plotList).getByRole('checkbox', { name: /Plot 23/ })).toBeChecked();
+    fireEvent.click(within(plotList).getByRole('checkbox', { name: /Plot 23/ }));
+    const plot25 = within(plotList).getByRole('checkbox', { name: /Plot 25/ });
+    const plot107 = within(plotList).getByRole('checkbox', { name: /Plot 107/ });
+    expect(plot25).not.toBeChecked();
+    expect(plot107).not.toBeChecked();
+    fireEvent.click(plot25);
+    fireEvent.click(plot107);
+    fireEvent.click(within(editDialog).getByRole('button', { name: 'Save changes' }));
+
+    const confirmation = await screen.findByRole('dialog', { name: 'Confirm plot assignments' });
+    expect(within(confirmation).getByText(
+      "Are you sure you want to update Amit Rao's North Avenue plots? Assign Plot 25, Plot 107. Deselect Plot 23.",
+    )).toBeInTheDocument();
+    expect(within(confirmation).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(fetchApi.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/62/plots/36',
+      { method: 'DELETE' },
+    ));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/62/plots',
+      {
+        method: 'POST',
+        body: JSON.stringify({ plotSiteIds: [31, 32] }),
+      },
+    ));
+  });
+
+  it('removes plots from the old site when changing to another Plot or Site name', async () => {
+    const assignedCustomer = {
+      ...payload.customers[1],
+      assignedPlot: payload.plots[0],
+      assignedPlots: [payload.plots[0]],
+      customerAssignedPlotIds: [30],
+    };
+    fetchApi.mockImplementation(async (url, options = {}) => {
+      if (options.method === 'POST' || options.method === 'DELETE') return { updated: true };
+      return { ...payload, customers: [assignedCustomer] };
+    });
+    render(<NotifyProvider><PickupCustomers /></NotifyProvider>);
+    await screen.findByRole('button', { name: 'Amit Rao' });
+    fireEvent.click(screen.getByRole('button', { name: 'View plots for Amit Rao' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Assigned plots' })).getByRole('button', { name: 'Edit assigned plots for Amit Rao' }));
+
+    const editor = screen.getByRole('dialog', { name: 'Edit assigned plot' });
+    fireEvent.change(within(editor).getByRole('combobox', { name: 'Edit plot or site name' }), { target: { value: 'Lake View' } });
+    const plotList = within(editor).getByRole('group', { name: 'Assigned and available plots' });
+    expect(within(plotList).queryByRole('checkbox', { name: /Plot 24/ })).toBeNull();
+    fireEvent.click(within(plotList).getByRole('checkbox', { name: /Plot 8/ }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save changes' }));
+
+    const confirmation = await screen.findByRole('dialog', { name: 'Confirm plot assignments' });
+    expect(within(confirmation).getByText(
+      "Are you sure you want to update Amit Rao's Lake View plots? Assign Plot 8. Deselect Plot 24.",
+    )).toBeInTheDocument();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/62/plots/30',
+      { method: 'DELETE' },
+    ));
+    expect(fetchApi).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/customer-pickups/62/plots',
+      { method: 'POST', body: JSON.stringify({ plotSiteIds: [35] }) },
+    );
   });
 
   it('defaults to a site that still has an available plot number', async () => {

@@ -769,17 +769,7 @@
         .hero-form-card {
             width: 100%;
             min-width: 0;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            box-shadow: var(--shadow-md);
-            /* padding: 28px; */
-            transition: box-shadow .3s ease, transform .3s ease;
-        }
-
-        .hero-form-card:hover {
-            box-shadow: var(--shadow-lg);
-            transform: translateY(-3px);
+            background: transparent;
         }
 
         .hero-form-card h3 {
@@ -800,7 +790,7 @@
             height: auto;
             min-height: 0;
             border: 0;
-            border-radius: 12px;
+            border-radius: 20px;
         }
 
         /* ---------- SECTION HEADS ---------- */
@@ -1562,12 +1552,11 @@
                     </div>
                 </div>
 
-                <div class="hero-form-card reveal" id="hero-form">
-                    <!-- Hero web form is injected at runtime into a CLOSED
-                    shadow root by Landing.jsx (dynamic id from
-                    /api/landing-form-config). Deliberately no static iframe
-                    here: the form link must not sit in the page markup where
-                    any visitor can read it from DevTools Elements. -->
+                <div class="hero-form-card" id="hero-form">
+                    <!-- Landing.jsx injects one server-rendered form document
+                    into a CLOSED shadow root. The response already contains
+                    the active form definition, so there is no second loading
+                    phase or client-side configuration request. -->
                     <div id="hero-form-mount"></div>
                 </div>
             </div>

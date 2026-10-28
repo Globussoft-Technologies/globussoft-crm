@@ -32,6 +32,22 @@ describe('filterSidebarPages', () => {
     expect(pages.some((page) => page.path === '/marketing')).toBe(false);
   });
 
+  it('keeps Lead Routing out of Generic CRM search, including server-provided pages', () => {
+    const localPages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+    });
+    expect(localPages.some((page) => page.path === '/lead-routing')).toBe(false);
+
+    const filtered = filterSidebarPages([
+      { path: '/lead-routing', label: 'Lead Routing' },
+      { path: '/leads', label: 'Leads' },
+    ], { vertical: 'generic' });
+    expect(filtered.map((page) => page.path)).toEqual(['/leads']);
+  });
+
   it('uses the shared sidebar visibility flag for generic navigation and search', () => {
     const pages = getGenericSidebarPages({
       isAdmin: true,

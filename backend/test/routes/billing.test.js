@@ -115,13 +115,18 @@ prisma.paymentGatewayConfig = {
 };
 prisma.plotBooking = prisma.plotBooking || {};
 prisma.plotBooking.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotBooking.findMany = vi.fn().mockResolvedValue([]);
 prisma.plotBooking.update = vi.fn().mockResolvedValue({});
 prisma.$transaction = vi.fn(async callback => callback(prisma));
 prisma.$queryRaw = vi.fn();
 prisma.plotSite = prisma.plotSite || {};
 prisma.plotSite.findFirst = vi.fn().mockResolvedValue(null);
+prisma.plotSite.findMany = vi.fn().mockResolvedValue([]);
 prisma.plotInvoiceItem = prisma.plotInvoiceItem || {};
 prisma.plotInvoiceItem.create = vi.fn().mockResolvedValue({});
+prisma.plotInvoiceItem.findMany = vi.fn().mockResolvedValue([]);
+prisma.plotBroker = prisma.plotBroker || {};
+prisma.plotBroker.findMany = vi.fn().mockResolvedValue([]);
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.tenantSetting = {
@@ -209,9 +214,13 @@ beforeEach(() => {
   prisma.payment.aggregate.mockReset();
   prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotBooking.findMany.mockReset().mockResolvedValue([]);
   prisma.plotBooking.update.mockReset().mockResolvedValue({});
   prisma.plotSite.findFirst.mockReset().mockResolvedValue(null);
+  prisma.plotSite.findMany.mockReset().mockResolvedValue([]);
   prisma.plotInvoiceItem.create.mockReset().mockResolvedValue({});
+  prisma.plotInvoiceItem.findMany.mockReset().mockResolvedValue([]);
+  prisma.plotBroker.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset();
   prisma.tenantSetting.findMany.mockReset().mockResolvedValue([]);
   prisma.location.findFirst.mockReset().mockResolvedValue(null);
@@ -1198,6 +1207,57 @@ describe("billing response vertical isolation", () => {
     expect(res.body[0].subBrand).toBeUndefined();
     expect(res.body[0].legalEntityCode).toBeUndefined();
     expect(res.body[0].contact.subBrand).toBeUndefined();
+  });
+
+  test("generic plot invoices include tenant-scoped plot and lot identity", async () => {
+    prisma.invoice.findMany.mockResolvedValue([{
+      id: 41,
+      invoiceNum: "PLOT-ABC12345",
+      amount: 250000,
+      status: "UNPAID",
+      tenantId: 1,
+      contact: { id: 7, name: "Plot Customer" },
+      deal: null,
+    }]);
+    prisma.plotInvoiceItem.findMany.mockResolvedValue([{
+      invoiceId: 41,
+      plotBookingId: 73,
+      itemId: 91,
+      description: "Green Valley — Plot No. A-101",
+    }]);
+    prisma.plotSite.findMany.mockResolvedValue([{
+      id: 91,
+      name: "Green Valley",
+      plotNumber: "A-101",
+      block: "A",
+      referenceCode: "GV-A101",
+    }]);
+    prisma.plotBooking.findMany.mockResolvedValue([{
+      id: 73,
+      bookingNumber: "BOOK-00073",
+      plotSiteId: 91,
+    }]);
+
+    const res = await request(makeApp({ vertical: "generic", tenantId: 1 }))
+      .get("/api/billing");
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].plotDetails).toEqual({
+      plotId: 91,
+      plotNumber: "A-101",
+      siteName: "Green Valley",
+      block: "A",
+      referenceCode: "GV-A101",
+      bookingId: 73,
+      bookingNumber: "BOOK-00073",
+      description: "Green Valley — Plot No. A-101",
+    });
+    expect(prisma.plotInvoiceItem.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, invoiceId: { in: [41] }, itemType: "PLOT" },
+    }));
+    expect(prisma.plotSite.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, id: { in: [91] } },
+    }));
   });
 
   test("travel invoice responses retain travel-only fields for the travel CRM", async () => {

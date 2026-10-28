@@ -221,11 +221,36 @@ describe('<Invoices /> — page surface', () => {
     expect(invoicePage).toHaveClass('invoices-generic-page');
     expect(summaryControls.querySelector('.invoice-summary-badges')).toBeInTheDocument();
     expect(summaryControls.querySelector('.invoice-filters')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create Invoice/i })).toHaveStyle({
+      background: 'var(--primary-color, var(--accent-color))',
+    });
     expect(screen.getByRole('columnheader', { name: /^Contact$/i })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: /Products \/ Services/i })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: /Payment Mode/i })).toBeNull();
     await openCreateInvoiceForm();
     expect(screen.getByRole('button', { name: /Issue Invoice/i })).toBeInTheDocument();
+  });
+
+  it('marks only the required Generic CRM create-invoice fields with an asterisk', async () => {
+    renderInvoices();
+    await screen.findByRole('heading', { name: /^Invoices$/i });
+    await openCreateInvoiceForm();
+
+    const dialog = screen.getByRole('dialog', { name: 'Create Invoice' });
+    expect(dialog.firstElementChild).toHaveStyle({ height: 'auto' });
+    const markedLabels = Array.from(
+      dialog.querySelectorAll('.invoice-required-mark'),
+      (mark) => mark.closest('label').textContent.replace(/\s+/g, ' ').trim(),
+    );
+
+    expect(markedLabels).toEqual([
+      'Contact *',
+      'Currency *',
+      'Amount ($) *',
+      'Due Date *',
+      'Status *',
+    ]);
+    expect(screen.getByText('Deal (Optional)').querySelector('.invoice-required-mark')).toBeNull();
   });
 
   it('renders one row per invoice with invoiceNum, contact, amount, and status', async () => {
@@ -303,6 +328,39 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText('Balance $199999.00')).toBeInTheDocument();
   });
 
+  it('shows the compact plot-name code and plot number and hides recurring billing for plot invoices', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([{
+          ...sampleInvoices[0],
+          invoiceNum: 'PLOT-ABC12345',
+          plotDetails: {
+            plotId: 91,
+            plotNumber: 'A-101',
+            siteName: 'Green Valley',
+            block: 'A',
+            referenceCode: 'GV-A101',
+            bookingId: 73,
+            bookingNumber: 'BOOK-00073',
+            description: 'Green Valley — Plot No. A-101',
+          },
+        }]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices();
+
+    const invoiceNumber = await screen.findByText('PLOT-GRE-A-101');
+    const row = invoiceNumber.closest('tr');
+    expect(row).not.toHaveTextContent('PLOT-ABC12345');
+    expect(row).not.toHaveTextContent('Site: Green Valley');
+    expect(row.querySelector('.plot-invoice-number')).not.toHaveAttribute('style');
+
+    openInvoiceActions('PLOT-ABC12345');
+    expect(screen.queryByRole('menuitem', { name: /Create Recurring/i })).toBeNull();
+  });
+
   it('refreshes the Generic CRM invoice ledger when returning from payment', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
@@ -316,13 +374,13 @@ describe('<Invoices /> — page surface', () => {
     });
   });
 
-  it('keeps the Generic CRM invoice ledger in normal page flow without an inner vertical scrollbar', async () => {
+  it('keeps the Generic CRM page chrome fixed and makes only the table viewport scrollable', async () => {
     renderInvoices();
 
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
     expect(document.querySelector('.invoices-generic-page > .invoice-ledger-card')).toBeInTheDocument();
     expect(document.querySelector('.invoice-table-scroll .top-scroll-sync__bottom')).toHaveStyle({
-      overflowY: 'visible',
+      overflowY: 'auto',
     });
     const firstInvoiceRow = screen.getByText('INV-001').closest('tr');
     fireEvent.mouseOver(firstInvoiceRow);
@@ -353,14 +411,31 @@ describe('<Invoices /> — page surface', () => {
         { ...sampleInvoices[0], currency: 'INR' },
         { ...sampleInvoices[1], currency: 'USD', paidAt: new Date().toISOString(), receivedPayments: [{ currency: 'EUR', amount: 4500 }] },
       ]);
+      if (url === '/api/currencies?fields=summary') return Promise.resolve([
+        { code: 'USD', exchangeRate: 1, isBase: true },
+        { code: 'INR', exchangeRate: 80, isBase: false },
+        { code: 'EUR', exchangeRate: 0.9, isBase: false },
+      ]);
       return defaultFetchMock(url, opts);
     });
     renderInvoices();
     expect(await screen.findByText('₹1234.56')).toBeInTheDocument();
     expect(screen.getByText('$5000.00')).toBeInTheDocument();
     expect(screen.getByText(/Received: €4500\.00/)).toBeInTheDocument();
-    expect(screen.getByText(/Outstanding: ₹1234\.56/)).toBeInTheDocument();
-    expect(screen.getByText(/Paid This Month: €4500\.00/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Outstanding: \$15\.43/)).toBeInTheDocument());
+    expect(screen.getByText(/Paid This Month: \$5000\.00/)).toBeInTheDocument();
+  });
+
+  it('does not combine unconvertible amounts into a misleading currency total', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) return Promise.resolve([
+        { ...sampleInvoices[0], currency: 'INR' },
+      ]);
+      if (url === '/api/currencies?fields=summary') return Promise.resolve([{ code: 'USD', exchangeRate: 1 }]);
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices();
+    expect(await screen.findByText(/Outstanding: Unavailable \(missing exchange rate\): ₹1234\.56/)).toBeInTheDocument();
   });
 
   it('shows the empty-state message when /api/billing returns []', async () => {
@@ -701,6 +776,9 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveStyle({ textAlign: 'left' });
     expect(screen.getByRole('button', { name: /View invoice INV-001/i }).closest('td'))
       .toHaveStyle({ textAlign: 'left' });
+    expect(screen.queryByRole('button', { name: 'Filter Invoice #' })).toBeNull();
+    expect(screen.getByLabelText('Filter invoices by date range')).toBeInTheDocument();
+    expect(screen.getByLabelText('Filter invoices by status')).toBeInTheDocument();
   });
 
   it('keeps the missing-quantity message fully visible in the wider quantity column', async () => {
@@ -736,7 +814,8 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText('INV-003')).toBeInTheDocument();
 
     // Filter -> PAID: only INV-002 remains.
-    const filter = screen.getByLabelText(/Filter invoices by status/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Status' }));
+    const filter = screen.getByLabelText('Filter table by status');
     fireEvent.change(filter, { target: { value: 'PAID' } });
     expect(screen.queryByText('INV-001')).toBeNull();
     expect(screen.getByText('INV-002')).toBeInTheDocument();
@@ -745,6 +824,109 @@ describe('<Invoices /> — page surface', () => {
     // Filter -> ALL: all three rows back.
     fireEvent.change(filter, { target: { value: 'ALL' } });
     expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+  });
+
+  it('opens Generic CRM column filters as popups from funnel buttons in the header', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    const table = screen.getByRole('table', { name: 'Invoices table' });
+    expect(table.querySelectorAll('thead tr')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Filter Invoice #' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Filter Amount' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Status' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Due date' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Issued' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filter Contact' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter invoices by date range')).toBeNull();
+    expect(screen.queryByLabelText('Filter invoices by status')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Amount' }));
+    expect(screen.getByLabelText('Filter by currency')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter by exact amount')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Contact' }));
+    const contactFilter = screen.getByLabelText('Filter by contact');
+    expect(contactFilter.closest('.invoice-header-filter-popover')?.parentElement).toBe(document.body);
+    fireEvent.change(contactFilter, { target: { value: 'Globex' } });
+    expect(screen.queryByText('INV-001')).toBeNull();
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+
+    const clearFilters = screen.getByRole('button', { name: 'Clear filters' });
+    expect(clearFilters.closest('.invoice-ledger-heading')).not.toBeNull();
+    fireEvent.click(clearFilters);
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Status' }));
+    fireEvent.change(screen.getByLabelText('Filter table by status'), { target: { value: 'VOIDED' } });
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+    expect(screen.queryByText('INV-001')).toBeNull();
+  });
+
+  it('offers preset and custom ranges in the Generic CRM due and issued date popups', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Due date' }));
+    const dueRange = screen.getByLabelText('Filter by due date range');
+    expect([...dueRange.options].map((option) => option.textContent)).toEqual([
+      'All time', 'Last 7 days', 'Last 30 days', 'Last 90 days', 'This month', 'This year', 'Custom range…',
+    ]);
+    fireEvent.change(dueRange, { target: { value: 'CUSTOM' } });
+    const dueFrom = screen.getByLabelText('Filter due date from');
+    const dueTo = screen.getByLabelText('Filter due date to');
+    const dueFromPicker = vi.fn();
+    const dueToPicker = vi.fn();
+    Object.defineProperty(dueFrom, 'showPicker', { configurable: true, value: dueFromPicker });
+    Object.defineProperty(dueTo, 'showPicker', { configurable: true, value: dueToPicker });
+    fireEvent.click(dueFrom);
+    fireEvent.click(dueTo);
+    expect(dueFromPicker).toHaveBeenCalledTimes(1);
+    expect(dueToPicker).toHaveBeenCalledTimes(1);
+    fireEvent.change(dueFrom, { target: { value: '2026-05-15' } });
+    fireEvent.change(dueTo, { target: { value: '2026-05-15' } });
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.queryByText('INV-001')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Issued' }));
+    const issuedRange = screen.getByLabelText('Filter by issued date range');
+    fireEvent.change(issuedRange, { target: { value: 'CUSTOM' } });
+    const issuedFrom = screen.getByLabelText('Filter issued date from');
+    const issuedTo = screen.getByLabelText('Filter issued date to');
+    const issuedFromPicker = vi.fn();
+    const issuedToPicker = vi.fn();
+    Object.defineProperty(issuedFrom, 'showPicker', { configurable: true, value: issuedFromPicker });
+    Object.defineProperty(issuedTo, 'showPicker', { configurable: true, value: issuedToPicker });
+    fireEvent.click(issuedFrom);
+    fireEvent.click(issuedTo);
+    expect(issuedFromPicker).toHaveBeenCalledTimes(1);
+    expect(issuedToPicker).toHaveBeenCalledTimes(1);
+  });
+
+  it('converts ledger amounts when a display currency is selected from the Amount popup', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/currencies?fields=summary') {
+        return Promise.resolve([
+          { code: 'USD', exchangeRate: 1, isBase: true },
+          { code: 'INR', exchangeRate: 80, isBase: false },
+        ]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Amount' }));
+    const currency = screen.getByLabelText('Filter by currency');
+    await waitFor(() => expect(currency.querySelector('option[value="INR"]')).not.toBeNull());
+    fireEvent.change(currency, { target: { value: 'INR' } });
+
+    const firstRow = screen.getByText('INV-001').closest('tr');
+    expect(firstRow).toHaveTextContent('₹98764.80');
     expect(screen.getByText('INV-002')).toBeInTheDocument();
     expect(screen.getByText('INV-003')).toBeInTheDocument();
   });
@@ -795,7 +977,7 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByRole('button', { name: 'Next invoice page' })).toBeDisabled();
   });
 
-  it('filter "no matches" state renders the dashed-card message', async () => {
+  it('keeps the table header visible and offers Clear filters when no rows match', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/billing') return Promise.resolve([sampleInvoices[0]]);
       if (url === '/api/contacts') return Promise.resolve(sampleContacts);
@@ -806,19 +988,54 @@ describe('<Invoices /> — page surface', () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
 
-    const filter = screen.getByLabelText(/Filter invoices by status/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Filter Status' }));
+    const filter = screen.getByLabelText('Filter table by status');
     fireEvent.change(filter, { target: { value: 'PAID' } });
 
     expect(screen.queryByText('INV-001')).toBeNull();
     expect(screen.getByText(/No invoices match the/i)).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Invoice #' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
   });
 
-  it('renders the KPI pills: Outstanding, Paid This Month, and total count', async () => {
+  it('renders three clickable KPI filters and removes the Generic total-count chip', async () => {
+    const currentPaidInvoice = {
+      ...sampleInvoices[1],
+      paidAt: new Date().toISOString(),
+    };
+    const overdueInvoice = {
+      ...sampleInvoices[2],
+      status: 'OVERDUE',
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing') return Promise.resolve([sampleInvoices[0], currentPaidInvoice, overdueInvoice]);
+      return defaultFetchMock(url, opts);
+    });
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
-    expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
-    expect(screen.getByText(/Paid This Month:/i)).toBeInTheDocument();
-    expect(screen.getByText(/3 total invoices/i)).toBeInTheDocument();
+    const outstanding = screen.getByRole('button', { name: /Outstanding:/i });
+    const paidThisMonth = screen.getByRole('button', { name: /Paid This Month:/i });
+    const overdue = screen.getByRole('button', { name: /1 Overdue/i });
+    expect(screen.queryByText(/3 total invoices/i)).toBeNull();
+
+    fireEvent.click(outstanding);
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.queryByText('INV-002')).toBeNull();
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+
+    fireEvent.click(paidThisMonth);
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.queryByText('INV-001')).toBeNull();
+
+    fireEvent.click(overdue);
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
+    expect(screen.queryByText('INV-002')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+    expect(screen.getByText('INV-002')).toBeInTheDocument();
+    expect(screen.getByText('INV-003')).toBeInTheDocument();
   });
 
   it('OVERDUE invoices surface an overdue-count pill', async () => {
@@ -1432,7 +1649,7 @@ describe('<Invoices /> — server-side date filter', () => {
   });
 
   it('re-fetches from the backend with a date range when a preset is picked', async () => {
-    renderInvoices();
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
     await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
 
     fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
@@ -1450,7 +1667,7 @@ describe('<Invoices /> — server-side date filter', () => {
   });
 
   it('does not render a separate date-column filter next to the date range', async () => {
-    renderInvoices();
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
     await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
 
     expect(screen.queryByLabelText(/choose which invoice date to filter on/i)).toBeNull();
@@ -1460,7 +1677,7 @@ describe('<Invoices /> — server-side date filter', () => {
   });
 
   it('custom range exposes both date inputs and sends from + to', async () => {
-    renderInvoices();
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
     await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
 
     fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
@@ -1475,7 +1692,7 @@ describe('<Invoices /> — server-side date filter', () => {
   });
 
   it('leaves color-scheme to the stylesheet so the picker icon survives both themes', async () => {
-    renderInvoices();
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
     await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
 
     fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
@@ -1495,7 +1712,7 @@ describe('<Invoices /> — server-side date filter', () => {
   });
 
   it('the count chip stops claiming a tenant-wide total once a range is active', async () => {
-    renderInvoices();
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
     await waitFor(() => expect(screen.getByText(/total invoices/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {

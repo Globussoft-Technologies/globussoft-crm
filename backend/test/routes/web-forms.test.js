@@ -192,6 +192,32 @@ beforeEach(() => {
 });
 
 describe('web-form embed sizing', () => {
+  test.each([
+    ['custom', undefined, undefined],
+    ['custom', {}, undefined],
+    ['custom', { utm_source: '' }, ''],
+    ['custom', { utm_source: 'tracked-campaign' }, 'tracked-campaign'],
+    [null, undefined, 'body-campaign'],
+  ])('separates form content from attribution (%s, %j)', async (sourceKind, tracking, expected) => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1, tenantId: TENANT_ID, name: 'Contact Us', slug: 'contact-us',
+      scope: 'generic', isActive: true,
+      fieldsJson: JSON.stringify([
+        { sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name' },
+        ...(sourceKind ? [{ sourceKind, sourceKey: 'utm_source', fieldType: 'text', label: 'Unrelated value' }] : []),
+      ]),
+      styleJson: '{}', settingsJson: '{}',
+    });
+    const response = await request(makeApp()).post('/api/forms/public/contact-us/submit')
+      .send({ name: 'Jane Doe', utm_source: 'body-campaign',
+        ...(tracking === undefined ? {} : { _gbsTracking: JSON.stringify(tracking) }) });
+    expect(response.status).toBe(201);
+    const payload = JSON.parse(prisma.webFormSubmission.create.mock.calls[0][0].data.payloadJson);
+    expect(payload._meta.tracking.utm_source).toBe(expected);
+    if (sourceKind) expect(payload['custom:utm_source']).toBe('body-campaign');
+    expect(prisma.contact.create.mock.calls[0][0].data.firstTouchSource || undefined).toBe(expected || undefined);
+  });
+
   test('generates a content-sized iframe without a fixed minimum or internal scroll cap', () => {
     const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
 

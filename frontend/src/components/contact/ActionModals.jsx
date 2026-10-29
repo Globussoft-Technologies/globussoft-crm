@@ -845,7 +845,6 @@ const DEFAULT_GENERIC_DEAL_TYPES = DEAL_TYPES.map((name, index) => ({
   id: String(name).toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''), name, description: '', isDefault: index === 0,
   stages: DEFAULT_DEAL_TYPE_STAGES.map((stage) => ({ ...stage })),
 }));
-
 const CURRENCY_OPTIONS = ['USD', 'INR', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD'];
 
 const slugifyStage = (name) => String(name || '')
@@ -892,7 +891,8 @@ const asList = (d) => {
 const normalizeDealTypes = (raw) => {
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_GENERIC_DEAL_TYPES;
+    if (raw == null) return DEFAULT_GENERIC_DEAL_TYPES;
+    if (!Array.isArray(parsed) || !parsed.length) return [];
     const normalized = parsed.map((type) => ({
       id: String(type?.id || '').trim(),
       name: String(type?.name || '').trim(),
@@ -905,7 +905,7 @@ const normalizeDealTypes = (raw) => {
         };
       }).filter((stage) => stage.id && stage.name),
     })).filter((type) => type.id && type.name && type.stages.length);
-    return normalized.length ? normalized : DEFAULT_GENERIC_DEAL_TYPES;
+    return normalized;
   } catch (_error) {
     return DEFAULT_GENERIC_DEAL_TYPES;
   }
@@ -1000,10 +1000,15 @@ function GenericDealTypeManager({ types, onChange, onClose, startNew = false, ed
       return false;
     })) { notify.error('Stage names must be unique within a deal type.'); return; }
     const id = draft.id || slugifyStage(name) || `deal-type-${Date.now()}`;
-    const next = editing
-      ? types.map((type) => type.id === editing.id ? { ...draft, id, name, stages } : type)
-      : [...types, { ...draft, id, name, stages, isDefault: types.length === 0 }];
-    if (draft.isDefault) next.forEach((type) => { type.isDefault = type.id === id; });
+    const firstType = types.length === 0;
+    let next = editing
+      ? types.map((type) => type.id === editing.id ? { ...draft, id, name, stages, isDefault: firstType || Boolean(draft.isDefault) } : type)
+      : [...types, { ...draft, id, name, stages, isDefault: firstType || Boolean(draft.isDefault) }];
+    if (next.some((type) => type.id === id && type.isDefault)) {
+      next = next.map((type) => ({ ...type, isDefault: type.id === id }));
+    } else if (!next.some((type) => type.isDefault)) {
+      next = next.map((type, index) => ({ ...type, isDefault: index === 0 }));
+    }
     setSaving(true);
     try {
       await fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_DEAL_TYPES_SETTING_KEY)}`, { method: 'PUT', body: JSON.stringify({ value: JSON.stringify(next), category: 'deals' }) });
@@ -1083,7 +1088,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const [contactFocused, setContactFocused] = useState(false);
   const [account, setAccount] = useState(initialContact?.company || '');
   const [accountTouched, setAccountTouched] = useState(false);
-  const [dealType, setDealType] = useState(deal?.dealType || (isGeneric ? 'New Business' : ''));
+  const [dealType, setDealType] = useState(deal?.dealType || '');
   const [title, setTitle] = useState(deal && isGeneric ? generatedDealName(deal) : (deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? 'New Deal' : ''))));
   const [titleTouched, setTitleTouched] = useState(Boolean(deal?.title));
   const [currency, setCurrency] = useState(deal?.currency || tenantCurrency());
@@ -1146,6 +1151,12 @@ export function DealModal({ contact, deal, onClose, onDone }) {
     return () => { alive = false; };
   }, [isGeneric, pipelineId]);
 
+  useEffect(() => {
+    if (isGeneric && !editing && !listsLoading && dealTypes.length === 0 && !dealTypeManagerOpen) {
+      setDealTypeManagerOpen(true);
+    }
+  }, [dealTypes.length, dealTypeManagerOpen, editing, isGeneric, listsLoading]);
+
   const selectedDealType = useMemo(() => dealTypes.find((type) => type.name === dealType || type.id === dealType) || dealTypes.find((type) => type.isDefault) || dealTypes[0], [dealTypes, dealType]);
 
   useEffect(() => {
@@ -1157,7 +1168,12 @@ export function DealModal({ contact, deal, onClose, onDone }) {
 
   const stageOptions = useMemo(() => {
     if (isGeneric && selectedDealType?.stages?.length) {
-      return selectedDealType.stages.map((item) => ({ value: slugifyStage(item.name), label: item.name }));
+      const configured = selectedDealType.stages.map((item) => ({ value: slugifyStage(item.name), label: item.name }));
+      const known = new Set(configured.map((item) => item.value));
+      const currentStage = slugifyStage(deal?.stage);
+      return deal?.stage && currentStage && !known.has(currentStage)
+        ? [...configured, { value: currentStage, label: deal.stage }]
+        : configured;
     }
     const fromApi = stages
       .map((s) => ({ value: slugifyStage(s.name), label: s.name }))
@@ -1282,7 +1298,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       const payload = {
         title: name,
         amount: Number(amount),
-        stage: stage || 'lead',
+        stage: isGeneric ? stage : (stage || 'lead'),
         probability: Number(probability) || 50,
         currency,
       };

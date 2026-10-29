@@ -275,7 +275,7 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     expect(stageWhere.AND.some((clause) => clause.stage)).toBe(false);
   });
 
-  test('generic CRM searches canonical deal-name fields only', async () => {
+  test('generic CRM searches deal names and related contact names', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
     prisma.deal.findMany.mockResolvedValue([]);
 
@@ -283,17 +283,30 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     expect(res.status).toBe(200);
     const searchClauses = prisma.deal.findMany.mock.calls[0][0].where.AND || [];
     expect(searchClauses).toEqual(expect.arrayContaining([
-      { OR: [{ title: { contains: 'cloud' } }, { dealType: { contains: 'cloud' } }] },
+      { OR: [{ title: { contains: 'cloud' } }, { dealType: { contains: 'cloud' } }, { contact: { is: { name: { contains: 'cloud' } } } }] },
     ]));
-    expect(JSON.stringify(searchClauses)).not.toContain('contact');
+    expect(JSON.stringify(searchClauses)).not.toContain('company');
     expect(JSON.stringify(searchClauses)).not.toContain('owner');
 
     await request(makeApp()).get('/api/deals?dealType=Sales&search=31');
     const idSearchClauses = prisma.deal.findMany.mock.calls[1][0].where.AND || [];
     expect(idSearchClauses).toEqual(expect.arrayContaining([
-      { OR: [{ title: { contains: '31' } }, { dealType: { contains: '31' } }, { id: 31 }] },
+      { OR: [{ title: { contains: '31' } }, { dealType: { contains: '31' } }, { contact: { is: { name: { contains: '31' } } } }, { id: 31 }] },
     ]));
   });
+  test.each(['/api/deals?search=Alice', '/api/deals/stats?search=Alice'])(
+    'contact-name search retains tenant and role scoping in %s', async (url) => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+      prisma.deal.findMany.mockResolvedValue([]);
+      const response = await request(makeApp({ role: 'USER', userId: 7 })).get(url);
+      expect(response.status).toBe(200);
+      const where = prisma.deal.findMany.mock.calls[0][0].where;
+      expect(where).toMatchObject({ tenantId: 1, ownerId: 7, deletedAt: null });
+      expect(where.AND).toEqual(expect.arrayContaining([
+        { OR: expect.arrayContaining([{ contact: { is: { name: { contains: 'Alice' } } } }]) },
+      ]));
+    });
+
   test('happy path: list returns rows scoped to tenant, soft-deletes excluded by default', async () => {
     prisma.deal.findMany.mockResolvedValue([
       { id: 1, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1, contact: null, owner: null },

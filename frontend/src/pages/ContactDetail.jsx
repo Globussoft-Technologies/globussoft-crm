@@ -1883,7 +1883,16 @@ export default function ContactDetail() {
                             {openSeg === seg.id && (
                               <div className="cp-chev-menu">
                                 {seg.options.map((o) => (
-                                  <button key={o.id || o.label} type="button" className={o.negative ? 'neg' : ''} onClick={() => pickStage(o.id || o.label)}>{o.label}</button>
+                                  <button
+                                    key={o.id || o.label}
+                                    type="button"
+                                    className={o.negative ? 'neg' : ''}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      pickStage(o.id || o.label);
+                                    }}
+                                  >{o.label}</button>
                                 ))}
                               </div>
                             )}

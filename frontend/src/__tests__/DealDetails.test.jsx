@@ -175,6 +175,16 @@ describe('<DealDetails />', () => {
     expect(pageScrollStyle).toContain('overflow-y:auto !important');
   });
 
+  it('uses theme-aware Generic deal page backgrounds in light and dark mode', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: 'Acme Expansion' });
+    const pageStyle = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent)
+      .find((css) => css.includes('.generic-deal-details-page{background:var(--surface-color) !important;padding:18px'));
+    expect(pageStyle).toContain('background:var(--surface-color) !important;padding:clamp');
+    expect(pageStyle).not.toContain('#f1f3f6');
+  });
+
   it('opens Activities only from View all notes', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Acme Expansion' });

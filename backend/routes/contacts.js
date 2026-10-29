@@ -3487,10 +3487,11 @@ const updateContactById = async (req, res) => {
           .flatMap((stage) => Array.isArray(stage?.options)
             ? stage.options.map((item, optionIndex) => ({
                 ...item,
-                negative: optionIndex > 0 || item?.negative === true,
+                id: String(item?.id || "").trim(),
+                negative: optionIndex > 0 || item?.negative === true || item?.negative === "true",
               }))
             : [])
-          .find((item) => item?.id === lifecycleStageKey);
+          .find((item) => item.id === lifecycleStageKey);
         if (!option) {
           return res.status(400).json({ error: "Invalid lifecycle stage", code: "INVALID_LIFECYCLE_STAGE" });
         }

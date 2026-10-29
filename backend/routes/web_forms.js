@@ -1530,9 +1530,12 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     if (formScope === "generic") {
       // Accept the UTM fields in the multipart body as well. Current embeds
       // send both the body values and the private tracking header; accepting
-      // both keeps direct/older embed callers attribution-safe too.
+      // both keeps direct/older embed callers attribution-safe too. A named
+      // form field is user content, however, not trusted tracking metadata.
+      const formFieldKeys = new Set(fields.map((field) => field.sourceKey));
       const bodyAttribution = Object.fromEntries(
         EMBED_ATTRIBUTION_QUERY_KEYS
+          .filter((key) => !formFieldKeys.has(key))
           .map((key) => [key, textOr(body[key]).slice(0, 2000)])
           .filter(([, value]) => value),
       );

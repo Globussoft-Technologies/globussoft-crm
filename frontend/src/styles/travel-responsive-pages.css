@@ -62,14 +62,14 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) !important;
   align-items: stretch !important;
-  gap: 12px !important;
+  gap: 16px !important;
   width: 100%;
   container-type: inline-size;
 }
 
 .meeting-form-tabs {
   display: flex !important;
-  gap: 0 !important;
+  gap: 8px !important;
   width: 100% !important;
 }
 
@@ -82,7 +82,7 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
 .meeting-form-actions {
   display: flex !important;
   align-items: stretch !important;
-  gap: 0 !important;
+  gap: 8px !important;
   width: 100% !important;
 }
 

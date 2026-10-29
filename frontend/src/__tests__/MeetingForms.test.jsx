@@ -56,6 +56,11 @@ describe("MeetingForms", () => {
   it("loads Travel CRM meeting forms and exposes the shared embed/API contract", async () => {
     render(<MeetingForms />);
     expect(await screen.findByText("Talk to an Expert")).toBeInTheDocument();
+    const formPicker = screen.getByRole("button", { name: /Meeting form · 1 saved/i });
+    expect(formPicker.className).toContain("meeting-form-picker");
+    expect(formPicker.style.width).toBe("100%");
+    expect(formPicker.style.padding).toBe("12px 22px");
+    expect(formPicker.style.gap).toBe("20px");
     fireEvent.click(screen.getByRole("button", { name: "Embed & API" }));
     expect(await screen.findByText("Store an externally confirmed booking")).toBeInTheDocument();
     expect(screen.getAllByDisplayValue(/\/embed\/meeting-form\.html\?form=tmcmf_/).length).toBeGreaterThanOrEqual(1);

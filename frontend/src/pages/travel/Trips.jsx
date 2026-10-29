@@ -44,6 +44,20 @@ const STATUSES = [
   { value: "cancelled", label: "Cancelled" },
 ];
 
+function openNativeDatePicker(event) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // The native click remains the fallback where showPicker is unavailable.
+  }
+}
+
+function handlePickerOnlyDateKeyDown(event) {
+  if (event.key === "Tab" || event.key === "Escape") return;
+  event.preventDefault();
+  if (["Enter", " ", "ArrowDown"].includes(event.key)) openNativeDatePicker(event);
+}
+
 const STATUS_COLORS = {
   confirmed: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
   "in-trip": { bg: "rgba(200,154,78,0.18)", color: "#9A6F2E" },
@@ -858,6 +872,10 @@ export default function Trips() {
                     }
                     style={inputStyle}
                     min={today}
+                    onClick={openNativeDatePicker}
+                    onKeyDown={handlePickerOnlyDateKeyDown}
+                    onPaste={(event) => event.preventDefault()}
+                    onDrop={(event) => event.preventDefault()}
                   />
                 </label>
                 <label style={{ ...fieldLabel, flex: 1 }}>
@@ -871,6 +889,10 @@ export default function Trips() {
                     }
                     style={inputStyle}
                     min={form.departDate || today}
+                    onClick={openNativeDatePicker}
+                    onKeyDown={handlePickerOnlyDateKeyDown}
+                    onPaste={(event) => event.preventDefault()}
+                    onDrop={(event) => event.preventDefault()}
                   />
                 </label>
               </div>

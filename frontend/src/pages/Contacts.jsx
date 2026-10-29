@@ -2,6 +2,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
+import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
 import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, ArrowLeft } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
@@ -921,82 +922,10 @@ const Contacts = () => {
     contactsScrollableTableBaseWidth,
   )}px`;
   const contactsFrozenTableWidthPx = `${contactsFrozenTableWidth}px`;
-  const contactsRowSyncSignature = useMemo(
-    () =>
-      sortedContacts
-        .map((contact) =>
-          [
-            contact.id,
-            contact.name,
-            contact.title,
-            contact.email,
-            contact.phone,
-            contact.company,
-            contact.aiScore ?? '',
-            contact.status ?? '',
-            contact.assignedToId ?? '',
-            contact.createdAt ?? '',
-            JSON.stringify(contact.customFields || {}),
-          ].join('|'),
-        )
-        .concat(JSON.stringify(columnLayout), contactsScrollableColumnDefs.map((column) => column.key).join(','))
-        .join('::'),
-    [columnLayout, contactsScrollableColumnDefs, sortedContacts],
-  );
-
   useLayoutEffect(() => {
-    if (sortedContacts.length === 0) return undefined;
-    const frozenTable = contactsFrozenTableRef.current;
-    const scrollableTable = contactsScrollableTableRef.current;
-    if (!frozenTable || !scrollableTable) return undefined;
-
-    const syncTablePairHeight = (leftRow, rightRow) => {
-      if (!leftRow || !rightRow) return;
-      const height = Math.max(
-        Math.ceil(leftRow.getBoundingClientRect().height),
-        Math.ceil(rightRow.getBoundingClientRect().height),
-      );
-      const nextHeight = `${height}px`;
-      if (leftRow.style.height !== nextHeight) {
-        leftRow.style.height = nextHeight;
-      }
-      if (rightRow.style.height !== nextHeight) {
-        rightRow.style.height = nextHeight;
-      }
-    };
-
-    const syncSplitTableRowHeights = () => {
-      const frozenHeaderRow = frozenTable.querySelector('thead tr');
-      const scrollHeaderRow = scrollableTable.querySelector('thead tr');
-      const frozenRows = Array.from(frozenTable.querySelectorAll('tbody tr'));
-      const scrollRows = Array.from(scrollableTable.querySelectorAll('tbody tr'));
-      if (
-        frozenRows.length === 0 ||
-        frozenRows.length !== scrollRows.length ||
-        !frozenHeaderRow ||
-        !scrollHeaderRow
-      ) {
-        return;
-      }
-
-      syncTablePairHeight(frozenHeaderRow, scrollHeaderRow);
-      frozenRows.forEach((frozenRow, index) => {
-        const scrollRow = scrollRows[index];
-        if (!scrollRow) return;
-        syncTablePairHeight(frozenRow, scrollRow);
-      });
-    };
-
-    syncSplitTableRowHeights();
-    return () => {
-      frozenTable?.querySelectorAll('thead tr, tbody tr').forEach((row) => {
-        row.style.height = '';
-      });
-      scrollableTable?.querySelectorAll('thead tr, tbody tr').forEach((row) => {
-        row.style.height = '';
-      });
-    };
-  }, [contactsRowSyncSignature, sortedContacts.length]);
+    if (loading || sortedContacts.length === 0) return undefined;
+    return observeSplitTableRowHeights(contactsFrozenTableRef.current, contactsScrollableTableRef.current);
+  }, [loading, sortedContacts, columnLayout, contactsScrollableColumnDefs]);
 
   const getContactHeaderCellStyle = (extra = {}) => ({
     padding: '1rem',
@@ -1787,7 +1716,11 @@ const Contacts = () => {
                 {contactsFrozenColumnDefs.map((column) => (
                   <col
                     key={column.key}
-                    style={{ width: `${getColumnWidth(column.key)}px` }}
+                    style={{
+                      width: `${getColumnWidth(column.key)}px`,
+                      minWidth: `${getColumnWidth(column.key)}px`,
+                      maxWidth: `${getColumnWidth(column.key)}px`,
+                    }}
                   />
                 ))}
               </colgroup>
@@ -1866,7 +1799,7 @@ const Contacts = () => {
                 className="stable-table"
                 ref={contactsScrollableTableRef}
                 style={{
-                  width: '100%',
+                  width: contactsScrollableTableMinWidth,
                   minWidth: contactsScrollableTableMinWidth,
                   borderCollapse: 'separate',
                   borderSpacing: 0,
@@ -1878,7 +1811,11 @@ const Contacts = () => {
                   {contactsScrollableColumnDefs.map((column) => (
                     <col
                       key={column.key}
-                      style={{ width: `${getColumnWidth(column.key)}px` }}
+                      style={{
+                        width: `${getColumnWidth(column.key)}px`,
+                        minWidth: `${getColumnWidth(column.key)}px`,
+                        maxWidth: `${getColumnWidth(column.key)}px`,
+                      }}
                     />
                   ))}
                 </colgroup>

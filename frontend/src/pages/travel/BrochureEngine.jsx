@@ -643,13 +643,14 @@ function InlinePlaceInput({ value, onChange, placeholder, quickPicks = [], hasEr
         <MapPin size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
       )}
       <input
+        className="brochure-place-input"
         type="text"
         value={value || ''}
         onChange={(e) => { onChange(e.target.value); setShowSuggestions(true); }}
         onFocus={() => setShowSuggestions(true)}
         onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
         placeholder={placeholder || 'Search a city…'}
-        style={{ ...inputStyle, paddingLeft: 30, borderColor: hasError ? '#e06a5a' : 'var(--border-color)' }}
+        style={{ ...inputStyle, paddingLeft: 36, borderColor: hasError ? '#e06a5a' : 'var(--border-color)' }}
         data-testid={dataTestId}
       />
       {showSuggestions && suggestions.length > 0 && (
@@ -1009,6 +1010,7 @@ function LocationTagInput({ label, tip, required, value, onChange, placeholder, 
           <MapPin size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
         )}
         <input
+          className="brochure-place-input"
           type="text"
           value={query}
           onChange={(e) => { setQuery(e.target.value); setShowSuggestions(true); }}
@@ -1392,6 +1394,7 @@ function TagArrayInput({ label, tip, items, onAdd, onRemove, placeholder, withLo
           )
         )}
         <input
+          className={withLocationSearch ? 'brochure-place-input' : undefined}
           type="text"
           value={query}
           onChange={(e) => { setQuery(e.target.value); setShowSuggestions(true); }}
@@ -1404,7 +1407,7 @@ function TagArrayInput({ label, tip, items, onAdd, onRemove, placeholder, withLo
             }
           }}
           placeholder={placeholder || (withLocationSearch ? 'Search a place and press Enter' : 'Type and press Enter')}
-          style={withLocationSearch ? { ...inputStyle, paddingLeft: 30 } : inputStyle}
+          style={withLocationSearch ? { ...inputStyle, paddingLeft: 36 } : inputStyle}
         />
         {withLocationSearch && showSuggestions && suggestions.length > 0 && (
           <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20, marginTop: 4, borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--popover-bg, var(--surface-color))', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', maxHeight: 220, overflowY: 'auto' }}>

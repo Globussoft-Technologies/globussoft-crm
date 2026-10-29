@@ -729,16 +729,23 @@ const modalInputStyle = {
 };
 
 const reviewTabsStyle = {
-  display: "flex",
-  gap: 6,
-  marginBottom: 14,
-  borderBottom: "1px solid var(--border-color, #d1d5db)",
+  display: "inline-flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 4,
+  maxWidth: "100%",
+  marginTop: 12,
+  marginBottom: 16,
+  padding: 4,
+  border: "1px solid var(--border-color, #d1d5db)",
+  borderRadius: 10,
+  background: "var(--subtle-bg, rgba(15, 23, 42, 0.04))",
 };
 
 const reviewTabStyle = {
-  padding: "9px 12px",
-  border: 0,
-  borderBottom: "2px solid transparent",
+  padding: "9px 14px",
+  border: "1px solid transparent",
+  borderRadius: 7,
   background: "transparent",
   color: "var(--text-secondary)",
   cursor: "pointer",
@@ -747,8 +754,10 @@ const reviewTabStyle = {
 
 const activeReviewTabStyle = {
   ...reviewTabStyle,
-  borderBottomColor: PRIMARY,
-  color: PRIMARY,
+  borderColor: PRIMARY,
+  background: PRIMARY,
+  color: "#fff",
+  boxShadow: "0 1px 3px rgba(15, 23, 42, 0.16)",
 };
 
 const teacherReportToolbarStyle = {

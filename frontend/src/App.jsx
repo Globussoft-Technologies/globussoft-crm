@@ -2612,7 +2612,9 @@ export default function App() {
                       />
                       <Route path="contacts" element={<Contacts />} />
                       <Route path="leads/:id" element={<ContactDetail />} />
-                      <Route path="contacts/:id" element={<ContactDetail />} />
+                      {/* Contact details remain available in code for later use.
+                          Contact names currently open the inline preview drawer. */}
+                      {/* <Route path="contacts/:id" element={<ContactDetail />} /> */}
                       <Route
                         path="pipeline"
                         element={

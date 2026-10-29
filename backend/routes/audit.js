@@ -48,79 +48,95 @@ router.get("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 router.get("/verify", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const rows = await prisma.auditLog.findMany({
-      where: { tenantId },
-      // Tie-break on id so two rows with the same createdAt (parallel
-      // writeAudit calls in the same millisecond) are walked in a
-      // deterministic order. Without the tiebreaker, two consecutive
-      // /verify calls could disagree on `brokenAt` for the same chain.
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      select: {
-        id: true,
-        action: true,
-        entity: true,
-        entityId: true,
-        userId: true,
-        details: true,
-        createdAt: true,
-        prevHash: true,
-        hash: true,
-      },
-    });
+    // Do not materialize a tenant's entire audit history in one Prisma
+    // response. Generic tenants can have many thousands of rows with large
+    // details payloads; the single unbounded query could time out upstream
+    // and turn a healthy chain into an HTTP 500. Cursor batches keep the
+    // verifier's memory and response time per DB round-trip bounded while
+    // preserving the same deterministic [createdAt, id] walk.
+    const batchSize = 1000;
+    const rowSelect = {
+      id: true,
+      action: true,
+      entity: true,
+      entityId: true,
+      userId: true,
+      details: true,
+      createdAt: true,
+      prevHash: true,
+      hash: true,
+    };
 
-    const totalRows = rows.length;
     let chainLength = 0;
     let brokenAt = null;
     let reason = null;
     let lastHash = null;
     let unhashedRows = 0;
 
-    for (const row of rows) {
-      chainLength += 1;
-
-      if (row.hash == null) {
-        unhashedRows += 1;
-        brokenAt = row.id;
-        reason = "null hash — row was never chained (run backfill)";
-        break;
+    let cursor = null;
+    while (true) {
+      const query = {
+        where: { tenantId },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        take: batchSize,
+        select: rowSelect,
+      };
+      if (cursor != null) {
+        query.cursor = { id: cursor };
+        query.skip = 1;
       }
 
-      const expectedPrev = lastHash == null ? `GENESIS_${tenantId}` : lastHash;
-      if (row.prevHash !== expectedPrev) {
-        brokenAt = row.id;
-        reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || "null"})`;
-        break;
+      const rows = await prisma.auditLog.findMany(query);
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        chainLength += 1;
+
+        if (row.hash == null) {
+          unhashedRows += 1;
+          if (brokenAt === null) {
+            brokenAt = row.id;
+            reason = "null hash — row was never chained (run backfill)";
+          }
+          continue;
+        }
+
+        // Keep walking after the first failure so totalRows/unhashedRows are
+        // accurate, but don't let a known-broken prefix affect diagnostics
+        // for later rows.
+        if (brokenAt !== null) continue;
+
+        const expectedPrev = lastHash == null ? `GENESIS_${tenantId}` : lastHash;
+        if (row.prevHash !== expectedPrev) {
+          brokenAt = row.id;
+          reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || "null"})`;
+          continue;
+        }
+
+        const recomputed = computeHash(row.prevHash, {
+          tenantId,
+          entity: row.entity,
+          action: row.action,
+          entityId: row.entityId,
+          userId: row.userId,
+          details: row.details,
+          createdAt: row.createdAt.toISOString(),
+        });
+
+        if (recomputed !== row.hash) {
+          brokenAt = row.id;
+          reason = "hash mismatch (row content tampered)";
+          continue;
+        }
+
+        lastHash = row.hash;
       }
 
-      const recomputed = computeHash(row.prevHash, {
-        tenantId,
-        entity: row.entity,
-        action: row.action,
-        entityId: row.entityId,
-        userId: row.userId,
-        details: row.details,
-        createdAt: row.createdAt.toISOString(),
-      });
-
-      if (recomputed !== row.hash) {
-        brokenAt = row.id;
-        reason = "hash mismatch (row content tampered)";
-        break;
-      }
-
-      lastHash = row.hash;
+      cursor = rows[rows.length - 1].id;
+      if (rows.length < batchSize) break;
     }
 
-    // After the loop ends (with or without a break) count remaining null-hash
-    // rows so the UI can size its "N rows unchained" banner correctly. We
-    // already stopped at the first one, so anything after it that's null is
-    // also unhashed.
-    if (brokenAt !== null) {
-      for (let i = chainLength; i < rows.length; i++) {
-        if (rows[i].hash == null) unhashedRows += 1;
-      }
-    }
-
+    const totalRows = chainLength;
     res.json({
       chainLength,
       totalRows,

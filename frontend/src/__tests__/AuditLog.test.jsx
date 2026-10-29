@@ -681,12 +681,12 @@ describe('<AuditLog /> — page surface', () => {
     await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
 
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Failed to verify audit chain');
+      expect(notifyError).toHaveBeenCalledWith('Audit-chain verification failed. Please try again.');
     });
 
-    // After the rejection the catch-branch sets integrityVerified=false +
-    // brokenAt=null + unhashedRows=0 → falls through to the broken chip.
-    expect(screen.getByTestId('integrity-chip-broken')).toBeInTheDocument();
+    // A technical failure must not be presented as a chain anomaly.
+    expect(screen.getByTestId('integrity-chip-error')).toBeInTheDocument();
+    expect(screen.queryByTestId('integrity-chip-broken')).not.toBeInTheDocument();
   });
 
   it('integrity chip renders "broken" for a tampered row (non-null hash mismatch)', async () => {

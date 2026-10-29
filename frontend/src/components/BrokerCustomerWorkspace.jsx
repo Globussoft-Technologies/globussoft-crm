@@ -149,6 +149,10 @@ export default function BrokerCustomerWorkspace() {
   return (
     <>
       <main className="transport-workspace" data-testid="broker-customer-workspace">
+      <header className="workspace-page-heading">
+        <h1><MapPin size={21} aria-hidden="true" /> <span>Site Visits</span></h1>
+        <p>Manage customer visits, attendance, and plot selection.</p>
+      </header>
       <section className="transport-summary" aria-label="Customer summary">
         <div><span className="transport-summary-icon total"><Users size={18} /></span><span><strong>{summary.total}</strong><small>All customers</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Ready for visit</small></span></div>
@@ -158,15 +162,18 @@ export default function BrokerCustomerWorkspace() {
       <div className="transport-toolbar" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div className="transport-tabs" role="tablist" aria-label="Customer filters">
           {[
-            ['all', 'All'], ['completed', 'Trip completed'], ['waiting', 'Not completed'], ['history', 'History'],
+            ['all', 'All'], ['completed', 'Trip completed'], ['waiting', 'Not completed'],
           ].map(([key, label]) => (
             <button key={key} type="button" role="tab" aria-selected={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}</button>
           ))}
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 230px', maxWidth: 340, padding: '0 10px', border: '1px solid var(--border-color)', borderRadius: 11, background: 'var(--card-bg, var(--subtle-bg-2))' }}>
+        <div className="site-visit-toolbar-actions">
+          <button type="button" role="tab" aria-selected={filter === 'history'} className={`site-visit-history-button${filter === 'history' ? ' active' : ''}`} onClick={() => setFilter('history')}>History</button>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 230px', maxWidth: 340, padding: '0 10px', border: '1px solid var(--border-color)', borderRadius: 11, background: 'var(--card-bg, var(--subtle-bg-2))' }}>
           <Search size={16} aria-hidden="true" style={{ flex: '0 0 16px', color: 'var(--text-secondary)' }} />
           <input aria-label="Search assigned customers" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers…" style={{ width: '100%', minWidth: 0, padding: '10px 2px', border: 0, outline: 0, background: 'transparent', color: 'var(--text-primary)' }} />
-        </label>
+          </label>
+        </div>
       </div>
 
       {error && <div className="transport-error" role="alert">{error}</div>}

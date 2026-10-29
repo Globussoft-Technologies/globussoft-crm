@@ -9,6 +9,7 @@ import {
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
+import { generatedDealName } from '../utils/dealDisplay';
 import { formatDate, formatDateTime } from '../utils/date';
 import { AuthContext } from '../appContexts';
 import { usePermissions } from '../hooks/usePermissions';
@@ -957,6 +958,14 @@ export default function ContactDetail() {
       return;
     }
     setDealModal({ open: true, deal: null });
+  };
+
+  const openExistingDeal = (deal) => {
+    if (isGeneric && deal?.id) {
+      navigate(`/deals/${deal.id}`);
+      return;
+    }
+    setDealModal({ open: true, deal });
   };
 
   const focusNotes = () => {
@@ -2015,7 +2024,7 @@ export default function ContactDetail() {
                               ))
                               : deals.map((d) => (
                                 <div className="cp-row" key={d.id}>
-                                  <button type="button" onClick={() => setDealModal({ open: true, deal: d })} className="cp-link-btn" style={{ fontWeight: 600 }}>{d.title}</button>
+                                  <button type="button" onClick={() => openExistingDeal(d)} className="cp-link-btn" style={{ fontWeight: 600 }}>{isGeneric ? generatedDealName(d) : d.title}</button>
                                   <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{formatMoney(d.amount, { currency: d.currency })}</span>
                                 </div>
                               ))
@@ -2127,7 +2136,7 @@ export default function ContactDetail() {
           {activeTab === 'conversations' && <ConversationsTab key={`conversation-${conversationRefreshKey}`} contact={contact} contactId={id} hideSms={isTravel || isWellness} showWhatsapp={isGeneric} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
-          {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} isGeneric={!isWellness && !isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={(deal) => setDealModal({ open: true, deal })} />}
+          {activeTab === 'deals' && <DealsTab contact={contact} refresh={refresh} isWellness={isWellness} isTravel={isTravel} isGeneric={!isWellness && !isTravel} onOpenAppointment={openWellnessBooking} onOpenTravelDeal={openContactDeal} onOpenDeal={openExistingDeal} />}
           {activeTab === 'ai-insights' && <InsightsTab contactId={id} />}
           {activeTab === 'files' && <FilesTab contactId={id} />}
         </div>

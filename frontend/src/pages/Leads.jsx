@@ -1095,12 +1095,23 @@ const leadWebFormName = (lead) =>
     : "");
 const leadTrackingMetadata = (lead) => {
   const raw = lead?.webFormSubmissions?.[0]?.payloadJson;
+  let metadata = {};
   try {
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return parsed?._meta?.tracking || {};
+    metadata = parsed?._meta?.tracking || {};
   } catch (_err) {
-    return {};
+    metadata = {};
   }
+  const touchpoint = lead?.touchpoints?.[0];
+  if (!touchpoint) return metadata;
+  return {
+    ...metadata,
+    utm_source: metadata.utm_source || touchpoint.source || "",
+    utm_medium: metadata.utm_medium || touchpoint.medium || "",
+    utm_campaign: metadata.utm_campaign || touchpoint.utmCampaign || "",
+    utm_term: metadata.utm_term || touchpoint.utmTerm || "",
+    utm_content: metadata.utm_content || touchpoint.utmContent || "",
+  };
 };
 // First/Last name columns (generic Leads table only): pure derivation of
 // Contact.name — first whitespace-separated token vs the remainder. Single

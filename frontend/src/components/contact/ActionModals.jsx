@@ -5,6 +5,7 @@ import { fetchApi } from '../../utils/api';
 import './ContactProfile.css';
 import { useNotify } from '../../utils/notify';
 import { tenantCurrency } from '../../utils/money';
+import { generatedDealName } from '../../utils/dealDisplay';
 import {
   createDeal, createTask, postActivity, sendEmail, sendSms, sendWhatsapp,
   syncMeetingToCalendar, updateDeal,
@@ -685,6 +686,9 @@ export function MeetingModal({ contact, onClose, onDone }) {
     setSaving(true);
     try {
       const details = [
+        `Meeting: ${title.trim()}`,
+        `Scheduled: ${fromDate}${fromTime ? ` ${fromTime}` : ''}`,
+        attendeeList.length ? `Attendees: ${attendeeList.map((item) => item.label).join(', ')}` : '',
         description.trim(),
         outcome.trim() ? `Outcome: ${outcome.trim()}` : '',
         meetingNotes.trim() ? `Meeting notes: ${meetingNotes.trim()}` : '',
@@ -894,9 +898,12 @@ const normalizeDealTypes = (raw) => {
       name: String(type?.name || '').trim(),
       description: String(type?.description || ''),
       isDefault: Boolean(type?.isDefault),
-      stages: (Array.isArray(type?.stages) ? type.stages : []).map((stage) => ({
-        id: String(stage?.id || '').trim(), name: String(stage?.name || '').trim(), color: stage?.color || '#3b82f6', condition: stageCondition(stage),
-      })).filter((stage) => stage.id && stage.name),
+      stages: (Array.isArray(type?.stages) ? type.stages : []).map((stage) => {
+        const name = String(typeof stage === 'string' ? stage : (stage?.name || stage?.title || stage?.label || '')).trim();
+        return {
+          id: String((typeof stage === 'object' && stage?.id) || slugifyStage(name)).trim(), name, color: stage?.color || '#3b82f6', condition: stageCondition(typeof stage === 'string' ? { name: stage } : stage),
+        };
+      }).filter((stage) => stage.id && stage.name),
     })).filter((type) => type.id && type.name && type.stages.length);
     return normalized.length ? normalized : DEFAULT_GENERIC_DEAL_TYPES;
   } catch (_error) {
@@ -1077,7 +1084,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const [account, setAccount] = useState(initialContact?.company || '');
   const [accountTouched, setAccountTouched] = useState(false);
   const [dealType, setDealType] = useState(deal?.dealType || (isGeneric ? 'New Business' : ''));
-  const [title, setTitle] = useState(deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? 'New Deal' : '')));
+  const [title, setTitle] = useState(deal && isGeneric ? generatedDealName(deal) : (deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? 'New Deal' : ''))));
   const [titleTouched, setTitleTouched] = useState(Boolean(deal?.title));
   const [currency, setCurrency] = useState(deal?.currency || tenantCurrency());
   const [amount, setAmount] = useState(deal?.amount ?? '');
@@ -1279,6 +1286,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
         probability: Number(probability) || 50,
         currency,
       };
+      if (!editing && isGeneric) payload.autoName = true;
       if (dealType) payload.dealType = dealType;
       if (contactId) payload.contactId = contactId;
       if (pipelineId) payload.pipelineId = Number(pipelineId);

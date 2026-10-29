@@ -145,6 +145,11 @@
     padding: 1rem !important;
   }
 
+  body[data-vertical="generic"] .app-main > main.generic-page-content
+    .reports-page .report-aggregate-card h2 {
+    font-size: var(--report-aggregate-font-size) !important;
+  }
+
   body[data-vertical="generic"] .reports-page__overview > .card:last-child > div:first-child {
     margin-bottom: 1rem !important;
   }
@@ -188,7 +193,8 @@
   body[data-vertical="generic"] main.generic-page-content .generic-deals-pipeline .deals-pipeline-search {
     width: clamp(150px, 16vw, 210px) !important;
     min-width: 0;
-    padding-left: 32px !important;
+    box-sizing: border-box;
+    padding-left: 42px !important;
     font-size: var(--generic-laptop-control) !important;
   }
 
@@ -252,4 +258,66 @@
   body[data-vertical="generic"] .agent-reports-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }
+}
+
+/* Generic CRM Deals: keep the page fixed and scroll only the active list. */
+body[data-vertical="generic"] main.generic-page-content:has(> .generic-deals-pipeline) {
+  height: calc(100dvh - 72px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content > .generic-deals-pipeline {
+  height: 100% !important;
+  min-height: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content > .generic-deals-pipeline .deals-pipeline-list-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto !important;
+  scrollbar-gutter: stable;
+}
+
+/* Keep Generic CRM report-table headers separate from the first data row. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell.card {
+  padding: 0 !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__detail-table thead th {
+  height: 42px !important;
+  padding: 0.65rem 0.75rem !important;
+  line-height: 1.25 !important;
+  vertical-align: middle !important;
+  white-space: nowrap;
+  color: var(--text-primary) !important;
+  background: var(--surface-color, #fff) !important;
+  background-color: var(--surface-color, #fff) !important;
+  background-clip: padding-box;
+  box-shadow: inset 0 -1px 0 var(--border-color);
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 100 !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__detail-table thead,
+body[data-vertical="generic"] main.generic-page-content .reports-page__detail-table thead tr {
+  background: var(--surface-color, #fff) !important;
+  background-color: var(--surface-color, #fff) !important;
+  opacity: 1 !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__detail-table thead tr {
+  position: relative;
+  z-index: 99;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__detail-table tbody td {
+  min-height: 42px;
+  padding: 0.65rem 0.75rem !important;
+  line-height: 1.3 !important;
+  vertical-align: middle !important;
 }

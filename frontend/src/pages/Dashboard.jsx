@@ -100,6 +100,9 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, tenant } = useContext(AuthContext) || {};
+  // Generic CRM uses date-filtered Expected Revenue. Preserve the existing
+  // forecast behavior for Wellness and Travel.
+  const isGenericCrm = !tenant?.vertical || tenant.vertical === 'generic';
   const currency = tenant?.defaultCurrency || 'USD';
   const locale = tenant?.locale || (currency === 'INR' ? 'en-IN' : 'en-US');
   const moneyOptions = { currency, locale };
@@ -167,6 +170,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     let active = true;
+    if (isGenericCrm && dateQuery) setAllTimeExpectedRevenue(undefined);
     // KPI numbers — full-population aggregates from the server.
     // For role=USER the backend auto-scopes to ownerId=userId, so the same
     // call produces personal-pipeline numbers without a query change here.
@@ -174,12 +178,11 @@ export default function Dashboard() {
       .then((d) => {
         if (!active) return;
         setStats({ ...DEFAULT_STATS, ...(d || {}) });
-        if (!dateQuery) setAllTimeExpectedRevenue(d?.expectedValue);
+        if (!dateQuery || !isGenericCrm) setAllTimeExpectedRevenue(d?.expectedValue);
       })
       .catch(() => { if (active) setStats(DEFAULT_STATS); });
-    // Expected Revenue is intentionally independent of the dashboard date
-    // filter: it represents the current all-time pending/open forecast.
-    if (dateQuery) {
+    // Keep the legacy all-time forecast only for non-Generic verticals.
+    if (dateQuery && !isGenericCrm) {
       fetchApi(`/api/deals/stats?currency=${encodeURIComponent(currency)}`)
         .then((d) => { if (active) setAllTimeExpectedRevenue(d?.expectedValue); })
         .catch(() => { if (active) setAllTimeExpectedRevenue(undefined); });
@@ -211,11 +214,13 @@ export default function Dashboard() {
         .catch(() => setDashboardTasks([]));
     }
     return () => { active = false; };
-  }, [isUser, currency, dateQuery]);
+  }, [isGenericCrm, isUser, currency, dateQuery]);
 
   // KPIs derived purely from `stats` (server aggregates), not from any list.
   const totalRevenue = stats.wonValue;
-  const expectedRevenue = allTimeExpectedRevenue !== undefined ? allTimeExpectedRevenue : stats.expectedValue;
+  const expectedRevenue = isGenericCrm && dateQuery
+    ? stats.expectedValue
+    : (allTimeExpectedRevenue !== undefined ? allTimeExpectedRevenue : stats.expectedValue);
   const displayRevenue = (value) => value === null ? 'Unavailable' : formatMoneyCompact(value, moneyOptions);
   // #639 — keep the raw numeric so formatPercent renders a 1-decimal "0.0%"
   // consistently. Pre-fix this was Math.round-d to an integer and rendered
@@ -379,7 +384,7 @@ export default function Dashboard() {
       <div className="dashboard-panels" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
         <div className="card dashboard-pipeline-card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Deals Analytics'}</h3>
           </div>
           <div ref={pipelineChartRef} className="dashboard-pipeline-chart" style={{ width: '100%', height: '260px', minWidth: 0, minHeight: '260px' }}>
             {!hasPipelineData ? (

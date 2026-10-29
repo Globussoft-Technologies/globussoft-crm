@@ -204,6 +204,8 @@ describe('buildWebFormScriptEmbedCode', () => {
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=104');
     expect(code).toContain('frame.allow="geolocation *"');
     expect(code).toContain('attribution:savedAttribution');
+    expect(code).toContain('frameUrl.searchParams.set(key');
+    expect(code).toContain('readTrackingCookie("gbs_"+key)');
     expect(code).toContain('Max-Age="+maxAge');
     expect(code).not.toContain('Contact </script> Form');
     expect(code).toContain('Contact \\u003c/script> Form');

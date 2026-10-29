@@ -35,6 +35,7 @@ router.get("/", async (req, res) => {
         priority: true,
         startDate: true,
         endDate: true,
+        budget: true,
         ownerId: true,
         tenantId: true,
         createdAt: true,

@@ -4,6 +4,7 @@ import { Building2, Download, FileText, Plus, Trash2, Upload } from 'lucide-reac
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDate, formatDateTime } from '../../utils/date';
+import { generatedDealName } from '../../utils/dealDisplay';
 import { fetchApi } from '../../utils/api';
 import {
   assignOwner, deleteAttachment, fetchAttachments, fetchEmailThreads,
@@ -471,7 +472,7 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
         deals.map((d) => (
           <div className="cp-row" key={d.id}>
             <button type="button" onClick={() => onOpenDeal(d)} style={{ flex: 1, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)', padding: 0 }}>
-              <span style={{ fontWeight: 600 }}>{d.title}</span>
+              <span style={{ fontWeight: 600 }}>{isGeneric ? generatedDealName(d) : d.title}</span>
               <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>{formatMoney(d.amount, { currency: d.currency })}{d.expectedClose ? ` • closes ${formatDate(d.expectedClose)}` : ''}</span>
             </button>
             <select className="cp-input cp-stage-select" value={d.stage} disabled={savingId === d.id} onChange={(e) => changeStage(d, e.target.value)}>

@@ -83,6 +83,27 @@ export function convertCurrency(amount, fromCode, toCode, currencies = []) {
   return (value / fromRate) * toRate;
 }
 
+// Persisted conversions must fail closed. The legacy display helper above
+// intentionally keeps its fallback, but must not relabel an unconverted value
+// when writing financial data back to the API.
+export function convertCurrencyStrict(amount, fromCode, toCode, currencies = []) {
+  const value = Number(amount);
+  const from = String(fromCode || '').trim().toUpperCase();
+  const to = String(toCode || '').trim().toUpperCase();
+  if (!Number.isFinite(value) || amount === '' || amount == null) throw new Error('Enter a valid amount.');
+  if (!from || !to) throw new Error('Choose valid source and target currencies.');
+  if (from === to) return value;
+  const rates = new Map(currencies.map(currency => [String(currency.code || '').toUpperCase(), Number(currency.exchangeRate)]));
+  const fromRate = rates.get(from);
+  const toRate = rates.get(to);
+  if (!Number.isFinite(fromRate) || fromRate <= 0 || !Number.isFinite(toRate) || toRate <= 0) {
+    throw new Error(`Exchange rates unavailable for ${from} to ${to}. Reload currencies and try again.`);
+  }
+  const converted = (value / fromRate) * toRate;
+  if (!Number.isFinite(converted)) throw new Error('Unable to convert this amount safely.');
+  return converted;
+}
+
 /**
  * Strip currency symbols and grouping characters and parse into a Number.
  * "$1,234.56" -> 1234.56 ; "₹1,23,456.78" -> 123456.78

@@ -84,10 +84,8 @@ function ownerName(deal) { return deal.ownerName || personName(deal.owner) || 'U
 function dealMatchesSearch(deal, rawSearch, generic = false) {
   const term = String(rawSearch || '').trim().toLowerCase();
   if (!term) return true;
-  // Generic CRM search is based on the same generated/stored deal name shown
-  // on the card. Do not match
-  // hidden contact/company/owner fields that can make an unrelated-looking
-  // auto-named deal appear in the results.
+  // Match deal names and related contact names, consistent with the API.
+  // Hidden company/owner fields are not part of Generic CRM search.
   if (generic) {
     const searchableText = [
       generatedDealName(deal),

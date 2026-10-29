@@ -178,6 +178,7 @@ router.get("/", async (req, res) => {
       const nameClauses = [
         { title: { contains: search } },
         { dealType: { contains: search } },
+        { contact: { is: { name: { contains: search } } } },
       ];
       if (/^\d+$/.test(search)) nameClauses.push({ id: Number(search) });
       if (generatedNameMatch) {
@@ -339,6 +340,7 @@ router.get("/stats", async (req, res) => {
       const nameClauses = [
         { title: { contains: search } },
         { dealType: { contains: search } },
+        { contact: { is: { name: { contains: search } } } },
       ];
       if (/^\d+$/.test(search)) nameClauses.push({ id: Number(search) });
       if (generatedNameMatch) nameClauses.push({ id: Number(generatedNameMatch[2]) });

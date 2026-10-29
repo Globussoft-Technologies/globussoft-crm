@@ -1,7 +1,8 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import { useState, useEffect, useContext, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
+import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
 import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, ArrowLeft } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
@@ -921,6 +922,11 @@ const Contacts = () => {
     contactsScrollableTableBaseWidth,
   )}px`;
   const contactsFrozenTableWidthPx = `${contactsFrozenTableWidth}px`;
+  useLayoutEffect(() => {
+    if (loading || sortedContacts.length === 0) return undefined;
+    return observeSplitTableRowHeights(contactsFrozenTableRef.current, contactsScrollableTableRef.current);
+  }, [loading, sortedContacts, columnLayout, contactsScrollableColumnDefs]);
+
   const getContactHeaderCellStyle = (extra = {}) => ({
     padding: '1rem',
     color: 'var(--text-secondary)',

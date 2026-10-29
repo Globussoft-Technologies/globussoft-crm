@@ -4921,6 +4921,13 @@
               var value = readCookie("gbs_" + key);
               if (value) tracking[key] = value;
             });
+            // Include attribution in the multipart request as ordinary fields
+            // as well as the private metadata header. This keeps UTM values
+            // available to older/direct submit callers if custom headers are
+            // stripped by a proxy or browser integration.
+            TRACKING_QUERY_KEYS.forEach(function (key) {
+              if (tracking[key]) fd.set(key, tracking[key]);
+            });
             Object.keys(detectedLocationMetadata).forEach(function (key) {
               tracking[key] = detectedLocationMetadata[key];
             });

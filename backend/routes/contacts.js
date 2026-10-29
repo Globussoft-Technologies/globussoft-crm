@@ -1841,6 +1841,24 @@ router.get("/", async (req, res) => {
           orderBy: { submittedAt: "desc" },
           take: 1,
         },
+        // UTM attribution is also persisted as a Touchpoint. Include the
+        // latest one so the Leads grid can render attribution even when the
+        // lead came through a non-web-form intake or legacy submission.
+        touchpoints: {
+          select: {
+            id: true,
+            source: true,
+            medium: true,
+            utmCampaign: true,
+            utmTerm: true,
+            utmContent: true,
+            url: true,
+            landingPage: true,
+            timestamp: true,
+          },
+          orderBy: { timestamp: "desc" },
+          take: 1,
+        },
       };
     }
     const contacts = await prisma.contact.findMany(findManyArgs);

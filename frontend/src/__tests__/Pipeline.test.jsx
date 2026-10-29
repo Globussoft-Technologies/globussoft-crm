@@ -81,6 +81,14 @@ function renderPipeline(initialEntry = '/pipeline') {
   );
 }
 
+function renderGenericPipeline(initialEntry = '/pipeline') {
+  return render(
+    <AuthContext.Provider value={{ user: { id: 1 }, tenant: { vertical: 'generic' } }}>
+      <MemoryRouter initialEntries={[initialEntry]}><Pipeline /></MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
 function expectedRange(days) {
   const today = new Date();
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1);
@@ -119,7 +127,11 @@ describe('Deals and Pipelines page', () => {
         { ...DEALS[2], stage: 'closed-lost' },
       ],
     });
-    renderPipeline();
+    render(
+      <AuthContext.Provider value={{ user: { tenantId: 1 }, tenant: { id: 1, vertical: 'generic' } }}>
+        <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
     expect(await screen.findByRole('heading', { name: 'Won' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Lost' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'closed-won' })).not.toBeInTheDocument();
@@ -302,6 +314,35 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByText('Initech Deal')).toBeInTheDocument();
   });
 
+  it('keeps the configured stage columns stable while searching legacy-stage deals', async () => {
+    mockApi({
+      stages: [
+        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        { id: 2, name: 'Contracted', color: '#10b981', position: 1 },
+        { id: 3, name: 'Negotiation', color: '#7c3aed', position: 2 },
+        { id: 4, name: 'Won', color: '#10b981', position: 3 },
+        { id: 5, name: 'Lost', color: '#ef4444', position: 4 },
+      ],
+      deals: [{ ...DEALS[0], title: 'Legacy contacted deal', stage: 'contacted' }],
+    });
+    render(
+      <AuthContext.Provider value={{ user: { tenantId: 1 }, tenant: { id: 1, vertical: 'generic' } }}>
+        <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    expect(await screen.findByText('Legacy contacted deal')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: /search deals/i }), { target: { value: 'legacy' } });
+    await waitFor(() => expect(screen.getByText('Legacy contacted deal')).toBeInTheDocument());
+    expect(screen.getAllByRole('heading', { name: /.+/ })).toEqual(expect.arrayContaining([
+      screen.getByRole('heading', { name: 'New Lead' }),
+      screen.getByRole('heading', { name: 'Contracted' }),
+      screen.getByRole('heading', { name: 'Negotiation' }),
+      screen.getByRole('heading', { name: 'Won' }),
+      screen.getByRole('heading', { name: 'Lost' }),
+    ]));
+    expect(screen.queryByRole('heading', { name: 'contacted' })).not.toBeInTheDocument();
+  });
+
   it('filters deals by stage and owner', async () => {
     renderPipeline();
     await screen.findByText('Acme Corp Renewal');
@@ -328,6 +369,14 @@ describe('Deals and Pipelines page', () => {
     fireEvent.click(screen.getByRole('button', { name: /generate deal score for Acme Corp Renewal/i }));
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/ai_scoring/score/1'));
     expect(notifyObj.success).toHaveBeenCalledWith('Deal score updated');
+  });
+
+  it('hides deal score and probability controls in Generic CRM', async () => {
+    renderGenericPipeline();
+    await screen.findByText('Acme Corp Renewal');
+
+    expect(screen.queryByRole('button', { name: /generate deal score/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('25%')).not.toBeInTheDocument();
   });
 
   it('opens and closes the Add Deal dialog', async () => {

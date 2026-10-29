@@ -81,12 +81,35 @@ function pipelinePresetForRange(range) {
 function personName(person) { return person ? (person.name || [person.firstName, person.lastName].filter(Boolean).join(' ') || person.email || '') : ''; }
 function dealContact(deal) { return deal.contactName || personName(deal.contact) || deal.company || 'No contact linked'; }
 function ownerName(deal) { return deal.ownerName || personName(deal.owner) || 'Unassigned'; }
-function stageIdForDeal(deal, stages) {
+function dealMatchesSearch(deal, rawSearch, generic = false) {
+  const term = String(rawSearch || '').trim().toLowerCase();
+  if (!term) return true;
+  // Generic CRM search is based on the same generated/stored deal name shown
+  // on the card. Do not match
+  // hidden contact/company/owner fields that can make an unrelated-looking
+  // auto-named deal appear in the results.
+  if (generic) {
+    const title = generatedDealName(deal).toLowerCase();
+    if (term.includes(' ')) return title.includes(term);
+    return title.split(/[^a-z0-9]+/).some((word) => word.startsWith(term));
+  }
+  return [
+    deal?.title,
+    deal?.company,
+    deal?.contactName,
+    deal?.contact?.name,
+    deal?.contact?.company,
+    deal?.ownerName,
+    personName(deal?.owner),
+  ].some((value) => String(value || '').toLowerCase().includes(term));
+}
+function stageIdForDeal(deal, stages, isGeneric = false) {
   const raw = slugifyStageName(deal?.stage);
   if (stages.some((stage) => stage.id === raw)) return raw;
   const aliases = {
     lead: ['new-lead', 'new'],
-    contacted: ['contacted'],
+    contacted: isGeneric ? ['contacted', 'contracted'] : ['contacted'],
+    contracted: ['contracted', 'contacted'],
     proposal: ['proposal-sent', 'proposal'],
     'proposal-sent': ['proposal-sent', 'proposal'],
     won: ['closed-won', 'won'],
@@ -116,13 +139,11 @@ function FilterDropdown({ ariaLabel, value, options, onChange }) {
   return <span ref={dropdownRef} style={{ position: 'relative' }}><select aria-label={ariaLabel} tabIndex={-1} value={value} onChange={onChange} style={hiddenFilterSelect}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button type="button" aria-label={`${ariaLabel} selector`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} style={filterSelect}>{selected.label}<ChevronDown size={14} /></button>{open && <div role="listbox" aria-label={`${ariaLabel} options`} style={filterMenu} onMouseDown={(event) => event.stopPropagation()}>{options.map((option) => <button type="button" role="option" aria-selected={String(option.value) === String(value)} key={option.value} style={filterOption} onClick={() => { onChange({ target: { value: option.value } }); setOpen(false); }}>{option.label}</button>)}</div>}</span>;
 }
 
-function DealCard({ deal, stage, onOpen, onDragStart, onDelete, onScore, cardFields, locale, reportingCurrency }) {
-  const currentVertical = document.body?.dataset.vertical;
-  const isGenericDeal = currentVertical !== 'wellness' && currentVertical !== 'travel';
+function DealCard({ deal, stage, onOpen, onDragStart, onDelete, onScore, cardFields, locale, reportingCurrency, isGenericDeal = false }) {
   const displayName = isGenericDeal ? generatedDealName(deal) : (deal.title || 'Untitled deal');
-  const hideProbability = document.body?.dataset.vertical === 'generic';
+  const hideProbability = isGenericDeal || document.body?.dataset.vertical === 'generic';
   return <article className="deals-pipeline-card" draggable onDragStart={(event) => onDragStart(event, deal)} onClick={() => onOpen(deal)} style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderLeft: `3px solid ${stage.color}`, borderRadius: 9, padding: 14, cursor: 'grab', alignSelf: 'start', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
-    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><GripVertical size={15} style={{ color: 'var(--text-secondary)', marginTop: 2, flexShrink: 0 }} aria-hidden="true" /><div style={{ minWidth: 0, flex: 1 }}><h3 className="deals-pipeline-card-title" style={{ margin: 0, fontSize: 13, lineHeight: 1.35, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{displayName}</h3>{cardFields.contact && <p className="deals-pipeline-card-contact" style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{dealContact(deal)}</p>}</div><div style={{ display: 'flex', gap: 5 }}><button type="button" onClick={(event) => { event.stopPropagation(); onScore(deal); }} aria-label={`Generate deal score for ${displayName}`} title="Generate deal score" style={iconButton}><Sparkles size={14} /></button><button type="button" onClick={(event) => { event.stopPropagation(); onDelete(deal); }} aria-label={`Delete deal ${displayName}`} style={iconButton}><Trash2 size={14} /></button></div></div>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><GripVertical size={15} style={{ color: 'var(--text-secondary)', marginTop: 2, flexShrink: 0 }} aria-hidden="true" /><div style={{ minWidth: 0, flex: 1 }}><h3 className="deals-pipeline-card-title" style={{ margin: 0, fontSize: 13, lineHeight: 1.35, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{displayName}</h3>{cardFields.contact && <p className="deals-pipeline-card-contact" style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{dealContact(deal)}</p>}</div><div style={{ display: 'flex', gap: 5 }}>{!isGenericDeal && <button type="button" onClick={(event) => { event.stopPropagation(); onScore(deal); }} aria-label={`Generate deal score for ${displayName}`} title="Generate deal score" style={iconButton}><Sparkles size={14} /></button>}<button type="button" onClick={(event) => { event.stopPropagation(); onDelete(deal); }} aria-label={`Delete deal ${displayName}`} style={iconButton}><Trash2 size={14} /></button></div></div>
     {(cardFields.amount || (cardFields.probability && !hideProbability)) && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 14, alignItems: 'center' }}>{cardFields.amount && <strong className="deals-pipeline-card-amount" style={{ fontSize: 13, color: 'var(--text-primary)' }}>{formatMoney(deal.amount || 0, { currency: deal.currency || reportingCurrency })} {deal.currency || reportingCurrency}</strong>}{cardFields.probability && !hideProbability && <span className="deals-pipeline-card-probability" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{Number(deal.probability ?? 0)}%</span>}</div>}
     {(cardFields.owner || cardFields.expectedClose) && <div className="deals-pipeline-card-footer" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 11, paddingTop: 10, borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)' }}>{cardFields.owner && <span>{ownerName(deal)}</span>}{cardFields.expectedClose && <span>{dateLabel(deal.expectedClose, locale)}</span>}</div>}
   </article>;
@@ -240,7 +261,7 @@ export default function Pipeline() {
     if (firstLoadRef.current) setLoading(true);
     setError('');
     try {
-      const query = new URLSearchParams({ limit: String(pageSize), page: String(page) });
+      const query = new URLSearchParams({ limit: String(isGeneric && debouncedSearch ? 500 : pageSize), page: String(page) });
       if (isGeneric && dealType) query.set('dealType', dealType);
       else if (pipelineId) query.set('pipelineId', pipelineId);
       if (stageFilter) query.set('stage', stageFilter);
@@ -266,8 +287,11 @@ export default function Pipeline() {
       if (requestId !== requestIdRef.current) return;
       const list = Array.isArray(dealData) ? dealData : (dealData?.data || []); setDeals(list);
       const serverTotal = Array.isArray(dealData) ? list.length : Number(dealData?.total ?? list.length);
-      setTotal(serverTotal);
-      setTotalPages(Array.isArray(dealData) ? 1 : Math.max(1, Number(dealData?.totalPages) || Math.ceil(serverTotal / pageSize)));
+      const displayTotal = isGeneric && debouncedSearch
+        ? list.filter((deal) => dealMatchesSearch(deal, debouncedSearch, true)).length
+        : serverTotal;
+      setTotal(displayTotal);
+      setTotalPages(Array.isArray(dealData) ? 1 : Math.max(1, Number(dealData?.totalPages) || Math.ceil(displayTotal / pageSize)));
       setStats(statsData && !Array.isArray(statsData) ? statsData : null);
       const normalizedStages = normalizePipelineStages(stageData);
       setStages(normalizedStages.length || !isGeneric || dealType !== 'New Business'
@@ -331,7 +355,13 @@ export default function Pipeline() {
   }, [load, tenant?.id, user?.tenantId]);
 
   const ownerOptions = useMemo(() => staff.map((member) => [String(member.id), member.name || member.email || `User ${member.id}`]), [staff]);
-  const visibleDeals = deals;
+  // Keep Generic CRM resilient when an older backend/proxy returns the
+  // unfiltered page while the search request is in flight. Travel and
+  // Wellness keep their existing server-driven behavior.
+  const visibleDeals = useMemo(
+    () => isGeneric && debouncedSearch ? deals.filter((deal) => dealMatchesSearch(deal, debouncedSearch, true)) : deals,
+    [deals, isGeneric, debouncedSearch],
+  );
   const effectiveStages = isGeneric && dealType === 'New Business' && stages.length === 0
     ? normalizePipelineStages(DEFAULT_GENERIC_DEAL_TYPE.stages)
     : stages;
@@ -342,24 +372,30 @@ export default function Pipeline() {
     }
     const known = new Set(allStages.map((stage) => stage.id));
     for (const item of isGeneric ? [...visibleDeals, ...(stats?.byStage || [])] : []) {
-      const id = stageIdForDeal(item, effectiveStages);
-      if (id && !known.has(id)) {
+      const id = stageIdForDeal(item, effectiveStages, isGeneric);
+      // Search results can contain legacy stages that are not part of the
+      // selected deal type's configured board. Keep the board stable during
+      // search; known legacy aliases (for example contacted -> Contracted)
+      // are still mapped by stageIdForDeal above.
+      if (id && !known.has(id) && !debouncedSearch) {
         known.add(id);
         allStages.push({ id, title: item.stage || id, color: '#64748b' });
       }
     }
     return allStages.map((stage) => {
-    const rows = visibleDeals.filter((deal) => stageIdForDeal(deal, effectiveStages) === stage.id);
-    const aggregate = stats?.byStage?.find((item) => stageIdForDeal(item, effectiveStages) === stage.id);
+    const rows = visibleDeals.filter((deal) => stageIdForDeal(deal, effectiveStages, isGeneric) === stage.id);
+    const aggregate = debouncedSearch ? null : stats?.byStage?.find((item) => stageIdForDeal(item, effectiveStages, isGeneric) === stage.id);
+    const searchValue = rows.reduce((totalValue, deal) => totalValue + Number(deal.amount || 0), 0);
+    const searchExpectedValue = rows.reduce((totalValue, deal) => totalValue + (Number(deal.amount || 0) * Number(deal.probability ?? 0)) / 100, 0);
     return {
       ...stage,
       rows,
       count: Number(aggregate?.count ?? rows.length),
-      value: aggregate ? aggregate.value : (stats ? 0 : null),
-      expectedValue: aggregate ? aggregate.expectedValue : (stats ? 0 : null),
+      value: aggregate ? aggregate.value : (debouncedSearch ? searchValue : (stats ? 0 : null)),
+      expectedValue: aggregate ? aggregate.expectedValue : (debouncedSearch ? searchExpectedValue : (stats ? 0 : null)),
     };
     });
-  }, [effectiveStages, visibleDeals, stats, isGeneric, dealType]);
+  }, [effectiveStages, visibleDeals, stats, isGeneric, dealType, debouncedSearch]);
   const reportingCurrency = stats?.currency || tenant?.defaultCurrency || 'USD';
   const kanbanHeight = isGeneric ? 'calc(100vh - 390px)' : 'calc(100vh - 430px)';
   const stageMoney = (amount) => amount == null ? '—' : formatMoney(amount, { currency: reportingCurrency, maximumFractionDigits: 0 });
@@ -433,9 +469,9 @@ export default function Pipeline() {
     {showFilters && <section style={{ ...toolbar, marginTop: -12, borderTop: 0 }}><Filter size={15} color="var(--text-secondary)" /><label style={control}><span>Stage</span><FilterDropdown ariaLabel="Stage" value={stageFilter} options={[{ value: '', label: 'All stages' }, ...stages.map((stage) => ({ value: stage.id, label: stage.title }))]} onChange={(event) => setStageFilter(event.target.value)} /></label><label style={control}><span>Owner</span><FilterDropdown ariaLabel="Owner" value={ownerFilter} options={[{ value: '', label: 'All owners' }, ...ownerOptions.map(([id, name]) => ({ value: id, label: name }))]} onChange={(event) => setOwnerFilter(event.target.value)} /></label></section>}
     {error && <div role="alert" style={alert}>{error}<button type="button" onClick={load} style={linkButton}>Try again</button></div>}
     {fxWarning && <div role="alert" style={alert}>{fxWarning}</div>}
-    {loading ? <div style={empty}>Loading deals...</div> : stageRows.length === 0 ? <div style={empty}>{isGeneric ? 'No deal type stages configured.' : 'No pipeline stages configured.'}</div> : view === 'kanban' ? <div className="deals-pipeline-board" aria-label="Deal pipeline board" style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(stageRows.length, 1)}, minmax(${KANBAN_COLUMN_MIN_WIDTH}px, 1fr))`, gap: 8, width: '100%', maxWidth: '100%', height: kanbanHeight, minHeight: 360, overflowX: 'auto', overflowY: 'hidden', scrollbarGutter: 'stable', paddingBottom: 12 }}>{stageRows.map((stage) => <section className={`deals-pipeline-stage${expandedStageIds.includes(stage.id) ? " is-expanded" : ""}`} key={stage.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragged) moveDeal(dragged, stage.id); setDragged(null); }} style={{ minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 8 }}><div className="deals-pipeline-stage-header" style={{ borderTop: `3px solid ${stage.color}`, padding: '8px 4px 10px' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}><div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}><h2 className="deals-pipeline-stage-title" title={stage.title} style={{ ...columnTitle, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{stage.title}</h2><span style={countBadge}>{stage.count}</span></div><StageBadge stage={stage} title={stageMoney(stage.value)} /></div>{stage.rows.some((deal) => deal.probability !== null && deal.probability !== undefined && deal.probability !== '') && <div className="deals-pipeline-stage-meta" style={columnMeta}>Weighted value {stageMoney(stage.expectedValue)}</div>}<button type="button" className="deals-pipeline-stage-toggle" style={{ padding: 0 }} aria-label={`Toggle ${stage.title} deals`} aria-expanded={expandedStageIds.includes(stage.id)} aria-controls={`deals-pipeline-list-${stage.id}`} onClick={() => setExpandedStageIds((current) => current.includes(stage.id) ? current.filter((id) => id !== stage.id) : [...current, stage.id])}><ChevronDown size={16} /></button></div><button type="button" className="deals-pipeline-add-deal" onClick={() => { setCreateDealDefaults({ ...(isGeneric ? { dealType } : { pipelineId: pipelineId || undefined }), stage: stage.id }); setShowCreate(true); }} style={addDealButton}><Plus size={14} /> Add deal</button><div id={`deals-pipeline-list-${stage.id}`} className="deals-kanban-list" style={{ display: 'grid', gap: 8, marginTop: 8, flex: 1, minHeight: 0, overflowY: 'auto', alignContent: 'start', gridAutoRows: 'max-content', paddingRight: 4 }}>{stage.rows.map((deal) => <DealCard key={deal.id} deal={deal} stage={stage} cardFields={cardFields} locale={locale} reportingCurrency={reportingCurrency} onOpen={openDeal} onDragStart={(event, row) => { setDragged(row); event.dataTransfer.effectAllowed = 'move'; }} onDelete={deleteDeal} onScore={generateDealScore} />)}{stage.rows.length === 0 && <div style={dropHint}>No deals on this page</div>}</div></section>)}</div> : <div className="deals-pipeline-list-view" style={{ border: '1px solid var(--border-color)', borderRadius: 10, overflow: 'auto' }}><table className="deals-pipeline-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}><thead><tr>{['Deal', 'Contact', 'Stage', 'Owner', 'Amount', ...(isGeneric ? [] : ['Probability', 'Expected close'])].map((headingText) => <th key={headingText} style={th}>{headingText}</th>)}</tr></thead><tbody>{visibleDeals.map((deal) => { const stage = stageRows.find((row) => row.id === stageIdForDeal(deal, effectiveStages)) || { id: deal.stage, title: deal.stage, color: '#64748b' }; return <tr key={deal.id} onClick={() => openDeal(deal)} style={{ cursor: 'pointer' }}><td style={td}><strong>{deal.title}</strong></td><td style={td}>{dealContact(deal)}</td><td style={td}><StageBadge stage={stage} title={stage.title} /></td><td style={td}>{ownerName(deal)}</td><td style={td}>{formatMoney(deal.amount || 0, { currency: deal.currency || reportingCurrency })} {deal.currency || reportingCurrency}</td>{!isGeneric && <><td style={td}>{deal.probability ?? 0}%</td><td style={td}>{dateLabel(deal.expectedClose, locale)}</td></>}</tr>; })}</tbody></table>{visibleDeals.length === 0 && <div style={empty}>No deals match your filters.</div>}</div>}
+    {loading ? <div style={empty}>Loading deals...</div> : stageRows.length === 0 ? <div style={empty}>{isGeneric ? 'No deal type stages configured.' : 'No pipeline stages configured.'}</div> : view === 'kanban' ? <div className="deals-pipeline-board" aria-label="Deal pipeline board" style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(stageRows.length, 1)}, minmax(${KANBAN_COLUMN_MIN_WIDTH}px, 1fr))`, gap: 8, width: '100%', maxWidth: '100%', height: kanbanHeight, minHeight: 360, overflowX: 'auto', overflowY: 'hidden', scrollbarGutter: 'stable', paddingBottom: 12 }}>{stageRows.map((stage) => <section className={`deals-pipeline-stage${expandedStageIds.includes(stage.id) ? " is-expanded" : ""}`} key={stage.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragged) moveDeal(dragged, stage.id); setDragged(null); }} style={{ minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 8 }}><div className="deals-pipeline-stage-header" style={{ borderTop: `3px solid ${stage.color}`, padding: '8px 4px 10px' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}><div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}><h2 className="deals-pipeline-stage-title" title={stage.title} style={{ ...columnTitle, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{stage.title}</h2><span style={countBadge}>{stage.count}</span></div><StageBadge stage={stage} title={stageMoney(stage.value)} /></div>{!isGeneric && stage.rows.some((deal) => deal.probability !== null && deal.probability !== undefined && deal.probability !== '') && <div className="deals-pipeline-stage-meta" style={columnMeta}>Weighted value {stageMoney(stage.expectedValue)}</div>}<button type="button" className="deals-pipeline-stage-toggle" style={{ padding: 0 }} aria-label={`Toggle ${stage.title} deals`} aria-expanded={expandedStageIds.includes(stage.id)} aria-controls={`deals-pipeline-list-${stage.id}`} onClick={() => setExpandedStageIds((current) => current.includes(stage.id) ? current.filter((id) => id !== stage.id) : [...current, stage.id])}><ChevronDown size={16} /></button></div><button type="button" className="deals-pipeline-add-deal" onClick={() => { setCreateDealDefaults({ ...(isGeneric ? { dealType } : { pipelineId: pipelineId || undefined }), stage: stage.id }); setShowCreate(true); }} style={addDealButton}><Plus size={14} /> Add deal</button><div id={`deals-pipeline-list-${stage.id}`} className="deals-kanban-list" style={{ display: 'grid', gap: 8, marginTop: 8, flex: 1, minHeight: 0, overflowY: 'auto', alignContent: 'start', gridAutoRows: 'max-content', paddingRight: 4 }}>{stage.rows.map((deal) => <DealCard key={deal.id} deal={deal} stage={stage} cardFields={cardFields} locale={locale} reportingCurrency={reportingCurrency} onOpen={openDeal} onDragStart={(event, row) => { setDragged(row); event.dataTransfer.effectAllowed = 'move'; }} onDelete={deleteDeal} onScore={generateDealScore} isGenericDeal={isGeneric} />)}{stage.rows.length === 0 && <div style={dropHint}>No deals on this page</div>}</div></section>)}</div> : <div className="deals-pipeline-list-view" style={{ border: '1px solid var(--border-color)', borderRadius: 10, overflow: 'auto' }}><table className="deals-pipeline-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}><thead><tr>{['Deal', 'Contact', 'Stage', 'Owner', 'Amount', ...(isGeneric ? [] : ['Probability', 'Expected close'])].map((headingText) => <th key={headingText} style={th}>{headingText}</th>)}</tr></thead><tbody>{visibleDeals.map((deal) => { const stage = stageRows.find((row) => row.id === stageIdForDeal(deal, effectiveStages, isGeneric)) || { id: deal.stage, title: deal.stage, color: '#64748b' }; return <tr key={deal.id} onClick={() => openDeal(deal)} style={{ cursor: 'pointer' }}><td style={td}><strong>{isGeneric ? generatedDealName(deal) : deal.title}</strong></td><td style={td}>{dealContact(deal)}</td><td style={td}><StageBadge stage={stage} title={stage.title} /></td><td style={td}>{ownerName(deal)}</td><td style={td}>{formatMoney(deal.amount || 0, { currency: deal.currency || reportingCurrency })} {deal.currency || reportingCurrency}</td>{!isGeneric && <><td style={td}>{deal.probability ?? 0}%</td><td style={td}>{dateLabel(deal.expectedClose, locale)}</td></>}</tr>; })}</tbody></table>{visibleDeals.length === 0 && <div style={empty}>No deals match your filters.</div>}</div>}
     <div style={paginationBar}><span>Showing {total === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total} deals</span><label style={control}><span>Rows</span><select aria-label="Deals per page" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>{[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}</select></label><button type="button" style={secondaryButton} disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}>Previous</button><span>Page {page} of {totalPages}</span><button type="button" style={secondaryButton} disabled={page >= totalPages || loading} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Next</button></div>
-    {showCardCustomizer && <div role="presentation" style={overlay} onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCardCustomizer(false); }}><div role="dialog" aria-modal="true" style={{ ...formCard, width: 'min(420px, calc(100vw - 32px))' }}><div style={formHeader}><h2 style={{ margin: 0, fontSize: 18 }}>Customize deal cards</h2><button type="button" aria-label="Close" onClick={() => setShowCardCustomizer(false)} style={iconButton}><X size={18} /></button></div>{[['contact', 'Contact'], ['amount', 'Deal value'], ['probability', 'Probability'], ['owner', 'Owner'], ['expectedClose', 'Expected close date']].map(([key, label]) => <label key={key} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--text-primary)' }}><input type="checkbox" checked={cardFields[key]} onChange={(event) => setCardFields((current) => ({ ...current, [key]: event.target.checked }))} />{label}</label>)}<button type="button" style={primaryButton} onClick={() => { localStorage.removeItem('deals-card-fields'); localStorage.setItem(cardFieldsKey, JSON.stringify(cardFields)); setShowCardCustomizer(false); }}>Save</button></div></div>}
+    {showCardCustomizer && <div role="presentation" style={overlay} onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCardCustomizer(false); }}><div role="dialog" aria-modal="true" style={{ ...formCard, width: 'min(420px, calc(100vw - 32px))' }}><div style={formHeader}><h2 style={{ margin: 0, fontSize: 18 }}>Customize deal cards</h2><button type="button" aria-label="Close" onClick={() => setShowCardCustomizer(false)} style={iconButton}><X size={18} /></button></div>{[['contact', 'Contact'], ['amount', 'Deal value'], ...(isGeneric ? [] : [['probability', 'Probability']]), ['owner', 'Owner'], ['expectedClose', 'Expected close date']].map(([key, label]) => <label key={key} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--text-primary)' }}><input type="checkbox" checked={cardFields[key]} onChange={(event) => setCardFields((current) => ({ ...current, [key]: event.target.checked }))} />{label}</label>)}<button type="button" style={primaryButton} onClick={() => { localStorage.removeItem('deals-card-fields'); localStorage.setItem(cardFieldsKey, JSON.stringify(cardFields)); setShowCardCustomizer(false); }}>Save</button></div></div>}
     {selectedDeal && <DealModal deal={selectedDeal} onClose={() => setSelectedDeal(null)} />}
     {showCreate && <ContactDealModal deal={createDealDefaults} onClose={() => setShowCreate(false)} onDone={async () => { if (isGeneric) await refreshGenericDealTypes(); await load(); }} />}
 

@@ -137,7 +137,16 @@ describe('GET /api/deals — page/limit/offset pagination', () => {
     expect(listWhere.tenantId).toBe(TENANT_ID);
     expect(listWhere.AND[0].OR).toEqual(expect.arrayContaining([
       { title: { contains: 'Acme' } },
-      { company: { contains: 'Acme' } },
+      {
+        contact: {
+          is: {
+            OR: [
+              { name: { contains: 'Acme' } },
+              { company: { contains: 'Acme' } },
+            ],
+          },
+        },
+      },
     ]));
   });
 

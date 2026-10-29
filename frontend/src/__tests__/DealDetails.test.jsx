@@ -130,50 +130,14 @@ describe('<DealDetails />', () => {
     expect(tracker.getByText('Lead')).not.toHaveClass('current');
   });
 
-  it('keeps the Add tag button available when a tag already exists', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/deals/42') return Promise.resolve({ ...deal, contact: { ...deal.contact, tags: ['Existing tag'] } });
-      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
-      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
-      return Promise.resolve([]);
-    });
-
-    renderPage();
-
-    expect((await screen.findAllByText('Existing tag')).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
-    expect(await screen.findByRole('textbox', { name: 'Add tag' })).toBeInTheDocument();
-  });
-
-  it('keeps the tag selector usable across a delayed catalogue response and reopening', async () => {
-    let resolveCatalog;
-    const catalog = new Promise((resolve) => { resolveCatalog = resolve; });
-    const defaultFetch = fetchApiMock.getMockImplementation();
-    fetchApiMock.mockImplementation((url, ...args) => url === '/api/contacts/tags'
-      ? catalog : defaultFetch(url, ...args));
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'Add tag' }));
-    const input = await screen.findByRole('textbox', { name: 'Add tag' });
-    fireEvent.change(input, { target: { value: 'New prospect' } });
-    await act(async () => { resolveCatalog([{ name: 'VIP', color: '#112233' }]); });
-    expect(screen.getByRole('textbox', { name: 'Add tag' })).toHaveValue('New prospect');
-    expect(screen.getByRole('dialog', { name: 'Tag selector' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('dialog', { name: 'Tag selector' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
-    expect(await screen.findByRole('textbox', { name: 'Add tag' })).toHaveValue('');
-  });
-
-  it('supports the details tab search and show-empty-fields control', async () => {
+  it('does not render the removed Overview / Deal details workspace', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Acme Expansion' });
-    fireEvent.click(screen.getByRole('button', { name: 'Deal details' }));
-    expect(screen.getByRole('heading', { name: 'Deal details' })).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search fields' }), { target: { value: 'Currency' } });
-    expect(screen.getByText('Currency')).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search fields' }), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /show empty fields/i }));
-    expect(screen.getAllByText('Territory').length).toBeGreaterThan(0);
+    expect(document.querySelector('.deal-reference-workspace')).not.toBeInTheDocument();
+    expect(screen.queryByText('Click to add tags')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add tag' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Search fields' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Overview')).not.toBeInTheDocument();
   });
 
   it('opens Add note only from the note entry area', async () => {
@@ -201,6 +165,16 @@ describe('<DealDetails />', () => {
     expect(notesList?.children).toHaveLength(12);
   });
 
+  it('keeps the Generic CRM page vertically scrollable for content below the viewport', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: 'Acme Expansion' });
+
+    const pageScrollStyle = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent)
+      .find((css) => css.includes('.generic-deal-details-page') && css.includes('overflow-y:auto !important'));
+    expect(pageScrollStyle).toContain('overflow-y:auto !important');
+  });
+
   it('opens Activities only from View all notes', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Acme Expansion' });
@@ -209,27 +183,4 @@ describe('<DealDetails />', () => {
     expect(screen.queryByRole('dialog', { name: 'Add note' })).not.toBeInTheDocument();
   });
 
-  it('searches related contacts through the backend instead of truncating to an initial list', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/deals/42') return Promise.resolve(deal);
-      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
-      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
-      if (url.includes('/api/contacts?') && url.includes('q=Beyond')) {
-        return Promise.resolve({ data: [{ id: 999, name: 'Beyond First Page' }] });
-      }
-      if (url.startsWith('/api/contacts?')) return Promise.resolve({ data: [] });
-      return Promise.resolve([]);
-    });
-
-    renderPage();
-    await screen.findByRole('heading', { name: 'Acme Expansion' });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Edit Related contact' })[0]);
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Search contacts' }), { target: { value: 'Beyond' } });
-
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
-      '/api/contacts?fields=summary&limit=50&q=Beyond',
-      { silent: true },
-    ));
-    expect(await screen.findByRole('option', { name: 'Beyond First Page' })).toBeInTheDocument();
-  });
 });

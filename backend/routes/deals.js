@@ -49,6 +49,18 @@ function addDealSearch(where, rawSearch) {
   return where;
 }
 
+function genericDealDisplayName(deal) {
+  const title = String(deal?.title || '').trim();
+  const relatedNames = [deal?.contactName, deal?.contact?.name]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+  const isLegacyPlaceholder = title.toLowerCase().endsWith(' deal')
+    && relatedNames.includes(title.slice(0, -5).trim().toLowerCase());
+  if (title && !isLegacyPlaceholder) return title;
+  const type = String(deal?.dealType || 'Deal').replace(/\s+/g, '');
+  return `${type}-${deal?.id ?? ''}`;
+}
+
 function canonicalDealStage(stage) {
   const value = String(stage || '').toLowerCase().trim().replace(/[_\s]+/g, '-');
   if (value === 'won' || value === 'closed-won') return 'closed-won';
@@ -112,6 +124,13 @@ router.get("/", async (req, res) => {
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (dealType) {
       await addDealTypeFilter(where, req.user.tenantId, dealType);
+      // A name search must be able to find a deal regardless of its current
+      // stage. Keep an explicitly selected stage filter authoritative, but do
+      // not add the deal type's inferred stage restriction to a free-text
+      // search.
+      await addGenericDealTypeStageFilter(where, req.user.tenantId, dealType, {
+        ignoreStageFilter: Boolean(search && !stage),
+      });
     }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
@@ -145,7 +164,25 @@ router.get("/", async (req, res) => {
       if (to) where.createdAt.lte = new Date(to);
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
-    addDealSearch(where, search);
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    if (tenant?.vertical === "generic" && search) {
+      const normalizedSearch = String(search).toLowerCase().replace(/\s+/g, "");
+      const generatedNameMatch = normalizedSearch.match(/^([a-z0-9]+)-(\d+)$/);
+      const nameClauses = [
+        { title: { contains: search } },
+        { dealType: { contains: search } },
+      ];
+      if (/^\d+$/.test(search)) nameClauses.push({ id: Number(search) });
+      if (generatedNameMatch) {
+        nameClauses.push({ id: Number(generatedNameMatch[2]) });
+      }
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : []), { OR: nameClauses }];
+    } else if (tenant?.vertical !== "generic") {
+      addDealSearch(where, search);
+    }
 
     // Travel vertical: check subBrandAccess first to determine filtering behavior
     const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -234,6 +271,7 @@ router.get("/", async (req, res) => {
     // Contact's source so the UI chip counts + filter state stay in sync.
     const enriched = filtered.map((d) => ({
       ...d,
+      ...(tenant?.vertical === "generic" ? { displayName: genericDealDisplayName(d) } : {}),
       channel: channelFromContactSource(d.contact?.source) || null,
     }));
     if (!paginated) return res.json(enriched);
@@ -273,11 +311,18 @@ router.get("/", async (req, res) => {
 router.get("/stats", async (req, res) => {
   try {
     const tid = req.user.tenantId;
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tid },
+      select: { vertical: true, defaultCurrency: true },
+    });
     let where = { tenantId: tid, deletedAt: null };
     if (req.query.stage) where.stage = String(req.query.stage);
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
     if (req.query.dealType) {
       await addDealTypeFilter(where, tid, req.query.dealType);
+      await addGenericDealTypeStageFilter(where, tid, req.query.dealType, {
+        ignoreStageFilter: Boolean(req.query.search && !req.query.stage),
+      });
     }
     if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
     if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
@@ -286,7 +331,20 @@ router.get("/stats", async (req, res) => {
       if (req.query.from) where.createdAt.gte = new Date(req.query.from);
       if (req.query.to) where.createdAt.lte = new Date(req.query.to);
     }
-    addDealSearch(where, req.query.search);
+    if (tenant?.vertical === "generic" && req.query.search) {
+      const search = String(req.query.search).trim().slice(0, 200);
+      const normalizedSearch = search.toLowerCase().replace(/\s+/g, "");
+      const generatedNameMatch = normalizedSearch.match(/^([a-z0-9]+)-(\d+)$/);
+      const nameClauses = [
+        { title: { contains: search } },
+        { dealType: { contains: search } },
+      ];
+      if (/^\d+$/.test(search)) nameClauses.push({ id: Number(search) });
+      if (generatedNameMatch) nameClauses.push({ id: Number(generatedNameMatch[2]) });
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : []), { OR: nameClauses }];
+    } else {
+      addDealSearch(where, req.query.search);
+    }
     if (req.user.role === "USER") where.ownerId = req.user.userId;
 
     const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -299,8 +357,7 @@ router.get("/stats", async (req, res) => {
       };
     }
     const deals = await prisma.deal.findMany({ where });
-    const tenantCurrency = await prisma.tenant.findUnique({ where: { id: tid }, select: { defaultCurrency: true } });
-    const reportingCurrency = String(req.query.currency || tenantCurrency?.defaultCurrency || 'USD').toUpperCase();
+    const reportingCurrency = String(req.query.currency || tenant?.defaultCurrency || 'USD').toUpperCase();
     const configuredCurrencies = await prisma.currency.findMany({ where: { tenantId: tid }, select: { code: true, exchangeRate: true } });
     const rates = Object.fromEntries(configuredCurrencies.map((currency) => [String(currency.code).toUpperCase(), Number(currency.exchangeRate)]));
     const targetRate = rates[reportingCurrency];
@@ -515,6 +572,31 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
   return allowed;
 }
 
+function stageFilterVariants(stages) {
+  const variants = new Set();
+  for (const stage of stages) {
+    const value = slugifyStageName(stage);
+    if (!value) continue;
+    variants.add(value);
+    if (value === "new-lead") variants.add("lead");
+    if (value === "contracted") variants.add("contacted");
+    if (value === "contacted") variants.add("contracted");
+    if (value === "won") variants.add("closed-won");
+    if (value === "lost") variants.add("closed-lost");
+    if (value === "proposal-sent") variants.add("proposal");
+  }
+  return [...variants];
+}
+
+async function addGenericDealTypeStageFilter(where, tenantId, dealType, { ignoreStageFilter = false } = {}) {
+  if (!dealType || ignoreStageFilter) return;
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  if (tenant?.vertical !== "generic") return;
+  const configuredStages = await getAllowedStagesForTenant(tenantId, dealType);
+  const stageValues = stageFilterVariants(configuredStages);
+  if (!stageValues.length) return;
+  where.AND = [...(where.AND || []), { stage: { in: stageValues } }];
+}
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
 async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false, allowLegacyStages = false } = {}) {

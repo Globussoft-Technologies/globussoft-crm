@@ -1,4 +1,5 @@
 export function generatedDealName(deal) {
+  if (deal?.displayName) return String(deal.displayName);
   // Preserve an explicit business title. Generated names are only the
   // fallback for records that do not have a title (or still use the legacy
   // "<contact> Deal" placeholder).

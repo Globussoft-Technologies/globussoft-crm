@@ -84,5 +84,11 @@ export function buildWebFormScriptEmbedCode(form, origin) {
   if (form?.scope && form.scope !== 'generic') return '';
   const src = buildPublicUrl(form, origin);
   const safeJson = (value) => JSON.stringify(String(value)).replace(/</g, '\\u003c');
-  return `<script>(function(script){if(!script||!script.parentNode)return;var frame=document.createElement("iframe");frame.src=${safeJson(src)};frame.title=${safeJson(form?.name || 'Web form')};frame.allow="geolocation *";frame.loading="lazy";frame.style.cssText="width:100%;height:auto;border:0;display:block;";script.parentNode.insertBefore(frame,script.nextSibling);${buildEmbedHostRuntime(true, 'frame')}})(document.currentScript);</script>`;
+  const trackingKeys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
+  // Put the captured attribution on the iframe URL as a transport fallback.
+  // This makes script-only embeds work even when a browser/proxy delays or
+  // drops the cross-window postMessage handshake. The form iframe then reads
+  // the same values from its own URL and includes them in the submit payload.
+  const forwardAttribution = `var trackingKeys=${trackingKeys};try{var frameUrl=new URL(frame.src,document.baseURI),pageQuery=new URLSearchParams(window.location.search);function readTrackingCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}trackingKeys.forEach(function(key){var value=pageQuery.get(key)||readTrackingCookie("gbs_"+key);if(value)frameUrl.searchParams.set(key,String(value).slice(0,2000));});frame.src=frameUrl.toString();}catch(e){}`;
+  return `<script>(function(script){if(!script||!script.parentNode)return;var frame=document.createElement("iframe");frame.src=${safeJson(src)};frame.title=${safeJson(form?.name || 'Web form')};frame.allow="geolocation *";frame.loading="lazy";frame.style.cssText="width:100%;height:auto;border:0;display:block;";${forwardAttribution}script.parentNode.insertBefore(frame,script.nextSibling);${buildEmbedHostRuntime(true, 'frame')}})(document.currentScript);</script>`;
 }

@@ -420,8 +420,8 @@ describe('DELETE /:id — delete project', () => {
 
 /**
  * #920 slice 5 — opt-in slim Prisma `select` to drop heavy nested includes
- * (owner + contact + deal + tasks) and sensitive flat columns (description,
- * budget) from list responses. Mirrors the contacts/deals/tickets/tasks shape
+ * (owner + contact + deal + tasks) and sensitive flat columns (description)
+ * from list responses. Mirrors the contacts/deals/tickets/tasks shape
  * shipped in slices 1-4. ADDITIVE only; any non-`summary` value (or absent
  * param) leaves the existing full-shape include path untouched. Pins:
  *   1. response rows carry only the slim keys (no nested objects on the wire).
@@ -435,12 +435,12 @@ describe('GET /api/projects?fields=summary — slim-shape opt-in (#920 slice 5)'
     prisma.project.findMany.mockResolvedValue([
       {
         id: 1, name: 'Atrium Refresh', status: 'Active', priority: 'High',
-        startDate: new Date('2026-06-01'), endDate: new Date('2026-12-31'),
+        startDate: new Date('2026-06-01'), endDate: new Date('2026-12-31'), budget: 50000,
         ownerId: 7, tenantId: 1, createdAt: new Date('2026-01-01'),
       },
       {
         id: 2, name: 'Lobby Lighting', status: 'Planning', priority: 'Medium',
-        startDate: null, endDate: null,
+        startDate: null, endDate: null, budget: 12000,
         ownerId: 7, tenantId: 1, createdAt: new Date('2026-01-02'),
       },
     ]);
@@ -459,6 +459,7 @@ describe('GET /api/projects?fields=summary — slim-shape opt-in (#920 slice 5)'
     expect(res.body[0]).toHaveProperty('name');
     expect(res.body[0]).toHaveProperty('status');
     expect(res.body[0]).toHaveProperty('priority');
+    expect(res.body[0]).toHaveProperty('budget');
     expect(res.body[0]).toHaveProperty('ownerId');
     expect(res.body[0]).toHaveProperty('tenantId');
     expect(res.body[0]).toHaveProperty('createdAt');
@@ -481,6 +482,7 @@ describe('GET /api/projects?fields=summary — slim-shape opt-in (#920 slice 5)'
       priority: true,
       startDate: true,
       endDate: true,
+      budget: true,
       ownerId: true,
       tenantId: true,
       createdAt: true,

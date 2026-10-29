@@ -277,7 +277,9 @@ export default function Reports() {
             : [];
           const configuredStageMap = new Map();
           configuredStages.forEach(stage => {
-            const stageName = typeof stage === 'string' ? stage : stage?.name;
+            const stageName = typeof stage === 'string'
+              ? stage
+              : (stage?.name || stage?.title || stage?.label || stage?.id);
             const key = reportStageKey(stageName);
             if (stageName && !configuredStageMap.has(key)) {
               configuredStageMap.set(key, { name: stageName, value: 0 });
@@ -407,7 +409,20 @@ export default function Reports() {
   const totalValue = data.reduce((sum, item) => sum + (item.value || 0), 0);
   const isMoneyMetric = metric === 'revenue' || metric === 'invoices';
   const sourceCurrency = tenantCurrency();
-  const conversionCurrencies = currencies.length ? currencies : [{ code: sourceCurrency, exchangeRate: 1 }];
+  const conversionCurrencies = (currencies.length ? currencies : [{ code: sourceCurrency, exchangeRate: 1 }])
+    .map(currency => ({ ...currency, code: String(currency.code || '').toUpperCase() }))
+    .filter(currency => currency.code);
+  const formatDetailDealAmount = (deal) => {
+    const amount = Number(deal?.amount || 0);
+    if (!isGeneric) return formatMoney(amount, { currency: deal?.currency || sourceCurrency });
+    const converted = convertCurrency(
+      amount,
+      deal?.currency || sourceCurrency,
+      displayCurrency,
+      conversionCurrencies,
+    );
+    return formatMoney(converted, { currency: displayCurrency, locale: tenantLocale() });
+  };
   const convertedTotalValue = totalValue;
   const formattedTotalValue = isMoneyMetric
     ? formatMoney(convertedTotalValue, { currency: displayCurrency, locale: tenantLocale() })
@@ -804,7 +819,19 @@ export default function Reports() {
                           backgroundColor: 'var(--modal-bg)',
                         }}
                       >
-                        Amount
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <span>Amount</span>
+                          {isGeneric && (
+                            <select
+                              aria-label="Deal amount currency"
+                              value={displayCurrency}
+                              onChange={event => setDisplayCurrency(event.target.value)}
+                              style={{ padding: '0.2rem 0.3rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '0.72rem', fontWeight: 600 }}
+                            >
+                              {conversionCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code}</option>)}
+                            </select>
+                          )}
+                        </span>
                       </th>
                       <th
                         style={{
@@ -1193,7 +1220,7 @@ export default function Reports() {
                     <tr key={row.id || i} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                       {detailType === 'deals' && <>
                         <td style={tdStyle}>{row.title}</td>
-                        <td style={{ ...numericTdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatMoney(row.amount || 0)}</td>
+                        <td style={{ ...numericTdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatDetailDealAmount(row)}</td>
                         <td style={tdStyle}><StageBadge stage={row.stage} /></td>
                         <td style={tdStyle}>{row.owner?.name || '—'}</td>
                         <td style={tdStyle}>{row.contact?.name || '—'}</td>

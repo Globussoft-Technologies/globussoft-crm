@@ -249,6 +249,9 @@ describe('<Projects /> — page surface', () => {
       expect(screen.getByText(/1 Active/)).toBeInTheDocument();
     });
     expect(screen.getByText(/1 Completed/)).toBeInTheDocument();
+    // Total Budget must use the budget values returned by the summary
+    // projection, not default to zero when the table rows are populated.
+    expect(screen.getByText(/Total Budget:/)).toHaveTextContent('87,000');
     // "3 total projects" reflects sampleProjects.length.
     expect(screen.getByText(/3 total projects/i)).toBeInTheDocument();
   });

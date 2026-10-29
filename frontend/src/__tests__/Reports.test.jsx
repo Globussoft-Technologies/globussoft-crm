@@ -319,6 +319,33 @@ describe('<Reports /> — broad page surface', () => {
     });
   });
 
+  it('converts Generic CRM deal amounts from the source currency in Detailed Data', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/currencies')) {
+        return Promise.resolve([
+          { code: 'USD', exchangeRate: 1 },
+          { code: 'EUR', exchangeRate: 0.9 },
+        ]);
+      }
+      if (url.startsWith('/api/reports/query')) return Promise.resolve(sampleData);
+      if (url.startsWith('/api/reports/detailed/deals')) {
+        return Promise.resolve({ data: [{ id: 1, title: 'Euro deal', amount: 100, currency: 'USD', stage: 'won', owner: null, contact: null, createdAt: '2026-10-28T00:00:00.000Z' }], total: 1, totalPages: 1 });
+      }
+      return Promise.resolve([]);
+    });
+    render(<Reports />);
+    fireEvent.click(screen.getByRole('button', { name: /Detailed Data/i }));
+    await waitFor(() => expect(screen.getByText('Euro deal')).toBeInTheDocument());
+
+    const currencySelect = screen.getByRole('combobox', { name: 'Deal amount currency' });
+    fireEvent.change(currencySelect, { target: { value: 'EUR' } });
+    await waitFor(() => {
+      const row = screen.getByText('Euro deal').closest('tr');
+      expect(row.textContent).toContain('90');
+      expect(currencySelect).toHaveValue('EUR');
+    });
+  });
+
   it('Detailed Data view renders the supported detail-type selector buttons', async () => {
     render(<Reports />);
     fireEvent.click(screen.getByRole('button', { name: /Detailed Data/i }));

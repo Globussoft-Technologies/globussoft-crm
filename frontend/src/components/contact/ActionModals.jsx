@@ -898,9 +898,12 @@ const normalizeDealTypes = (raw) => {
       name: String(type?.name || '').trim(),
       description: String(type?.description || ''),
       isDefault: Boolean(type?.isDefault),
-      stages: (Array.isArray(type?.stages) ? type.stages : []).map((stage) => ({
-        id: String(stage?.id || '').trim(), name: String(stage?.name || '').trim(), color: stage?.color || '#3b82f6', condition: stageCondition(stage),
-      })).filter((stage) => stage.id && stage.name),
+      stages: (Array.isArray(type?.stages) ? type.stages : []).map((stage) => {
+        const name = String(typeof stage === 'string' ? stage : (stage?.name || stage?.title || stage?.label || '')).trim();
+        return {
+          id: String((typeof stage === 'object' && stage?.id) || slugifyStage(name)).trim(), name, color: stage?.color || '#3b82f6', condition: stageCondition(typeof stage === 'string' ? { name: stage } : stage),
+        };
+      }).filter((stage) => stage.id && stage.name),
     })).filter((type) => type.id && type.name && type.stages.length);
     return normalized.length ? normalized : DEFAULT_GENERIC_DEAL_TYPES;
   } catch (_error) {

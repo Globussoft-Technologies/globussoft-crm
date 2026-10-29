@@ -222,6 +222,64 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     expect(res.status).toBe(200);
     expect(prisma.deal.findMany.mock.calls[0][0].where.dealType).toBe('Renew');
   });
+
+  test('keeps legacy contacted deals visible under a configured Contracted stage', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales', stages: [{ name: 'New Lead' }, { name: 'Contracted' }, { name: 'Won' }, { name: 'Lost' }] },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/deals?dealType=Sales');
+    expect(res.status).toBe(200);
+    const stageClause = prisma.deal.findMany.mock.calls[0][0].where.AND.find((clause) => clause.stage);
+    expect(stageClause.stage.in).toEqual(expect.arrayContaining(['contracted', 'contacted']));
+  });
+
+  test('name search spans all stages while an explicit stage filter remains authoritative', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales', stages: [{ name: 'Review' }] },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const app = makeApp();
+    const searchResponse = await request(app).get('/api/deals?dealType=Sales&search=historic');
+    expect(searchResponse.status).toBe(200);
+    const searchWhere = prisma.deal.findMany.mock.calls[0][0].where;
+    expect(searchWhere.AND).toEqual(expect.arrayContaining([
+      { OR: [
+        { title: { contains: 'historic' } },
+        { company: { contains: 'historic' } },
+        { contact: { is: { name: { contains: 'historic' } } } },
+        { owner: { is: { name: { contains: 'historic' } } } },
+      ] },
+    ]));
+    expect(searchWhere.AND.some((clause) => clause.stage)).toBe(false);
+
+    await request(app).get('/api/deals?dealType=Sales&search=historic&stage=review');
+    const stageWhere = prisma.deal.findMany.mock.calls[1][0].where;
+    expect(stageWhere.stage).toBe('review');
+    expect(stageWhere.AND.some((clause) => clause.stage)).toBe(false);
+  });
+
+  test('generic CRM searches canonical deal-name fields only', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/deals?dealType=Sales&search=cloud');
+    expect(res.status).toBe(200);
+    const searchClauses = prisma.deal.findMany.mock.calls[0][0].where.AND || [];
+    expect(searchClauses).toEqual(expect.arrayContaining([
+      { OR: [{ title: { contains: 'cloud' } }, { dealType: { contains: 'cloud' } }] },
+    ]));
+    expect(JSON.stringify(searchClauses)).not.toContain('contact');
+    expect(JSON.stringify(searchClauses)).not.toContain('owner');
+
+    await request(makeApp()).get('/api/deals?dealType=Sales&search=31');
+    const idSearchClauses = prisma.deal.findMany.mock.calls[1][0].where.AND || [];
+    expect(idSearchClauses).toEqual(expect.arrayContaining([
+      { OR: [{ title: { contains: '31' } }, { dealType: { contains: '31' } }, { id: 31 }] },
+    ]));
+  });
   test('happy path: list returns rows scoped to tenant, soft-deletes excluded by default', async () => {
     prisma.deal.findMany.mockResolvedValue([
       { id: 1, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1, contact: null, owner: null },

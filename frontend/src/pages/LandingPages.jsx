@@ -975,7 +975,7 @@ export default function LandingPages() {
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.5))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }}
           onClick={(e) => { if (e.target === e.currentTarget && !generating) setShowGenerateModal(false); }}
         >
-          <div className="card" style={{ ...cardSurfaceStyle, padding: '1.75rem', width: 'min(1020px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="card landing-page-generate-modal" style={{ ...cardSurfaceStyle, padding: '1.75rem', width: 'min(1020px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }}>
             <h3 id="generate-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, marginBottom: '0.4rem', fontSize: '1.2rem' }}>
               <Sparkles size={20} style={{ color: '#b8893b' }} /> Generate Destination Landing Page
             </h3>
@@ -1089,7 +1089,7 @@ export default function LandingPages() {
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))', gap: '0.6rem' }}>
+                <div className="landing-page-generate-palette-grid" style={{ display: 'grid', gap: '0.6rem' }}>
                   {themeChoices.map((choice) => {
                     const selected = genForm.themeId === choice.id;
                     const theme = choice.theme || {};
@@ -1102,6 +1102,7 @@ export default function LandingPages() {
                         onClick={() => handleThemeChoice(choice.id)}
                         disabled={generating}
                         aria-pressed={selected}
+                        className="landing-page-generate-palette-card"
                         style={{
                           border: `1px solid ${borderColor}`,
                           borderRadius: 12,
@@ -1125,7 +1126,7 @@ export default function LandingPages() {
                           e.currentTarget.style.borderColor = borderColor;
                         }}
                       >
-                        <div style={{ height: '52px', borderRadius: 10, background: `linear-gradient(135deg, ${theme.brandColor || '#123B63'}, ${theme.accentColor || '#D9A441'})`, border: `1px solid ${theme.borderColor || 'rgba(255,255,255,0.08)'}` }} />
+                        <div className="landing-page-generate-palette-preview" style={{ height: '52px', borderRadius: 10, background: `linear-gradient(135deg, ${theme.brandColor || '#123B63'}, ${theme.accentColor || '#D9A441'})`, border: `1px solid ${theme.borderColor || 'rgba(255,255,255,0.08)'}` }} />
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                           <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>{choice.label}</div>
                           {choice.id === suggestedTheme.id && (

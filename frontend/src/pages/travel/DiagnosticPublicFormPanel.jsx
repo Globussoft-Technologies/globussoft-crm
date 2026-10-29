@@ -1047,6 +1047,7 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
 function PillToggle({ active, onChange, label }) {
   return (
     <button
+      className="diagnostic-cancellation-toggle"
       type="button"
       onClick={onChange}
       role="switch"
@@ -1168,6 +1169,7 @@ function ColorField({ label, value, fallback, onChange, tooltip }) {
         }}
       >
         <input
+          className="diagnostic-color-swatch"
           type="color"
           value={swatchValue}
           onChange={(e) => onChange(e.target.value)}

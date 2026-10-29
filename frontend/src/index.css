@@ -608,6 +608,67 @@ button {
   font-family: inherit;
 }
 
+/* The destination palette cards are content-rich buttons, not compact form
+   controls. Keep them out of the shared Travel control sizing contract. */
+.landing-page-generate-modal {
+  box-sizing: border-box;
+  container-type: inline-size;
+  width: min(1020px, calc(100vw - 48px)) !important;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px) !important;
+  overflow-x: hidden !important;
+}
+
+.landing-page-generate-palette-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  align-items: stretch;
+  grid-auto-rows: auto;
+}
+
+.landing-page-generate-palette-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: auto !important;
+  min-height: 158px !important;
+  align-items: stretch;
+  overflow: visible;
+  transform: none !important;
+}
+
+.landing-page-generate-palette-preview {
+  flex: 0 0 52px;
+  height: 52px !important;
+  min-height: 52px !important;
+}
+
+.landing-page-generate-palette-card > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@container (max-width: 900px) {
+  .landing-page-generate-palette-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@container (max-width: 600px) {
+  .landing-page-generate-palette-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@container (max-width: 420px) {
+  .landing-page-generate-modal {
+    padding: 1rem !important;
+  }
+
+  .landing-page-generate-palette-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 /* Travel Tally: cost-centres master page */
 .tally-cost-centres-page {
   width: min(100% - 48px, 1392px);
@@ -3123,14 +3184,6 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
   box-sizing: border-box;
 }
 
-body[data-vertical="travel"] .travel-app-shell .travel-content-frame .landing-pages-page .landing-pages-search.input-field {
-  padding-left: 2.75rem !important;
-}
-
-body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-forms-page .meeting-form-switcher > button {
-  padding: 11px 14px !important;
-}
-
 @media (max-width: 899px) {
   .travel-content-frame > * {
     max-width: none !important;
@@ -3746,6 +3799,10 @@ body[data-vertical="generic"]
   overflow-y: auto;
   max-height: calc(100vh - 24rem);
   background: var(--surface-color);
+}
+
+body[data-vertical="travel"] .leads-split-table {
+  scrollbar-gutter: stable;
 }
 
 .leads-table-frozen-pane {
@@ -5301,6 +5358,17 @@ body[data-vertical="generic"]
 
 .contacts-split-table table.stable-table tbody tr {
   height: 52px;
+}
+
+.contacts-split-table table.stable-table tbody td {
+  height: clamp(42px, 3.1vw, 52px) !important;
+}
+
+/* The contacts view is rendered as two synchronized tables. Keep the browser
+   from recalculating either table from the first row's contents; the widths in
+   each colgroup are the single source of truth for every row. */
+.contacts-split-table table.stable-table {
+  table-layout: fixed !important;
 }
 
 .contacts-split-table table.stable-table th,

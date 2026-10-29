@@ -872,17 +872,17 @@ export default function CurriculumAdmin() {
           <table data-testid="curriculum-mapping-table" style={{ width: '100%', minWidth: '1120px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
-                <th style={{ ...th, width: '8%' }}>{sortHeader('Year', 'academicYear')}</th>
-                <th style={{ ...th, width: '10%' }}>{sortHeader('Curriculum', 'curriculum')}</th>
+                <th style={{ ...th, width: '7%' }}>{sortHeader('Year', 'academicYear')}</th>
+                <th style={{ ...th, width: '9%' }}>{sortHeader('Curriculum', 'curriculum')}</th>
                 <th style={{ ...th, width: '6%' }}>{sortHeader('Grade', 'grade')}</th>
-                <th style={{ ...th, width: '8%' }}>{sortHeader('Subject', 'subject')}</th>
-                <th style={{ ...th, width: '7%' }}>{sortHeader('Code', 'learningOutcomeCode')}</th>
-                <th style={{ ...th, width: '19%' }}>{sortHeader('Learning outcome', 'learningOutcome')}</th>
-                <th style={{ ...th, width: '17%' }}>{sortHeader('Destination', 'destinationLabel')}</th>
+                <th style={{ ...th, width: '7%' }}>{sortHeader('Subject', 'subject')}</th>
+                <th style={{ ...th, width: '6%' }}>{sortHeader('Code', 'learningOutcomeCode')}</th>
+                <th style={{ ...th, width: '18%' }}>{sortHeader('Learning outcome', 'learningOutcome')}</th>
+                <th style={{ ...th, width: '16%' }}>{sortHeader('Destination', 'destinationLabel')}</th>
                 <th style={{ ...th, width: '5%' }}>{sortHeader('Fit', 'fitScore')}</th>
-                <th style={{ ...th, width: '7%' }}>{sortHeader('Conf.', 'confidenceScore')}</th>
-                <th style={{ ...th, width: '5%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '13%', textAlign: 'center' }}>Actions</th>}
+                <th style={{ ...th, width: '6%' }}>{sortHeader('Conf.', 'confidenceScore')}</th>
+                <th style={{ ...th, width: '4%' }}>Active</th>
+                {isAdmin && <th style={{ ...th, width: '16%', paddingInline: 16, textAlign: 'center' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -909,8 +909,8 @@ export default function CurriculumAdmin() {
                     {m.isActive ? 'Yes' : <span style={{ color: 'var(--text-secondary)' }}>No</span>}
                   </td>
                   {isAdmin && (
-                    <td style={td}>
-                      <div style={{ display: 'flex', gap: 6 }}>
+                    <td className="curriculum-mapping-actions-cell" style={{ ...td, paddingInline: 16 }}>
+                      <div className="curriculum-mapping-actions" style={{ display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'nowrap' }}>
                         <button
                           type="button"
                           onClick={() => openEdit(m)}

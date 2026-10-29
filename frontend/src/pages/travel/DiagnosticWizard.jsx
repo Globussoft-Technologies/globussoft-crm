@@ -179,18 +179,19 @@ export default function DiagnosticWizard() {
             // used to) was confusing and didn't match the builder's own
             // "Current" template picker.
             <button
+              className="diagnostic-current-template-picker"
               type="button"
               onClick={() => onPickBank(currentBank)}
               style={bankRow}
               aria-label={`Start diagnostic with ${currentBank.templateName || 'current template'}`}
             >
-              <div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
                 <strong>{currentBank.templateName || `${subBrand.toUpperCase()} Template`}</strong>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                   Version {currentBank.version} · Current · Updated {new Date(currentBank.updatedAt || currentBank.createdAt).toLocaleDateString()}
                 </div>
               </div>
-              <ChevronRight size={18} aria-hidden style={{ color: 'var(--text-secondary)' }} />
+              <ChevronRight size={18} aria-hidden style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
             </button>
           )}
         </section>
@@ -414,9 +415,9 @@ const subBrandActive = {
 };
 const bankRow = {
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  padding: '12px 14px', borderRadius: 8,
+  minHeight: 64, padding: '14px 16px', borderRadius: 8,
   background: 'var(--surface-color)', border: '1px solid var(--border-color)',
-  textAlign: 'left', cursor: 'pointer', width: '100%',
+  textAlign: 'left', cursor: 'pointer', width: '100%', boxSizing: 'border-box',
   font: 'inherit', color: 'inherit',
 };
 const optionIdle = {

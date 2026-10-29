@@ -267,8 +267,27 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     renderPage();
     expect(screen.getByRole('heading', { name: /Questions \(3\)/i })).toBeTruthy();
     const removeBtns = screen.getAllByRole('button', { name: /Remove question/i });
+    const protectedDelete = screen.getByRole('button', { name: 'Protected question cannot be removed' });
+    expect(protectedDelete.disabled).toBe(true);
+    expect(protectedDelete.className).toContain('diagnostic-protected-delete');
     fireEvent.click(removeBtns[0]);
     expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
+  });
+
+  it('keeps required switches compact and consistently sized across question cards', async () => {
+    renderPage();
+    const toggles = await screen.findAllByRole('switch');
+    expect(toggles).toHaveLength(3);
+
+    for (const toggle of toggles) {
+      expect(toggle.className).toContain('diagnostic-required-toggle');
+      expect(toggle.style.width).toBe('36px');
+      expect(toggle.style.height).toBe('20px');
+      const knob = toggle.querySelector('span');
+      expect(knob.style.width).toBe('14px');
+      expect(knob.style.height).toBe('14px');
+      expect(knob.style.transform).toBe('translateY(-50%)');
+    }
   });
 
   it('Add category appends a new band card to the Scoring list', () => {

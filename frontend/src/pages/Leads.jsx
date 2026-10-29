@@ -220,6 +220,7 @@ const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
 const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
 const LEADS_ACTIONS_COLUMN_WIDTH = 176;
+const LEADS_TRAVEL_ACTIONS_COLUMN_WIDTH = 224;
 const LEADS_SOURCE_COLUMN_MIN_WIDTH = 190;
 const LEADS_ASSIGNED_COLUMN_MIN_WIDTH = 190;
 const LEAD_CHECKBOX_STYLE = {
@@ -2780,7 +2781,7 @@ const Leads = () => {
       );
     }
     if (key === "actions") {
-      return Math.max(configuredWidth, LEADS_ACTIONS_COLUMN_WIDTH);
+      return Math.max(configuredWidth, isTravel ? LEADS_TRAVEL_ACTIONS_COLUMN_WIDTH : LEADS_ACTIONS_COLUMN_WIDTH);
     }
     if (key === "source") {
       return Math.max(configuredWidth, LEADS_SOURCE_COLUMN_MIN_WIDTH);
@@ -11411,7 +11412,7 @@ const Leads = () => {
                         <td
                           style={getBodyCellStyle("actions", {
                             padding: "0.75rem 0.5rem",
-                            minWidth: `${LEADS_ACTIONS_COLUMN_WIDTH}px`,
+                            minWidth: `${getColumnWidth("actions")}px`,
                             overflow: "visible",
                             textOverflow: "clip",
                           })}

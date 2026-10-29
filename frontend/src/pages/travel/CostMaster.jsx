@@ -102,6 +102,7 @@ function AttributeChips({ attributes }) {
 function PillToggle({ active, onChange, label }) {
   return (
     <button
+      className="cost-master-active-toggle"
       type="button"
       onClick={onChange}
       aria-label={label}

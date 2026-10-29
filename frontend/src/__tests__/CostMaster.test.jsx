@@ -304,9 +304,15 @@ describe('<CostMaster /> — toggle-active', () => {
   it('clicking pill toggle PATCHes /:id with { isActive: false } when row was active', async () => {
     renderPage();
     await screen.findByText('Makkah:Hilton:Deluxe');
+    const activeToggle = screen.getByRole('button', { name: /Toggle active for Makkah:Hilton:Deluxe/i });
+    expect(activeToggle.className).toContain('cost-master-active-toggle');
+    expect(activeToggle.style.width).toBe('40px');
+    expect(activeToggle.style.height).toBe('22px');
+    expect(activeToggle.querySelector('span').style.width).toBe('16px');
+    expect(activeToggle.querySelector('span').style.height).toBe('16px');
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Toggle active for Makkah:Hilton:Deluxe/i }));
+    fireEvent.click(activeToggle);
     await waitFor(() => {
       const patch = fetchApiMock.mock.calls.find(([u, o]) => u === '/api/travel/cost-master/301' && o?.method === 'PATCH');
       expect(patch).toBeTruthy();

@@ -309,11 +309,11 @@
 }
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button:not(.calendar-summary-card),
-  input:not([type="checkbox"]):not([type="radio"]),
+  button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
   select,
   textarea,
-  .input-field,
+  .input-field:not(.landing-pages-search),
   .btn-primary,
   .btn-secondary,
   [class*="actions"] a,
@@ -328,13 +328,17 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   line-height: 1.2;
 }
 
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame input.brochure-place-input {
+  padding-left: 36px !important;
+}
+
 /* Fixed component heights otherwise mask the fluid min-height (for example,
    compact date pickers). Apply the token to single-line controls themselves;
    textareas remain content-sized. */
 @media (min-width: 900px) {
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-    button:not(.calendar-summary-card),
-    input:not([type="checkbox"]):not([type="radio"]),
+    button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
     select,
     .btn-primary,
     .btn-secondary,
@@ -347,7 +351,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
 }
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button,
+  button:not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
   [role="button"],
   .btn-primary,
   .btn-secondary
@@ -359,7 +363,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
 /* Lucide icons usually receive a fixed size prop. Keep icons inside Travel
    controls on the same viewport curve as their label and padding. */
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button,
+  button:not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
   [role="button"],
   .btn-primary,
   .btn-secondary,
@@ -372,7 +376,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   flex: 0 0 var(--travel-ui-control-icon);
 }
 
-.travel-app-shell .travel-content-frame :where(.card, .glass, .kpi-card, .widget-card, [class*="-card"], section, article, form, fieldset, [role="region"]) {
+.travel-app-shell .travel-content-frame :where(.card, .glass, .kpi-card, .widget-card, [class*="-card"]:not(.trip-overview-kpi-card), section, article, form, fieldset, [role="region"]) {
   min-width: 0;
   box-sizing: border-box;
 }
@@ -444,7 +448,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
     [class$="-filters"],
     [class$="-filter-bar"],
     [class$="-filter-controls"]
-  ) > :where(select, input:not([type="checkbox"]):not([type="radio"]), .input-field) {
+  ) > :where(select, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), .input-field) {
     width: var(--travel-ui-filter-field) !important;
     min-width: 0 !important;
     max-width: 100%;
@@ -477,7 +481,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
     [class$="-filters"],
     [class$="-filter-bar"],
     [class$="-filter-controls"]
-  ) > label > :where(select, input:not([type="checkbox"]):not([type="radio"])) {
+  ) > label > :where(select, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"])) {
     width: 100% !important;
     min-width: 0 !important;
     max-width: 100%;
@@ -1075,4 +1079,3 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
     white-space: nowrap;
   }
 }
-

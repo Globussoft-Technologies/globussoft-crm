@@ -307,13 +307,29 @@ router.get("/:key", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const key = String(req.params.key);
-    const rawDefaultValue = DEFAULTS[key] !== undefined ? DEFAULTS[key] : null;
-    const defaultValue = isSensitiveKey(key) ? null : rawDefaultValue;
+    let rawDefaultValue = DEFAULTS[key] !== undefined ? DEFAULTS[key] : null;
+    let defaultValue = isSensitiveKey(key) ? null : rawDefaultValue;
 
     const row = await prisma.tenantSetting.findUnique({
       where: { tenantId_key: { tenantId, key } },
       select: { key: true, value: true, category: true },
     });
+
+    // Generic CRM starts without a built-in deal type/stage model. Preserve
+    // the historical virtual default for tenants that already contain deals,
+    // so existing tenants and records keep their current behavior.
+    if (!row && key === KEYS.GENERIC_DEAL_TYPES) {
+      try {
+        const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+        if (tenant?.vertical === "generic") {
+          const existingDeals = await prisma.deal.count({ where: { tenantId, deletedAt: null } });
+          if (!existingDeals) rawDefaultValue = "[]";
+        }
+      } catch (_error) {
+        // Keep the existing default fallback if the compatibility probe fails.
+      }
+    }
+    defaultValue = isSensitiveKey(key) ? null : rawDefaultValue;
 
     if (!row) {
       return res.json({

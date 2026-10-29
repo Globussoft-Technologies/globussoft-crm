@@ -89,9 +89,14 @@ function dealMatchesSearch(deal, rawSearch, generic = false) {
   // hidden contact/company/owner fields that can make an unrelated-looking
   // auto-named deal appear in the results.
   if (generic) {
-    const title = generatedDealName(deal).toLowerCase();
-    if (term.includes(' ')) return title.includes(term);
-    return title.split(/[^a-z0-9]+/).some((word) => word.startsWith(term));
+    const searchableText = [
+      generatedDealName(deal),
+      deal?.title,
+      deal?.displayName,
+      deal?.contactName,
+      deal?.contact?.name,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return searchableText.includes(term);
   }
   return [
     deal?.title,
@@ -175,7 +180,7 @@ export default function Pipeline() {
   const [dealTypeMenuOpen, setDealTypeMenuOpen] = useState(false);
   const dealTypeMenuRef = useRef(null);
   const requestIdRef = useRef(0); const firstLoadRef = useRef(true); const pipelineSelectionResolvedRef = useRef(false);
-  const [stageFilter, setStageFilter] = useState(''); const [ownerFilter, setOwnerFilter] = useState(''); const [pipelineId, setPipelineId] = useState(() => searchParams.get('pipelineId') || ''); const [dealType, setDealType] = useState(() => searchParams.get('dealType') || 'New Business'); const [showFilters, setShowFilters] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false); const [showCardCustomizer, setShowCardCustomizer] = useState(false); const [cardFields, setCardFields] = useState(() => { try { return JSON.parse(localStorage.getItem(cardFieldsKey)) || { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } catch { return { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } });
+  const [stageFilter, setStageFilter] = useState(''); const [ownerFilter, setOwnerFilter] = useState(''); const [pipelineId, setPipelineId] = useState(() => searchParams.get('pipelineId') || ''); const [dealType, setDealType] = useState(() => searchParams.get('dealType') || ''); const [showFilters, setShowFilters] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false); const [showCardCustomizer, setShowCardCustomizer] = useState(false); const [cardFields, setCardFields] = useState(() => { try { return JSON.parse(localStorage.getItem(cardFieldsKey)) || { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } catch { return { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } });
   const [expandedStageIds, setExpandedStageIds] = useState([]);
   const [showCreate, setShowCreate] = useState(false); const [createDealDefaults, setCreateDealDefaults] = useState({}); const [selectedDeal, setSelectedDeal] = useState(null); const [dragged, setDragged] = useState(null);
 
@@ -206,21 +211,20 @@ export default function Pipeline() {
     let next = [];
     try {
       const setting = await fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_DEAL_TYPES_SETTING_KEY)}`, { silent: true });
-      next = parseGenericDealTypes(setting);
+      next = Array.isArray(setting) || !setting ? [DEFAULT_GENERIC_DEAL_TYPE] : parseGenericDealTypes(setting);
     } catch {
       try {
         const collection = await fetchApi('/api/tenant-settings', { silent: true });
         const row = Array.isArray(collection?.settings)
           ? collection.settings.find((item) => item.key === GENERIC_DEAL_TYPES_SETTING_KEY)
           : null;
-        next = parseGenericDealTypes(row);
+        next = row ? parseGenericDealTypes(row) : [DEFAULT_GENERIC_DEAL_TYPE];
       } catch {
-        next = [];
+        next = [DEFAULT_GENERIC_DEAL_TYPE];
       }
     }
-    const available = next.length ? next : [DEFAULT_GENERIC_DEAL_TYPE];
-    setDealTypes(available);
-    return available;
+    setDealTypes(next);
+    return next;
   }, []);
 
   useEffect(() => {
@@ -229,12 +233,13 @@ export default function Pipeline() {
     refreshGenericDealTypes()
       .then((next) => {
         if (!active) return;
-        const available = next.length ? next : [DEFAULT_GENERIC_DEAL_TYPE];
+        const available = next;
         setDealTypes(available);
         const selected = available.find((type) => type.name === searchParams.get('dealType')) || available.find((type) => type.isDefault) || available[0];
         if (selected && selected.name !== dealType) setDealType(selected.name);
+        if (!selected && dealType) setDealType('');
       })
-      .catch(() => { if (active) setDealTypes([DEFAULT_GENERIC_DEAL_TYPE]); });
+      .catch(() => { if (active) { setDealTypes([DEFAULT_GENERIC_DEAL_TYPE]); setDealType(DEFAULT_GENERIC_DEAL_TYPE.name); } });
     return () => { active = false; };
   }, [isGeneric, refreshGenericDealTypes]);
 
@@ -274,9 +279,7 @@ export default function Pipeline() {
       const selectedType = dealTypes.find((type) => type.name === dealType) || dealTypes.find((type) => type.isDefault) || dealTypes[0];
       const selectedStages = selectedType?.stages?.length
         ? selectedType.stages
-        : (isGeneric && (dealType === 'New Business' || !selectedType)
-          ? DEFAULT_GENERIC_DEAL_TYPE.stages
-          : []);
+        : [];
       const [dealData, stageData, pipelineData, statsData, staffData] = await Promise.all([
         fetchApi(`/api/deals?${query.toString()}`),
         isGeneric ? Promise.resolve(selectedStages) : fetchApi(pipelineId ? `/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}` : '/api/pipeline_stages'),
@@ -294,9 +297,7 @@ export default function Pipeline() {
       setTotalPages(Array.isArray(dealData) ? 1 : Math.max(1, Number(dealData?.totalPages) || Math.ceil(displayTotal / pageSize)));
       setStats(statsData && !Array.isArray(statsData) ? statsData : null);
       const normalizedStages = normalizePipelineStages(stageData);
-      setStages(normalizedStages.length || !isGeneric || dealType !== 'New Business'
-        ? normalizedStages
-        : normalizePipelineStages(DEFAULT_GENERIC_DEAL_TYPE.stages));
+      setStages(normalizedStages);
       setPipelines(Array.isArray(pipelineData) ? pipelineData : []);
       setStaff(Array.isArray(staffData) ? staffData : (staffData?.data || []));
       firstLoadRef.current = false;
@@ -362,19 +363,15 @@ export default function Pipeline() {
     () => isGeneric && debouncedSearch ? deals.filter((deal) => dealMatchesSearch(deal, debouncedSearch, true)) : deals,
     [deals, isGeneric, debouncedSearch],
   );
-  const effectiveStages = isGeneric && dealType === 'New Business' && stages.length === 0
-    ? normalizePipelineStages(DEFAULT_GENERIC_DEAL_TYPE.stages)
-    : stages;
+  const effectiveStages = stages;
   const stageRows = useMemo(() => {
     const allStages = [...effectiveStages];
-    if (allStages.length === 0 && isGeneric && dealType === 'New Business') {
-      allStages.push(...normalizePipelineStages(DEFAULT_GENERIC_DEAL_TYPE.stages));
-    }
     const known = new Set(allStages.map((stage) => stage.id));
     for (const item of isGeneric ? [...visibleDeals, ...(stats?.byStage || [])] : []) {
       const id = stageIdForDeal(item, effectiveStages, isGeneric);
       // Keep matching deals visible even if their stage was removed from
-      // configuration, including while searching.
+      // configuration, including while searching. This also preserves
+      // legacy stages that are not part of the selected deal type's board.
       if (id && !known.has(id)) {
         known.add(id);
         allStages.push({ id, title: item.stage || id, color: '#64748b' });

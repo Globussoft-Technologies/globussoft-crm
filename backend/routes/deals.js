@@ -131,6 +131,10 @@ router.get("/", async (req, res) => {
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (dealType) {
       await addDealTypeFilter(where, req.user.tenantId, dealType);
+      // Generic CRM deal types filter by dealType only. The board must render
+      // legacy and custom stages as well; an inferred stage restriction can
+      // make a valid deal disappear from the Deals page while it remains
+      // visible in Reports. An explicit `stage` query above remains honored.
     }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
@@ -524,7 +528,7 @@ router.get("/:id", async (req, res) => {
 // validator now resolves the allowed slug set from the tenant's own
 // PipelineStage rows; terminal "won" / "lost" are always honored as a
 // backstop for tenants whose stage list hasn't been seeded yet.
-const LEGACY_DEAL_STAGES = ["lead", "contacted", "proposal", "negotiation", "won", "lost"];
+const LEGACY_DEAL_STAGES = ["lead", "contacted", "proposal", "proposal-sent", "negotiation", "won", "lost"];
 const slugifyStageName = (name) =>
   String(name || "")
     .toLowerCase()
@@ -552,7 +556,9 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
           .map((stage) => slugifyStageName(typeof stage === "string" ? stage : (stage?.name || stage?.title || stage?.label || stage?.id)))
           .filter(Boolean),
       );
-      if (configured.size) return configured;
+      if (configured.size) {
+        return configured;
+      }
     } catch (_error) {
       // Fall through to the tenant pipeline stages for legacy records.
     }

@@ -13,7 +13,7 @@ const articles = [
   },
   {
     title: 'Pipeline & Deal Management',
-    content: 'The Pipeline is your visual sales board:\n\n**Drag & Drop** — Move deals between stages by dragging cards. Changes sync in real-time across all users.\n\n**AI Scoring** — Click the Zap icon on any deal card to get AI-predicted win probability.\n\n**Custom Stages** — Go to Settings > Pipeline Stages to add, remove, or reorder your pipeline stages.\n\n**CPQ (Configure Price Quote)** — Click any deal to open the detail modal, then use the CPQ builder to create structured pricing quotes with line items.'
+    content: 'The Pipeline is your visual sales board:\n\n**Drag & Drop** — Move deals between stages by dragging cards. Changes sync in real-time across all users.\n\n**AI Scoring** — Click the Zap icon on any deal card to get AI-predicted win probability.\n\n**Custom Stages** — Go to Settings > Pipeline Stages to add, remove, or reorder your pipeline stages.\n\n**Quotes** — Click any deal to open the detail modal, then choose Create Quote to manage the customer quote in Finance → Quotes.'
   },
   {
     title: 'Invoicing, Estimates & Expenses',

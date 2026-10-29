@@ -972,6 +972,11 @@ describe('<PickupCustomers />', () => {
     expect(responsiveCss).toMatch(/\.pickup-history-dialog:hover\s*\{[^}]*transform:none;[^}]*border-color:var\(--border-color\)/s);
   });
 
+  it('sizes the customer directory from its rows while keeping the details pane independent', () => {
+    expect(responsiveCss).toMatch(/\.pickup-customer-directory\s*\{[^}]*align-self:start;[^}]*max-height:calc\(100vh - 260px\)/s);
+    expect(responsiveCss).toMatch(/\.pickup-directory-scroll\s*\{[^}]*flex:1 1 auto;[^}]*min-height:0;[^}]*overflow:auto/s);
+  });
+
   it('prevents avoidable search overlap and customer-name wrapping', () => {
     expect(responsiveCss).toMatch(/\.pickup-directory-toolbar input\.input-field\s*\{[^}]*padding-left:clamp\([^}]*!important/s);
     expect(responsiveCss).toMatch(/\.pickup-customer-title h2\s*\{[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap/s);

@@ -27,6 +27,10 @@ describe('Pickup & Plot table scroll cards', () => {
     expect(hoverRule[1]).toMatch(/border-color:\s*var\(--border-color\)\s*;/);
   });
 
+  it('sizes directory and plot-inventory cards from their table content', () => {
+    expect(css).toMatch(/\.pickup-person-directory-page \.pickup-plot-table-scroll,[\s\S]*?\.pickup-plot-inventory-page \.pickup-plot-table-scroll,[\s\S]*?\.pickup-inventory-page \.pickup-plot-table-scroll,[\s\S]*?\.billing-directory-page \.pickup-plot-table-scroll,[\s\S]*?\.staff-work-assignment-page \.pickup-plot-table-scroll\s*\{[^}]*flex:\s*0 0 auto\s*;[^}]*max-height:\s*calc\(100vh - 260px\)\s*;/s);
+  });
+
   it('removes row hover styling only for Generic CRM Pickup & Plot tables', () => {
     expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-no-row-hover\s+tbody\s+tr:not\(\.is-selected\):hover/);
     expect(css).toMatch(/table\.pickup-plot-no-row-hover\s+tbody\s+tr:not\(\.is-selected\):hover[^{}]*\{[^}]*background-color:\s*transparent\s*!important\s*;/s);

@@ -1375,6 +1375,7 @@ const PAGE_ICON_BY_PATH = {
   "/transport-workspace": Truck,
   "/sales-workspace": Handshake,
   // Finance
+  "/quotes": FileText,
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
   "/wellness/invoices": Receipt,
@@ -2808,19 +2809,18 @@ function renderGenericNav({
       {renderGroup("Documents & Delivery", <>
         <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
         <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
-        <Link to="/document-tracking" icon={Eye} label="Doc Tracking" requiredPermission={{ module: "documents", action: "read" }} />
         <Link to="/contracts" icon={FileText} label="Contracts" requiredPermission={{ module: "contracts", action: "read" }} />
         <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} />
       </>)}
 
       {renderGroup("Finance", <>
+        <Link to="/quotes" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
         <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
         {/* Generic CRM: Estimates is intentionally hidden. Keep the page
             implementation intact so it can be re-enabled later. */}
         {/* <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} /> */}
         <Link to="/expenses" icon={IndianRupee} label="Expenses" requiredPermission={{ module: "expenses", action: "read" }} />
         <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
-        <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly requiredPermission={{ module: "cpq", action: "read" }} />
       </>)}
 
       {renderGroup("Analytics & Reports", <>

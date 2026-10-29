@@ -156,6 +156,38 @@ describe('<AuditLog /> — page surface', () => {
     expect(screen.getByText('13')).toBeInTheDocument();
   });
 
+  it('renders hard-delete actions and exposes the hard-delete filter', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({ chainLength: 1, brokenAt: null, integrityVerified: true });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve({ total: 1, byAction: { DELETE: 1, HARD_DELETE: 1 } });
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({
+          logs: [{
+            id: 99,
+            createdAt: '2026-04-29T09:02:00.000Z',
+            action: 'HARD_DELETE',
+            entity: 'Contact',
+            entityId: 13,
+            user: { name: 'Admin Deleter', email: 'admin@acme.test' },
+            details: '{"name":"Deleted Lead"}',
+          }],
+          pages: 1,
+          total: 1,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderAuditLog();
+    await waitFor(() => expect(screen.getByText('Admin Deleter')).toBeInTheDocument());
+    expect(screen.getAllByText('HARD_DELETE').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByDisplayValue('All actions')).toBeInTheDocument();
+  });
+
   it('shows the empty-state message when /audit-viewer returns no logs', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/audit/verify')) {

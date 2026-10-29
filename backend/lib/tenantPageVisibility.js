@@ -90,14 +90,13 @@ const GENERIC_SIDEBAR_PRESENTATION = [
 
   { path: '/signatures', label: 'E-Signatures', category: 'Documents & Delivery' },
   { path: '/document-templates', label: 'Doc Templates', category: 'Documents & Delivery' },
-  { path: '/document-tracking', label: 'Doc Tracking', category: 'Documents & Delivery' },
   { path: '/contracts', label: 'Contracts', category: 'Documents & Delivery' },
   { path: '/projects', label: 'Projects', category: 'Documents & Delivery' },
 
   { path: '/invoices', label: 'Invoices', category: 'Finance' },
   { path: '/expenses', label: 'Expenses', category: 'Finance' },
   { path: '/payments', label: 'Payments', category: 'Finance' },
-  { path: '/cpq', label: 'CPQ', category: 'Finance' },
+  { path: '/quotes', label: 'Quotes', category: 'Finance' },
 
   { path: '/reports', label: 'Reports', category: 'Analytics & Reports' },
   { path: '/agent-reports', label: 'Agent Reports', category: 'Analytics & Reports' },

@@ -45,6 +45,13 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// The legacy route remains on disk for reference only. The supported API is
+// /api/quotes and is covered by quotes-api.spec.js; do not make CPQ an active
+// test dependency.
+test.beforeEach(() => {
+  test.skip(true, 'Legacy CPQ API is not mounted or consumed.');
+});
+
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 

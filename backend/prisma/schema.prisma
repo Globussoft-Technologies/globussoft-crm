@@ -150,6 +150,8 @@ model Tenant {
   expenses                 Expense[]
   contracts                Contract[]
   estimates                Estimate[]
+  // Generic Finance quote builder records share the existing tenant-scoped
+  // Quote model shared by the generic Finance Quotes workspace.
   projects                 Project[]
   notifications            Notification[]
   auditLogs                AuditLog[]
@@ -1052,6 +1054,7 @@ model Contact {
   expenses                  Expense[]
   contracts                 Contract[]
   estimates                 Estimate[]
+  quotes                    Quote[]
   projects                  Project[]
   marketplaceLeads          MarketplaceLead[]
   smsMessages               SmsMessage[]
@@ -2079,24 +2082,51 @@ model Product {
 
 model Quote {
   id          Int             @id @default(autoincrement())
+  quoteNumber String?
   title       String
   totalAmount Float           @default(0.0)
   mrr         Float           @default(0.0)
   status      String          @default("Draft") // Draft, Sent, Accepted, Rejected
-  dealId      Int
-  deal        Deal            @relation(fields: [dealId], references: [id], onDelete: Restrict)
+  quoteOwnerName String?
+  validUntil  DateTime?
+  currency    String          @default("USD")
+  accountName String?
+  customerName String?
+  customerEmail String?
+  billingAddress String?       @db.Text
+  shippingAddress String?      @db.Text
+  discountTotal Float          @default(0.0)
+  taxTotal     Float           @default(0.0)
+  adjustment   Float           @default(0.0)
+  terms        String?         @db.Text
+  notes        String?         @db.Text
+  description  String?         @db.Text
+  contactId    Int?
+  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId      Int?
+  deal        Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
   lineItems   QuoteLineItem[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, quoteNumber])
 }
 
 model QuoteLineItem {
   id          Int      @id @default(autoincrement())
   quantity    Int      @default(1)
+  description String?  @db.Text
+  cost        Float    @default(0.0)
   unitPrice   Float
+  discountPercent Float @default(0.0)
+  discountAmount  Float @default(0.0)
+  gstRate     Float    @default(0.0)
+  gstAmount   Float    @default(0.0)
+  amount      Float    @default(0.0)
+  total       Float    @default(0.0)
   quoteId     Int
   quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   productId   Int?

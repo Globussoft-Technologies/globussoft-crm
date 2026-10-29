@@ -5,6 +5,13 @@
  */
 const { test, expect } = require('@playwright/test');
 
+// The legacy page is retained on disk for reference only. The supported CRM
+// route is Finance -> Quotes, so this historical spec must not exercise the
+// retired page dependency.
+test.beforeEach(() => {
+  test.skip(true, 'Legacy CPQ page is not an active CRM surface.');
+});
+
 test.describe('CPQ — Configure, Price, Quote', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/cpq');

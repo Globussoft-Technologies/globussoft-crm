@@ -128,6 +128,67 @@
   box-shadow: 0 3px 8px rgba(5, 150, 105, 0.12);
 }
 
+.pickup-inventory-empty-cell {
+  padding: 0 !important;
+  border-right: 0 !important;
+}
+
+.pickup-inventory-empty-state {
+  min-height: 250px;
+  padding: 2.5rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  text-align: center;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--primary-color, var(--accent-color)) 5%, var(--surface-color)), var(--surface-color));
+}
+
+.pickup-inventory-empty-icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-color, var(--accent-color));
+  border: 1px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 24%, var(--border-color));
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
+
+.pickup-inventory-empty-copy {
+  max-width: 510px;
+}
+
+.pickup-inventory-empty-copy h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.pickup-inventory-empty-copy p {
+  margin: 0.45rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.pickup-inventory-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.pickup-inventory-empty-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.35rem;
+}
+
 @media (max-width: 899px) {
   .pickup-inventory-action {
     width: 32px;

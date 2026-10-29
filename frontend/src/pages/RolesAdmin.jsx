@@ -69,7 +69,7 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'settings',      actions: ['read', 'manage'] },
   // Generic CRM page modules. The live catalog is authoritative; these keep
   // the modal useful while an older backend is still serving the fallback.
-  ...['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms']
+  ...['playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms']
     .map((module) => ({ module, actions: ['read', 'write', 'update', 'delete'] })),
 ];
 
@@ -91,7 +91,7 @@ const PERMISSION_DOMAINS_FALLBACK = [
   { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'my_prescriptions', 'consents', 'visits'] },
   { domain: 'Wellness Inventory', modules: ['products', 'inventory', 'pos'] },
   { domain: 'Admin & Platform',   modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'] },
-  { domain: 'Generic CRM Pages',  modules: ['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms'] },
+  { domain: 'Generic CRM Pages',  modules: ['playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms'] },
 ];
 
 // One-line description per module so admins know what each permission box
@@ -108,7 +108,7 @@ const MODULE_DESCRIPTIONS = {
   tasks:          'To-dos assigned to users or linked to CRM records.',
   projects:       'Multi-step engagements grouping deals, tasks, and contacts.',
   pipeline:       'Sales pipeline stages and configuration.',
-  quotes:         'Price quotes and CPQ documents sent to prospects.',
+  quotes:         'Price quotes sent to prospects.',
   forecasting:    'Revenue forecast roll-ups and weekly snapshots.',
   quotas:         'Sales targets assigned to users or teams.',
   // Communications
@@ -206,7 +206,6 @@ const MODULE_DESCRIPTIONS = {
   flyer_studio:         'Marketing Flyer Studio — design and publish sub-brand flyers.',
   flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
   // Generic CRM page modules
-  cpq:                 'Configure-price-quote builder and quote calculations.',
   playbooks:           'Reusable sales playbooks and guided processes.',
   territories:         'Sales territory mapping and assignment.',
   live_chat:           'Live-chat conversations and visitor handoff.',

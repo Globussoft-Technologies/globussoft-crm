@@ -84,7 +84,6 @@ const MANAGER_PERMISSIONS = [
   'documents.read', 'documents.write', 'documents.update',
   'contracts.read', 'contracts.write', 'contracts.update',
   'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
-  'cpq.read', 'cpq.write', 'cpq.update',
   'playbooks.read', 'playbooks.write', 'playbooks.update',
   'territories.read', 'territories.write', 'territories.update',
   'live_chat.read', 'live_chat.write', 'live_chat.update',
@@ -284,7 +283,6 @@ const WELLNESS_ONLY_GRANTS = new Set([
 ]);
 
 const GENERIC_ONLY_GRANTS = new Set([
-  'cpq.read', 'cpq.write', 'cpq.update',
   'playbooks.read', 'playbooks.write', 'playbooks.update',
   'territories.read', 'territories.write', 'territories.update',
   'live_chat.read', 'live_chat.write', 'live_chat.update',

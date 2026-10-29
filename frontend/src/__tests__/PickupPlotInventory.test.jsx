@@ -111,10 +111,10 @@ describe('<PickupPlotInventory />', () => {
     });
     expect(screen.getByTestId('plot-inventory-table')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
     expect(screen.getByTestId('plot-inventory-table')).toHaveStyle({
-      flex: '1 1 auto', minHeight: '0', maxHeight: '100%', width: '100%', maxWidth: '100%',
+      flex: '0 0 auto', minHeight: '0', maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
       overflowX: 'auto', overflowY: 'auto',
     });
-    expect(screen.getByTestId('plot-inventory-table-width')).toHaveStyle({ width: '2370px', minWidth: '100%' });
+    expect(screen.getByTestId('plot-inventory-table-width')).toHaveStyle({ width: '2400px', minWidth: '100%' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', height: 'auto' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
     const stickyHeader = screen.getByRole('columnheader', { name: 'Plot / Site' });
@@ -439,6 +439,41 @@ describe('<PickupPlotInventory />', () => {
       '/api/pickup-plot-inventory/plots/9/status',
       { method: 'PATCH', body: JSON.stringify({ isActive: false }) },
     ));
+  });
+
+  it('deletes an available plot through the delete endpoint', async () => {
+    renderPage();
+    await screen.findByText('Plot A-9');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Plot A-9' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/pickup-plot-inventory/plots/9',
+      { method: 'DELETE' },
+    ));
+    expect(screen.getByRole('button', { name: 'Deactivate Plot A-9' })).toBeInTheDocument();
+  });
+
+  it('shows deletion only for unbooked available or on-hold plots', async () => {
+    fetchApiMock.mockResolvedValueOnce({
+      ...inventory,
+      plots: [
+        inventory.plots[0],
+        { ...inventory.plots[0], id: 10, name: 'Plot On Hold', availability: 'HOLD' },
+        { ...inventory.plots[0], id: 11, name: 'Plot Being Shown', hasActiveBookingWorkflow: true },
+        { ...inventory.plots[0], id: 12, name: 'Plot Booked', availability: 'BOOKED' },
+        { ...inventory.plots[0], id: 13, name: 'Plot Sold', availability: 'SOLD' },
+        { ...inventory.plots[0], id: 14, name: 'Inactive Available Plot', isActive: false },
+      ],
+    });
+    renderPage();
+    expect(await screen.findByText('Plot On Hold')).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'Delete Plot A-9' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete Plot On Hold' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete Inactive Available Plot' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Activate Inactive Available Plot' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete Plot Being Shown' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete Plot Booked' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete Plot Sold' })).toBeNull();
   });
 
   it('imports plots from the CSV/Excel dialog and reloads the inventory', async () => {

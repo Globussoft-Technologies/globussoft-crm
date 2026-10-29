@@ -429,14 +429,12 @@ describe('MANAGER permission backfill - seed-on-creation only', () => {
       .filter((call) => call[0].data.roleId === managerId)
       .map((call) => `${call[0].data.module}.${call[0].data.action}`);
 
-    expect(grants).toContain('cpq.read');
     expect(grants).toContain('web_forms.write');
     expect(grants).toContain('calendar.update');
     expect(grants).toContain('forecasting.read');
     expect(grants).toContain('quotas.read');
     expect(grants).toContain('sequences.read');
     expect(grants).toContain('settings.read');
-    expect(grants).not.toContain('cpq.delete');
     expect(grants).not.toContain('patients.read');
     expect(grants).not.toContain('itineraries.read');
   });

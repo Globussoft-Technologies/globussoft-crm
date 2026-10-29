@@ -57,6 +57,7 @@ prisma.pickupLocation.update = vi.fn();
 prisma.plotSite.findMany = vi.fn();
 prisma.plotSite.create = vi.fn();
 prisma.plotSite.update = vi.fn();
+prisma.plotSite.delete = vi.fn();
 prisma.plotSite.updateMany = vi.fn();
 prisma.contact.findMany = vi.fn();
 prisma.contact.update = vi.fn();
@@ -3376,12 +3377,71 @@ describe('plot/site mutations', () => {
   });
 
   test('status changes are tenant scoped', async () => {
-    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, isActive: true });
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, availability: 'RESERVED', isActive: true });
     prisma.plotSite.update.mockResolvedValue({ id: 30, isActive: false });
     const response = await request(makeApp()).patch('/api/pickup-plot-inventory/plots/30/status').send({ isActive: false });
     expect(response.status).toBe(200);
     expect(prisma.plotSite.findFirst).toHaveBeenCalledWith({ where: { id: 30, tenantId: 7 } });
     expect(prisma.plotSite.update).toHaveBeenCalledWith({ where: { id: 30 }, data: { isActive: false } });
+  });
+
+  test('does not remove a plot that is already booked or sold', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, availability: 'BOOKED', isActive: true });
+
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/plots/30');
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'PLOT_DELETE_NOT_ALLOWED' });
+    expect(prisma.plotSite.update).not.toHaveBeenCalled();
+  });
+
+  test('does not remove an available plot while a booking workflow is active', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, availability: 'AVAILABLE', isActive: true });
+    prisma.plotBooking.findFirst.mockResolvedValue({ id: 91, status: 'PLOT_RESERVED' });
+
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/plots/30');
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'PLOT_HAS_ACTIVE_WORKFLOW' });
+    expect(prisma.plotSite.delete).not.toHaveBeenCalled();
+  });
+
+  test('does not remove a plot while a broker is actively showing it', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, availability: 'HOLD', isActive: true });
+    prisma.plotBroker.findMany.mockResolvedValue([{
+      assignmentPairsJson: JSON.stringify([{ customerId: 61, plotSiteId: 30 }]),
+      workflowStatusJson: JSON.stringify({ 'customer-61-plot-30': { status: 'PLOT_SHOWN' } }),
+    }]);
+
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/plots/30');
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'PLOT_HAS_ACTIVE_WORKFLOW' });
+    expect(prisma.plotSite.delete).not.toHaveBeenCalled();
+  });
+
+  test('deletes an available plot with no booking history', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, availability: 'AVAILABLE', isActive: true });
+    prisma.plotSite.delete.mockResolvedValue({ id: 30, name: 'Plot 30', availability: 'AVAILABLE' });
+
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/plots/30');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ deleted: true, plot: { id: 30 } });
+    expect(prisma.plotSite.delete).toHaveBeenCalledWith({ where: { id: 30 } });
+  });
+
+  test('does not delete a plot with booking history even after cancellation', async () => {
+    prisma.plotSite.findFirst.mockResolvedValue({ id: 30, tenantId: 7, availability: 'HOLD', isActive: true });
+    prisma.plotBooking.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 91, status: 'CANCELLED' });
+
+    const response = await request(makeApp()).delete('/api/pickup-plot-inventory/plots/30');
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ code: 'PLOT_HAS_BOOKING_HISTORY' });
+    expect(prisma.plotSite.delete).not.toHaveBeenCalled();
   });
 });
 

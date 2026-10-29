@@ -5,6 +5,7 @@ import {
   MapPin,
   Plus,
   Power,
+  Trash2,
   X,
 } from 'lucide-react';
 import { AuthContext } from '../App';
@@ -18,6 +19,7 @@ import MultiSelectDropdown from '../components/MultiSelectDropdown';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import CompactPickupLocationCell from '../components/CompactPickupLocationCell';
 import InventorySpreadsheetImport from '../components/InventorySpreadsheetImport';
+import PickupPlotEmptyState from '../components/PickupPlotEmptyState';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { googleMapsSearchUrl } from '../utils/googleMaps';
 
@@ -27,6 +29,7 @@ const EMPTY_PLOT = {
   availability: 'AVAILABLE', notes: '', isActive: true, boundary: [], pickupLocationIds: [],
 };
 const AVAILABILITY = ['AVAILABLE', 'HOLD', 'BOOKED', 'REGISTERED', 'RESERVED', 'SOLD'];
+const REMOVABLE_AVAILABILITY = new Set(['AVAILABLE', 'HOLD']);
 const PLOT_AREA_UNIT_OPTIONS = [
   { value: 'SQ_FT', label: 'Sq. ft.' },
   { value: 'KATHA', label: 'Katha' },
@@ -93,7 +96,7 @@ const PLOT_INVENTORY_COLUMNS = [
   { label: 'Facing', width: 160, minWidth: 100 },
   { label: 'Type', width: 160, minWidth: 100 },
   { label: 'Status', width: 115, minWidth: 90 },
-  { label: 'Actions', width: 110, minWidth: 90 },
+  { label: 'Actions', width: 140, minWidth: 130 },
 ];
 
 const PLOT_IMPORT_COLUMNS = [
@@ -226,6 +229,16 @@ function PlotPickupLocations({ plot }) {
     contextLabel={plot.name || 'plot or site'}
     emptyLabel="—"
   />;
+}
+
+function hasActiveBookingWorkflow(plot) {
+  return plot?.hasActiveBookingWorkflow === true
+    || (Array.isArray(plot?.assignedCustomers) && plot.assignedCustomers.length > 0);
+}
+
+function canDeletePlot(plot) {
+  return REMOVABLE_AVAILABILITY.has(String(plot?.availability || '').toUpperCase())
+    && !hasActiveBookingWorkflow(plot);
 }
 
 function StatusPill({ active, children }) {
@@ -433,6 +446,27 @@ export default function PickupPlotInventory() {
     }
   };
 
+  const deletePlot = async (plot) => {
+    if (!canDeletePlot(plot)) return;
+    const confirmed = await notify.confirm({
+      title: 'Delete plot or site?',
+      message: `${plot.name} will be permanently deleted from plot inventory. This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      await fetchApi(`/api/pickup-plot-inventory/plots/${plot.id}`, {
+        method: 'DELETE',
+      });
+      notify.success('Plot or site deleted.');
+      await loadInventory();
+    } catch (error) {
+      notify.error(error.message || 'Could not delete plot or site.');
+    }
+  };
+
   const matchesSharedFilters = useCallback((row, searchableValues) => {
     if (statusFilter === 'active' && !row.isActive) return false;
     if (statusFilter === 'inactive' && row.isActive) return false;
@@ -448,6 +482,12 @@ export default function PickupPlotInventory() {
       plot.price, plot.roadWidth, plot.facing, plot.propertyType, plot.availability, plot.notes,
     ]);
   }), [availabilityFilter, data.plots, matchesSharedFilters]);
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setAvailabilityFilter('all');
+  };
 
   return (
     <div
@@ -504,7 +544,7 @@ export default function PickupPlotInventory() {
           className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="plot-inventory-table"
           style={{
-            flex: '1 1 auto', minHeight: 0, maxHeight: '100%', width: '100%', maxWidth: '100%',
+            flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
             boxSizing: 'border-box', overflowX: 'auto', overflowY: 'auto', padding: 0,
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
@@ -572,15 +612,35 @@ export default function PickupPlotInventory() {
                   <td style={plotTableCellStyle}>{plot.facing ? plot.facing.replaceAll('_', ' ') : '—'}</td>
                   <td style={plotTableCellStyle}>{plot.propertyType || '—'}</td>
                   <td style={plotTableCellStyle}>{plot.isActive ? 'Active' : 'Inactive'}</td>
-                  <td style={plotTableCellStyle}><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <button className="btn-secondary" aria-label={`Edit ${plot.name}`} onClick={() => openPlot(plot)}><Edit2 size={14} /></button>
-                    <button className="btn-secondary" aria-label={`${plot.isActive ? 'Deactivate' : 'Activate'} ${plot.name}`} onClick={() => toggleStatus(plot)}><Power size={14} /></button>
+                  <td className="pickup-plot-actions-cell" style={plotTableCellStyle}><div className="pickup-plot-row-actions">
+                    <button type="button" className="btn-secondary pickup-plot-row-action" aria-label={`Edit ${plot.name}`} onClick={() => openPlot(plot)}><Edit2 size={14} /></button>
+                    <button type="button" className="btn-secondary pickup-plot-row-action" aria-label={`${plot.isActive ? 'Deactivate' : 'Activate'} ${plot.name}`} onClick={() => toggleStatus(plot)}><Power size={14} /></button>
+                    {canDeletePlot(plot) && <button
+                      type="button"
+                      className="btn-secondary pickup-plot-row-action pickup-plot-delete-action"
+                      aria-label={`Delete ${plot.name}`}
+                      title="Delete plot or site"
+                      onClick={() => deletePlot(plot)}
+                    ><Trash2 size={14} /></button>}
                   </div></td>
                 </tr>
               ))}
               {loading && !loadedRef.current && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading inventory…</td></tr>}
-              {!loading && data.plots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites yet.</td></tr>}
-              {!loading && data.plots.length > 0 && filteredPlots.length === 0 && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>No plots or sites match the selected filters.</td></tr>}
+              {!loading && filteredPlots.length === 0 && <tr>
+                <td colSpan="14" className="pickup-plot-empty-cell">
+                  <PickupPlotEmptyState
+                    icon={MapPin}
+                    testId="plot-inventory-empty-state"
+                    title={data.plots.length === 0 ? 'No plots or sites yet.' : 'No plots or sites match the selected filters.'}
+                    description={data.plots.length === 0
+                      ? 'Add your first plot or site to start tracking availability, pricing, addresses, and customer assignments.'
+                      : 'Try another search or reset the filters to see more plots and sites.'}
+                    actionLabel={data.plots.length === 0 ? 'Add first plot / site' : 'Clear filters'}
+                    actionVariant={data.plots.length === 0 ? 'primary' : 'secondary'}
+                    onAction={data.plots.length === 0 ? () => openPlot() : clearFilters}
+                  />
+                </td>
+              </tr>}
             </tbody>
           </table>
           </div>}

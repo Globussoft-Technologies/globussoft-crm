@@ -51,6 +51,16 @@ describe('<PickupInventory />', () => {
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
   });
 
+  it('shows a guided empty state with an add-location action', async () => {
+    fetchApi.mockResolvedValueOnce({ pickupLocations: [] });
+    render(<PickupInventory />);
+
+    expect(await screen.findByRole('heading', { name: 'No pickup locations yet' })).toBeInTheDocument();
+    expect(screen.getByTestId('pickup-inventory-empty-state')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add pickup location' }));
+    expect(screen.getByRole('dialog', { name: 'Add pickup location' })).toBeInTheDocument();
+  });
+
   it('adds a pickup location from the inventory page', async () => {
     fetchApi.mockResolvedValueOnce(payload).mockResolvedValueOnce({ id: 5 }).mockResolvedValueOnce(payload);
     render(<PickupInventory />);
@@ -127,7 +137,9 @@ describe('<PickupInventory />', () => {
     expect(screen.getByRole('columnheader', { name: 'Created at' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Updated at' })).toBeInTheDocument();
     expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
-    expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveStyle({ overflowX: 'auto', overflowY: 'auto', minHeight: '0' });
+    expect(screen.getByTestId('pickup-inventory-table-scroll')).toHaveStyle({
+      flex: '0 0 auto', maxHeight: 'calc(100vh - 260px)', overflowX: 'auto', overflowY: 'auto', minHeight: '0',
+    });
     expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1265px', minWidth: '100%' });
     expect(screen.getByRole('table')).toHaveStyle({ width: '100%', tableLayout: 'fixed' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();

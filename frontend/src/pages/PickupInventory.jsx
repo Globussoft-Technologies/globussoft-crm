@@ -101,6 +101,11 @@ export default function PickupInventory() {
     });
   }, [locations, search, statusFilter]);
 
+  const clearFilters = () => {
+    setSearch('');
+    setStatusFilter('all');
+  };
+
   const saveLimit = async (location) => {
     const rawLimit = limits[location.id];
     const maxAssignments = rawLimit === '' ? null : Number(rawLimit);
@@ -278,7 +283,7 @@ export default function PickupInventory() {
           className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="pickup-inventory-table-scroll"
           style={{
-            flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
+            flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
             overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
@@ -362,7 +367,24 @@ export default function PickupInventory() {
                 </tr>;
               })}
               {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</td></tr>}
-              {!loading && filteredLocations.length === 0 && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No pickup locations found.</td></tr>}
+              {!loading && filteredLocations.length === 0 && <tr>
+                <td colSpan="8" className="pickup-inventory-empty-cell">
+                  <div className="pickup-inventory-empty-state" data-testid="pickup-inventory-empty-state">
+                    <div className="pickup-inventory-empty-icon" aria-hidden="true"><MapPin size={25} /></div>
+                    <div className="pickup-inventory-empty-copy">
+                      <h2>{locations.length === 0 ? 'No pickup locations yet' : 'No pickup locations found.'}</h2>
+                      <p>{locations.length === 0
+                        ? 'Add your first pickup point to start assigning plots, tracking capacity, and opening directions from one place.'
+                        : 'Try a different search term or reset the status filter to see more pickup locations.'}</p>
+                    </div>
+                    <div className="pickup-inventory-empty-actions">
+                      {locations.length === 0
+                        ? <button type="button" className="btn-primary" onClick={openAddLocation}><Plus size={15} /> Add pickup location</button>
+                        : <button type="button" className="btn-secondary" onClick={clearFilters}><RefreshCw size={14} /> Clear filters</button>}
+                    </div>
+                  </div>
+                </td>
+              </tr>}
             </tbody>
           </table>
           </div>}

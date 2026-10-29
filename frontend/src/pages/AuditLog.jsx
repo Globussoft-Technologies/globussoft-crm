@@ -14,6 +14,9 @@ const ACTION_COLOR = {
 const OTHER_COLOR = '#6b7280';
 
 function actionColor(action) {
+  if (action === 'HARD_DELETE' || action === 'SOFT_DELETE' || /(?:^|_)DELETE$/.test(String(action || ''))) {
+    return ACTION_COLOR.DELETE;
+  }
   return ACTION_COLOR[action] || OTHER_COLOR;
 }
 
@@ -720,6 +723,8 @@ export default function AuditLog() {
             <option value="CREATE">CREATE</option>
             <option value="UPDATE">UPDATE</option>
             <option value="DELETE">DELETE</option>
+            <option value="HARD_DELETE">HARD_DELETE</option>
+            <option value="SOFT_DELETE">SOFT_DELETE</option>
           </select>
           <input
             type="date"

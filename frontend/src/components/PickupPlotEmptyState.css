@@ -1,0 +1,67 @@
+.pickup-plot-empty-cell {
+  padding: 0 !important;
+  border-right: 0 !important;
+}
+
+.pickup-plot-empty-state {
+  width: 100%;
+  min-height: 240px;
+  box-sizing: border-box;
+  padding: 2.5rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  text-align: center;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--primary-color, var(--accent-color)) 5%, var(--surface-color)), var(--surface-color));
+}
+
+.pickup-plot-empty-state.is-compact {
+  min-height: 190px;
+  padding: 2rem 1rem;
+}
+
+.pickup-plot-empty-icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-color, var(--accent-color));
+  border: 1px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 24%, var(--border-color));
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
+
+.pickup-plot-empty-state.is-compact .pickup-plot-empty-icon {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.95rem;
+}
+
+.pickup-plot-empty-copy {
+  max-width: 540px;
+}
+
+.pickup-plot-empty-copy h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.pickup-plot-empty-copy p {
+  margin: 0.45rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.pickup-plot-empty-state > button {
+  min-height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { BadgeIndianRupee, Building2, Copy, ExternalLink, Eye, Link2, MapPin, Pencil, Plus, RefreshCw, Search, UserRound, WalletCards, X } from "lucide-react";
 import { AuthContext } from "../appContexts";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
+import PickupPlotEmptyState from "../components/PickupPlotEmptyState";
 import PickupLocationSelect from "../components/PickupLocationSelect";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -458,6 +459,11 @@ export default function PickupCustomers() {
   }), [customers, search, status]);
   const selectedCustomer = visibleCustomers.find((row) => row.id === selectedCustomerId) || visibleCustomers[0] || null;
 
+  const clearCustomerFilters = () => {
+    setSearch('');
+    setStatus('all');
+  };
+
   // Keep the client-side guard because older endpoint responses may also
   // contain reserved/sold rows, but normalize imported status labels before
   // comparing them. A case-sensitive check made genuinely available plots
@@ -842,7 +848,22 @@ export default function PickupCustomers() {
               <thead><tr><th>Customer</th><th>Contact</th><th>Status</th></tr></thead>
               <tbody>
                 {visibleCustomers.map((row) => { const selected = row.id === selectedCustomer?.id; const journeyStatus = customerJourneyStatus(row); return <tr key={row.id} className={selected ? "is-selected" : ""} onClick={() => setSelectedCustomerId(row.id)}><td><button type="button" onClick={() => setSelectedCustomerId(row.id)} aria-pressed={selected}>{row.contact?.name || "Customer"}</button><small>{row.assignedPlot?.name || row.contact?.interestedPlotArea || "No plot selected"}</small></td><td>{row.contact?.phone || row.contact?.email || "Not available"}</td><td><span style={pickupTripStatusStyle(journeyStatus)}>{formatPickupStatus(journeyStatus)}</span></td></tr>; })}
-                {!visibleCustomers.length && <tr><td colSpan="3" className="pickup-empty-cell">No customer records match these filters.</td></tr>}
+                {!visibleCustomers.length && <tr>
+                  <td colSpan="3" className="pickup-empty-cell pickup-plot-empty-cell">
+                    <PickupPlotEmptyState
+                      icon={UserRound}
+                      compact
+                      testId="pickup-customers-empty-state"
+                      title={customers.length === 0 ? 'No customer records yet.' : 'No customer records match these filters.'}
+                      description={customers.length === 0
+                        ? 'Customer workflow records will appear here when pickup or plot details are assigned.'
+                        : 'Try another search or reset the trip-status filter to see more customers.'}
+                      actionLabel={customers.length === 0 ? 'Refresh list' : 'Clear filters'}
+                      actionVariant="secondary"
+                      onAction={customers.length === 0 ? load : clearCustomerFilters}
+                    />
+                  </td>
+                </tr>}
               </tbody>
             </table>
           </div>

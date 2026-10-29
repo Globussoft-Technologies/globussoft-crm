@@ -9157,6 +9157,17 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
   border-color: var(--border-color);
 }
 
+/* These pages size the table card from its rows. Larger datasets still scroll
+   inside the card instead of leaving an empty flex-grown area below it. */
+.pickup-person-directory-page .pickup-plot-table-scroll,
+.pickup-plot-inventory-page .pickup-plot-table-scroll,
+.pickup-inventory-page .pickup-plot-table-scroll,
+.billing-directory-page .pickup-plot-table-scroll,
+.staff-work-assignment-page .pickup-plot-table-scroll {
+  flex: 0 0 auto;
+  max-height: calc(100vh - 260px);
+}
+
 /* Generic CRM Pickup & Plot tables intentionally keep their resting visual
    state on pointer hover. Row click handlers (for example Customer Status
    selection) remain active, and the selected-row class keeps its highlight. */
@@ -9216,6 +9227,41 @@ body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-se
   transform: none;
   filter: none;
 }
+
+/* Keep Plot & Site Inventory row actions together. The column is intentionally
+   wide enough for all available controls so Delete never drops below the
+   Edit and Activate/Deactivate buttons. */
+body[data-vertical="generic"] .pickup-plot-inventory-page table.pickup-plot-leads-table td.pickup-plot-actions-cell {
+  padding: 0.55rem 0.65rem !important;
+  white-space: nowrap;
+}
+
+body[data-vertical="generic"] .pickup-plot-inventory-page .pickup-plot-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  min-width: max-content;
+}
+
+body[data-vertical="generic"] .pickup-plot-inventory-page .pickup-plot-row-action {
+  width: 2.15rem;
+  min-width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 2.15rem;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body[data-vertical="generic"] .pickup-plot-inventory-page .pickup-plot-delete-action:hover:not(:disabled) {
+  color: var(--danger-color, #dc2626);
+  border-color: color-mix(in srgb, var(--danger-color, #dc2626) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--danger-color, #dc2626) 9%, transparent);
+}
+
 /* Public Generic CRM pickup/plot selection */
 .public-selection-page { min-height: 100vh; display: grid; place-items: center; padding: 2rem 1rem; background: var(--app-bg, var(--background-color, #f5f7fb)); color: var(--text-primary, #172033); }
 .public-selection-card { width: min(100%, 620px); padding: clamp(1.5rem, 4vw, 2.75rem); border: 1px solid var(--border-color, #d9deea); border-radius: 18px; background: var(--card-bg, #fff); box-shadow: 0 18px 50px rgba(15, 23, 42, .12); }

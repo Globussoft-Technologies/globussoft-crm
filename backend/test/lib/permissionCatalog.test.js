@@ -195,7 +195,6 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     for (const cat of [generic, unknown, nullV]) {
       expect(cat.contacts).toBeDefined();
       expect(cat.invoices).toBeDefined();
-      expect(cat.cpq).toBeDefined();
       expect(cat.web_forms).toBeDefined();
       expect(cat.patients).toBeUndefined();
       expect(cat.itineraries).toBeUndefined();

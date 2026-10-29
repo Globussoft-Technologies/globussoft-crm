@@ -134,10 +134,10 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' } },
   { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' } },
   { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', requiredPermission: { module: 'document_templates', action: 'read' } },
-  { path: '/document-tracking', label: 'Doc Tracking', description: 'Track documents and signatures', requiredPermission: { module: 'documents', action: 'read' } },
   { path: '/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', requiredPermission: { module: 'invoices', action: 'read' } },
   // Generic CRM: Estimates is intentionally removed from search/navigation.
   // { path: '/estimates', label: 'Estimates', description: 'Quotes + estimates sent to customers', requiredPermission: { module: 'estimates', action: 'read' } },
+  { path: '/quotes', label: 'Quotes', description: 'Build and manage customer quotes with GST line items', requiredPermission: { module: 'quotes', action: 'read' } },
   { path: '/expenses', label: 'Expenses', description: 'Team expense submissions', requiredPermission: { module: 'expenses', action: 'read' } },
   { path: '/contracts', label: 'Contracts', description: 'Contract lifecycle management', requiredPermission: { module: 'contracts', action: 'read' } },
   { path: '/projects', label: 'Projects', description: 'Project tracking + task boards', requiredPermission: { module: 'projects', action: 'read' } },
@@ -163,7 +163,6 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/sla', label: 'SLA Policies', description: 'Service level agreement setup', managerOnly: true },
   { path: '/payments', label: 'Payments', description: 'Payment history + gateway transactions', managerOnly: true },
   { path: '/lead-scoring', label: 'Lead Scoring', description: 'Lead qualification engine', managerOnly: true, sidebarHidden: true },
-  { path: '/cpq', label: 'CPQ', description: 'Configure price quote engine', managerOnly: true },
   { path: '/staff', label: 'Staff', description: 'Team management', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' } },
   { path: '/settings/roles', label: 'Roles', description: 'RBAC roles + permissions matrix', requiredPermission: { module: 'roles', action: 'read' } },
   { path: '/audit-log', label: 'Audit Log', description: 'Compliance audit trail', adminOnly: true, requiredPermission: { module: 'audit', action: 'read' } },
@@ -226,7 +225,6 @@ const GENERIC_PAGE_PERMISSION_FALLBACK = {
   '/surveys': ['surveys', 'read'],
   '/sla': ['sla', 'read'],
   '/payments': ['payments', 'read'],
-  '/cpq': ['cpq', 'read'],
   '/data-import-export': ['settings', 'manage'],
 };
 

@@ -120,6 +120,20 @@ describe('Deals and Pipelines page', () => {
     expect(await screen.findByText('Legacy proposal deal')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'proposal' })).toBeInTheDocument();
   });
+  it('keeps unconfigured legacy-stage deals visible while searching', async () => {
+    mockApi({ deals: [{ ...DEALS[0], title: 'Legacy discovery deal', stage: 'retired-stage' }] });
+    render(
+      <AuthContext.Provider value={{ user: { tenantId: 1 }, tenant: { id: 1, vertical: 'generic' } }}>
+        <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    expect(await screen.findByText('Legacy discovery deal')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: /search deals/i }), { target: { value: 'legacy' } });
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(expect.stringContaining('search=legacy')));
+    expect(screen.getByText('Legacy discovery deal')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'retired-stage' })).toBeInTheDocument();
+  });
+
   it('maps legacy closed stage aliases into the configured Won and Lost columns', async () => {
     mockApi({
       deals: [

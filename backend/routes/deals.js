@@ -16,6 +16,13 @@ const { DEFAULTS, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
+// Never load authentication or recovery fields into deal responses.
+const dealUserSelect = { id: true, name: true, email: true };
+const dealRelations = {
+  contact: { include: { assignedTo: { select: dealUserSelect } } },
+  owner: { select: dealUserSelect },
+};
+
 /**
  * Derive the canonical lead-capture channel from a Contact.source string.
  * Travel inbound leads store source as "inbound:<channel>" (e.g.
@@ -124,13 +131,6 @@ router.get("/", async (req, res) => {
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (dealType) {
       await addDealTypeFilter(where, req.user.tenantId, dealType);
-      // A name search must be able to find a deal regardless of its current
-      // stage. Keep an explicitly selected stage filter authoritative, but do
-      // not add the deal type's inferred stage restriction to a free-text
-      // search.
-      await addGenericDealTypeStageFilter(where, req.user.tenantId, dealType, {
-        ignoreStageFilter: Boolean(search && !stage),
-      });
     }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
@@ -260,7 +260,7 @@ router.get("/", async (req, res) => {
         createdAt: true,
       };
     } else {
-      findManyArgs.include = { contact: { include: { assignedTo: true } }, owner: true };
+      findManyArgs.include = dealRelations;
     }
     const deals = await prisma.deal.findMany(findManyArgs);
     // #464: strip fields the caller's role can't read (e.g. amount hidden
@@ -320,9 +320,6 @@ router.get("/stats", async (req, res) => {
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
     if (req.query.dealType) {
       await addDealTypeFilter(where, tid, req.query.dealType);
-      await addGenericDealTypeStageFilter(where, tid, req.query.dealType, {
-        ignoreStageFilter: Boolean(req.query.search && !req.query.stage),
-      });
     }
     if (req.query.ownerId) where.ownerId = parseInt(req.query.ownerId);
     if (req.query.subBrand) where.subBrand = String(req.query.subBrand);
@@ -488,8 +485,7 @@ router.get("/:id", async (req, res) => {
     const deal = await prisma.deal.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
       include: {
-        contact: { include: { assignedTo: true } },
-        owner: true,
+        ...dealRelations,
         attachments: true,
         invoices: true,
         quotes: { include: { lineItems: true } },
@@ -572,31 +568,6 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
   return allowed;
 }
 
-function stageFilterVariants(stages) {
-  const variants = new Set();
-  for (const stage of stages) {
-    const value = slugifyStageName(stage);
-    if (!value) continue;
-    variants.add(value);
-    if (value === "new-lead") variants.add("lead");
-    if (value === "contracted") variants.add("contacted");
-    if (value === "contacted") variants.add("contracted");
-    if (value === "won") variants.add("closed-won");
-    if (value === "lost") variants.add("closed-lost");
-    if (value === "proposal-sent") variants.add("proposal");
-  }
-  return [...variants];
-}
-
-async function addGenericDealTypeStageFilter(where, tenantId, dealType, { ignoreStageFilter = false } = {}) {
-  if (!dealType || ignoreStageFilter) return;
-  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
-  if (tenant?.vertical !== "generic") return;
-  const configuredStages = await getAllowedStagesForTenant(tenantId, dealType);
-  const stageValues = stageFilterVariants(configuredStages);
-  if (!stageValues.length) return;
-  where.AND = [...(where.AND || []), { stage: { in: stageValues } }];
-}
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
 async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false, allowLegacyStages = false } = {}) {
@@ -656,12 +627,12 @@ router.post("/", async (req, res) => {
       data.currency = tenant?.defaultCurrency || "USD";
     }
 
-    let deal = await prisma.deal.create({ data, include: { contact: { include: { assignedTo: true } }, owner: true } });
+    let deal = await prisma.deal.create({ data, include: dealRelations });
     if (autoName) {
       deal = await prisma.deal.update({
         where: { id: deal.id },
         data: { title: `${String(dealType || 'Deal').replace(/\s+/g, '')}-${deal.id}` },
-        include: { contact: { include: { assignedTo: true } }, owner: true },
+        include: dealRelations,
       });
     }
 
@@ -762,7 +733,7 @@ router.put("/:id", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data,
-      include: { contact: { include: { assignedTo: true } }, owner: true },
+      include: dealRelations,
     });
 
     // Stage-change activity
@@ -858,7 +829,7 @@ router.put("/:id/stage", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data,
-      include: { contact: { include: { assignedTo: true } }, owner: true },
+      include: dealRelations,
     });
 
     if (existing.stage !== stage && deal.contactId) {
@@ -924,7 +895,7 @@ router.post("/:id/won", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data: { stage: "won", probability: 100 },
-      include: { contact: { include: { assignedTo: true } }, owner: true },
+      include: dealRelations,
     });
 
     if (deal.contactId) {
@@ -971,7 +942,7 @@ router.post("/:id/lost", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data,
-      include: { contact: { include: { assignedTo: true } }, owner: true },
+      include: dealRelations,
     });
 
     if (deal.contactId) {
@@ -1041,7 +1012,7 @@ router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data: { deletedAt: null },
-      include: { contact: { include: { assignedTo: true } }, owner: true },
+      include: dealRelations,
     });
     if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json({ ...deal, restored: true });

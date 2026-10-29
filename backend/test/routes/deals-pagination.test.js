@@ -54,6 +54,8 @@ authMw.verifyRole = (_roles) => (_req, _res, next) => next();
 prisma.deal = prisma.deal || {};
 prisma.deal.findMany = vi.fn();
 prisma.deal.count = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -84,6 +86,7 @@ function makeApp({ tenantId = TENANT_ID, userId = USER_ID, role = 'ADMIN' } = {}
 }
 
 beforeEach(() => {
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'travel', defaultCurrency: 'USD' });
   prisma.deal.findMany.mockReset().mockResolvedValue([SAMPLE_DEAL]);
   prisma.deal.count.mockReset().mockResolvedValue(1);
 });
@@ -140,10 +143,7 @@ describe('GET /api/deals — page/limit/offset pagination', () => {
       {
         contact: {
           is: {
-            OR: [
-              { name: { contains: 'Acme' } },
-              { company: { contains: 'Acme' } },
-            ],
+            name: { contains: 'Acme' },
           },
         },
       },

@@ -373,11 +373,9 @@ export default function Pipeline() {
     const known = new Set(allStages.map((stage) => stage.id));
     for (const item of isGeneric ? [...visibleDeals, ...(stats?.byStage || [])] : []) {
       const id = stageIdForDeal(item, effectiveStages, isGeneric);
-      // Search results can contain legacy stages that are not part of the
-      // selected deal type's configured board. Keep the board stable during
-      // search; known legacy aliases (for example contacted -> Contracted)
-      // are still mapped by stageIdForDeal above.
-      if (id && !known.has(id) && !debouncedSearch) {
+      // Keep matching deals visible even if their stage was removed from
+      // configuration, including while searching.
+      if (id && !known.has(id)) {
         known.add(id);
         allStages.push({ id, title: item.stage || id, color: '#64748b' });
       }

@@ -176,6 +176,20 @@ beforeEach(() => {
 // ─── GET / — list with tenant + soft-delete + USER-role scoping ─────
 
 describe('GET /api/deals — list with tenant + soft-delete + role scoping', () => {
+  test('list and detail only select public identity fields for related users', async () => {
+    const identity = { id: true, name: true, email: true };
+    const relations = {
+      contact: { include: { assignedTo: { select: identity } } },
+      owner: { select: identity },
+    };
+    prisma.deal.findMany.mockResolvedValue([]);
+    prisma.deal.findFirst.mockResolvedValue({ id: 81, tenantId: 1 });
+    const app = makeApp();
+    expect((await request(app).get('/api/deals')).status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].include).toEqual(relations);
+    expect((await request(app).get('/api/deals/81')).status).toBe(200);
+    expect(prisma.deal.findFirst.mock.calls[0][0].include).toMatchObject(relations);
+  });
   test.each(['/api/deals?dealType=Renewal', '/api/deals/stats?dealType=Renewal'])(
     'keeps legacy stages visible for a selected deal type in %s', async (url) => {
       prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
@@ -231,8 +245,8 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     prisma.deal.findMany.mockResolvedValue([]);
     const res = await request(makeApp()).get('/api/deals?dealType=Sales');
     expect(res.status).toBe(200);
-    const stageClause = prisma.deal.findMany.mock.calls[0][0].where.AND.find((clause) => clause.stage);
-    expect(stageClause.stage.in).toEqual(expect.arrayContaining(['contracted', 'contacted']));
+    const where = prisma.deal.findMany.mock.calls[0][0].where;
+    expect(where.AND?.some((clause) => clause.stage) || false).toBe(false);
   });
 
   test('name search spans all stages while an explicit stage filter remains authoritative', async () => {
@@ -948,7 +962,7 @@ describe('GET /api/deals?fields=summary — slim-shape opt-in (#920 slice 2)', (
     await request(app).get('/api/deals');
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     // Full-shape path: include is set, select is absent.
-    expect(findArgs.include).toEqual({ contact: true, owner: true });
+    expect(findArgs.include).toEqual({ contact: { include: { assignedTo: { select: { id: true, name: true, email: true } } } }, owner: { select: { id: true, name: true, email: true } } });
     expect(findArgs.select).toBeUndefined();
   });
 
@@ -958,7 +972,7 @@ describe('GET /api/deals?fields=summary — slim-shape opt-in (#920 slice 2)', (
     await request(app).get('/api/deals?fields=summaryfoo');
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     // Any non-exact 'summary' value falls through to the full-shape include.
-    expect(findArgs.include).toEqual({ contact: true, owner: true });
+    expect(findArgs.include).toEqual({ contact: { include: { assignedTo: { select: { id: true, name: true, email: true } } } }, owner: { select: { id: true, name: true, email: true } } });
     expect(findArgs.select).toBeUndefined();
   });
 

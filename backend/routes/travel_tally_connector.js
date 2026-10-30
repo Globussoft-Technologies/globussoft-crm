@@ -334,6 +334,12 @@ async function updateCostCentreVoucherSyncStatus(tenantId, vouchersXml, voucherS
 
 router.get("/status", ...guards, requirePermission("tally", "read"), async (req, res) => {
   try {
+    // Presence changes while the page is open; do not reuse an older offline response.
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
     const integration = await prisma.integration.findUnique({
       where: { tenantId_provider: { tenantId: req.travelTenant.id, provider: CONNECTOR_PROVIDER } },
       select: { settings: true, isActive: true },

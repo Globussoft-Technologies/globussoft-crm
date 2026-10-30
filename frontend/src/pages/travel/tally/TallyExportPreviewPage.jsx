@@ -14,7 +14,7 @@ import tallyIcon from "../../../assets/tally-icon.png";
 
 const field = (value) => value == null || value === "" ? "—" : String(value);
 const requestConnectorStatus = (silent = true) =>
-  fetchApi("/api/travel/tally/connector/status", { silent });
+  fetchApi("/api/travel/tally/connector/status", { silent, cache: "no-store" });
 const SUB_BRAND_OPTIONS = [
   { value: "all", label: "All sub-brands" },
   { value: "tmc", label: "TMC" },

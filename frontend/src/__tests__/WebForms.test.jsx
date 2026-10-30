@@ -462,6 +462,32 @@ describe('public web form embed footer', () => {
     expect(html).not.toContain('requestHeaders["X-GBS-Tracking"]');
   });
 
+  test('submits Generic attribution when third-party iframe cookies are blocked', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const start = html.indexOf('function resolveTrackingAttribution(');
+    const end = html.indexOf('function pageUrlWithoutQueryOrHash(', start);
+    const remembered = [];
+    const context = {
+      TRACKING_QUERY_KEYS: ['utm_source', 'utm_campaign', 'gclid'],
+      readCookie: () => '',
+      rememberCookie: (name, value) => remembered.push([name, value]),
+    };
+
+    runInNewContext(html.slice(start, end), context);
+    const query = {
+      get: (key) => ({ utm_source: 'google', utm_campaign: 'metros', gclid: 'click-123' })[key] || '',
+    };
+    const attribution = context.resolveTrackingAttribution(query, {});
+
+    expect(attribution).toEqual({
+      utm_source: 'google',
+      utm_campaign: 'metros',
+      gclid: 'click-123',
+    });
+    expect(remembered).toContainEqual(['gbs_utm_source', 'google']);
+    expect(html).toContain('var value = resolvedAttribution[key];');
+  });
+
   test('preserves Generic phone country choices made by the visitor', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 

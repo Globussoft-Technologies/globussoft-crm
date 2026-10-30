@@ -1635,6 +1635,24 @@
             TRACKING_COOKIE_MAX_AGE_SECONDS +
             "; Path=/; SameSite=Lax";
         }
+        function resolveTrackingAttribution(query, hostAttribution) {
+          var resolved = {};
+          TRACKING_QUERY_KEYS.forEach(function (key) {
+            // A CRM form embedded on another domain runs in a third-party
+            // iframe. Browsers may block document.cookie there, so cookies
+            // are persistence only and must not be the attribution transport.
+            var value =
+              readCookie("gbs_" + key) ||
+              (hostAttribution && hostAttribution[key]) ||
+              (query && query.get(key)) ||
+              "";
+            if (!value) return;
+            value = String(value).slice(0, 2000);
+            resolved[key] = value;
+            rememberCookie("gbs_" + key, value);
+          });
+          return resolved;
+        }
         function pageUrlWithoutQueryOrHash(value) {
           try {
             var parsed = new URL(String(value || ""), window.location.href);
@@ -4880,14 +4898,10 @@
                     }
                   })()
                 : "direct");
-            TRACKING_QUERY_KEYS.forEach(function (key) {
-              rememberCookie(
-                "gbs_" + key,
-                query.get(key) ||
-                  (hostContext.attribution && hostContext.attribution[key]) ||
-                  "",
-              );
-            });
+            var resolvedAttribution = resolveTrackingAttribution(
+              query,
+              hostContext.attribution,
+            );
             rememberCookie("gbs_landing_url", pageUrl);
             rememberCookie("gbs_landing_title", pageTitle);
             var tracking = {
@@ -4901,15 +4915,15 @@
                 : window.location.hostname,
               formName: formData.name || "",
               formId: formData.id || slug,
-              utm_source: readCookie("gbs_utm_source"),
-              utm_medium: readCookie("gbs_utm_medium"),
-              utm_campaign: readCookie("gbs_utm_campaign"),
-              utm_term: readCookie("gbs_utm_term"),
-              utm_content: readCookie("gbs_utm_content"),
-              gclid: readCookie("gbs_gclid"),
-              fbclid: readCookie("gbs_fbclid"),
-              fbc: readCookie("gbs_fbc"),
-              fbp: readCookie("gbs_fbp"),
+              utm_source: resolvedAttribution.utm_source || "",
+              utm_medium: resolvedAttribution.utm_medium || "",
+              utm_campaign: resolvedAttribution.utm_campaign || "",
+              utm_term: resolvedAttribution.utm_term || "",
+              utm_content: resolvedAttribution.utm_content || "",
+              gclid: resolvedAttribution.gclid || "",
+              fbclid: resolvedAttribution.fbclid || "",
+              fbc: resolvedAttribution.fbc || "",
+              fbp: resolvedAttribution.fbp || "",
               submittedAt: new Date().toISOString(),
               browser: normalizeBrowser(navigator.userAgent),
               operatingSystem: normalizeOs(navigator.userAgent),
@@ -4918,7 +4932,7 @@
                 : "desktop",
             };
             TRACKING_QUERY_KEYS.forEach(function (key) {
-              var value = readCookie("gbs_" + key);
+              var value = resolvedAttribution[key];
               if (value) tracking[key] = value;
             });
             // Include attribution in the multipart request as ordinary fields

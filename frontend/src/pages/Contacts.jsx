@@ -162,7 +162,7 @@ function validateCsvRow(row) {
 }
 
 function ContactPreviewDrawer({ contact, loading, onClose, onEdit }) {
-  if (!contact && !loading) return null;
+  if (!contact) return null;
 
   const valueOrNotSet = (value) => value || 'Not set';
   const assignedTo = contact?.assignedTo?.name || contact?.assignedTo?.email || (contact?.assignedToId ? `Staff #${contact.assignedToId}` : 'Unassigned');
@@ -334,17 +334,27 @@ const Contacts = () => {
   const [editingContact, setEditingContact] = useState(null);
   const [previewContact, setPreviewContact] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const previewRequestId = useRef(0);
+
+  const closeContactPreview = () => {
+    previewRequestId.current += 1;
+    setPreviewContact(null);
+    setPreviewLoading(false);
+  };
 
   const openContactPreview = async (contact) => {
+    const requestId = ++previewRequestId.current;
     setPreviewContact(contact);
     setPreviewLoading(true);
     try {
       const fullContact = await fetchApi(`/api/contacts/${contact.id}`, { silent: true });
-      setPreviewContact((current) => current?.id === contact.id ? { ...current, ...fullContact } : current);
+      if (previewRequestId.current === requestId) {
+        setPreviewContact((current) => current?.id === contact.id ? { ...current, ...fullContact } : current);
+      }
     } catch {
       // Keep the list row data visible if the detail request fails.
     } finally {
-      setPreviewLoading(false);
+      if (previewRequestId.current === requestId) setPreviewLoading(false);
     }
   };
 
@@ -2312,10 +2322,10 @@ const Contacts = () => {
       <ContactPreviewDrawer
         contact={previewContact}
         loading={previewLoading}
-        onClose={() => setPreviewContact(null)}
+        onClose={closeContactPreview}
         onEdit={() => {
           setEditingContact(previewContact);
-          setPreviewContact(null);
+          closeContactPreview();
         }}
       />
     </div>

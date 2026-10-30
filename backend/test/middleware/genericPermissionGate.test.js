@@ -15,7 +15,6 @@ beforeEach(() => {
 describe('genericPermissionGate', () => {
   test('maps every generic-only API surface to method-specific permissions', () => {
     const prefixes = {
-      '/cpq': 'cpq',
       '/playbooks': 'playbooks',
       '/territories': 'territories',
       '/live-chat': 'live_chat',
@@ -46,7 +45,7 @@ describe('genericPermissionGate', () => {
   test('does not change wellness or travel API behavior', async () => {
     for (const vertical of ['wellness', 'travel']) {
       prisma.tenant.findUnique.mockResolvedValueOnce({ vertical });
-      const req = { path: '/cpq', method: 'GET', user: { tenantId: 7, vertical } };
+      const req = { path: '/playbooks', method: 'GET', user: { tenantId: 7, vertical } };
       const next = vi.fn();
       await genericPermissionGate(req, {}, next);
       expect(next).toHaveBeenCalledOnce();
@@ -55,7 +54,7 @@ describe('genericPermissionGate', () => {
 
   test('fails closed when generic tenant ownership cannot be resolved', async () => {
     prisma.tenant.findUnique.mockRejectedValue(new Error('database unavailable'));
-    const req = { path: '/cpq', method: 'GET', user: { tenantId: 7 } };
+    const req = { path: '/playbooks', method: 'GET', user: { tenantId: 7 } };
     const json = vi.fn();
     const res = { status: vi.fn(() => ({ json })) };
     const next = vi.fn();
@@ -70,7 +69,7 @@ describe('genericPermissionGate', () => {
   test('denies direct generic API calls without the mapped permission', async () => {
     prisma.userRole.findMany.mockResolvedValue([{ role: { permissions: [] } }]);
     const req = {
-      path: '/cpq',
+      path: '/playbooks',
       method: 'GET',
       user: { tenantId: 7, userId: 9, vertical: 'generic', role: 'USER' },
     };
@@ -83,17 +82,17 @@ describe('genericPermissionGate', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({
       code: 'RBAC_DENIED',
-      required: 'cpq.read',
+      required: 'playbooks.read',
     }));
     expect(next).not.toHaveBeenCalled();
   });
 
   test('allows direct generic API calls with the mapped permission', async () => {
     prisma.userRole.findMany.mockResolvedValue([{
-      role: { permissions: [{ module: 'cpq', action: 'read' }] },
+      role: { permissions: [{ module: 'playbooks', action: 'read' }] },
     }]);
     const req = {
-      path: '/cpq',
+      path: '/playbooks',
       method: 'GET',
       user: { tenantId: 7, userId: 9, vertical: 'generic', role: 'USER' },
     };

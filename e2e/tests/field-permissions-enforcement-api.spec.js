@@ -450,39 +450,6 @@ test.describe('Field-Level Permissions — Invoice write enforcement (#577)', ()
   });
 });
 
-test.describe('Field-Level Permissions — Quote read enforcement (#577)', () => {
-  test('authorized ADMIN GET /api/cpq/quotes/:dealId strips Quote.totalAmount when canRead=false', async ({ request }) => {
-    // Need a deal first.
-    const deal = await createDeal(request, { title: 'quote-fixture' });
-    // Create the quote via admin.
-    const qRes = await adminPost(request, '/api/cpq/quotes', {
-      dealId: deal.id,
-      title: `${RUN_TAG} fp-quote`,
-      lineItems: [{ productName: 'Item', quantity: 1, unitPrice: 99, isRecurring: false }],
-    });
-    expect(qRes.status(), `create quote: ${await qRes.text()}`).toBe(201);
-    const quote = await qRes.json();
-    const rule = await createRule(request, {
-      role: 'ADMIN', entity: 'Quote', field: 'totalAmount', canRead: false, canWrite: false,
-    });
-    try {
-      // CPQ is a manager/admin module. Use an authorized caller here so this
-      // assertion reaches the Quote field filter instead of correctly being
-      // rejected by the outer generic permission gate.
-      const r = await adminGet(request, `/api/cpq/quotes/${deal.id}`);
-      expect(r.status()).toBe(200);
-      const list = await r.json();
-      const me = list.find((q) => q.id === quote.id);
-      expect(me, 'created quote must appear in USER list').toBeTruthy();
-      expect(me).not.toHaveProperty('totalAmount');
-      expect(me).toHaveProperty('title');
-    } finally {
-      await deleteRule(request, rule.id);
-      await adminDelete(request, `/api/deals/${deal.id}`).catch(() => {});
-    }
-  });
-});
-
 // Belt-and-braces afterAll cleanup in case any rule above leaked due to a
 // failed assertion. Best-effort — we don't assert these succeed.
 test.afterAll(async ({ request }) => {

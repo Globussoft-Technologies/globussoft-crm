@@ -1282,6 +1282,7 @@ function SuggestedQuestionsPanel({ questions, onAdd, onClose }) {
 function PillToggle({ active, onChange, label, disabled = false }) {
   return (
     <button
+      className="diagnostic-required-toggle"
       type="button"
       onClick={onChange}
       disabled={disabled}
@@ -1298,11 +1299,11 @@ function PillToggle({ active, onChange, label, disabled = false }) {
       }}
     >
       <span style={{
-        position: 'absolute', top: 2, left: active ? 17 : 2,
+        position: 'absolute', top: '50%', left: active ? 19 : 3,
         width: 14, height: 14, borderRadius: '50%',
         background: active ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)',
-        transition: 'left .15s ease, background .15s ease',
-      }} />
+        transform: 'translateY(-50%)', transition: 'left .15s ease, background .15s ease',
+      }} aria-hidden="true" />
     </button>
   );
 }
@@ -1358,7 +1359,11 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
             <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move question down">
               <ChevronDown size={14} aria-hidden />
             </IconBtn>
-            {!systemManaged && (
+            {systemManaged ? (
+              <IconBtn disabled className="diagnostic-protected-delete" title="This system question cannot be removed" aria-label="Protected question cannot be removed" danger>
+                <Trash2 size={14} aria-hidden />
+              </IconBtn>
+            ) : (
               <IconBtn onClick={onRemove} title="Remove question" aria-label="Remove question" danger>
                 <Trash2 size={14} aria-hidden />
               </IconBtn>
@@ -2292,7 +2297,7 @@ function EngineWeightsPanel({ notify, isAdmin }) {
                 type="range"
                 value={weights[f.key]}
                 onChange={(e) => updateField(f.key, e.target.value)}
-                style={rangeInput}
+                style={rangeInputStyle(weights[f.key], 0, f.max || 100)}
                 className="diagnostic-weight-range"
                 aria-label={f.label}
                 min={0}
@@ -2310,7 +2315,7 @@ function EngineWeightsPanel({ notify, isAdmin }) {
               type="range"
               value={weights.scoresWellThreshold}
               onChange={(e) => updateField('scoresWellThreshold', e.target.value)}
-              style={rangeInput}
+              style={rangeInputStyle(weights.scoresWellThreshold, 0, 100)}
               className="diagnostic-weight-range"
               aria-label="Strong match threshold"
               min={0}
@@ -2341,7 +2346,7 @@ function EngineWeightsPanel({ notify, isAdmin }) {
               type="range"
               value={topK}
               onChange={(e) => setTopK(Number(e.target.value))}
-              style={rangeInput}
+              style={rangeInputStyle(topK, 3, 20)}
               className="diagnostic-weight-range"
               aria-label="Max recommendations shown"
               min={3}
@@ -2667,6 +2672,13 @@ const rangeInput = {
   height: 28,
   accentColor: 'var(--primary-color)',
 };
+function rangeInputStyle(value, min, max) {
+  const number = Number(value);
+  const progress = Number.isFinite(number) && max > min
+    ? Math.min(100, Math.max(0, Math.round(((number - min) / (max - min)) * 100)))
+    : 0;
+  return { ...rangeInput, '--range-progress': `${progress}%` };
+}
 const sliderValue = {
   minWidth: 58,
   padding: '7px 10px',
@@ -2935,6 +2947,10 @@ const diagnosticBuilderCss = `
     white-space: nowrap;
   }
 
+  .diagnostic-protected-delete {
+    opacity: 0.7 !important;
+  }
+
   @media (max-width: 1100px) {
     .diagnostic-template-row {
       grid-template-columns: minmax(0, 1fr) !important;
@@ -2977,7 +2993,7 @@ const diagnosticBuilderCss = `
   .diagnostic-weight-range::-webkit-slider-runnable-track {
     height: 10px;
     border-radius: 999px;
-    background: linear-gradient(90deg, var(--primary-color, #4f46e5), var(--accent-color, #6d5dfc));
+    background: linear-gradient(90deg, var(--primary-color, #4f46e5) 0 var(--range-progress), var(--border-color, #d8dbe3) var(--range-progress) 100%);
     border: 1px solid rgba(15, 23, 42, 0.12);
     box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.16);
   }
@@ -3002,7 +3018,7 @@ const diagnosticBuilderCss = `
   .diagnostic-weight-range::-moz-range-track {
     height: 10px;
     border-radius: 999px;
-    background: linear-gradient(90deg, var(--primary-color, #4f46e5), var(--accent-color, #6d5dfc));
+    background: linear-gradient(90deg, var(--primary-color, #4f46e5) 0 var(--range-progress), var(--border-color, #d8dbe3) var(--range-progress) 100%);
     border: 1px solid rgba(15, 23, 42, 0.12);
     box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.16);
   }

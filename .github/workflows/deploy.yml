@@ -309,7 +309,6 @@ jobs:
           #   - ai-scoring-api.spec.js       (23 tests: routes/ai_scoring.js)
           #   - contracts-api.spec.js        (37 tests: routes/contracts.js)
           #   - custom-objects-api.spec.js   (29 tests: routes/custom_objects.js)
-          #   - cpq-api.spec.js              (26 tests: routes/cpq.js)
           #   - tasks-api.spec.js            (53 tests: routes/tasks.js)
           #   - estimates-api.spec.js        (58 tests: routes/estimates.js)
           #   - push-api.spec.js             (33 tests: routes/push.js)
@@ -381,9 +380,9 @@ jobs:
             tests/ai-scoring-api.spec.js \
             tests/contracts-api.spec.js \
             tests/custom-objects-api.spec.js \
-            tests/cpq-api.spec.js \
             tests/tasks-api.spec.js \
             tests/estimates-api.spec.js \
+            tests/quotes-api.spec.js \
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \

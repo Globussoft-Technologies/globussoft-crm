@@ -145,6 +145,37 @@ describe('audit_viewer RBAC — #621 ADMIN-only', () => {
   });
 });
 
+describe('audit_viewer deletion statistics', () => {
+  test('DELETE KPI includes generic, hard-delete, and soft-delete actions', async () => {
+    prisma.auditLog.groupBy
+      .mockResolvedValueOnce([
+        { action: 'DELETE', _count: { _all: 2 } },
+        { action: 'HARD_DELETE', _count: { _all: 3 } },
+        { action: 'SOFT_DELETE', _count: { _all: 4 } },
+        { action: 'UPDATE', _count: { _all: 5 } },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    prisma.auditLog.count.mockResolvedValueOnce(14);
+
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer/stats')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 14,
+      byAction: {
+        DELETE: 9,
+        HARD_DELETE: 3,
+        SOFT_DELETE: 4,
+        UPDATE: 5,
+      },
+    });
+  });
+});
+
 /**
  * Extended coverage — query semantics + tenant isolation + CSV contract.
  *

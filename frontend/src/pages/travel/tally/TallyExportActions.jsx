@@ -140,7 +140,7 @@ export default function TallyExportActions({
 
   const loadConnectorStatus = async (silent = true) => {
     try {
-      const status = await fetchApi("/api/travel/tally/connector/status", { silent });
+      const status = await fetchApi("/api/travel/tally/connector/status", { silent, cache: "no-store" });
       setConnectorStatus(status);
     } catch (_) {
       if (!silent) setConnectorStatus(null);

@@ -176,6 +176,44 @@ beforeEach(() => {
 // ─── GET / — list with tenant + soft-delete + USER-role scoping ─────
 
 describe('GET /api/deals — list with tenant + soft-delete + role scoping', () => {
+  test('list and detail only select public identity fields for related users', async () => {
+    const identity = { id: true, name: true, email: true };
+    const relations = {
+      contact: { include: { assignedTo: { select: identity } } },
+      owner: { select: identity },
+    };
+    prisma.deal.findMany.mockResolvedValue([]);
+    prisma.deal.findFirst.mockResolvedValue({ id: 81, tenantId: 1 });
+    const app = makeApp();
+    expect((await request(app).get('/api/deals')).status).toBe(200);
+    expect(prisma.deal.findMany.mock.calls[0][0].include).toEqual(relations);
+    expect((await request(app).get('/api/deals/81')).status).toBe(200);
+    expect(prisma.deal.findFirst.mock.calls[0][0].include).toMatchObject(relations);
+  });
+  test.each(['/api/deals?dealType=Renewal', '/api/deals/stats?dealType=Renewal'])(
+    'keeps legacy stages visible for a selected deal type in %s', async (url) => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+      prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+        { id: 'new-business', name: 'New Business', isDefault: true, stages: [{ name: 'New Lead' }] },
+        { id: 'renewal', name: 'Renewal', stages: [{ name: 'Review' }, { name: 'Won' }] },
+      ]) });
+      const legacy = { id: 81, title: 'Existing renewal', dealType: 'Renewal', stage: 'retired-stage',
+        amount: 125, currency: 'USD', tenantId: 1, contact: null, owner: null };
+      prisma.deal.findMany.mockImplementation(async ({ where }) =>
+        where.AND?.some(condition => condition.stage?.in && !condition.stage.in.includes(legacy.stage)) ? [] : [legacy]);
+      const response = await request(makeApp()).get(url);
+      expect(response.status).toBe(200);
+      const where = prisma.deal.findMany.mock.calls[0][0].where;
+      expect(where).toMatchObject({ tenantId: 1, dealType: 'Renewal' });
+      expect(JSON.stringify(where)).not.toContain('"stage"');
+      if (url.includes('/stats')) {
+        expect(response.body.totalDeals).toBe(1);
+        expect(response.body.totalValue).toBe(125);
+        expect(response.body.byStage).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'retired-stage', count: 1 })]));
+      } else expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: 81, stage: 'retired-stage' })]));
+    },
+  );
+
   test.each(['/api/deals?dealType=Sales', '/api/deals/stats?dealType=Sales'])('includes untyped deals for the renamed New Business type in %s', async (url) => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
       { id: 'new-business', name: 'Sales', isDefault: false, stages: [{ name: 'Review' }] },
@@ -198,6 +236,77 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     expect(res.status).toBe(200);
     expect(prisma.deal.findMany.mock.calls[0][0].where.dealType).toBe('Renew');
   });
+
+  test('keeps legacy contacted deals visible under a configured Contracted stage', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales', stages: [{ name: 'New Lead' }, { name: 'Contracted' }, { name: 'Won' }, { name: 'Lost' }] },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/deals?dealType=Sales');
+    expect(res.status).toBe(200);
+    const where = prisma.deal.findMany.mock.calls[0][0].where;
+    expect(where.AND?.some((clause) => clause.stage) || false).toBe(false);
+  });
+
+  test('name search spans all stages while an explicit stage filter remains authoritative', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify([
+      { id: 'new-business', name: 'Sales', stages: [{ name: 'Review' }] },
+    ]) });
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const app = makeApp();
+    const searchResponse = await request(app).get('/api/deals?dealType=Sales&search=historic');
+    expect(searchResponse.status).toBe(200);
+    const searchWhere = prisma.deal.findMany.mock.calls[0][0].where;
+    expect(searchWhere.AND).toEqual(expect.arrayContaining([
+      { OR: [
+        { title: { contains: 'historic' } },
+        { company: { contains: 'historic' } },
+        { contact: { is: { name: { contains: 'historic' } } } },
+        { owner: { is: { name: { contains: 'historic' } } } },
+      ] },
+    ]));
+    expect(searchWhere.AND.some((clause) => clause.stage)).toBe(false);
+
+    await request(app).get('/api/deals?dealType=Sales&search=historic&stage=review');
+    const stageWhere = prisma.deal.findMany.mock.calls[1][0].where;
+    expect(stageWhere.stage).toBe('review');
+    expect(stageWhere.AND.some((clause) => clause.stage)).toBe(false);
+  });
+
+  test('generic CRM searches deal names and related contact names', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.deal.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/deals?dealType=Sales&search=cloud');
+    expect(res.status).toBe(200);
+    const searchClauses = prisma.deal.findMany.mock.calls[0][0].where.AND || [];
+    expect(searchClauses).toEqual(expect.arrayContaining([
+      { OR: [{ title: { contains: 'cloud' } }, { dealType: { contains: 'cloud' } }, { contact: { is: { name: { contains: 'cloud' } } } }] },
+    ]));
+    expect(JSON.stringify(searchClauses)).not.toContain('company');
+    expect(JSON.stringify(searchClauses)).not.toContain('owner');
+
+    await request(makeApp()).get('/api/deals?dealType=Sales&search=31');
+    const idSearchClauses = prisma.deal.findMany.mock.calls[1][0].where.AND || [];
+    expect(idSearchClauses).toEqual(expect.arrayContaining([
+      { OR: [{ title: { contains: '31' } }, { dealType: { contains: '31' } }, { contact: { is: { name: { contains: '31' } } } }, { id: 31 }] },
+    ]));
+  });
+  test.each(['/api/deals?search=Alice', '/api/deals/stats?search=Alice'])(
+    'contact-name search retains tenant and role scoping in %s', async (url) => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+      prisma.deal.findMany.mockResolvedValue([]);
+      const response = await request(makeApp({ role: 'USER', userId: 7 })).get(url);
+      expect(response.status).toBe(200);
+      const where = prisma.deal.findMany.mock.calls[0][0].where;
+      expect(where).toMatchObject({ tenantId: 1, ownerId: 7, deletedAt: null });
+      expect(where.AND).toEqual(expect.arrayContaining([
+        { OR: expect.arrayContaining([{ contact: { is: { name: { contains: 'Alice' } } } }]) },
+      ]));
+    });
+
   test('happy path: list returns rows scoped to tenant, soft-deletes excluded by default', async () => {
     prisma.deal.findMany.mockResolvedValue([
       { id: 1, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1, contact: null, owner: null },
@@ -866,7 +975,7 @@ describe('GET /api/deals?fields=summary — slim-shape opt-in (#920 slice 2)', (
     await request(app).get('/api/deals');
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     // Full-shape path: include is set, select is absent.
-    expect(findArgs.include).toEqual({ contact: true, owner: true });
+    expect(findArgs.include).toEqual({ contact: { include: { assignedTo: { select: { id: true, name: true, email: true } } } }, owner: { select: { id: true, name: true, email: true } } });
     expect(findArgs.select).toBeUndefined();
   });
 
@@ -876,7 +985,7 @@ describe('GET /api/deals?fields=summary — slim-shape opt-in (#920 slice 2)', (
     await request(app).get('/api/deals?fields=summaryfoo');
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     // Any non-exact 'summary' value falls through to the full-shape include.
-    expect(findArgs.include).toEqual({ contact: true, owner: true });
+    expect(findArgs.include).toEqual({ contact: { include: { assignedTo: { select: { id: true, name: true, email: true } } } }, owner: { select: { id: true, name: true, email: true } } });
     expect(findArgs.select).toBeUndefined();
   });
 

@@ -283,9 +283,9 @@ describe('<LandingPages /> — index page surface', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
 
-    expect(
-      screen.getByRole('searchbox', { name: /Search landing pages/i }),
-    ).toBeInTheDocument();
+    const searchInput = screen.getByRole('searchbox', { name: /Search landing pages/i });
+    expect(searchInput).toBeInTheDocument();
+    expect(searchInput.style.paddingLeft).toBe('2.5rem');
     expect(screen.getByRole('button', { name: /All\s*2/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Published\s*1/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Drafts\s*1/i })).toBeInTheDocument();

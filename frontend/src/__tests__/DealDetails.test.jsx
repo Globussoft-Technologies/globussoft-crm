@@ -54,6 +54,53 @@ describe('<DealDetails />', () => {
     expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42');
   });
 
+  it.each(['missing', 'failed', 'invalid', 'pending'])('does not save a currency change with %s rates', async (scenario) => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/deals/42') return Promise.resolve({ ...deal, amount: 8300, currency: 'INR' });
+      if (url === '/api/currencies') {
+        if (scenario === 'failed') return Promise.reject(new Error('Currency request failed'));
+        if (scenario === 'pending') return new Promise(() => {});
+        return Promise.resolve(scenario === 'invalid' ? [{ code: 'INR', exchangeRate: 0 }, { code: 'USD', exchangeRate: 1 }] : []);
+      }
+      return Promise.resolve([]);
+    });
+    renderPage();
+    const control = await screen.findByRole('combobox', { name: 'Deal currency' });
+    fireEvent.change(control, { target: { value: 'USD' } });
+    await waitFor(() => expect(control).not.toBeDisabled());
+    expect(control).toHaveValue('INR');
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+  });
+
+  it('saves a correctly converted deal currency when rates are available', async () => {
+    const rates = [{ code: 'INR', exchangeRate: 83 }, { code: 'USD', exchangeRate: 1 }];
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/deals/42') return Promise.resolve({ ...deal, amount: 8300, currency: 'INR', ...(options?.method === 'PUT' ? JSON.parse(options.body) : {}) });
+      if (url === '/api/currencies') return Promise.resolve(rates);
+      return Promise.resolve([]);
+    });
+    renderPage();
+    const control = await screen.findByRole('combobox', { name: 'Deal currency' });
+    await act(async () => {});
+    fireEvent.change(control, { target: { value: 'USD' } });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42', {
+      method: 'PUT', body: JSON.stringify({ amount: 100, currency: 'USD' }),
+    }));
+  });
+
+  it.each(['amount', 'currency'])('blocks the inline %s editor from saving without exchange rates', async (field) => {
+    fetchApiMock.mockImplementation((url) => url === '/api/deals/42'
+      ? Promise.resolve({ ...deal, amount: 8300, currency: 'INR' }) : Promise.resolve([]));
+    renderPage();
+    await screen.findByRole('heading', { name: deal.title });
+    act(() => window.dispatchEvent(new CustomEvent('deal-details-edit', { detail: { field, anchor: { bottom: 100, left: 10 } } })));
+    const dialog = screen.getByRole('dialog', { name: field === 'amount' ? 'Edit Amount' : 'Edit Currency' });
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'USD' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/Exchange rates unavailable/);
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+  });
+
   it('loads every stage from the selected Generic CRM pipeline and highlights only the deal stage', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/deals/42') return Promise.resolve({ ...deal, pipelineId: 7 });
@@ -83,50 +130,14 @@ describe('<DealDetails />', () => {
     expect(tracker.getByText('Lead')).not.toHaveClass('current');
   });
 
-  it('keeps the Add tag button available when a tag already exists', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/deals/42') return Promise.resolve({ ...deal, contact: { ...deal.contact, tags: ['Existing tag'] } });
-      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
-      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
-      return Promise.resolve([]);
-    });
-
-    renderPage();
-
-    expect((await screen.findAllByText('Existing tag')).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
-    expect(await screen.findByRole('textbox', { name: 'Add tag' })).toBeInTheDocument();
-  });
-
-  it('keeps the tag selector usable across a delayed catalogue response and reopening', async () => {
-    let resolveCatalog;
-    const catalog = new Promise((resolve) => { resolveCatalog = resolve; });
-    const defaultFetch = fetchApiMock.getMockImplementation();
-    fetchApiMock.mockImplementation((url, ...args) => url === '/api/contacts/tags'
-      ? catalog : defaultFetch(url, ...args));
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'Add tag' }));
-    const input = await screen.findByRole('textbox', { name: 'Add tag' });
-    fireEvent.change(input, { target: { value: 'New prospect' } });
-    await act(async () => { resolveCatalog([{ name: 'VIP', color: '#112233' }]); });
-    expect(screen.getByRole('textbox', { name: 'Add tag' })).toHaveValue('New prospect');
-    expect(screen.getByRole('dialog', { name: 'Tag selector' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('dialog', { name: 'Tag selector' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add tag' }));
-    expect(await screen.findByRole('textbox', { name: 'Add tag' })).toHaveValue('');
-  });
-
-  it('supports the details tab search and show-empty-fields control', async () => {
+  it('does not render the removed Overview / Deal details workspace', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Acme Expansion' });
-    fireEvent.click(screen.getByRole('button', { name: 'Deal details' }));
-    expect(screen.getByRole('heading', { name: 'Deal details' })).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search fields' }), { target: { value: 'Currency' } });
-    expect(screen.getByText('Currency')).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search fields' }), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /show empty fields/i }));
-    expect(screen.getAllByText('Territory').length).toBeGreaterThan(0);
+    expect(document.querySelector('.deal-reference-workspace')).not.toBeInTheDocument();
+    expect(screen.queryByText('Click to add tags')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add tag' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Search fields' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Overview')).not.toBeInTheDocument();
   });
 
   it('opens Add note only from the note entry area', async () => {
@@ -154,6 +165,26 @@ describe('<DealDetails />', () => {
     expect(notesList?.children).toHaveLength(12);
   });
 
+  it('keeps the Generic CRM page vertically scrollable for content below the viewport', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: 'Acme Expansion' });
+
+    const pageScrollStyle = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent)
+      .find((css) => css.includes('.generic-deal-details-page') && css.includes('overflow-y:auto !important'));
+    expect(pageScrollStyle).toContain('overflow-y:auto !important');
+  });
+
+  it('uses theme-aware Generic deal page backgrounds in light and dark mode', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: 'Acme Expansion' });
+    const pageStyle = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent)
+      .find((css) => css.includes('.generic-deal-details-page{background:var(--surface-color) !important;padding:18px'));
+    expect(pageStyle).toContain('background:var(--surface-color) !important;padding:clamp');
+    expect(pageStyle).not.toContain('#f1f3f6');
+  });
+
   it('opens Activities only from View all notes', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Acme Expansion' });
@@ -162,27 +193,4 @@ describe('<DealDetails />', () => {
     expect(screen.queryByRole('dialog', { name: 'Add note' })).not.toBeInTheDocument();
   });
 
-  it('searches related contacts through the backend instead of truncating to an initial list', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/deals/42') return Promise.resolve(deal);
-      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
-      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
-      if (url.includes('/api/contacts?') && url.includes('q=Beyond')) {
-        return Promise.resolve({ data: [{ id: 999, name: 'Beyond First Page' }] });
-      }
-      if (url.startsWith('/api/contacts?')) return Promise.resolve({ data: [] });
-      return Promise.resolve([]);
-    });
-
-    renderPage();
-    await screen.findByRole('heading', { name: 'Acme Expansion' });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Edit Related contact' })[0]);
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Search contacts' }), { target: { value: 'Beyond' } });
-
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
-      '/api/contacts?fields=summary&limit=50&q=Beyond',
-      { silent: true },
-    ));
-    expect(await screen.findByRole('option', { name: 'Beyond First Page' })).toBeInTheDocument();
-  });
 });

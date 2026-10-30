@@ -476,14 +476,6 @@ test.describe('Extended API Health Checks', () => {
     expect(Array.isArray(body)).toBe(true);
   });
 
-  test('GET /api/cpq/products returns 200 with array', async ({ request }) => {
-    const response = await authGet(request, '/api/cpq/products');
-    expect(response.status()).toBe(200);
-    const body = await safeJson(response);
-    expect(body).not.toBeNull();
-    expect(Array.isArray(body)).toBe(true);
-  });
-
   test('GET /api/search?q=test returns 200 with search results object', async ({ request }) => {
     const response = await authGet(request, '/api/search?q=test');
     expect(response.status()).toBe(200);

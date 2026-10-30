@@ -105,7 +105,7 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
     });
     fireEvent.click(btn);
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/audit/verify');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/audit/verify', { silent: true });
     });
   });
 

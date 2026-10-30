@@ -9,6 +9,14 @@ const { validateDateRange } = require('../lib/validateDateRange');
 
 const prisma = require("../lib/prisma");
 
+// Deletion actions are intentionally more specific than the generic DELETE
+// verb on some resources. Keep the viewer's deletion KPI/category inclusive
+// so hard-deleted Contacts (leads) and soft-deleted records are not hidden
+// from operators simply because their audit action carries a qualifier.
+function isDeleteAction(action) {
+  return action === "DELETE" || /(?:^|_)DELETE$/.test(String(action || ""));
+}
+
 // #621: ADMIN-only — audit log viewer.
 // Pre-fix MANAGER was in the allow-list but the wellness sidebar's
 // `adminOnly` flag hid the link, RoleGuard redirected MANAGER on /audit-log,
@@ -199,7 +207,12 @@ router.get('/stats', async (req, res) => {
 
     const counts = { CREATE: 0, UPDATE: 0, DELETE: 0 };
     for (const row of byAction) {
-      counts[row.action] = row._count._all;
+      const count = row._count._all;
+      // Preserve the exact action counts as additive fields for consumers
+      // that need to distinguish HARD_DELETE/SOFT_DELETE, while also making
+      // the top-level DELETE bucket mean "all deletion actions".
+      if (row.action !== "DELETE") counts[row.action] = count;
+      if (isDeleteAction(row.action)) counts.DELETE += count;
     }
 
     res.json({

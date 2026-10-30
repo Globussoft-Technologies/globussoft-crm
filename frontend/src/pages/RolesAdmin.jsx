@@ -69,7 +69,7 @@ const PERMISSION_MODULES_FALLBACK = [
   { module: 'settings',      actions: ['read', 'manage'] },
   // Generic CRM page modules. The live catalog is authoritative; these keep
   // the modal useful while an older backend is still serving the fallback.
-  ...['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms']
+  ...['playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms']
     .map((module) => ({ module, actions: ['read', 'write', 'update', 'delete'] })),
 ];
 
@@ -91,7 +91,7 @@ const PERMISSION_DOMAINS_FALLBACK = [
   { domain: 'Wellness Clinical',  modules: ['patients', 'appointments', 'my_appointments', 'book_appointment', 'waitlist', 'services', 'prescriptions', 'my_prescriptions', 'consents', 'visits'] },
   { domain: 'Wellness Inventory', modules: ['products', 'inventory', 'pos'] },
   { domain: 'Admin & Platform',   modules: ['staff', 'roles', 'settings', 'audit', 'integrations', 'developer'] },
-  { domain: 'Generic CRM Pages',  modules: ['cpq', 'playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms'] },
+  { domain: 'Generic CRM Pages',  modules: ['playbooks', 'territories', 'live_chat', 'support', 'sla', 'social', 'field_permissions', 'sandbox', 'document_templates', 'custom_objects', 'lead_scoring', 'deal_insights', 'calendar', 'ab_tests', 'booking_pages', 'web_forms'] },
 ];
 
 // One-line description per module so admins know what each permission box
@@ -108,7 +108,7 @@ const MODULE_DESCRIPTIONS = {
   tasks:          'To-dos assigned to users or linked to CRM records.',
   projects:       'Multi-step engagements grouping deals, tasks, and contacts.',
   pipeline:       'Sales pipeline stages and configuration.',
-  quotes:         'Price quotes and CPQ documents sent to prospects.',
+  quotes:         'Price quotes sent to prospects.',
   forecasting:    'Revenue forecast roll-ups and weekly snapshots.',
   quotas:         'Sales targets assigned to users or teams.',
   // Communications
@@ -206,7 +206,6 @@ const MODULE_DESCRIPTIONS = {
   flyer_studio:         'Marketing Flyer Studio — design and publish sub-brand flyers.',
   flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
   // Generic CRM page modules
-  cpq:                 'Configure-price-quote builder and quote calculations.',
   playbooks:           'Reusable sales playbooks and guided processes.',
   territories:         'Sales territory mapping and assignment.',
   live_chat:           'Live-chat conversations and visitor handoff.',
@@ -1139,7 +1138,9 @@ function TmcTeacherShareableLinkPanel() {
         <div style={{ marginTop: '1rem', display: 'grid', gap: '0.6rem' }}>
           <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }} htmlFor="tmc-teacher-registration-link">Share this link</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            <input id="tmc-teacher-registration-link" value={link} readOnly onFocus={(event) => event.target.select()} style={{ flex: '1 1 320px', minWidth: 0, width: 'auto', boxSizing: 'border-box', padding: '0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+            <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+              <input id="tmc-teacher-registration-link" value={link} readOnly onFocus={(event) => event.target.select()} style={{ display: 'block', width: '100%', maxWidth: 'none', minWidth: 0, boxSizing: 'border-box', padding: '0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+            </div>
             <button type="button" className="btn-secondary" onClick={copyLink} style={{ display: 'inline-flex', flex: '0 0 auto', alignItems: 'center', gap: '0.4rem' }}><Copy size={15} /> {copiedRegistrationLink ? 'Copied' : 'Copy link'}</button>
           </div>
         </div>
@@ -1178,6 +1179,7 @@ function TmcTeacherShareableLinkPanel() {
               <div key={teacher.id} role="listitem" style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <button
                   type="button"
+                  className="tmc-teacher-list-row"
                   onClick={() => selectTeacher(teacher)}
                   aria-pressed={String(selectedTeacherId) === String(teacher.id)}
                   style={{ width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'center', padding: '0.85rem 0.25rem', border: 0, background: String(selectedTeacherId) === String(teacher.id) ? 'rgba(79,70,229,0.06)' : 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', borderRadius: 8 }}

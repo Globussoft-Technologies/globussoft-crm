@@ -18,6 +18,7 @@ const visibilityResponse = {
   pages: [
     { path: "/home", label: "Home", category: "Core", description: "Landing" },
     { path: "/contacts", label: "Contacts", category: "CRM", description: "Contact directory" },
+    { path: "/quotes", label: "Quotes", category: "Finance", description: "Generic CRM quote builder" },
     { path: "/marketing", label: "Marketing", category: "CRM", description: "Campaigns" },
   ],
 };
@@ -79,6 +80,7 @@ describe("SuperAdminPageVisibility", () => {
     render(<SuperAdminPageVisibility />);
 
     expect(await screen.findByRole("button", { name: /Contacts/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Quotes/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Home/ })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: /Contacts/ }));

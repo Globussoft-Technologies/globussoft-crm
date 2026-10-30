@@ -3,8 +3,25 @@ import {
   CURRENCY_SYMBOLS,
   formatCurrency,
   convertCurrency,
+  convertCurrencyStrict,
   parseCurrency,
 } from '../utils/currency';
+
+describe('persisted currency conversion', () => {
+  it('requires no exchange rate for same-currency saves', () => {
+    expect(convertCurrencyStrict(8300, 'INR', 'inr')).toBe(8300);
+  });
+  it('converts with complete valid rates', () => {
+    expect(convertCurrencyStrict(8300, 'INR', 'USD', [{ code: 'INR', exchangeRate: 83 }, { code: 'USD', exchangeRate: 1 }])).toBe(100);
+  });
+  it.each([[], [{ code: 'USD', exchangeRate: 1 }], ...[0, -1, NaN, Infinity, null, ''].map(exchangeRate =>
+    [{ code: 'USD', exchangeRate: 1 }, { code: 'INR', exchangeRate }])].map(currencies => ({ currencies })))('rejects missing or invalid exchange rates (%j)', ({ currencies }) => {
+    expect(() => convertCurrencyStrict(8300, 'INR', 'USD', currencies)).toThrow(/Exchange rates unavailable/);
+  });
+  it.each(['', null, NaN, Infinity])('rejects invalid amounts (%s)', amount => {
+    expect(() => convertCurrencyStrict(amount, 'USD', 'USD')).toThrow(/valid amount/);
+  });
+});
 
 describe('utils/currency — CURRENCY_SYMBOLS table', () => {
   it('covers all the majors the CRM cares about', () => {

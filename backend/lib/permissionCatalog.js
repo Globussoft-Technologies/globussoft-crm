@@ -110,7 +110,6 @@ const GENERIC_MODULES = {
   transport_workspace: ['read', 'update'],
   broker_workspace: ['read', 'update'],
   billing_workspace: ['read', 'update'],
-  cpq: ['read', 'write', 'update', 'delete'],
   playbooks: ['read', 'write', 'update', 'delete'],
   territories: ['read', 'write', 'update', 'delete'],
   live_chat: ['read', 'write', 'update', 'delete'],

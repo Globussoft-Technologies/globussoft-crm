@@ -70,6 +70,10 @@ async function fillStep2() {
   // Trip Details step
   fireEvent.click(screen.getByTestId('step-2'));
   await waitFor(() => expect(screen.getByTestId('input-tripTitle')).toBeInTheDocument());
+  expect(screen.getByTestId('input-destinationCountry')).toHaveClass('brochure-place-input');
+  expect(screen.getByTestId('input-destinationCountry').style.paddingLeft).toBe('36px');
+  expect(screen.getByTestId('input-routeCities')).toHaveClass('brochure-place-input');
+  expect(screen.getByTestId('input-routeCities').style.paddingLeft).toBe('36px');
   fireEvent.change(screen.getByTestId('input-tripTitle'), { target: { value: 'Japan STEM Tour 2026' } });
   fireEvent.change(screen.getByTestId('input-destinationCountry'), { target: { value: 'Japan' } });
   fireEvent.change(screen.getByTestId('input-travelDates-from'), { target: { value: '2026-04-01' } });

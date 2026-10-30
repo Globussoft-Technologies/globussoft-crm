@@ -36,8 +36,8 @@
 //   removal, feature-flagged shells awaiting credentials, helper modules
 //   that export route factories rather than mountable routers). Every
 //   entry MUST cite either a GH issue, a CHANGELOG.md release tag, or a
-//   one-line rationale. Empty as of 2026-05-25 — all 141 route files are
-//   currently mounted.
+//   one-line rationale. Deprecated modules must be listed explicitly;
+//   new active routes remain subject to the mount check.
 //
 // Test tier:
 //   Integration tier — `test/integration/` — same folder as
@@ -69,8 +69,9 @@ const SERVER_JS = path.join(REPO_BACKEND, 'server.js');
 
 // Route files that are intentionally NOT mounted in server.js.
 // Each entry MUST cite a reason (GH issue, feature flag, deprecation).
-// Empty as of 2026-05-25 — all 141 top-level route files are mounted.
 const ALLOWED_UNMOUNTED = new Set([
+  'cpq', // PR #1622 retires /api/cpq in favor of the mounted /api/quotes
+         // workspace. Retain the legacy handler for its existing unit tests.
   // Example:
   // 'foo_deprecated', // #1234 — slated for removal in v3.9, kept for back-compat
   'file-uploads', // S3 upload router scaffolded but not yet mounted — would

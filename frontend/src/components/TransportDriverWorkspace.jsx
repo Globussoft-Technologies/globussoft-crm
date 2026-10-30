@@ -8,6 +8,7 @@ import {
   Navigation,
   Phone,
   Route,
+  Truck,
   UserRound,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -180,6 +181,10 @@ export default function TransportDriverWorkspace() {
 
   return (
     <main className="transport-workspace" data-testid="transport-driver-workspace">
+      <header className="workspace-page-heading">
+        <h1><Truck size={21} aria-hidden="true" /> <span>Transport Work</span></h1>
+        <p>Manage assigned pickup and drop-off trips.</p>
+      </header>
       <section className="transport-summary" aria-label="Trip summary">
         <div><span className="transport-summary-icon active"><Route size={18} /></span><span><strong>{summary.active}</strong><small>Active trips</small></span></div>
         <div><span className="transport-summary-icon done"><CheckCircle2 size={18} /></span><span><strong>{summary.completed}</strong><small>Completed</small></span></div>

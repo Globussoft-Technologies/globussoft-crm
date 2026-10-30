@@ -232,7 +232,6 @@ const WellnessAttendanceCalendar = lazy(
 );
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const MarketplaceLeads = lazy(() => import("./pages/MarketplaceLeads"));
-const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
 const CustomObjectView = lazy(() => import("./pages/CustomObjectView"));
 const Sequences = lazy(() => import("./pages/Sequences"));
@@ -251,6 +250,7 @@ const Clients = lazy(() => import("./pages/Clients"));
 const Expenses = lazy(() => import("./pages/Expenses"));
 const Contracts = lazy(() => import("./pages/Contracts"));
 const Estimates = lazy(() => import("./pages/Estimates"));
+const Quotes = lazy(() => import("./pages/Quotes"));
 const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
@@ -327,7 +327,6 @@ const SharedInbox = lazy(() => import("./pages/SharedInbox"));
 const SLA = lazy(() => import("./pages/SLA"));
 const LiveChat = lazy(() => import("./pages/LiveChat"));
 const Playbooks = lazy(() => import("./pages/Playbooks"));
-const DocumentTracking = lazy(() => import("./pages/DocumentTracking"));
 const IndustryTemplates = lazy(() => import("./pages/IndustryTemplates"));
 const Social = lazy(() => import("./pages/Social"));
 const Sandbox = lazy(() => import("./pages/Sandbox"));
@@ -2612,6 +2611,8 @@ export default function App() {
                       />
                       <Route path="contacts" element={<Contacts />} />
                       <Route path="leads/:id" element={<ContactDetail />} />
+                      {/* Travel contact names use the preview drawer; this shared
+                          route remains active for Generic and Wellness deep links. */}
                       <Route path="contacts/:id" element={<ContactDetail />} />
                       <Route
                         path="pipeline"
@@ -2688,7 +2689,7 @@ export default function App() {
                         path="billing"
                         element={<Navigate to="/invoices" />}
                       />
-                      <Route path="cpq" element={<CPQ />} />
+                      <Route path="cpq" element={<Navigate to="/quotes" replace />} />
                       <Route path="marketplace" element={<Marketplace />} />
                       <Route
                         path="marketplace-leads"
@@ -2832,6 +2833,14 @@ export default function App() {
                       <Route
                         path="estimates"
                         element={<NonGenericEstimatesOnly><Estimates /></NonGenericEstimatesOnly>}
+                      />
+                      <Route
+                        path="quotes"
+                        element={
+                          <GenericOnly>
+                            <Quotes />
+                          </GenericOnly>
+                        }
                       />
                       <Route path="invoices" element={<Invoices />} />
                       <Route path="tickets" element={<Tickets />} />
@@ -3312,14 +3321,7 @@ export default function App() {
                       <Route path="sla" element={<SLA />} />
                       <Route path="live-chat" element={<LiveChat />} />
                       <Route path="playbooks" element={<Playbooks />} />
-                      <Route
-                        path="document-tracking"
-                        element={
-                          <GenericOnly>
-                            <DocumentTracking />
-                          </GenericOnly>
-                        }
-                      />
+                      <Route path="document-tracking" element={<Navigate to="/quotes" replace />} />
                       <Route
                         path="industry-templates"
                         element={

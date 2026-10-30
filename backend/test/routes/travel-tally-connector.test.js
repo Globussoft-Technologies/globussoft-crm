@@ -151,6 +151,7 @@ describe("travel Tally connector routes", () => {
     });
     const response = await request(makeApp()).get("/api/travel/tally/connector/status").set(auth());
     expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
     expect(response.body).toMatchObject({ configured: true, online: false, credentials: { connectorId: "tally_public_id" } });
     expect(JSON.stringify(response.body)).not.toContain("tokenHash");
     expect(response.body).not.toHaveProperty("token");

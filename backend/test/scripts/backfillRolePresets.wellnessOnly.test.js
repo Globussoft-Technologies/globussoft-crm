@@ -107,7 +107,6 @@ describe('backfill generic-only guard', () => {
     const m = src.match(/const GENERIC_ONLY_GRANTS = new Set\(\[([\s\S]*?)\]\)/);
     expect(m).toBeTruthy();
     const guarded = [...m[1].matchAll(/'([a-z_]+\.[a-z_]+)'/g)].map((x) => x[1]);
-    expect(guarded).toContain('cpq.read');
     expect(guarded).toContain('web_forms.update');
     expect(guarded).toContain('forecasting.read');
     expect(guarded).toContain('quotas.read');

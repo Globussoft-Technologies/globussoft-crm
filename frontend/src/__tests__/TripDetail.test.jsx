@@ -467,6 +467,10 @@ describe('<TripDetail /> — Overview tab', () => {
     // KPI strip + summary bands keep these labels.
     expect(screen.getByText('Required docs')).toBeInTheDocument();
     expect(screen.getByText('Trip status')).toBeInTheDocument();
+    const kpiCards = [...document.querySelectorAll('.trip-overview-kpi-card')];
+    expect(kpiCards).toHaveLength(3);
+    expect(kpiCards.every((card) => card.style.padding === '14px' && card.style.width === '100%')).toBe(true);
+    expect(kpiCards[2].querySelector('div[style*="overflow-wrap"]')).toHaveStyle({ overflowWrap: 'anywhere' });
     // 'Participants' / 'Public Experience' / 'Payment plan' all appear as both tab
     // chrome AND in the overview (KPI card / summary band title). Scope via
     // getAllByText.
@@ -2328,4 +2332,3 @@ describe('<TripDetail /> — Sync from registration button', () => {
     });
   });
 });
-

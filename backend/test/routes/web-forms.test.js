@@ -55,6 +55,8 @@ prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
 
 prisma.tenant = prisma.tenant || {};
 
+prisma.touchpoint = prisma.touchpoint || {};
+
 prisma.tenantSetting = prisma.tenantSetting || {};
 
 prisma.user = prisma.user || {};
@@ -79,6 +81,8 @@ for (const key of ['findFirst', 'create', 'update']) {
   prisma.contactAttachment[key] = vi.fn();
 
 }
+
+prisma.touchpoint.create = vi.fn();
 
 for (const key of ['findMany', 'upsert']) {
 
@@ -130,7 +134,7 @@ function makeApp(vertical = 'generic', tenantId = TENANT_ID) {
 beforeEach(() => {
   Object.values(prisma.webFormFolder).forEach((mock) => mock.mockReset());
 
-  for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.tenantSetting, prisma.user]) {
+  for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.tenantSetting, prisma.user, prisma.touchpoint]) {
 
     for (const key of Object.keys(model)) {
 
@@ -156,6 +160,10 @@ beforeEach(() => {
   prisma.contact.findFirst.mockResolvedValue(null);
 
   prisma.contact.create.mockResolvedValue({ id: 2001, name: 'Jane Doe', email: 'jane@example.com', phone: '9876543210' });
+
+  prisma.contact.update.mockImplementation(async ({ data }) => ({ id: 2001, name: 'Jane Doe', email: 'jane@example.com', phone: '9876543210', ...data }));
+
+  prisma.touchpoint.create.mockResolvedValue({ id: 5001 });
 
   prisma.deal.create.mockResolvedValue({ id: 3001 });
 
@@ -184,6 +192,32 @@ beforeEach(() => {
 });
 
 describe('web-form embed sizing', () => {
+  test.each([
+    ['custom', undefined, undefined],
+    ['custom', {}, undefined],
+    ['custom', { utm_source: '' }, ''],
+    ['custom', { utm_source: 'tracked-campaign' }, 'tracked-campaign'],
+    [null, undefined, 'body-campaign'],
+  ])('separates form content from attribution (%s, %j)', async (sourceKind, tracking, expected) => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1, tenantId: TENANT_ID, name: 'Contact Us', slug: 'contact-us',
+      scope: 'generic', isActive: true,
+      fieldsJson: JSON.stringify([
+        { sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name' },
+        ...(sourceKind ? [{ sourceKind, sourceKey: 'utm_source', fieldType: 'text', label: 'Unrelated value' }] : []),
+      ]),
+      styleJson: '{}', settingsJson: '{}',
+    });
+    const response = await request(makeApp()).post('/api/forms/public/contact-us/submit')
+      .send({ name: 'Jane Doe', utm_source: 'body-campaign',
+        ...(tracking === undefined ? {} : { _gbsTracking: JSON.stringify(tracking) }) });
+    expect(response.status).toBe(201);
+    const payload = JSON.parse(prisma.webFormSubmission.create.mock.calls[0][0].data.payloadJson);
+    expect(payload._meta.tracking.utm_source).toBe(expected);
+    if (sourceKind) expect(payload['custom:utm_source']).toBe('body-campaign');
+    expect(prisma.contact.create.mock.calls[0][0].data.firstTouchSource || undefined).toBe(expected || undefined);
+  });
+
   test('generates a content-sized iframe without a fixed minimum or internal scroll cap', () => {
     const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
 
@@ -1598,6 +1632,13 @@ describe('POST /api/forms/public/:slug/submit', () => {
     const submissionArg = prisma.webFormSubmission.create.mock.calls[0][0].data;
 
     expect(submissionArg.payloadJson).toContain('"interest":["A","B"]');
+    expect(JSON.parse(submissionArg.payloadJson)).toEqual(expect.objectContaining({
+      utm_source: 'newsletter',
+      utm_medium: null,
+      utm_campaign: null,
+      utm_term: null,
+      utm_content: null,
+    }));
     expect(JSON.parse(submissionArg.payloadJson)._meta.tracking).toEqual(expect.objectContaining({
       pageUrl: 'https://example.com/pricing',
       utm_source: 'newsletter',
@@ -1606,6 +1647,23 @@ describe('POST /api/forms/public/:slug/submit', () => {
       locationLongitude: '77.624500',
       formName: 'Contact Us',
       formId: '1',
+    }));
+
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        medium: null,
+        firstTouchSource: 'newsletter',
+        lastTouchSource: 'newsletter',
+      }),
+    }));
+    expect(prisma.touchpoint.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        contactId: 2001,
+        tenantId: TENANT_ID,
+        channel: 'web',
+        source: 'newsletter',
+        medium: null,
+      }),
     }));
 
     expect(prisma.tenant.findUnique).toHaveBeenCalledWith({

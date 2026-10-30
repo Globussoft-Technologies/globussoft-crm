@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, UploadCloud, Download, FileSignature, Trash2 } from 'lucide-react';
+import { X, FileText, UploadCloud, Download, Trash2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { useNotify } from '../utils/notify';
-import CPQBuilder from './CPQBuilder';
 
 const API_BASE = "";
 
@@ -11,7 +10,6 @@ export default function DealModal({ deal, onClose }) {
   const notify = useNotify();
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [notes, setNotes] = useState(deal?.notes || '');
   const [savingNote, setSavingNote] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -62,36 +60,6 @@ export default function DealModal({ deal, onClose }) {
       console.error("Upload failed", err);
     }
     setUploading(false);
-  };
-
-  // #585: the backend now returns binary PDF bytes inline (Content-Type
-  // application/pdf, Content-Disposition attachment). Use raw fetch
-  // instead of fetchApi (which forces JSON parsing) so we can grab the
-  // blob, trigger a real download in the browser, and still refresh
-  // the attachments list (the route also persists a copy to disk).
-  const handleGenerateQuote = async () => {
-    setGenerating(true);
-    try {
-      const token = getAuthToken();
-      const res = await fetch(`${API_BASE}/api/deals_documents/${deal.id}/generate-quote`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/pdf' },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `quote-${deal.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      await loadAttachments();
-    } catch (err) {
-      console.error("Quote gen failed", err);
-    }
-    setGenerating(false);
   };
 
   const handleDeleteAttachment = (attachmentId) => {
@@ -182,9 +150,9 @@ export default function DealModal({ deal, onClose }) {
             <h3 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: 'bold' }}>Document Center</h3>
             
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-              <button onClick={handleGenerateQuote} disabled={generating} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, justifyContent: 'center' }}>
-                <FileSignature size={18} /> {generating ? 'Generating PDF...' : 'Generate Quote'}
-              </button>
+              <a href={`/quotes?dealId=${deal.id}`} onClick={onClose} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, justifyContent: 'center', textDecoration: 'none' }}>
+                <FileText size={18} /> Create Quote
+              </a>
               
               <label className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, justifyContent: 'center', cursor: 'pointer', margin: 0 }}>
                 <UploadCloud size={18} /> {uploading ? 'Uploading...' : 'Upload File'}
@@ -217,8 +185,6 @@ export default function DealModal({ deal, onClose }) {
               ))}
             </div>
 
-            <CPQBuilder dealId={deal.id} />
-            
             <div style={{ marginTop: '2rem', background: 'var(--subtle-bg-2)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
               <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <FileText size={20} color="var(--accent-color)" /> Deal Notes & Tasks

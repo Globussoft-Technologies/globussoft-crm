@@ -19,7 +19,7 @@
  *     DUPLICATE_CONTACT, mocked here so tests don't depend on its internals.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -498,6 +498,45 @@ describe('Contacts.jsx — top-level page contract', () => {
       expect(select).toHaveValue('8');
       expect(notifyObj.success).toHaveBeenCalledWith('Assigned to Vikram Sales');
     });
+  });
+
+  it.each(['button', 'backdrop'])('closes a loading travel preview immediately via %s and ignores its late response', async (closeVia) => {
+    let resolveDetail;
+    fetchApiMock.mockImplementation((url) => url === '/api/contacts/1'
+      ? new Promise((resolve) => { resolveDetail = resolve; }) : defaultFetchImpl(url));
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter><Contacts /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview contact Aarav Sharma' }));
+    expect(screen.getByText('Loading contact…')).toBeInTheDocument();
+    if (closeVia === 'button') fireEvent.click(screen.getByRole('button', { name: 'Close contact preview' }));
+    else fireEvent.click(screen.getByRole('dialog', { name: 'Contact preview' }));
+    expect(screen.queryByRole('dialog', { name: 'Contact preview' })).not.toBeInTheDocument();
+    await act(async () => resolveDetail({ ...SEEDED_CONTACTS[0], title: 'Late result' }));
+    expect(screen.queryByRole('dialog', { name: 'Contact preview' })).not.toBeInTheDocument();
+  });
+
+  it('ignores an old preview request after the same contact is reopened', async () => {
+    const pending = [];
+    fetchApiMock.mockImplementation((url) => url === '/api/contacts/1'
+      ? new Promise((resolve) => pending.push(resolve)) : defaultFetchImpl(url));
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter><Contacts /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    const open = await screen.findByRole('button', { name: 'Preview contact Aarav Sharma' });
+    fireEvent.click(open);
+    fireEvent.click(screen.getByRole('button', { name: 'Close contact preview' }));
+    fireEvent.click(open);
+    await act(async () => pending[0]({ ...SEEDED_CONTACTS[0], title: 'Stale result' }));
+    expect(screen.getByText('Loading contact…')).toBeInTheDocument();
+    expect(screen.queryByText('Stale result')).not.toBeInTheDocument();
+    await act(async () => pending[1]({ ...SEEDED_CONTACTS[0], title: 'Current result' }));
+    expect(screen.queryByText('Loading contact…')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Current result').length).toBeGreaterThan(0);
   });
 
   it('travel agents can reassign contacts and the dropdown excludes admins', async () => {

@@ -1,17 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import React from 'react';
 import DealModal from '../components/DealModal';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
-}));
-
-// Replace the nested CPQBuilder with a stub so we isolate DealModal
-vi.mock('../components/CPQBuilder', () => ({
-  default: () => React.createElement('div', { 'data-testid': 'cpq-stub' }),
 }));
 
 const deal = {
@@ -78,31 +72,13 @@ describe('DealModal', () => {
     expect(await screen.findByText(/No documents attached/i)).toBeInTheDocument();
   });
 
-  it('generate-quote button triggers POST to generate-quote endpoint', async () => {
-    // #585: the route now returns binary PDF bytes inline (Content-Type
-    // application/pdf), so the frontend uses raw fetch to grab a blob and
+  it('links the deal to the canonical Quotes workspace', async () => {
+    // Quote creation is owned by the Finance workspace; this link only carries
+    // the related deal context to the canonical route.
     // trigger a real download — fetchApi (which forces JSON parsing) is
-    // bypassed for this one call. Mock global.fetch + URL.createObjectURL
-    // so the click still drives a single POST against /generate-quote.
-    fetchApiMock.mockResolvedValue([]);
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      status: 200,
-      blob: () => Promise.resolve(new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])], { type: 'application/pdf' })),
-    });
-    const createObjectURL = vi.fn(() => 'blob:fake');
-    const revokeObjectURL = vi.fn();
-    Object.defineProperty(global.URL, 'createObjectURL', { value: createObjectURL, configurable: true });
-    Object.defineProperty(global.URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true });
     render(<DealModal deal={deal} onClose={() => {}} />);
-    fireEvent.click(await screen.findByText(/Generate Quote/i));
-    await waitFor(() => {
-      const postCall = fetchSpy.mock.calls.find(
-        ([url, opts]) => typeof url === 'string' && url.includes('/generate-quote') && opts?.method === 'POST',
-      );
-      expect(postCall).toBeDefined();
-    });
-    fetchSpy.mockRestore();
+    const quoteLink = await screen.findByRole('link', { name: /Create Quote/i });
+    expect(quoteLink).toHaveAttribute('href', '/quotes?dealId=42');
   });
 
   it('saving a note PUTs to /api/deals/:id', async () => {
@@ -132,18 +108,13 @@ describe('DealModal', () => {
     expect(screen.getByText('Open')).toBeInTheDocument();
   });
 
-  it('shows CPQ builder stub', async () => {
-    render(<DealModal deal={deal} onClose={() => {}} />);
-    expect(await screen.findByTestId('cpq-stub')).toBeInTheDocument();
-  });
-
   // ------------------------------------------------------------------
   // Extension cases (2026-05-26)
   //
   // SUT note: DealModal is NOT a create/edit form — it's a Document
   // Center modal that surfaces an EXISTING deal's read-only properties
-  // (amount, probability, close date) alongside attachments + notes +
-  // CPQ. The "create vs edit / form validation / stage select" cases
+  // (amount, probability, close date) alongside attachments + notes.
+  // The "create vs edit / form validation / stage select" cases
   // suggested by the prompt don't apply to this SUT shape. The
   // following cases pin the actually-observable behaviour: read-only
   // property surface, click-stop on inner dialog, attachment open +

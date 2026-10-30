@@ -14,6 +14,9 @@ const ACTION_COLOR = {
 const OTHER_COLOR = '#6b7280';
 
 function actionColor(action) {
+  if (action === 'HARD_DELETE' || action === 'SOFT_DELETE' || /(?:^|_)DELETE$/.test(String(action || ''))) {
+    return ACTION_COLOR.DELETE;
+  }
   return ACTION_COLOR[action] || OTHER_COLOR;
 }
 
@@ -513,18 +516,29 @@ export default function AuditLog() {
   // chip shows the current state without requiring the operator to click.
   const [integrity, setIntegrity] = useState(null);
   const [verifying, setVerifying] = useState(false);
+  const [verificationError, setVerificationError] = useState(null);
   const [backfilling, setBackfilling] = useState(false);
 
   const verifyChain = useCallback(async () => {
     if (!isAdmin) return;
     setVerifying(true);
+    setVerificationError(null);
     try {
-      const data = await fetchApi('/api/audit/verify');
+      const data = await fetchApi('/api/audit/verify', { silent: true });
       setIntegrity(data);
     } catch (err) {
       console.error('[AuditLog] verify failed', err);
-      setIntegrity({ integrityVerified: false, brokenAt: null, chainLength: 0, totalRows: 0, unhashedRows: 0, error: true });
-      notify.error('Failed to verify audit chain');
+      setIntegrity(null);
+      setVerificationError(
+        err?.status >= 500
+          ? 'Audit-chain verification is temporarily unavailable. Please try again.'
+          : 'Audit-chain verification failed. Please try again.'
+      );
+      notify.error(
+        err?.status >= 500
+          ? 'Audit-chain verification is temporarily unavailable. Please try again.'
+          : 'Audit-chain verification failed. Please try again.'
+      );
     } finally {
       setVerifying(false);
     }
@@ -720,6 +734,8 @@ export default function AuditLog() {
             <option value="CREATE">CREATE</option>
             <option value="UPDATE">UPDATE</option>
             <option value="DELETE">DELETE</option>
+            <option value="HARD_DELETE">HARD_DELETE</option>
+            <option value="SOFT_DELETE">SOFT_DELETE</option>
           </select>
           <input
             type="date"
@@ -795,6 +811,18 @@ export default function AuditLog() {
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
                   ({integrity.chainLength} rows)
                 </span>
+              </span>
+            ) : verificationError ? (
+              <span
+                data-testid="integrity-chip-error"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                  padding: '0.3rem 0.7rem', borderRadius: 999,
+                  background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.4)', fontWeight: 600,
+                }}
+              >
+                <ShieldAlert size={14} /> Verification unavailable
               </span>
             ) : integrity && integrity.unhashedRows > 0 && integrity.reason && /null hash/i.test(integrity.reason) ? (
               // First break is a null hash → operator just needs to run

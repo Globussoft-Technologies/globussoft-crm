@@ -608,6 +608,67 @@ button {
   font-family: inherit;
 }
 
+/* The destination palette cards are content-rich buttons, not compact form
+   controls. Keep them out of the shared Travel control sizing contract. */
+.landing-page-generate-modal {
+  box-sizing: border-box;
+  container-type: inline-size;
+  width: min(1020px, calc(100vw - 48px)) !important;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px) !important;
+  overflow-x: hidden !important;
+}
+
+.landing-page-generate-palette-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  align-items: stretch;
+  grid-auto-rows: auto;
+}
+
+.landing-page-generate-palette-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: auto !important;
+  min-height: 158px !important;
+  align-items: stretch;
+  overflow: visible;
+  transform: none !important;
+}
+
+.landing-page-generate-palette-preview {
+  flex: 0 0 52px;
+  height: 52px !important;
+  min-height: 52px !important;
+}
+
+.landing-page-generate-palette-card > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@container (max-width: 900px) {
+  .landing-page-generate-palette-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@container (max-width: 600px) {
+  .landing-page-generate-palette-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@container (max-width: 420px) {
+  .landing-page-generate-modal {
+    padding: 1rem !important;
+  }
+
+  .landing-page-generate-palette-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 /* Travel Tally: cost-centres master page */
 .tally-cost-centres-page {
   width: min(100% - 48px, 1392px);
@@ -3123,14 +3184,6 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
   box-sizing: border-box;
 }
 
-body[data-vertical="travel"] .travel-app-shell .travel-content-frame .landing-pages-page .landing-pages-search.input-field {
-  padding-left: 2.75rem !important;
-}
-
-body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-forms-page .meeting-form-switcher > button {
-  padding: 11px 14px !important;
-}
-
 @media (max-width: 899px) {
   .travel-content-frame > * {
     max-width: none !important;
@@ -3746,6 +3799,10 @@ body[data-vertical="generic"]
   overflow-y: auto;
   max-height: calc(100vh - 24rem);
   background: var(--surface-color);
+}
+
+body[data-vertical="travel"] .leads-split-table {
+  scrollbar-gutter: stable;
 }
 
 .leads-table-frozen-pane {
@@ -5301,6 +5358,17 @@ body[data-vertical="generic"]
 
 .contacts-split-table table.stable-table tbody tr {
   height: 52px;
+}
+
+.contacts-split-table table.stable-table tbody td {
+  height: clamp(42px, 3.1vw, 52px) !important;
+}
+
+/* The contacts view is rendered as two synchronized tables. Keep the browser
+   from recalculating either table from the first row's contents; the widths in
+   each colgroup are the single source of truth for every row. */
+.contacts-split-table table.stable-table {
+  table-layout: fixed !important;
 }
 
 .contacts-split-table table.stable-table th,
@@ -9089,6 +9157,17 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
   border-color: var(--border-color);
 }
 
+/* These pages size the table card from its rows. Larger datasets still scroll
+   inside the card instead of leaving an empty flex-grown area below it. */
+.pickup-person-directory-page .pickup-plot-table-scroll,
+.pickup-plot-inventory-page .pickup-plot-table-scroll,
+.pickup-inventory-page .pickup-plot-table-scroll,
+.billing-directory-page .pickup-plot-table-scroll,
+.staff-work-assignment-page .pickup-plot-table-scroll {
+  flex: 0 0 auto;
+  max-height: calc(100vh - 260px);
+}
+
 /* Generic CRM Pickup & Plot tables intentionally keep their resting visual
    state on pointer hover. Row click handlers (for example Customer Status
    selection) remain active, and the selected-row class keeps its highlight. */
@@ -9148,6 +9227,41 @@ body[data-vertical="generic"] table.pickup-plot-no-row-hover tbody tr:not(.is-se
   transform: none;
   filter: none;
 }
+
+/* Keep Plot & Site Inventory row actions together. The column is intentionally
+   wide enough for all available controls so Delete never drops below the
+   Edit and Activate/Deactivate buttons. */
+body[data-vertical="generic"] .pickup-plot-inventory-page table.pickup-plot-leads-table td.pickup-plot-actions-cell {
+  padding: 0.55rem 0.65rem !important;
+  white-space: nowrap;
+}
+
+body[data-vertical="generic"] .pickup-plot-inventory-page .pickup-plot-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  min-width: max-content;
+}
+
+body[data-vertical="generic"] .pickup-plot-inventory-page .pickup-plot-row-action {
+  width: 2.15rem;
+  min-width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 2.15rem;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body[data-vertical="generic"] .pickup-plot-inventory-page .pickup-plot-delete-action:hover:not(:disabled) {
+  color: var(--danger-color, #dc2626);
+  border-color: color-mix(in srgb, var(--danger-color, #dc2626) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--danger-color, #dc2626) 9%, transparent);
+}
+
 /* Public Generic CRM pickup/plot selection */
 .public-selection-page { min-height: 100vh; display: grid; place-items: center; padding: 2rem 1rem; background: var(--app-bg, var(--background-color, #f5f7fb)); color: var(--text-primary, #172033); }
 .public-selection-card { width: min(100%, 620px); padding: clamp(1.5rem, 4vw, 2.75rem); border: 1px solid var(--border-color, #d9deea); border-radius: 18px; background: var(--card-bg, #fff); box-shadow: 0 18px 50px rgba(15, 23, 42, .12); }

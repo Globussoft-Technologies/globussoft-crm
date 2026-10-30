@@ -159,6 +159,27 @@ describe('<Dashboard />', () => {
     expect(screen.getByText('Total Deals').closest('a').getAttribute('href')).toBe('/pipeline?from=2026-10-15&to=2026-10-20');
   });
 
+  it('uses the selected date range for Generic CRM Expected Revenue', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals/stats')) {
+        const params = new URL(url, 'http://localhost').searchParams;
+        return Promise.resolve({
+          totalDeals: params.has('from') ? 1 : 10,
+          wonValue: params.has('from') ? 0 : 900,
+          expectedValue: params.has('from') ? 125 : 900,
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderDashboard(null, '/dashboard?from=2026-10-15&to=2026-10-20');
+
+    await waitFor(() => {
+      expect(screen.getByText('Expected Revenue').nextElementSibling).toHaveAttribute('title', '$125');
+    });
+    expect(fetchApi.mock.calls.some(([url]) => url === '/api/deals/stats?currency=USD')).toBe(false);
+  });
+
   it('renders Closed Revenue from stats.wonValue (not a list reduce of /api/deals)', async () => {
     // The exact $5B-on-demo scenario from #567. The stats endpoint reports
     // 375 won / $5B even though the newest-10 list has no won deals — pre-fix,

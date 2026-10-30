@@ -16,6 +16,13 @@ const { DEFAULTS, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
+// Never load authentication or recovery fields into deal responses.
+const dealUserSelect = { id: true, name: true, email: true };
+const dealRelations = {
+  contact: { include: { assignedTo: { select: dealUserSelect } } },
+  owner: { select: dealUserSelect },
+};
+
 /**
  * Derive the canonical lead-capture channel from a Contact.source string.
  * Travel inbound leads store source as "inbound:<channel>" (e.g.
@@ -47,6 +54,18 @@ function addDealSearch(where, rawSearch) {
   };
   where.AND = [...(Array.isArray(where.AND) ? where.AND : []), clause];
   return where;
+}
+
+function genericDealDisplayName(deal) {
+  const title = String(deal?.title || '').trim();
+  const relatedNames = [deal?.contactName, deal?.contact?.name]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+  const isLegacyPlaceholder = title.toLowerCase().endsWith(' deal')
+    && relatedNames.includes(title.slice(0, -5).trim().toLowerCase());
+  if (title && !isLegacyPlaceholder) return title;
+  const type = String(deal?.dealType || 'Deal').replace(/\s+/g, '');
+  return `${type}-${deal?.id ?? ''}`;
 }
 
 function canonicalDealStage(stage) {
@@ -112,6 +131,10 @@ router.get("/", async (req, res) => {
     if (pipelineId) where.pipelineId = parseInt(pipelineId);
     if (dealType) {
       await addDealTypeFilter(where, req.user.tenantId, dealType);
+      // Generic CRM deal types filter by dealType only. The board must render
+      // legacy and custom stages as well; an inferred stage restriction can
+      // make a valid deal disappear from the Deals page while it remains
+      // visible in Reports. An explicit `stage` query above remains honored.
     }
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
@@ -145,7 +168,26 @@ router.get("/", async (req, res) => {
       if (to) where.createdAt.lte = new Date(to);
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
-    addDealSearch(where, search);
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    if (tenant?.vertical === "generic" && search) {
+      const normalizedSearch = String(search).toLowerCase().replace(/\s+/g, "");
+      const generatedNameMatch = normalizedSearch.match(/^([a-z0-9]+)-(\d+)$/);
+      const nameClauses = [
+        { title: { contains: search } },
+        { dealType: { contains: search } },
+        { contact: { is: { name: { contains: search } } } },
+      ];
+      if (/^\d+$/.test(search)) nameClauses.push({ id: Number(search) });
+      if (generatedNameMatch) {
+        nameClauses.push({ id: Number(generatedNameMatch[2]) });
+      }
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : []), { OR: nameClauses }];
+    } else if (tenant?.vertical !== "generic") {
+      addDealSearch(where, search);
+    }
 
     // Travel vertical: check subBrandAccess first to determine filtering behavior
     const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -223,7 +265,7 @@ router.get("/", async (req, res) => {
         createdAt: true,
       };
     } else {
-      findManyArgs.include = { contact: true, owner: true };
+      findManyArgs.include = dealRelations;
     }
     const deals = await prisma.deal.findMany(findManyArgs);
     // #464: strip fields the caller's role can't read (e.g. amount hidden
@@ -234,6 +276,7 @@ router.get("/", async (req, res) => {
     // Contact's source so the UI chip counts + filter state stay in sync.
     const enriched = filtered.map((d) => ({
       ...d,
+      ...(tenant?.vertical === "generic" ? { displayName: genericDealDisplayName(d) } : {}),
       channel: channelFromContactSource(d.contact?.source) || null,
     }));
     if (!paginated) return res.json(enriched);
@@ -273,6 +316,10 @@ router.get("/", async (req, res) => {
 router.get("/stats", async (req, res) => {
   try {
     const tid = req.user.tenantId;
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tid },
+      select: { vertical: true, defaultCurrency: true },
+    });
     let where = { tenantId: tid, deletedAt: null };
     if (req.query.stage) where.stage = String(req.query.stage);
     if (req.query.pipelineId) where.pipelineId = parseInt(req.query.pipelineId);
@@ -286,7 +333,21 @@ router.get("/stats", async (req, res) => {
       if (req.query.from) where.createdAt.gte = new Date(req.query.from);
       if (req.query.to) where.createdAt.lte = new Date(req.query.to);
     }
-    addDealSearch(where, req.query.search);
+    if (tenant?.vertical === "generic" && req.query.search) {
+      const search = String(req.query.search).trim().slice(0, 200);
+      const normalizedSearch = search.toLowerCase().replace(/\s+/g, "");
+      const generatedNameMatch = normalizedSearch.match(/^([a-z0-9]+)-(\d+)$/);
+      const nameClauses = [
+        { title: { contains: search } },
+        { dealType: { contains: search } },
+        { contact: { is: { name: { contains: search } } } },
+      ];
+      if (/^\d+$/.test(search)) nameClauses.push({ id: Number(search) });
+      if (generatedNameMatch) nameClauses.push({ id: Number(generatedNameMatch[2]) });
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : []), { OR: nameClauses }];
+    } else {
+      addDealSearch(where, req.query.search);
+    }
     if (req.user.role === "USER") where.ownerId = req.user.userId;
 
     const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -299,8 +360,7 @@ router.get("/stats", async (req, res) => {
       };
     }
     const deals = await prisma.deal.findMany({ where });
-    const tenantCurrency = await prisma.tenant.findUnique({ where: { id: tid }, select: { defaultCurrency: true } });
-    const reportingCurrency = String(req.query.currency || tenantCurrency?.defaultCurrency || 'USD').toUpperCase();
+    const reportingCurrency = String(req.query.currency || tenant?.defaultCurrency || 'USD').toUpperCase();
     const configuredCurrencies = await prisma.currency.findMany({ where: { tenantId: tid }, select: { code: true, exchangeRate: true } });
     const rates = Object.fromEntries(configuredCurrencies.map((currency) => [String(currency.code).toUpperCase(), Number(currency.exchangeRate)]));
     const targetRate = rates[reportingCurrency];
@@ -431,8 +491,7 @@ router.get("/:id", async (req, res) => {
     const deal = await prisma.deal.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
       include: {
-        contact: true,
-        owner: true,
+        ...dealRelations,
         attachments: true,
         invoices: true,
         quotes: { include: { lineItems: true } },
@@ -471,7 +530,7 @@ router.get("/:id", async (req, res) => {
 // validator now resolves the allowed slug set from the tenant's own
 // PipelineStage rows; terminal "won" / "lost" are always honored as a
 // backstop for tenants whose stage list hasn't been seeded yet.
-const LEGACY_DEAL_STAGES = ["lead", "contacted", "proposal", "negotiation", "won", "lost"];
+const LEGACY_DEAL_STAGES = ["lead", "contacted", "proposal", "proposal-sent", "negotiation", "won", "lost"];
 const slugifyStageName = (name) =>
   String(name || "")
     .toLowerCase()
@@ -496,10 +555,12 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
         : null;
       const configured = new Set(
         (Array.isArray(selected?.stages) ? selected.stages : [])
-          .map((stage) => slugifyStageName(stage?.name))
+          .map((stage) => slugifyStageName(typeof stage === "string" ? stage : (stage?.name || stage?.title || stage?.label || stage?.id)))
           .filter(Boolean),
       );
-      if (configured.size) return configured;
+      if (configured.size) {
+        return configured;
+      }
     } catch (_error) {
       // Fall through to the tenant pipeline stages for legacy records.
     }
@@ -541,7 +602,7 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId, autoName } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: false });
@@ -574,7 +635,14 @@ router.post("/", async (req, res) => {
       data.currency = tenant?.defaultCurrency || "USD";
     }
 
-    const deal = await prisma.deal.create({ data, include: { contact: true, owner: true } });
+    let deal = await prisma.deal.create({ data, include: dealRelations });
+    if (autoName) {
+      deal = await prisma.deal.update({
+        where: { id: deal.id },
+        data: { title: `${String(dealType || 'Deal').replace(/\s+/g, '')}-${deal.id}` },
+        include: dealRelations,
+      });
+    }
 
     // Activity for the associated contact
     if (deal.contactId) {
@@ -673,7 +741,7 @@ router.put("/:id", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data,
-      include: { contact: true, owner: true },
+      include: dealRelations,
     });
 
     // Stage-change activity
@@ -769,7 +837,7 @@ router.put("/:id/stage", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data,
-      include: { contact: true, owner: true },
+      include: dealRelations,
     });
 
     if (existing.stage !== stage && deal.contactId) {
@@ -835,7 +903,7 @@ router.post("/:id/won", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data: { stage: "won", probability: 100 },
-      include: { contact: true, owner: true },
+      include: dealRelations,
     });
 
     if (deal.contactId) {
@@ -882,7 +950,7 @@ router.post("/:id/lost", async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data,
-      include: { contact: true, owner: true },
+      include: dealRelations,
     });
 
     if (deal.contactId) {
@@ -952,7 +1020,7 @@ router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
     const deal = await prisma.deal.update({
       where: { id: existing.id },
       data: { deletedAt: null },
-      include: { contact: true, owner: true },
+      include: dealRelations,
     });
     if (req.io) req.io.to(`tenant:${req.user.tenantId}`).emit("deal_updated", deal);
     res.json({ ...deal, restored: true });

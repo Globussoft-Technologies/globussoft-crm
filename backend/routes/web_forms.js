@@ -1528,7 +1528,19 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       }
     }
     if (formScope === "generic") {
+      // Accept the UTM fields in the multipart body as well. Current embeds
+      // send both the body values and the private tracking header; accepting
+      // both keeps direct/older embed callers attribution-safe too. A named
+      // form field is user content, however, not trusted tracking metadata.
+      const formFieldKeys = new Set(fields.map((field) => field.sourceKey));
+      const bodyAttribution = Object.fromEntries(
+        EMBED_ATTRIBUTION_QUERY_KEYS
+          .filter((key) => !formFieldKeys.has(key))
+          .map((key) => [key, textOr(body[key]).slice(0, 2000)])
+          .filter(([, value]) => value),
+      );
       trackingMetadata = {
+        ...bodyAttribution,
         ...(trackingMetadata || {}),
         referrerUrl: trackingMetadata?.referrerUrl || textOr(req.get("referer"), ""),
         browser: trackingMetadata?.browser || textOr(req.get("user-agent"), ""),
@@ -1537,6 +1549,22 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         formId: trackingMetadata?.formId || String(form.id),
       };
     }
+
+    // UTM values arrive from the embed host through the tracking header. Keep
+    // them in the submission metadata, but also promote them into the CRM's
+    // canonical attribution fields so a form submission is useful to lead
+    // routing, reporting, and the contact detail view. The Touchpoint below
+    // preserves the complete UTM set without adding UTM columns to Contact.
+    const submittedUtm = formScope === "generic"
+      ? {
+        source: textOr(trackingMetadata?.utm_source),
+        medium: textOr(trackingMetadata?.utm_medium),
+        campaign: textOr(trackingMetadata?.utm_campaign),
+        term: textOr(trackingMetadata?.utm_term),
+        content: textOr(trackingMetadata?.utm_content),
+      }
+      : null;
+    const hasSubmittedUtm = Boolean(submittedUtm && Object.values(submittedUtm).some(Boolean));
     const files = Array.isArray(req.files) ? req.files : [];
     const totalUploadBytes = files.reduce(
       (total, file) => total + Number(file?.size || 0),
@@ -1594,6 +1622,11 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       source: formScope === "travel" ? "inbound:web_form" : "website-form",
       status: "Lead",
     };
+    if (hasSubmittedUtm) {
+      contactData.medium = submittedUtm.medium || null;
+      contactData.firstTouchSource = submittedUtm.source || null;
+      contactData.lastTouchSource = submittedUtm.source || null;
+    }
     const missing = [];
 
     if (settings.optInEnabled) {
@@ -1759,6 +1792,18 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
     delete contactData._firstName;
     delete contactData._lastName;
+
+    // Keep the standard UTM fields at the top level of the saved form
+    // payload. They are also retained under _meta.tracking and on the
+    // Touchpoint, but consumers of WebFormSubmission.payloadJson expect the
+    // submitted values alongside the other form fields.
+    if (hasSubmittedUtm) {
+      payload.utm_source = submittedUtm.source || null;
+      payload.utm_medium = submittedUtm.medium || null;
+      payload.utm_campaign = submittedUtm.campaign || null;
+      payload.utm_term = submittedUtm.term || null;
+      payload.utm_content = submittedUtm.content || null;
+    }
 
     if (missing.length) {
       return res.status(400).json({
@@ -1966,6 +2011,40 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         where: { id: contact.id },
         data: { whatsappPhone: contactData.whatsappPhone },
       });
+    }
+
+    if (!createdNewContact && hasSubmittedUtm) {
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: {
+          medium: submittedUtm.medium || contact.medium || null,
+          lastTouchSource: submittedUtm.source || contact.lastTouchSource || null,
+          ...(contact.firstTouchSource ? {} : { firstTouchSource: submittedUtm.source || null }),
+        },
+      });
+    }
+
+    if (hasSubmittedUtm) {
+      try {
+        await prisma.touchpoint.create({
+          data: {
+            contactId: contact.id,
+            tenantId: form.tenantId,
+            channel: submittedUtm.medium || "web",
+            source: submittedUtm.source || null,
+            medium: submittedUtm.medium || null,
+            utmCampaign: submittedUtm.campaign || null,
+            utmTerm: submittedUtm.term || null,
+            utmContent: submittedUtm.content || null,
+            url: trackingMetadata?.pageUrl || null,
+            landingPage: trackingMetadata?.landingPageUrl || trackingMetadata?.pageUrl || null,
+            firstTouchAt: contact.firstTouchSource === submittedUtm.source ? new Date() : null,
+          },
+        });
+      } catch (error) {
+        // Attribution must not make an otherwise valid lead submission fail.
+        console.error("[web_forms] touchpoint create failed:", error?.message);
+      }
     }
 
     submitStage = "write_custom_fields";

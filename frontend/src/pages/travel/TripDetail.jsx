@@ -285,7 +285,7 @@ function OverviewTab({ trip, onJump, notify }) {
       </div>
 
       {/* KPI strip — participants / docs / status */}
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))" }}>
+      <div style={{ display: "grid", gap: 12, minWidth: 0, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))" }}>
         <KpiCard
           icon={Users}
           label="Participants"
@@ -561,11 +561,12 @@ function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
     "var(--text-primary)";
   return (
     <button
+      className="trip-overview-kpi-card"
       type="button"
       onClick={interactive ? onClick : undefined}
       disabled={!interactive}
       style={{
-        textAlign: "left", width: "100%",
+        textAlign: "left", width: "100%", minWidth: 0,
         background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 10, padding: 14,
         cursor: interactive ? "pointer" : "default",
@@ -585,7 +586,7 @@ function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
         </span>
         {interactive && <ArrowRight size={12} aria-hidden style={{ opacity: 0.5 }} />}
       </div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: toneColor, lineHeight: 1.1 }}>{value}</div>
+      <div style={{ minWidth: 0, overflowWrap: "anywhere", fontSize: 20, fontWeight: 700, color: toneColor, lineHeight: 1.1 }}>{value}</div>
       {hint && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>{hint}</div>}
     </button>
   );

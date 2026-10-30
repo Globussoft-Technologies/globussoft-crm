@@ -1841,6 +1841,24 @@ router.get("/", async (req, res) => {
           orderBy: { submittedAt: "desc" },
           take: 1,
         },
+        // UTM attribution is also persisted as a Touchpoint. Include the
+        // latest one so the Leads grid can render attribution even when the
+        // lead came through a non-web-form intake or legacy submission.
+        touchpoints: {
+          select: {
+            id: true,
+            source: true,
+            medium: true,
+            utmCampaign: true,
+            utmTerm: true,
+            utmContent: true,
+            url: true,
+            landingPage: true,
+            timestamp: true,
+          },
+          orderBy: { timestamp: "desc" },
+          take: 1,
+        },
       };
     }
     const contacts = await prisma.contact.findMany(findManyArgs);
@@ -3120,20 +3138,31 @@ router.delete(
 
     const contacts = await prisma.contact.findMany({
       where: { id: { in: ids }, tenantId: req.user.tenantId },
-      select: { id: true },
+      // Keep a small immutable snapshot in the audit row. The Contact is
+      // about to be permanently removed, so the viewer cannot resolve its
+      // name/email after the delete from the live Contacts endpoint.
+      select: { id: true, name: true, email: true, company: true, status: true, assignedToId: true },
     });
     const targetContactIds = contacts.map(({ id }) => id);
-    const count = await hardDeleteContacts(prisma, targetContactIds);
-    for (const id of targetContactIds) {
+    for (const contact of contacts) {
       await writeAudit(
         "Contact",
         "HARD_DELETE",
-        id,
+        contact.id,
         req.user.userId,
         req.user.tenantId,
-        { contactId: id },
+        {
+          contactId: contact.id,
+          name: contact.name,
+          email: contact.email,
+          company: contact.company,
+          status: contact.status,
+          assignedToId: contact.assignedToId,
+          bulk: true,
+        },
       );
     }
+    const count = await hardDeleteContacts(prisma, targetContactIds);
 
     res.json({ deleted: count });
   } catch (_err) {
@@ -3469,10 +3498,11 @@ const updateContactById = async (req, res) => {
           .flatMap((stage) => Array.isArray(stage?.options)
             ? stage.options.map((item, optionIndex) => ({
                 ...item,
-                negative: optionIndex > 0 || item?.negative === true,
+                id: String(item?.id || "").trim(),
+                negative: optionIndex > 0 || item?.negative === true || item?.negative === "true",
               }))
             : [])
-          .find((item) => item?.id === lifecycleStageKey);
+          .find((item) => item.id === lifecycleStageKey);
         if (!option) {
           return res.status(400).json({ error: "Invalid lifecycle stage", code: "INVALID_LIFECYCLE_STAGE" });
         }
@@ -4616,7 +4646,14 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       existing.id,
       req.user?.userId || null,
       req.user.tenantId,
-      { contactId: existing.id },
+      {
+        contactId: existing.id,
+        name: existing.name,
+        email: existing.email,
+        company: existing.company,
+        status: existing.status,
+        assignedToId: existing.assignedToId,
+      },
     );
     await hardDeleteContact(prisma, existing.id);
 

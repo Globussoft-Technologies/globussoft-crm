@@ -106,7 +106,11 @@ async function getForeign(request) {
     await fixturePrisma.user.create({ data: {
       tenantId: tenant.id, email, name: RUN_TAG, role: 'ADMIN',
       password: await backendRequire('bcryptjs').hash(password, 10),
-      emailVerifiedAt: new Date(), subscriptionStatus: 'ACTIVE',
+      // The subscription guard resolves tenant coverage from a paid plan or
+      // a current admin trial; User.subscriptionStatus=ACTIVE alone grants none.
+      emailVerifiedAt: new Date(), subscriptionStatus: 'TRIAL',
+      trialStartDate: new Date(),
+      trialEndsAt: new Date(Date.now() + 7 * 86_400_000),
     } });
     // Login provisions the canonical tenant roles and grants, just as for a
     // newly registered administrator; no fabricated permission/JWT bypass.
@@ -217,7 +221,15 @@ test.afterAll(async ({ request }) => {
   }
   if (fixturePrisma) {
     try {
-      if (foreignTenantId) await fixturePrisma.tenant.delete({ where: { id: foreignTenantId } });
+      if (foreignTenantId) {
+        // Login/workflow requests write forensic audit rows. Their tenant FK
+        // intentionally restricts deletion: drain ONLY our disposable tenant's
+        // records explicitly, then let the remaining fixture children cascade.
+        await fixturePrisma.$transaction([
+          fixturePrisma.auditLog.deleteMany({ where: { tenantId: foreignTenantId } }),
+          fixturePrisma.tenant.delete({ where: { id: foreignTenantId } }),
+        ]);
+      }
     } finally {
       await fixturePrisma.$disconnect();
     }

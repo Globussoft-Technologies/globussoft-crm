@@ -2611,6 +2611,8 @@ export default function App() {
                       />
                       <Route path="contacts" element={<Contacts />} />
                       <Route path="leads/:id" element={<ContactDetail />} />
+                      {/* Travel contact names use the preview drawer; this shared
+                          route remains active for Generic and Wellness deep links. */}
                       <Route path="contacts/:id" element={<ContactDetail />} />
                       <Route
                         path="pipeline"

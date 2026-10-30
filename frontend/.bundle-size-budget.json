@@ -67,7 +67,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 9950,
+    "all-js-maxKB": 10000,
+    "//pr1629-total-bump": "9950 → 10000 KB: merged Generic workflow and web-form attribution controls bring total JS to 9952.6 KB in deploy run 41050723335. Compilation and every individual chunk budget pass. Retain 47.4 KB headroom without changing entry/vendor caps or adding dependencies.",
     "//pr1616-deals-reports": "9900 → 9950 KB: PR #1616 expands deal-detail editing, pipeline search and reporting controls without adding a runtime dependency. The production build at 61430b6e measured 9901.5 KB total JS (versus the post-1610 baseline of 9855.2 KB), with every individual chunk inside its existing cap. Retain 48.5 KB total headroom; per-chunk and CSS limits are unchanged.",
     "//post1610-route-splitting": "9850 → 9900 KB: deploy run 40654897295 measured 9848.4 KB total JS but failed because eager pickup/workspace imports inflated the entry to 763.4 KB. Restoring route-level splitting and adding a content Suspense boundary reduces the entry to 320.5 KB (original 325 KB cap unchanged), while emitted split-chunk/import-preload overhead brings total JS to 9855.2 KB. No dependency is added; retain 44.8 KB total headroom.",
     "//pr1595-integrations-js": "9800 → 9850 KB: PR #1595 adds Maps/Twilio settings, inventory import and workspace calling UI. The Node 24 production build after merging main measured 9801.9 KB JS; retain 48.1 KB headroom. Individual chunk caps remain unchanged.",

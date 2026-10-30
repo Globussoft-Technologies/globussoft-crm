@@ -13,6 +13,7 @@ import prisma from '../../lib/prisma.js';
 
 const requireCJS = createRequire(import.meta.url);
 const fs = requireCJS('node:fs');
+const { runInNewContext } = requireCJS('node:vm');
 const axios = requireCJS('axios');
 axios.post = vi.fn();
 
@@ -192,6 +193,49 @@ beforeEach(() => {
 });
 
 describe('web-form embed sizing', () => {
+  test('server-generated embeds preserve extended attribution across host navigation and blocked iframe cookies', () => {
+    const attribution = {
+      utm_id: 'utm-123', gbraid: 'gb-123', wbraid: 'wb-123',
+      campaign_id: 'campaign-123', adset_id: 'set-123', ad_id: 'ad-123',
+      campaign_name: 'Launch', adset_name: 'Audience', ad_name: 'Creative',
+      placement: 'feed', site_source_name: 'facebook',
+      landing_page: 'https://external.example/landing', referrer: 'https://search.example/',
+    };
+    const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
+    const runtime = code.match(/<script>([\s\S]*?)<\/script>/)[1];
+    const cookies = new Map();
+    const visit = (query) => {
+      const messages = [];
+      const listeners = {};
+      const frame = { contentWindow: { postMessage: (message) => messages.push(message) }, addEventListener: () => {} };
+      const document = { currentScript: { previousElementSibling: frame }, documentElement: { clientWidth: 1000 }, title: 'External website' };
+      Object.defineProperty(document, 'cookie', {
+        get: () => [...cookies].map(([key, value]) => `${key}=${value}`).join('; '),
+        set: (value) => {
+          const pair = value.split(';')[0];
+          const separator = pair.indexOf('=');
+          cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+        },
+      });
+      const location = new URL(`https://external.example/contact?${query}`);
+      const window = { innerWidth: 1000, addEventListener: (type, callback) => { listeners[type] = callback; } };
+      runInNewContext(runtime, { window, document, location, URLSearchParams });
+      listeners.message({ source: frame.contentWindow, data: { source: 'gbs-web-form', type: 'ready' } });
+      return messages.find((message) => message.type === 'context').attribution;
+    };
+    expect(visit(new URLSearchParams(attribution).toString())).toMatchObject(attribution);
+    // The next page has no campaign query string; only first-party host cookies survive.
+    const savedAttribution = visit('');
+    expect(savedAttribution).toMatchObject(attribution);
+
+    const html = fs.readFileSync(requireCJS.resolve('../../../frontend/public/embed/web-form.html'), 'utf8');
+    const start = html.indexOf('function resolveTrackingAttribution(');
+    const end = html.indexOf('function pageUrlWithoutQueryOrHash(', start);
+    const iframe = { TRACKING_QUERY_KEYS: Object.keys(attribution), readCookie: () => '', rememberCookie: () => {} };
+    runInNewContext(html.slice(start, end), iframe);
+    expect(iframe.resolveTrackingAttribution(new URLSearchParams(), savedAttribution)).toMatchObject(attribution);
+  });
+
   test.each([
     ['custom', undefined, undefined],
     ['custom', {}, undefined],

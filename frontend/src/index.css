@@ -2219,6 +2219,70 @@ main[data-testid="staff-work-assignment-page"] .pickup-plot-work-search {
   background-color: var(--input-bg-focus);
 }
 
+.compose-recipient-suggestions {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.compose-recipient-suggestion {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 0;
+  text-align: left;
+  background: transparent;
+  color: var(--text-primary);
+  transition: background-color 0.15s ease;
+}
+
+.compose-recipient-suggestion:hover,
+.compose-recipient-suggestion:focus-visible {
+  outline: none;
+  background: var(--surface-hover);
+}
+
+.compose-recipient-suggestion__avatar {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent-color);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.compose-recipient-suggestion__details {
+  min-width: 0;
+  display: grid;
+  gap: 0.05rem;
+}
+
+.compose-recipient-suggestion__name,
+.compose-recipient-suggestion__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-recipient-suggestion__name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.compose-recipient-suggestion__email {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
 /* Generic CRM Win/Loss date controls. Keep this scoped to the page so
  * wellness and travel date controls retain their existing presentation. */
 .win-loss-date-range .win-loss-date-input {

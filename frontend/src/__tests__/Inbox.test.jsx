@@ -291,7 +291,12 @@ describe("<Inbox />", () => {
     expect(screen.getByRole("button", { name: /send email/i })).toBeInTheDocument();
 
     const toInput = screen.getByPlaceholderText(/client@company.com/i);
+    expect(toInput).toHaveAttribute("aria-expanded", "false");
+    await user.click(toInput);
+    expect(screen.getByRole("listbox", { name: "Recipient suggestions" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "rishu@x.in" })).toBeInTheDocument();
     await user.type(toInput, "rishu");
+    expect(toInput).toHaveAttribute("aria-expanded", "true");
     const suggestion = await screen.findByRole("option", { name: "rishu@x.in" });
     expect(suggestion).toHaveTextContent("Rishu Goyal");
     await user.click(suggestion);

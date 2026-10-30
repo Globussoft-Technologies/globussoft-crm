@@ -731,6 +731,8 @@ export default function Inbox({
       })
     : composeRecipientOptions;
   const visibleRecipientSuggestions = filteredRecipientSuggestions.slice(0, 6);
+  const recipientSuggestionsOpen =
+    showRecipientSuggestions && visibleRecipientSuggestions.length > 0;
 
   const handleRecipientSelect = (recipient) => {
     setComposeData((prev) => ({
@@ -1539,6 +1541,10 @@ export default function Inbox({
                     type="text"
                     required
                     autoComplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={recipientSuggestionsOpen}
+                    aria-controls="compose-recipient-suggestions"
                     className="input-field"
                     value={composeData.to}
                     onFocus={() => setShowRecipientSuggestions(true)}
@@ -1553,10 +1559,12 @@ export default function Inbox({
                     placeholder="client@company.com (comma-separated for multiple)"
                   />
 
-                  {showRecipientSuggestions && visibleRecipientSuggestions.length > 0 && (
+                  {recipientSuggestionsOpen && (
                     <div
+                      id="compose-recipient-suggestions"
                       role="listbox"
                       aria-label="Recipient suggestions"
+                      className="compose-recipient-suggestions"
                       style={{
                         position: "absolute",
                         top: "calc(100% + 0.35rem)",
@@ -1577,30 +1585,26 @@ export default function Inbox({
                           key={entry.key || `${entry.email}-${index}`}
                           role="option"
                           aria-label={entry.email}
+                          className="compose-recipient-suggestion"
                           onMouseDown={(event) => {
                             event.preventDefault();
                             handleRecipientSelect(entry);
                           }}
-                          style={{
-                            width: "100%",
-                            textAlign: "left",
-                            background: "transparent",
-                            border: "none",
-                            borderBottom:
-                              index === visibleRecipientSuggestions.length - 1
-                                ? "none"
-                                : "1px solid var(--border-color)",
-                            padding: "0.85rem 1rem",
-                            cursor: "pointer",
-                            color: "var(--text-primary)",
-                          }}
+                          style={{ borderBottom: index === visibleRecipientSuggestions.length - 1
+                            ? "none"
+                            : "1px solid var(--border-color)" }}
                         >
-                          <div style={{ fontWeight: 600, marginBottom: "0.15rem" }}>{entry.email}</div>
-                          {entry.name && (
-                            <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-                              {entry.name}
-                            </div>
-                          )}
+                          <span className="compose-recipient-suggestion__avatar" aria-hidden="true">
+                            {(entry.name || entry.email).trim().charAt(0).toUpperCase()}
+                          </span>
+                          <span className="compose-recipient-suggestion__details">
+                            <span className="compose-recipient-suggestion__name">
+                              {entry.name || entry.email}
+                            </span>
+                            {entry.name && (
+                              <span className="compose-recipient-suggestion__email">{entry.email}</span>
+                            )}
+                          </span>
                         </button>
                       ))}
                     </div>

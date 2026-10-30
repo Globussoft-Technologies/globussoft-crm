@@ -114,8 +114,35 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
 
     await screen.findByText("Online on office-pc-1");
     expect(screen.queryByRole("button", { name: /Download Tally Connector/i })).not.toBeInTheDocument();
+    expect(screen.getByTitle("This trip has not been synced to Tally yet")).toHaveTextContent("Not synced");
+    expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
     expect(statusRequests).toBe(2);
     expect(navigate).not.toHaveBeenCalledWith("/travel/tally/export");
+  });
+
+  it("emphasizes the PowerShell setup commands", async () => {
+    routeParams.current = {};
+    fetchApi.mockImplementation(async (url) => {
+      if (url.endsWith("/connector/status")) return { configured: true, online: false };
+      return apiResponse(url);
+    });
+
+    render(<TallyExportPreviewPage />);
+
+    const setup = await screen.findByRole("note", { name: "First-time Tally connector setup" });
+    expect(setup).toHaveTextContent("installer scripts are temporarily unsigned");
+    expect(setup).toHaveTextContent("organization policies may still block unsigned scripts");
+    for (const command of [
+      "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass",
+      "Unblock-File .\\TallyConnector.exe",
+      ".\\install-startup.ps1",
+      ".\\uninstall-startup.ps1",
+    ]) {
+      const matches = Array.from(setup.querySelectorAll("strong > code"))
+        .filter((element) => element.textContent === command);
+      expect(matches.length).toBeGreaterThan(0);
+      expect(matches[0].parentElement).toHaveTextContent(`"${command}"`);
+    }
   });
 
   it("uses browser history for the Back button", async () => {

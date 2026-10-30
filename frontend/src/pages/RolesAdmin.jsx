@@ -1138,7 +1138,9 @@ function TmcTeacherShareableLinkPanel() {
         <div style={{ marginTop: '1rem', display: 'grid', gap: '0.6rem' }}>
           <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }} htmlFor="tmc-teacher-registration-link">Share this link</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            <input id="tmc-teacher-registration-link" value={link} readOnly onFocus={(event) => event.target.select()} style={{ flex: '1 1 320px', minWidth: 0, width: 'auto', boxSizing: 'border-box', padding: '0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+            <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+              <input id="tmc-teacher-registration-link" value={link} readOnly onFocus={(event) => event.target.select()} style={{ display: 'block', width: '100%', maxWidth: 'none', minWidth: 0, boxSizing: 'border-box', padding: '0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+            </div>
             <button type="button" className="btn-secondary" onClick={copyLink} style={{ display: 'inline-flex', flex: '0 0 auto', alignItems: 'center', gap: '0.4rem' }}><Copy size={15} /> {copiedRegistrationLink ? 'Copied' : 'Copy link'}</button>
           </div>
         </div>
@@ -1177,6 +1179,7 @@ function TmcTeacherShareableLinkPanel() {
               <div key={teacher.id} role="listitem" style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <button
                   type="button"
+                  className="tmc-teacher-list-row"
                   onClick={() => selectTeacher(teacher)}
                   aria-pressed={String(selectedTeacherId) === String(teacher.id)}
                   style={{ width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'center', padding: '0.85rem 0.25rem', border: 0, background: String(selectedTeacherId) === String(teacher.id) ? 'rgba(79,70,229,0.06)' : 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', borderRadius: 8 }}

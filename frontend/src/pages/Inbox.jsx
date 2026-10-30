@@ -1124,6 +1124,9 @@ export default function Inbox({
         padding: isGeneric ? 0 : "2rem",
         boxSizing: "border-box",
         overflowX: "hidden",
+        overflowY: isGeneric ? "hidden" : undefined,
+        height: isGeneric ? "100%" : undefined,
+        minHeight: 0,
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -1171,8 +1174,9 @@ export default function Inbox({
         style={{
           width: "100%",
           flex: isGeneric ? "1 1 auto" : "0 0 auto",
-          maxHeight: "calc(100vh - 320px)",
-          overflowY: isGeneric ? "visible" : "auto",
+          maxHeight: isGeneric ? "none" : "calc(100vh - 320px)",
+          minHeight: 0,
+          overflowY: "auto",
           overflowX: "hidden",
           padding: "1.25rem",
         }}

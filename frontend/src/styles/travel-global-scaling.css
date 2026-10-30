@@ -309,7 +309,7 @@
 }
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
+  button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row),
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
   select,
   textarea,
@@ -337,7 +337,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame input.broch
    textareas remain content-sized. */
 @media (min-width: 900px) {
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-    button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
+    button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row),
     input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
     select,
     .btn-primary,
@@ -351,7 +351,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame input.broch
 }
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button:not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
+  button:not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row),
   [role="button"],
   .btn-primary,
   .btn-secondary
@@ -363,7 +363,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
 /* Lucide icons usually receive a fixed size prop. Keep icons inside Travel
    controls on the same viewport curve as their label and padding. */
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button:not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card),
+  button:not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row),
   [role="button"],
   .btn-primary,
   .btn-secondary,

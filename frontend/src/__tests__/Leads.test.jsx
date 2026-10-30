@@ -4187,15 +4187,17 @@ describe('Leads Web Form column (generic CRM only)', () => {
     expect(screen.queryByText('Contact Us')).toBeNull();
   });
 
-  it('hides Referrer URL from Generic Leads even when a saved preference still contains it', async () => {
+  it('renders existing landing/referrer columns and newly added attribution columns for Generic Leads', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
-          visible: ['name', 'pageUrl', 'referrerUrl'],
+          visible: ['name', 'pageUrl', 'landingPageUrl', 'referrerUrl', 'campaign_id'],
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'pageUrl', label: 'Page URL' },
+            { key: 'landingPageUrl', label: 'Landing Page URL' },
             { key: 'referrerUrl', label: 'Referrer URL' },
+            { key: 'campaign_id', label: 'Campaign ID' },
           ],
         });
       }
@@ -4207,7 +4209,12 @@ describe('Leads Web Form column (generic CRM only)', () => {
             id: 6,
             webForm: { id: 2, name: 'Contact Us' },
             payloadJson: JSON.stringify({
-              _meta: { tracking: { pageUrl: 'https://example.com/lead', referrerUrl: 'https://search.example/referrer' } },
+              _meta: { tracking: {
+                pageUrl: 'https://example.com/lead',
+                landing_page: 'https://example.com/landing',
+                referrer: 'https://search.example/referrer',
+                campaign_id: 'campaign-123',
+              } },
             }),
           }],
         }]);
@@ -4220,8 +4227,12 @@ describe('Leads Web Form column (generic CRM only)', () => {
 
     expect(screen.getByText('Page URL')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/lead')).toBeInTheDocument();
-    expect(screen.queryByText('Referrer URL')).toBeNull();
-    expect(screen.queryByText('https://search.example/referrer')).toBeNull();
+    expect(screen.getByText('Landing Page')).toBeInTheDocument();
+    expect(screen.getByText('https://example.com/landing')).toBeInTheDocument();
+    expect(screen.getByText('Referrer URL')).toBeInTheDocument();
+    expect(screen.getByText('https://search.example/referrer')).toBeInTheDocument();
+    expect(screen.getByText('Campaign ID')).toBeInTheDocument();
+    expect(screen.getByText('campaign-123')).toBeInTheDocument();
   });
 
   it('does not render stale Generic extended columns in Travel', async () => {

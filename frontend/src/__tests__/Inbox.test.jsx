@@ -259,13 +259,15 @@ describe("<Inbox />", () => {
       flex: "1 1 auto",
       maxHeight: "none",
       minHeight: "0",
-      overflowY: "auto",
+      overflowY: "hidden",
     });
 
     const messageScroll = listCard.querySelector(".inbox-message-scroll--generic");
     expect(messageScroll).toContainElement(await screen.findByText(sampleInboxEmail.subject));
     expect(messageScroll).not.toContainElement(screen.getByRole("searchbox", { name: "Search mail" }));
     expect(messageScroll).not.toContainElement(screen.getByRole("tablist", { name: "Email folder" }));
+    expect(messageScroll).toHaveStyle({ flex: "1 1 auto", overflowY: "auto" });
+    expect(listCard.querySelector(".inbox-toolbar--generic")).toBeTruthy();
   });
 
   it("opens the restored composer with autocomplete, Cc/Bcc, and theme-aware modal surfaces", async () => {

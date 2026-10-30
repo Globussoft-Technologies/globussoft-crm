@@ -44,7 +44,6 @@ const GENERIC_NON_SIDEBAR_PAGE_PATHS = new Set([
   '/gmail',
   '/shared-inbox',
   '/support',
-  '/workflows',
   '/field-permissions',
   '/custom-reports',
   '/lead-scoring',
@@ -76,6 +75,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/live-chat', label: 'Live Chat', category: 'Communication' },
 
   { path: '/tasks', label: 'Task Queue', category: 'Work Management' },
+  { path: '/workflows', label: 'Workflows', category: 'Work Management' },
 
   { path: '/tickets', label: 'Tickets', category: 'Customer Support' },
   { path: '/sla', label: 'SLA Policies', category: 'Customer Support' },

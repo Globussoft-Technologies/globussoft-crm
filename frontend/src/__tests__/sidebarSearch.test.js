@@ -138,7 +138,10 @@ describe('filterSidebarPages', () => {
       expect.objectContaining({ id: 'adsgpt', actionTarget: '[data-tour-feature="adsgpt"]' }),
       expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
     ]));
-    expect(manager.some((page) => page.path === '/workflows')).toBe(false);
+    expect(manager).toContainEqual(expect.objectContaining({ path: '/workflows' }));
+    expect(genericRoleGuardProps('/workflows')).toEqual({
+      requiredPermission: { module: 'workflows', action: 'read' },
+    });
   });
 
   it('keeps only travel sidebar-visible pages and rewrites their labels', () => {

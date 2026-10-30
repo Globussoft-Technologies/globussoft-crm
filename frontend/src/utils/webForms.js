@@ -48,9 +48,11 @@ export function buildPublicUrl(form, origin) {
 }
 
 const EMBED_ATTRIBUTION_QUERY_KEYS = [
-  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_id', 'utm_term', 'utm_content',
   'gclid', 'gbraid', 'wbraid', 'fbclid', 'fbc', 'fbp', 'gad_source',
-  'gad_campaignid', 'adgroup', 'network', 'device', 'placement', 'hsa_acc',
+  'gad_campaignid', 'campaign_id', 'adset_id', 'ad_id', 'campaign_name',
+  'adset_name', 'ad_name', 'adgroup', 'network', 'device', 'placement',
+  'site_source_name', 'landing_page', 'referrer', 'hsa_acc',
   'hsa_cam', 'hsa_grp', 'hsa_ad', 'hsa_src', 'hsa_tgt', 'hsa_kw', 'hsa_mt',
   'hsa_net', 'hsa_ver',
 ];

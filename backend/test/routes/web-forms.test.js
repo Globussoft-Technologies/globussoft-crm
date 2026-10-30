@@ -901,6 +901,40 @@ describe('GET /api/forms/public/:slug', () => {
     });
   });
 
+  test('preserves per-form lead custom choice options instead of replacing them with organization defaults', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 4,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Campaign-specific intake',
+      slug: 'campaign-specific-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([{
+        id: 'business-type',
+        sourceKind: 'lead_custom',
+        sourceKey: 'business_type',
+        fieldType: 'dropdown',
+        label: 'Business type',
+        options: ['Campaign A', 'Campaign B'],
+        optionsCustomized: true,
+      }]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { fieldKey: 'business_type', options: JSON.stringify(['Organization default']) },
+    ]);
+
+    const res = await request(makeApp()).get('/api/forms/public/campaign-specific-intake');
+
+    expect(res.status).toBe(200);
+    expect(res.body.fields[0]).toMatchObject({
+      options: ['Campaign A', 'Campaign B'],
+      optionsCustomized: true,
+    });
+  });
+
   test('returns the active form with embed code', async () => {
 
     prisma.webForm.findFirst.mockResolvedValue({
@@ -1597,6 +1631,13 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('_gbsTracking', JSON.stringify({
         pageUrl: 'https://example.com/pricing',
         utm_source: 'newsletter',
+        utm_id: 'utm-123',
+        campaign_id: 'campaign-123',
+        adset_id: 'adset-123',
+        ad_id: 'ad-123',
+        site_source_name: 'facebook',
+        landing_page: 'https://example.com/landing',
+        referrer: 'https://search.example.com/',
         location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
         locationLatitude: '12.935200',
         locationLongitude: '77.624500',
@@ -1642,6 +1683,13 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(JSON.parse(submissionArg.payloadJson)._meta.tracking).toEqual(expect.objectContaining({
       pageUrl: 'https://example.com/pricing',
       utm_source: 'newsletter',
+      utm_id: 'utm-123',
+      campaign_id: 'campaign-123',
+      adset_id: 'adset-123',
+      ad_id: 'ad-123',
+      site_source_name: 'facebook',
+      landing_page: 'https://example.com/landing',
+      referrer: 'https://search.example.com/',
       location: 'Koramangala, Bengaluru, Karnataka, 560034, India',
       locationLatitude: '12.935200',
       locationLongitude: '77.624500',

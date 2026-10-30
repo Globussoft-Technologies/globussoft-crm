@@ -448,12 +448,80 @@ describe('WebForms builder page', () => {
 
     expect(screen.getByText('Conditional flow')).toBeInTheDocument();
     expect(screen.getByText('Show question')).toBeInTheDocument();
+    expect(screen.getByText('Add a sub question for an answer')).toBeInTheDocument();
+    expect(screen.getByText('Each sub question stays attached to the answer that created it. A sub question can become the next parent.')).toBeInTheDocument();
     const childCard = container.querySelector('.wf-conditional-child-card');
     expect(childCard).toBeInTheDocument();
     expect(childCard).toHaveTextContent('Shopify');
     expect(childCard).toHaveTextContent('Shopify Store URL');
     expect(childCard.querySelector('[data-testid="wf-field-editor-grid"]')).toBeInTheDocument();
     expect(childCard.querySelector('.wf-conditional-config')).toBeNull();
+  });
+
+  test('limits conditional parents to dropdown and radio while children keep all editable field types', async () => {
+    const { container } = renderPage({ ...FORM_FIXTURE, scope: 'generic' });
+    await openBuilder();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add conditional flow/i }));
+
+    const parentType = Array.from(container.querySelectorAll('select[aria-label^="Field type for"]'))
+      .find((select) => Array.from(select.options).some((option) => option.value === 'radio'));
+    expect(parentType).toBeTruthy();
+    expect(parentType).not.toBeDisabled();
+    expect(Array.from(parentType.options).map((option) => option.value)).toEqual(['dropdown', 'radio']);
+
+    const parentCard = parentType.closest('.wf-field-card');
+    fireEvent.change(parentCard.querySelector('.wf-generic-options-input'), { target: { value: 'Yes\nNo' } });
+    fireEvent.click(screen.getByRole('button', { name: '+ Yes' }));
+
+    const childCard = container.querySelector('.wf-conditional-child-card');
+    const childType = childCard.querySelector('select[aria-label^="Field type for"]');
+    expect(childType).not.toBeDisabled();
+    expect(Array.from(childType.options).map((option) => option.value)).toEqual([
+      'text', 'email', 'tel', 'textarea', 'number', 'dropdown', 'radio', 'date', 'url', 'checkbox', 'multiselect',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Yes' }));
+    expect(notifyError).toHaveBeenCalledWith('A sub question already exists for Yes.');
+
+    fireEvent.change(childType, { target: { value: 'radio' } });
+    fireEvent.change(childCard.querySelector('.wf-generic-options-input'), { target: { value: 'A\nB' } });
+    fireEvent.click(within(childCard).getByRole('button', { name: '+ A' }));
+    expect(container.querySelectorAll('.wf-conditional-child-card')).toHaveLength(2);
+
+    const liveChildCard = container.querySelector('.wf-conditional-child-card');
+    fireEvent.change(liveChildCard.querySelector('select[aria-label^="Field type for"]'), { target: { value: 'email' } });
+
+    expect(container.querySelectorAll('.wf-conditional-child-card')).toHaveLength(1);
+    expect(liveChildCard.querySelector('select[aria-label^="Field type for"]')).toHaveValue('email');
+  });
+
+  test('offers dropdown and radio for an existing field that can create conditional children', async () => {
+    const parentField = {
+      id: 'lead-parent',
+      sourceKind: 'lead_custom',
+      sourceKey: 'business_type',
+      fieldType: 'dropdown',
+      label: 'Business type',
+      optionsText: 'SaaS\nAgency',
+      options: ['SaaS', 'Agency'],
+      required: false,
+      hidden: false,
+      showWhen: null,
+    };
+    renderPage({ ...FORM_FIXTURE, scope: 'generic', fields: [parentField] }, [
+      { id: 7, fieldKey: 'business_type', label: 'Business type', fieldType: 'dropdown', options: ['SaaS', 'Agency'] },
+    ]);
+    await openBuilder();
+
+    const parentType = screen.getByRole('combobox', { name: 'Field type for Business type' });
+    expect(parentType).not.toBeDisabled();
+    expect(Array.from(parentType.options).map((option) => option.value)).toEqual(['dropdown', 'radio']);
+    expect(screen.getByRole('button', { name: '+ SaaS' })).toBeInTheDocument();
+
+    fireEvent.change(parentType, { target: { value: 'radio' } });
+    expect(parentType).toHaveValue('radio');
+    expect(screen.getByText('Radio layout')).toBeInTheDocument();
   });
 
   test('preserves comma separators while editing conditional flow options', async () => {
@@ -728,6 +796,47 @@ describe('WebForms builder page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Business type.*custom/i }));
 
     expect(await screen.findByDisplayValue('SaaS, E-Commerce, Freelancer')).toBeInTheDocument();
+  });
+
+  test('keeps edited lead custom choice options isolated to the current web form', async () => {
+    const leadFields = [
+      { id: 7, fieldKey: 'business_type', label: 'Business type', fieldType: 'dropdown', options: ['Organization default'] },
+    ];
+    const form = {
+      ...FORM_FIXTURE,
+      name: 'Per-form choices',
+      fields: [{
+        id: 'business-type',
+        sourceKind: 'lead_custom',
+        sourceKey: 'business_type',
+        fieldType: 'dropdown',
+        label: 'Business type',
+        options: ['Form A', 'Form B'],
+        optionsCustomized: true,
+        required: false,
+        hidden: false,
+        width: 'full',
+      }],
+    };
+
+    renderPage(form, leadFields);
+    await openBuilder('Per-form choices');
+
+    const optionsInput = await screen.findByDisplayValue('Form A, Form B');
+    expect(screen.queryByDisplayValue('Organization default')).toBeNull();
+    fireEvent.change(optionsInput, { target: { value: 'Form A, Exclusive option' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      expect(JSON.parse(saveCall[1].body).fields[0]).toEqual(expect.objectContaining({
+        options: ['Form A', 'Exclusive option'],
+        optionsCustomized: true,
+      }));
+    });
   });
 
   test('creates a lead field from the Generic contact picker plus action', async () => {

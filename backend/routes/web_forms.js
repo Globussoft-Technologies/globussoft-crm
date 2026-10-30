@@ -729,6 +729,8 @@ function normalizeField(field, index, scope = "generic", leadFieldDefinitions = 
     : null;
   const configuredOptions = CHOICE_TYPES.has(fieldType) ? parseOptions(field?.options) : [];
   const leadOptions = leadDefinition ? parseOptions(leadDefinition.options) : [];
+  const optionsCustomized = sourceKind === "lead_custom" &&
+    CHOICE_TYPES.has(fieldType) && field?.optionsCustomized === true;
   const showWhen = field?.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey)
     ? {
       fieldId: textOr(field.showWhen.fieldId),
@@ -759,7 +761,9 @@ function normalizeField(field, index, scope = "generic", leadFieldDefinitions = 
 
     hidden: Boolean(field?.hidden),
 
-    options: leadOptions.length ? leadOptions : configuredOptions,
+    options: optionsCustomized ? configuredOptions : leadOptions.length ? leadOptions : configuredOptions,
+
+    optionsCustomized,
 
     fileFormats:
       fieldType === "file" ? parseFileFormats(field?.fileFormats) : [],
@@ -1521,7 +1525,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       try {
         const parsed = JSON.parse(String(trackingInput));
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 30).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
+          trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 60).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
         }
       } catch (_err) {
         trackingMetadata = null;

@@ -69,6 +69,11 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('Max-Age="+maxAge');
     expect(code).toContain('attribution:savedAttribution');
     expect(code).toContain('"utm_source"');
+    expect(code).toContain('"utm_id"');
+    expect(code).toContain('"campaign_id"');
+    expect(code).toContain('"site_source_name"');
+    expect(code).toContain('"landing_page"');
+    expect(code).toContain('"referrer"');
     expect(code).toContain('"hsa_ver"');
   });
 
@@ -449,6 +454,12 @@ describe('public web form embed footer', () => {
 
     expect(html).toContain('var TRACKING_COOKIE_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;');
     expect(html).toContain('TRACKING_COOKIE_MAX_AGE_SECONDS +');
+    for (const key of [
+      'utm_id', 'campaign_id', 'adset_id', 'ad_id', 'campaign_name',
+      'adset_name', 'ad_name', 'site_source_name', 'landing_page', 'referrer',
+    ]) {
+      expect(html).toContain(`"${key}"`);
+    }
   });
 
   test('stores a clean submission page URL while preserving query attribution', () => {

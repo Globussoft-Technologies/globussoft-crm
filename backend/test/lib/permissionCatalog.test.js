@@ -196,6 +196,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       expect(cat.contacts).toBeDefined();
       expect(cat.invoices).toBeDefined();
       expect(cat.web_forms).toBeDefined();
+      expect(cat.workflows).toEqual(['read', 'write', 'update', 'delete', 'manage']);
       expect(cat.patients).toBeUndefined();
       expect(cat.itineraries).toBeUndefined();
     }
@@ -213,6 +214,8 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       }
     }
     expect(getCatalogForVertical('wellness').calendar).toEqual(['read', 'write']);
+    expect(getCatalogForVertical('wellness').workflows).toBeUndefined();
+    expect(getCatalogForVertical('travel').workflows).toBeUndefined();
   });
 
   it('matches the bundled PERMISSION_CATALOG_* constants', () => {

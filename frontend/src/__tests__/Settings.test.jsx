@@ -266,17 +266,30 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(screen.getByText("utm_source")).toBeInTheDocument();
     expect(screen.getByText("utm_medium")).toBeInTheDocument();
     expect(screen.getByText("utm_campaign")).toBeInTheDocument();
+    expect(screen.getByText("utm_id")).toBeInTheDocument();
     expect(screen.getByText("utm_term")).toBeInTheDocument();
     expect(screen.getByText("utm_content")).toBeInTheDocument();
     expect(screen.getByText("gclid")).toBeInTheDocument();
+    expect(screen.getByText("gbraid")).toBeInTheDocument();
+    expect(screen.getByText("wbraid")).toBeInTheDocument();
     expect(screen.getByText("fbclid")).toBeInTheDocument();
     expect(screen.getByText("fbc")).toBeInTheDocument();
     expect(screen.getByText("fbp")).toBeInTheDocument();
+    expect(screen.getByText("campaign_id")).toBeInTheDocument();
+    expect(screen.getByText("adset_id")).toBeInTheDocument();
+    expect(screen.getByText("ad_id")).toBeInTheDocument();
+    expect(screen.getByText("campaign_name")).toBeInTheDocument();
+    expect(screen.getByText("adset_name")).toBeInTheDocument();
+    expect(screen.getByText("ad_name")).toBeInTheDocument();
+    expect(screen.getByText("placement")).toBeInTheDocument();
+    expect(screen.getByText("site_source_name")).toBeInTheDocument();
+    expect(screen.getByText("landing_page")).toBeInTheDocument();
+    expect(screen.getByText("referrer")).toBeInTheDocument();
     expect(screen.queryByText("gbs_utm_source")).not.toBeInTheDocument();
     expect(screen.queryByText("gbs_landing_url")).not.toBeInTheDocument();
     expect(screen.queryByText("gbs_landing_title")).not.toBeInTheDocument();
     expect(
-      screen.getByText(/fetched automatically and do not need cookie keys/i),
+      screen.getByText(/landing page and referrer are also detected automatically/i),
     ).toBeInTheDocument();
     expect(
       recaptchaHeading.closest(".card").compareDocumentPosition(trackingCard) &

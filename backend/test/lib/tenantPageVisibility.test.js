@@ -63,6 +63,7 @@ describe('tenant page visibility normalization', () => {
   it('exposes only Generic sidebar controls, not mounted-but-hidden routes', () => {
     const paths = visibility.getTenantPageVisibilityCatalog('generic').map((page) => page.path);
     expect(paths).toContain('/contacts');
+    expect(paths).toContain('/workflows');
     expect(paths).toContain('/integrations/adsgpt');
     expect(paths).toContain('/integrations/callified');
     for (const path of visibility.GENERIC_NON_SIDEBAR_PAGE_PATHS) {
@@ -91,6 +92,11 @@ describe('tenant page visibility normalization', () => {
     expect(catalog.find((page) => page.path === '/quotes')).toMatchObject({
       label: 'Quotes',
       category: 'Finance',
+    });
+    expect(catalog.find((page) => page.path === '/workflows')).toMatchObject({
+      label: 'Workflows',
+      category: 'Work Management',
+      requiredPermissions: [{ module: 'workflows', action: 'read' }],
     });
   });
 
@@ -184,6 +190,20 @@ describe('tenant page visibility resolution', () => {
     expect(catalog.forecasting).toBeUndefined();
     expect(catalog.contacts).toEqual(['read']);
     expect(catalog.payments).toEqual(['read']);
+  });
+
+  it('keeps Workflows permissions visible until Super Admin disables the page', () => {
+    expect(visibility.filterPermissionCatalogForTenant(
+      { workflows: ['read', 'write', 'update', 'delete', 'manage'] },
+      'generic',
+      [],
+    ).workflows).toEqual(['read', 'write', 'update', 'delete', 'manage']);
+
+    expect(visibility.filterPermissionCatalogForTenant(
+      { workflows: ['read', 'write', 'update', 'delete', 'manage'] },
+      'generic',
+      ['/workflows'],
+    ).workflows).toBeUndefined();
   });
 
   it('makes a permission unavailable only when every matching page is hidden', async () => {

@@ -1600,6 +1600,7 @@
           "utm_source",
           "utm_medium",
           "utm_campaign",
+          "utm_id",
           "utm_term",
           "utm_content",
           "gclid",
@@ -1610,10 +1611,19 @@
           "fbp",
           "gad_source",
           "gad_campaignid",
+          "campaign_id",
+          "adset_id",
+          "ad_id",
+          "campaign_name",
+          "adset_name",
+          "ad_name",
           "adgroup",
           "network",
           "device",
           "placement",
+          "site_source_name",
+          "landing_page",
+          "referrer",
           "hsa_acc",
           "hsa_cam",
           "hsa_grp",
@@ -4910,6 +4920,12 @@
               pageSource: pageSource,
               referrerUrl: document.referrer || "",
               landingPageUrl: readCookie("gbs_landing_url") || pageUrl,
+              landing_page:
+                resolvedAttribution.landing_page ||
+                readCookie("gbs_landing_url") ||
+                pageUrl,
+              referrer:
+                resolvedAttribution.referrer || document.referrer || "",
               currentDomain: pageUrlObject
                 ? pageUrlObject.hostname
                 : window.location.hostname,
@@ -4918,6 +4934,7 @@
               utm_source: resolvedAttribution.utm_source || "",
               utm_medium: resolvedAttribution.utm_medium || "",
               utm_campaign: resolvedAttribution.utm_campaign || "",
+              utm_id: resolvedAttribution.utm_id || "",
               utm_term: resolvedAttribution.utm_term || "",
               utm_content: resolvedAttribution.utm_content || "",
               gclid: resolvedAttribution.gclid || "",

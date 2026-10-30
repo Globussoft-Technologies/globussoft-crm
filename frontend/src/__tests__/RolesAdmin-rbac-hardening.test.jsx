@@ -824,6 +824,30 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
 });
 
 describe('tenant page visibility in the permission matrix', () => {
+  it('renders Workflows permissions for an enabled Generic CRM tenant', async () => {
+    const catalog = {
+      ...CATALOG,
+      vertical: 'generic',
+      catalog: { ...CATALOG.catalog, workflows: ['read', 'write', 'update', 'delete', 'manage'] },
+      modules: [
+        ...CATALOG.modules,
+        { module: 'workflows', actions: ['read', 'write', 'update', 'delete', 'manage'] },
+      ],
+      domains: [
+        ...CATALOG.domains,
+        { domain: 'Automation', modules: [{ module: 'workflows', actions: ['read', 'write', 'update', 'delete', 'manage'] }] },
+      ],
+      hiddenModules: [],
+    };
+
+    renderPage([ADMIN_ROLE], { '/api/roles/catalog': catalog }, 'generic');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    await screen.findByText(/Permissions: Administrator/i);
+
+    expect(screen.getByText('workflows')).toBeInTheDocument();
+    expect(screen.getByText('Trigger-action automation rules across CRM objects.')).toBeInTheDocument();
+  });
+
   it('does not render a module whose page is disabled for the tenant', async () => {
     const catalog = {
       ...CATALOG,

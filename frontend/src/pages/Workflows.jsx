@@ -987,7 +987,7 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
           {action.type === "create_approval" && <Select aria-label={`Action ${index + 1} approval entity`} value={config.entity || "Deal"} onChange={(entity) => updateConfig("entity", entity)}><option>Deal</option><option>Contact</option><option>Invoice</option><option>Ticket</option></Select>}
           {action.type === "create_approval" && <input aria-label={`Action ${index + 1} approval reason`} value={config.reasonTemplate || ""} onChange={(event) => updateConfig("reasonTemplate", event.target.value)} placeholder="Reason, e.g. Discount review for {{title}}" />}
           {action.type === "send_webhook" && <input aria-label={`Action ${index + 1} webhook URL`} value={config.url || ""} onChange={(event) => updateConfig("url", event.target.value)} placeholder="https://example.com/webhook" />}
-          {action.type === "send_webhook" && <button type="button" className="workflow-link-button" onClick={() => setShowWebhookSettings(true)}><Pencil size={14} /> Edit webhook settings</button>}
+          {action.type === "send_webhook" && <button type="button" className="workflow-link-button workflow-webhook-edit-button" onClick={() => setShowWebhookSettings(true)}><Pencil size={14} /> Edit webhook settings</button>}
         </div>
         <ActionIcon size={18} className="workflow-action-icon" />
         <button type="button" className="workflow-icon-button" onClick={() => removeAction(index)} aria-label={`Remove action ${index + 1}`}><Trash2 size={15} /></button>

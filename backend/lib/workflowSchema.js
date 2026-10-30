@@ -150,7 +150,7 @@ const ACTION_TYPES = [
   { value: 'assign_agent', label: 'Assign owner', config: ['entity', 'mode', 'userId', 'userIds'], modules: ['contact', 'deal', 'task', 'ticket'] },
   { value: 'add_to_sequence', label: 'Add to sales sequence', config: ['sequenceId'], modules: ['contact', 'lead', 'deal'] },
   { value: 'remove_from_sequence', label: 'Remove from sales sequence', config: ['sequenceId'], modules: ['contact', 'lead', 'deal'] },
-  { value: 'send_webhook', label: 'Trigger webhook', config: ['url', 'method', 'encoding', 'headers', 'bodyMode', 'bodyTemplate'], modules: null },
+  { value: 'send_webhook', label: 'Trigger webhook', config: ['url', 'method', 'encoding', 'headers', 'bodyMode', 'selectedFields', 'bodyTemplate'], modules: null },
   { value: 'create_approval', label: 'Create approval request', config: ['entity', 'reasonTemplate'], modules: null },
   { value: 'wait', label: 'Wait / delay', config: ['delayMinutes'], modules: null },
   // Destructive, so it is deliberately last and restricted. Soft-deletes

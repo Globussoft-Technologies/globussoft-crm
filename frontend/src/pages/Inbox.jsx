@@ -1123,10 +1123,10 @@ export default function Inbox({
         margin: isGeneric ? 0 : "0 auto",
         padding: isGeneric ? 0 : "2rem",
         boxSizing: "border-box",
+        height: isGeneric ? "100%" : undefined,
+        minHeight: isGeneric ? 0 : undefined,
         overflowX: "hidden",
         overflowY: isGeneric ? "hidden" : undefined,
-        height: isGeneric ? "100%" : undefined,
-        minHeight: 0,
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -1169,14 +1169,14 @@ export default function Inbox({
       <div
         className={`card inbox-list-card${isGeneric ? " inbox-list-card--generic" : ""}`}
         data-testid="inbox-list-card"
-        ref={inboxScrollRef}
-        onScroll={handleInboxScroll}
+        ref={isGeneric ? undefined : inboxScrollRef}
+        onScroll={isGeneric ? undefined : handleInboxScroll}
         style={{
           width: "100%",
           flex: isGeneric ? "1 1 auto" : "0 0 auto",
+          minHeight: isGeneric ? 0 : undefined,
           maxHeight: isGeneric ? "none" : "calc(100vh - 320px)",
-          minHeight: 0,
-          overflowY: "auto",
+          overflowY: isGeneric ? "hidden" : "auto",
           overflowX: "hidden",
           padding: "1.25rem",
         }}
@@ -1286,7 +1286,9 @@ export default function Inbox({
 
             <div
               className={isGeneric ? "inbox-message-scroll--generic" : undefined}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
+              ref={isGeneric ? inboxScrollRef : undefined}
+              onScroll={isGeneric ? handleInboxScroll : undefined}
+              style={{ display: "flex", flex: isGeneric ? "1 1 auto" : undefined, flexDirection: "column", gap: "1rem", minWidth: 0, minHeight: isGeneric ? 0 : undefined, overflowY: isGeneric ? "auto" : undefined, overflowX: isGeneric ? "hidden" : undefined }}
             >
             {emails.length === 0 ? (
               <p

@@ -143,6 +143,23 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys).not.toContain('webForm');
   });
 
+  test('generic Leads catalog exposes the missing ad attribution columns only', async () => {
+    const generic = await request(makeApp()).get('/api/table-column-prefs/leads');
+    const genericKeys = generic.body.availableColumns.map((column) => column.key);
+
+    expect(generic.status).toBe(200);
+    expect(genericKeys).toEqual(expect.arrayContaining([
+      'gbraid', 'wbraid', 'utm_id', 'campaign_id', 'adset_id', 'ad_id',
+      'campaign_name', 'adset_name', 'ad_name', 'placement', 'site_source_name',
+    ]));
+
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    const travel = await request(makeApp()).get('/api/table-column-prefs/leads');
+    const travelKeys = travel.body.availableColumns.map((column) => column.key);
+    expect(travelKeys).not.toContain('campaign_id');
+    expect(travelKeys).not.toContain('site_source_name');
+  });
+
   test('leads catalog carries the data-backed Freshsales-parity set with labels', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 

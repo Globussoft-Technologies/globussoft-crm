@@ -210,6 +210,8 @@ describe("travel Tally connector routes", () => {
       "uninstall-startup.ps1",
       "README.md",
     ]);
+    expect(response.body.files.find((file) => file.name === "install-startup.ps1").data).toContain("Unblock-File");
+    expect(response.body.files.find((file) => file.name === "install-startup.ps1").data).toContain("process verified");
     expect(response.body.files.find((file) => file.name === "uninstall-startup.ps1").data).toContain("Stop-Process");
   });
 

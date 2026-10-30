@@ -10,6 +10,7 @@ The connector runs on the Windows computer that hosts Tally. It makes an outboun
 
    ```powershell
    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   Unblock-File .\TallyConnector.exe
    .\install-startup.ps1
    ```
 
@@ -65,7 +66,7 @@ From PowerShell in the deployment folder, run:
 .\install-startup.ps1
 ```
 
-The installer checks for the executable, configuration, and VBS launcher. It creates or updates `Globussoft Tally Connector.lnk` in the current user's Startup folder, pointing to `wscript.exe`, then starts the connector hidden immediately. Running the installer again updates the shortcut without starting a second connector process. Administrator rights are not required for a per-user install.
+The installer checks for the executable, configuration, and VBS launcher, removes Windows' Internet-download block from the packaged files, and verifies that the connector process stays running. It creates or updates `Globussoft Tally Connector.lnk` in the current user's Startup folder, pointing to `wscript.exe`, then starts the connector hidden immediately. Running the installer again updates the shortcut without starting a second connector process. Administrator rights are not required for a per-user install.
 
 Check `logs/connector.log` for startup, connection, reconnect, and job messages. The process remains hidden while running. The Startup shortcut launches it at the next sign-in for this Windows user. To verify that behavior, sign out and back in, then check for a new startup entry in the log and a running `TallyConnector.exe` process. A reachable CRM should produce a `Connected to Globussoft CRM` entry; otherwise, the connector logs errors and retries.
 

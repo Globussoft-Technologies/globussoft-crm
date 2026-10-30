@@ -446,9 +446,9 @@ export default function TallyExportPreviewPage() {
         <ol style={connectorSetupSteps}>
           <li>Click <b>Download Tally Connector</b> and extract the ZIP on the Windows computer that runs Tally.</li>
           <li>Open the company in Tally and enable its HTTP/XML service on localhost port 9000.</li>
-          <li>In the extracted folder, open PowerShell, run <code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code>, then run <code>.\install-startup.ps1</code>. This allows the installer in this PowerShell window only.</li>
-          <li>Check <code>logs\connector.log</code> in that folder for connection status.</li>
-          <li>To disconnect later, open PowerShell in the same folder, run <code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code>, then run <code>.\uninstall-startup.ps1</code>.</li>
+          <li>In the extracted folder, open PowerShell, run <strong>&quot;<code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code>&quot;</strong>, then <strong>&quot;<code>Unblock-File .\TallyConnector.exe</code>&quot;</strong>, and finally <strong>&quot;<code>.\install-startup.ps1</code>&quot;</strong>. This allows the installer in this PowerShell window only and removes Windows&apos; download block from the connector.</li>
+          <li>Check <strong>&quot;<code>logs\connector.log</code>&quot;</strong> in that folder for connection status.</li>
+          <li>To disconnect later, open PowerShell in the same folder, run <strong>&quot;<code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass</code>&quot;</strong>, then run <strong>&quot;<code>.\uninstall-startup.ps1</code>&quot;</strong>.</li>
         </ol>
       </div>
       {showSyncGuidelines && <TallySyncGuidelines onClose={() => setShowSyncGuidelines(false)} />}
@@ -474,7 +474,7 @@ export default function TallyExportPreviewPage() {
           <option value="all">All statuses</option>
           <option value="SYNCED">Synced</option>
           <option value="NEW_VOUCHERS">New vouchers pending</option>
-          <option value="NOT_CONNECTED">Not connected</option>
+          <option value="NOT_CONNECTED">Not synced</option>
           <option value="FAILED">Failed</option>
         </select>
       </div>
@@ -597,8 +597,9 @@ function SyncStatusBadge({ status }) {
     : normalized === "FAILED"
       ? { color: "#b91c1c", background: "#fef2f2", borderColor: "#fecaca", dot: "#ef4444" }
       : { color: "#92400e", background: "#fffbeb", borderColor: "#fde68a", dot: "#f59e0b" };
-  const label = normalized === "NOT_CONNECTED" ? "Not connected" : normalized === "NEW_VOUCHERS" ? "New vouchers pending" : normalized.charAt(0) + normalized.slice(1).toLowerCase();
-  return <span style={{ ...syncStatusBadge, ...palette }}><span aria-hidden="true" style={{ ...syncStatusDot, background: palette.dot }} />{label}</span>;
+  const label = normalized === "NOT_CONNECTED" ? "Not synced" : normalized === "NEW_VOUCHERS" ? "New vouchers pending" : normalized.charAt(0) + normalized.slice(1).toLowerCase();
+  const title = normalized === "NOT_CONNECTED" ? "This trip has not been synced to Tally yet" : undefined;
+  return <span title={title} style={{ ...syncStatusBadge, ...palette }}><span aria-hidden="true" style={{ ...syncStatusDot, background: palette.dot }} />{label}</span>;
 }
 function TallySyncGuidelines({ onClose }) {
   return <aside id="tally-sync-guidelines" style={guidelinesPanel} aria-labelledby="tally-sync-guidelines-title">

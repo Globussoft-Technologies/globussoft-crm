@@ -81,7 +81,6 @@ const COMMON_MODULES = {
   analytics: ['read', 'export'],
 
   // Automation
-  workflows: ['read', 'write', 'update', 'delete', 'manage'],
   sequences: ['read', 'write', 'update', 'delete'],
 
   // Documents
@@ -104,6 +103,7 @@ const COMMON_MODULES = {
 // Keep this separate from COMMON_MODULES so adding a generic page never
 // changes another vertical's permission matrix.
 const GENERIC_MODULES = {
+  workflows: ['read', 'write', 'update', 'delete', 'manage'],
   // Pickup/plot operational workspaces. These are deliberately independent
   // of role keys/names: a tenant admin can grant any custom role one or more
   // work queues without renaming the role.

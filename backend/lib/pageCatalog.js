@@ -1263,9 +1263,10 @@ const PAGE_CATALOG = [
   //  Automation 
   {
     path: '/workflows',
-    label: 'Automation',
+    label: 'Workflows',
     description: 'Workflow automation builder',
     category: 'Automation',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'workflows', action: 'read' }],
   },
 

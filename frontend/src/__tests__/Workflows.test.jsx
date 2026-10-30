@@ -125,9 +125,20 @@ describe("Workflows page", () => {
     render(<Workflows />);
     await user.click(screen.getByRole("button", { name: /create workflow/i }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
-    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    const editWebhookButton = screen.getByRole("button", { name: /edit webhook settings/i });
+    expect(editWebhookButton).toBeVisible();
+    expect(editWebhookButton).toHaveClass("workflow-webhook-edit-button");
+    await user.click(editWebhookButton);
 
     expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
+    const webhookFields = [
+      "contactId", "name", "email", "phone", "company", "title", "status", "source", "tags",
+      "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus",
+      "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk",
+      "metaIsQualified", "changedFields", "createdAt",
+    ];
+    webhookFields.forEach((field) => expect(screen.getByRole("checkbox", { name: field })).toBeChecked());
+    await user.click(screen.getByRole("checkbox", { name: "company" }));
     await user.type(screen.getByRole("textbox", { name: "Webhook callback URL" }), "https://hooks.example.com/meta-feedback");
     await user.click(screen.getByRole("button", { name: /add custom header/i }));
     await user.type(screen.getByRole("textbox", { name: "Webhook header 1 name" }), "X-Webhook-Secret");
@@ -138,6 +149,8 @@ describe("Workflows page", () => {
     await user.click(screen.getByRole("button", { name: /test this webhook/i }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows/test-webhook", expect.objectContaining({ method: "POST" })));
+    const testWebhookCall = fetchApiMock.mock.calls.find(([path]) => path === "/api/workflows/test-webhook");
+    expect(JSON.parse(testWebhookCall[1].body).config.selectedFields).toEqual(expect.not.arrayContaining(["company"]));
     expect(notify.success).toHaveBeenCalledWith("Webhook responded with HTTP 202");
     await user.click(screen.getByRole("button", { name: /save settings/i }));
     expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument();

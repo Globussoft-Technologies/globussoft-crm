@@ -122,12 +122,23 @@ const GENERIC_AUTOMATIC_TABLE_FIELDS = [
   ["utm_source", "UTM Source"],
   ["utm_medium", "UTM Medium"],
   ["utm_campaign", "UTM Campaign"],
+  ["utm_id", "UTM ID"],
   ["utm_term", "UTM Term"],
   ["utm_content", "UTM Content"],
   ["gclid", "Google Click ID"],
+  ["gbraid", "Google Braid ID"],
+  ["wbraid", "Google Wbraid ID"],
   ["fbclid", "Meta Click ID"],
   ["fbc", "Meta Click Cookie"],
   ["fbp", "Meta Browser ID"],
+  ["campaign_id", "Campaign ID"],
+  ["adset_id", "Ad Set ID"],
+  ["ad_id", "Ad ID"],
+  ["campaign_name", "Campaign Name"],
+  ["adset_name", "Ad Set Name"],
+  ["ad_name", "Ad Name"],
+  ["placement", "Placement"],
+  ["site_source_name", "Site Source Name"],
   ["submittedAt", "Submission Timestamp"],
   ["browser", "Browser"],
   ["operatingSystem", "Operating System"],
@@ -187,6 +198,7 @@ const GENERIC_LOCKED_CONTACT_FIELD_TYPES = {
   phone: "tel",
 };
 const CHOICE_FIELD_TYPES = new Set(["dropdown", "radio", "multiselect"]);
+const CONDITIONAL_PARENT_FIELD_TYPES = new Set(["dropdown", "radio"]);
 const FILE_FORMAT_OPTIONS = [
  { value: "CSV", accept: ".csv,text/csv" },
  { value: "XLSX", accept: ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
@@ -658,6 +670,7 @@ function normalizeField(field, index, leadFields = [], scope = "generic") {
     ? leadFields.find((item) => item.fieldKey === sourceKey)
     : null;
   const leadOptions = Array.isArray(leadDefinition?.options) ? leadDefinition.options : [];
+  const optionsCustomized = sourceKind === "lead_custom" && field?.optionsCustomized === true;
   const hasOptionsText = typeof field?.optionsText === "string";
   const persistedOptions = Array.isArray(field?.options) && field.options.length
     ? field.options
@@ -910,11 +923,16 @@ function normalizeField(field, index, leadFields = [], scope = "generic") {
 
     choiceLayout: fieldType === "radio" && field?.choiceLayout === "horizontal" ? "horizontal" : "vertical",
 
-    optionsText: sourceKind === "lead_custom" && leadOptions.length
-      ? leadOptions.join(", ")
-      : hasOptionsText
+    optionsCustomized,
+    optionsText: optionsCustomized
+      ? hasOptionsText
         ? field.optionsText
-        : persistedOptions.join(", ") || String(CONTACT_FIELD_DEFAULTS[sourceKey]?.options?.join(", ") || ""),
+        : persistedOptions.join(", ")
+      : sourceKind === "lead_custom" && leadOptions.length
+        ? leadOptions.join(", ")
+        : hasOptionsText
+          ? field.optionsText
+          : persistedOptions.join(", ") || String(CONTACT_FIELD_DEFAULTS[sourceKey]?.options?.join(", ") || ""),
 
 
 
@@ -1470,6 +1488,7 @@ function emptyFieldFor(kind, leadFields, sourceKey = "", fieldType = "text", lab
 
     const field = defaultField("lead_custom", firstLead?.fieldKey || sourceKey || "lead_custom_field", label || firstLead?.label || "Lead field", fieldType || firstLead?.fieldType || "text");
     const options = Array.isArray(firstLead?.options) ? firstLead.options : [];
+    field.optionsCustomized = CHOICE_FIELD_TYPES.has(field.fieldType);
     if (options.length) field.optionsText = options.join(", ");
     return field;
 
@@ -3699,7 +3718,9 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
 
 
 
-    ? leadFields.find((item) => item.fieldKey === field.sourceKey)?.options || []
+    ? field.optionsCustomized
+      ? splitOptions(field.optionsText)
+      : leadFields.find((item) => item.fieldKey === field.sourceKey)?.options || splitOptions(field.optionsText)
 
 
 
@@ -3725,6 +3746,7 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
     if (!candidate) return [];
     if (candidate.fieldType === "checkbox") return ["true"];
     if (candidate.sourceKind === "lead_custom") {
+      if (candidate.optionsCustomized) return splitOptions(candidate.optionsText);
       const leadOptions = leadFields.find((item) => item.fieldKey === candidate.sourceKey)?.options || [];
       return leadOptions.length ? leadOptions : splitOptions(candidate.optionsText);
     }
@@ -3735,10 +3757,18 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
     }
     return [];
   };
-  const branchOptions = supportsAdvancedFeatures ? getConditionalOptions(field) : [];
-  const fieldTypeOptions = formScope === "generic"
+  const isConditionalRoot = field?.conditionalFlow === true || String(field?.sourceKey || "").startsWith("conditional-root_");
+  const isConditionalChild = Boolean(field?.showWhen);
+  const isConditionalField = isConditionalRoot || isConditionalChild;
+  const isConditionalParentCandidate = supportsAdvancedFeatures && !isConditionalField && CONDITIONAL_PARENT_FIELD_TYPES.has(field.fieldType);
+  const canBeConditionalParent = !isConditionalField || CONDITIONAL_PARENT_FIELD_TYPES.has(field.fieldType);
+  const branchOptions = supportsAdvancedFeatures && canBeConditionalParent ? getConditionalOptions(field) : [];
+  const editableFieldTypeOptions = formScope === "generic"
     ? editableFieldTypes
     : editableFieldTypes.filter((item) => item.value !== "tel");
+  const fieldTypeOptions = isConditionalRoot || isConditionalParentCandidate
+    ? editableFieldTypeOptions.filter((item) => CONDITIONAL_PARENT_FIELD_TYPES.has(item.value))
+    : editableFieldTypeOptions;
 
 
 
@@ -5553,7 +5583,7 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
                   className="input-field"
                   aria-label={`Field type for ${field.label || field.sourceKey || `field ${index + 1}`}`}
                   value={field.fieldType}
-                  disabled={formScope === "generic"}
+                  disabled={formScope === "generic" && !isConditionalField && !isConditionalParentCandidate}
                   onChange={(e) => {
                     const nextType = e.target.value;
                     onChange(index, {
@@ -5577,7 +5607,7 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
                 <div className="wf-generic-field-secondary" style={{ display: "grid", gap: 10, minWidth: 0 }}>
                   <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
-                    <textarea className="input-field wf-generic-options-input" rows={2} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Type one option per line (or use commas)" />
+                    <textarea className="input-field wf-generic-options-input" rows={2} value={field.optionsText || ""} onChange={(e) => onChange(index, { optionsText: e.target.value, optionsCustomized: field.sourceKind === "lead_custom" ? true : field.optionsCustomized })} placeholder="Type one option per line (or use commas)" />
                   </label>
                   {field.fieldType === "radio" ? (
                     <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
@@ -5894,7 +5924,7 @@ function FieldCard({ field, index, leadFields, scope, onChange, onMove, onRemove
         {supportsAdvancedFeatures && branchOptions.length > 0 && onAddConditionalChild ? (
           <div style={{ gridColumn: "1 / -1", marginTop: 14, paddingTop: 14, borderTop: "1px dashed var(--wf-border)", display: "grid", gap: 8 }}>
             <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 700 }}>
-              Add a child question for an answer
+              Add a sub question for an answer
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {branchOptions.map((option) => (
@@ -9068,7 +9098,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
 
-      const fields = [...(current?.fields || [])];
+      let fields = [...(current?.fields || [])];
 
 
 
@@ -9085,6 +9115,39 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
       fields[index] = { ...(fields[index] || {}), ...patch };
+
+      if (
+        supportsAdvancedWebFormFeatures(current?.scope) &&
+        Object.prototype.hasOwnProperty.call(patch, "fieldType") &&
+        !CONDITIONAL_PARENT_FIELD_TYPES.has(patch.fieldType)
+      ) {
+        const changedField = fields[index];
+        const descendantIds = new Set();
+        const parentIds = new Set([String(changedField.id)]);
+        const parentKeys = new Set(changedField.sourceKey ? [String(changedField.sourceKey)] : []);
+        let foundDescendant = true;
+
+        while (foundDescendant) {
+          foundDescendant = false;
+          fields.forEach((candidate) => {
+            const condition = candidate.showWhen;
+            const pointsToParent = condition && (
+              (condition.fieldId && parentIds.has(String(condition.fieldId))) ||
+              (!condition.fieldId && condition.fieldKey && parentKeys.has(String(condition.fieldKey)))
+            );
+            if (pointsToParent && !descendantIds.has(String(candidate.id))) {
+              descendantIds.add(String(candidate.id));
+              parentIds.add(String(candidate.id));
+              if (candidate.sourceKey) parentKeys.add(String(candidate.sourceKey));
+              foundDescendant = true;
+            }
+          });
+        }
+
+        if (descendantIds.size) {
+          fields = fields.filter((candidate) => !descendantIds.has(String(candidate.id)));
+        }
+      }
 
       if (supportsAdvancedWebFormFeatures(current?.scope) && Object.prototype.hasOwnProperty.call(patch, "stepId")) {
         const changedField = fields[index];
@@ -9606,7 +9669,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
       String(field.showWhen.value || "") === String(answer)
     ));
     if (alreadyAdded) {
-      notifyRef.current?.error?.(`A child question already exists for ${answer}.`);
+      notifyRef.current?.error?.(`A sub question already exists for ${answer}.`);
       return;
     }
 
@@ -20642,7 +20705,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                                 <div className="wf-conditional-group-header">
                                   <span>Conditional flow</span>
                                   <small>Starts with: {group.root?.label || "Parent question"} · {group.fields.length} questions</small>
-                                   <small>Each child stays attached to the answer that created it. A child can become the next parent.</small>
+                                   <small>Each sub question stays attached to the answer that created it. A sub question can become the next parent.</small>
                                 </div>
                                 <div className="wf-conditional-group-fields">
                                   {(() => {

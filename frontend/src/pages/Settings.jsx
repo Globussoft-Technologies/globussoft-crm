@@ -3794,12 +3794,25 @@ function GenericWebFormAutomaticTrackingCard() {
     ["UTM Source", "utm_source"],
     ["UTM Medium", "utm_medium"],
     ["UTM Campaign", "utm_campaign"],
+    ["UTM ID", "utm_id"],
     ["UTM Term", "utm_term"],
     ["UTM Content", "utm_content"],
     ["Google Click ID", "gclid"],
+    ["Google Braid ID", "gbraid"],
+    ["Google Wbraid ID", "wbraid"],
     ["Meta Click ID", "fbclid"],
     ["Meta Click Cookie", "fbc"],
     ["Meta Browser ID", "fbp"],
+    ["Campaign ID", "campaign_id"],
+    ["Ad Set ID", "adset_id"],
+    ["Ad ID", "ad_id"],
+    ["Campaign Name", "campaign_name"],
+    ["Ad Set Name", "adset_name"],
+    ["Ad Name", "ad_name"],
+    ["Placement", "placement"],
+    ["Site Source Name", "site_source_name"],
+    ["Landing Page", "landing_page"],
+    ["Referrer", "referrer"],
   ];
   return (
     <div
@@ -3828,8 +3841,8 @@ function GenericWebFormAutomaticTrackingCard() {
         ))}
       </div>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5, margin: "1rem 0 0" }}>
-        Page URL, page source, referrer, current domain, form name, submission time, browser, operating system, device type,
-        and permitted location are fetched automatically and do not need cookie keys.
+        Page URL, page source, current domain, form name, submission time, browser, operating system, device type,
+        and permitted location are fetched automatically. Landing page and referrer are also detected automatically when their keys are absent.
       </p>
     </div>
   );

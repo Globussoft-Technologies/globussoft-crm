@@ -729,6 +729,8 @@ function normalizeField(field, index, scope = "generic", leadFieldDefinitions = 
     : null;
   const configuredOptions = CHOICE_TYPES.has(fieldType) ? parseOptions(field?.options) : [];
   const leadOptions = leadDefinition ? parseOptions(leadDefinition.options) : [];
+  const optionsCustomized = sourceKind === "lead_custom" &&
+    CHOICE_TYPES.has(fieldType) && field?.optionsCustomized === true;
   const showWhen = field?.showWhen && (field.showWhen.fieldId || field.showWhen.fieldKey)
     ? {
       fieldId: textOr(field.showWhen.fieldId),
@@ -759,7 +761,9 @@ function normalizeField(field, index, scope = "generic", leadFieldDefinitions = 
 
     hidden: Boolean(field?.hidden),
 
-    options: leadOptions.length ? leadOptions : configuredOptions,
+    options: optionsCustomized ? configuredOptions : leadOptions.length ? leadOptions : configuredOptions,
+
+    optionsCustomized,
 
     fileFormats:
       fieldType === "file" ? parseFileFormats(field?.fileFormats) : [],
@@ -1078,9 +1082,11 @@ function escapeHtml(value) {
 }
 
 const EMBED_ATTRIBUTION_QUERY_KEYS = [
-  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content",
   "gclid", "gbraid", "wbraid", "fbclid", "fbc", "fbp", "gad_source",
-  "gad_campaignid", "adgroup", "network", "device", "placement", "hsa_acc",
+  "gad_campaignid", "campaign_id", "adset_id", "ad_id", "campaign_name",
+  "adset_name", "ad_name", "adgroup", "network", "device", "placement",
+  "site_source_name", "landing_page", "referrer", "hsa_acc",
   "hsa_cam", "hsa_grp", "hsa_ad", "hsa_src", "hsa_tgt", "hsa_kw", "hsa_mt",
   "hsa_net", "hsa_ver",
 ];
@@ -1521,7 +1527,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       try {
         const parsed = JSON.parse(String(trackingInput));
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 30).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
+          trackingMetadata = Object.fromEntries(Object.entries(parsed).slice(0, 60).map(([key, value]) => [key, textOr(value).slice(0, 2000)]));
         }
       } catch (_err) {
         trackingMetadata = null;

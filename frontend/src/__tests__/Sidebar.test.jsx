@@ -138,7 +138,7 @@ const GENERIC_BASE_PERMS = [
   'forecasting.read', 'quotas.read', 'dashboards.read', 'analytics.read',
   'sequences.read', 'surveys.read', 'social.read', 'sla.read',
   'payments.read', 'lead_scoring.read', 'quotes.read', 'territories.read',
-  'calendar.read',
+  'cpq.read', 'calendar.read', 'workflows.read',
 ];
 const GENERIC_ADMIN_WORKSPACE_PERMS = [
   'transport_workspace.read', 'broker_workspace.read', 'billing_workspace.read',
@@ -974,6 +974,12 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Privacy')).toBeTruthy();
       // Settings is admin-only here.
       expect(screen.getByText('Settings')).toBeTruthy();
+      expect(screen.getByText('Workflows').closest('a')).toHaveAttribute('href', '/workflows');
+    });
+
+    it('hides Workflows when the Generic CRM role lacks workflows.read', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', permissions: GENERIC_USER_PERMS });
+      expect(screen.queryByText('Workflows')).toBeNull();
     });
 
     it('uses configured permissions instead of the legacy manager tier for generic reports', () => {
@@ -998,7 +1004,7 @@ describe('Sidebar — load-bearing render surface', () => {
     it('keeps requested product pages out of the Generic CRM sidebar but shows Landing Sites', () => {
       const hiddenLabels = [
         'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
-        'Lead Scoring', 'Approvals', 'Workflows', 'Knowledge Base',
+        'Lead Scoring', 'Approvals', 'Knowledge Base',
         'Sequences', 'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
       ];
 
@@ -1008,6 +1014,7 @@ describe('Sidebar — load-bearing render surface', () => {
           expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
         }
         expect(screen.getByText('Landing Sites')).toBeTruthy();
+        expect(screen.getByText('Workflows').closest('a')).toHaveAttribute('href', '/workflows');
         unmount();
       }
     });

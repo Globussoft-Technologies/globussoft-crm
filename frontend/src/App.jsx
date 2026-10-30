@@ -2680,7 +2680,12 @@ export default function App() {
                         path="workflows"
                         element={
                           <GenericOnly>
-                            <Workflows />
+                            <RoleGuard
+                              requiredPermission={{ module: "workflows", action: "read" }}
+                              feature="Workflows"
+                            >
+                              <Workflows />
+                            </RoleGuard>
                           </GenericOnly>
                         }
                       />

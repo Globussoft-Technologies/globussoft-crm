@@ -1325,16 +1325,19 @@ test('Changing folder views closes and resets the new folder editor', async () =
   render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
   await screen.findByText('Brand intake');
 
-  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Folder name' }), { target: { value: 'Unused draft' } });
-  fireEvent.click(screen.getByRole('button', { name: 'All Forms (1)' }));
-  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
+  // Keep role/name assertions scoped to the small folder toolbar instead of
+  // repeatedly computing accessibility styles across the entire builder DOM.
+  const toolbar = within(document.querySelector('.wf-folder-toolbar'));
+  fireEvent.click(toolbar.getByRole('button', { name: 'New Folder' }));
+  fireEvent.change(screen.getByLabelText('Folder name'), { target: { value: 'Unused draft' } });
+  fireEvent.click(toolbar.getByRole('button', { name: 'All Forms (1)' }));
+  expect(screen.queryByLabelText('Folder name')).toBeNull();
 
-  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
-  expect(screen.getByRole('textbox', { name: 'Folder name' })).toHaveValue('');
-  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
-  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*0/ }));
+  fireEvent.click(toolbar.getByRole('button', { name: 'New Folder' }));
+  expect(screen.getByLabelText('Folder name')).toHaveValue('');
+  fireEvent.click(toolbar.getByRole('button', { name: 'All Folders' }));
+  expect(screen.queryByLabelText('Folder name')).toBeNull();
+  fireEvent.click(toolbar.getByRole('button', { name: /Campaigns.*0/ }));
   expect(screen.getByText('Campaigns')).toBeInTheDocument();
 });
 
@@ -1581,12 +1584,14 @@ test.each([
     return baseFetch(url, opts);
   });
   render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
-  fireEvent.click(await screen.findByRole('button', { name: 'All Folders' }));
-  await screen.findByRole('button', { name: /Campaigns.*1/ });
-  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*1/ }));
-  fireEvent.click(screen.getByRole('button', { name: 'Delete folder' }));
-  expect(screen.getByRole('dialog', { name: 'Delete folder?' })).toHaveTextContent('1 form');
-  fireEvent.click(screen.getByRole('button', { name: actionLabel }));
+  await screen.findByText('Brand intake');
+  const toolbar = within(document.querySelector('.wf-folder-toolbar'));
+  fireEvent.click(toolbar.getByRole('button', { name: 'All Folders' }));
+  fireEvent.click(await toolbar.findByRole('button', { name: /Campaigns.*1/ }));
+  fireEvent.click(within(document.querySelector('.wf-folder-manage')).getByRole('button', { name: 'Delete folder' }));
+  const dialog = screen.getByRole('dialog', { name: 'Delete folder?' });
+  expect(dialog).toHaveTextContent('1 form');
+  fireEvent.click(within(dialog).getByRole('button', { name: actionLabel }));
   await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/folders/9', expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ deleteForms }) })));
   if (deleteForms) {
     await waitFor(() => expect(screen.queryByText('Brand intake')).toBeNull());

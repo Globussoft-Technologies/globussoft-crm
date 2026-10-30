@@ -61,27 +61,64 @@
  *      Spec doesn't probe a non-existent endpoint.
  *
  * Pattern: e2e/tests/landing-pages-api.spec.js (commit 1e5bd3e). Dual-
- * token (generic admin drives main CRUD; wellness admin drives tenant
- * isolation). RUN_TAG = `E2E_FLOW_WF_<ts>` matches the existing
+ * token (generic admin drives main CRUD; a separate Generic tenant drives
+ * isolation; Wellness is explicitly denied). RUN_TAG matches the existing
  * /^E2E_FLOW_/ regex in e2e/test-data-patterns.js. global-teardown does
  * NOT sweep AutomationRule rows, so beforeAll pre-cleans any orphan
  * E2E_FLOW_WF_ rules and afterAll deletes everything this run created.
  */
 const { test, expect } = require('@playwright/test');
+const { createRequire } = require('node:module');
+const path = require('node:path');
 
 // Serial: cleanup tracker is mutated across describe blocks, and the
-// tenant-isolation block creates a wellness rule that several later
+// tenant-isolation block creates a foreign Generic rule that several later
 // generic-admin checks must NOT see. Parallel shuffle would race those
 // assertions.
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
-const RUN_TAG = `E2E_FLOW_WF_${Date.now()}`;
+const RUN_TAG = `E2E_FLOW_WF_${Date.now()}_${process.pid}`;
+const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+let fixturePrisma = null;
+let foreignTenantId = null;
+let foreignToken = null;
+
+// Workflows are Generic-only. Exercise isolation between TWO Generic tenants,
+// not by granting Wellness access to a module it deliberately cannot use.
+// Direct fixture writes are allowed only against an explicitly local database.
+async function getForeign(request) {
+  test.skip(!localHosts.has(new URL(BASE_URL).hostname) || !process.env.DATABASE_URL,
+    'Same-vertical fixture requires a local stack and explicit DATABASE_URL');
+  if (!foreignToken) {
+    const dbUrl = new URL(process.env.DATABASE_URL);
+    if (!localHosts.has(dbUrl.hostname)) throw new Error('Workflow fixture refuses a remote database');
+    const backendRequire = createRequire(path.resolve(__dirname, '../../backend/package.json'));
+    const { PrismaClient } = backendRequire('@prisma/client');
+    fixturePrisma = new PrismaClient();
+    const tenant = await fixturePrisma.tenant.create({ data: {
+      name: RUN_TAG, slug: RUN_TAG.toLowerCase(), vertical: 'generic', plan: 'enterprise',
+    } });
+    foreignTenantId = tenant.id;
+    const email = `${RUN_TAG.toLowerCase()}@example.test`;
+    const password = 'WorkflowFixture123!';
+    await fixturePrisma.user.create({ data: {
+      tenantId: tenant.id, email, name: RUN_TAG, role: 'ADMIN',
+      password: await backendRequire('bcryptjs').hash(password, 10),
+      emailVerifiedAt: new Date(), subscriptionStatus: 'ACTIVE',
+    } });
+    // Login provisions the canonical tenant roles and grants, just as for a
+    // newly registered administrator; no fabricated permission/JWT bypass.
+    foreignToken = (await loginAs(request, email, password)).token;
+    expect(foreignToken, 'Foreign Generic administrator can log in').toBeTruthy();
+  }
+  return { token: foreignToken };
+}
 
 // ── Dual-token auth ────────────────────────────────────────────────
 // admin@globussoft.com (ADMIN, generic tenant)  — drives main CRUD
-// admin@wellness.demo  (ADMIN, wellness tenant) — drives tenant iso
+// admin@wellness.demo  (ADMIN, wellness tenant) — verifies vertical denial
 
 let genericToken = null;
 let genericUserId = null;
@@ -141,7 +178,7 @@ async function del(request, token, path) {
 }
 
 // ── Cleanup tracker keyed by tenant ────────────────────────────────
-const createdRulesByTenant = { generic: new Set(), wellness: new Set() };
+const createdRulesByTenant = { generic: new Set(), foreign: new Set() };
 
 // Pre-cleanup orphans from prior aborted runs. global-teardown does not
 // sweep AutomationRule rows, so each run must self-purge anything matching
@@ -149,7 +186,7 @@ const createdRulesByTenant = { generic: new Set(), wellness: new Set() };
 async function purgeOrphansFor(request, tenant) {
   const tok = tenant === 'generic'
     ? (await getGeneric(request)).token
-    : (await getWellness(request)).token;
+    : foreignToken;
   if (!tok) return;
   const res = await get(request, tok, '/api/workflows');
   if (!res.ok()) return;
@@ -166,17 +203,23 @@ test.beforeAll(async ({ request }) => {
   await getGeneric(request);
   await getWellness(request);
   await purgeOrphansFor(request, 'generic');
-  await purgeOrphansFor(request, 'wellness');
 });
 
 test.afterAll(async ({ request }) => {
   for (const [tenant, ids] of Object.entries(createdRulesByTenant)) {
     const tok = tenant === 'generic'
       ? (await getGeneric(request)).token
-      : (await getWellness(request)).token;
+      : foreignToken;
     if (!tok) continue;
     for (const id of ids) {
       await del(request, tok, `/api/workflows/${id}`).catch(() => {});
+    }
+  }
+  if (fixturePrisma) {
+    try {
+      if (foreignTenantId) await fixturePrisma.tenant.delete({ where: { id: foreignTenantId } });
+    } finally {
+      await fixturePrisma.$disconnect();
     }
   }
 });
@@ -185,7 +228,7 @@ let ruleCounter = 0;
 async function createRule(request, tenant, overrides = {}) {
   const tok = tenant === 'generic'
     ? (await getGeneric(request)).token
-    : (await getWellness(request)).token;
+    : (await getForeign(request)).token;
   if (!tok) throw new Error(`createRule: no ${tenant} token`);
   ruleCounter += 1;
   const body = {
@@ -203,6 +246,16 @@ async function createRule(request, tenant, overrides = {}) {
 }
 
 // ── GET /triggers ──────────────────────────────────────────────────
+
+test('Wellness cannot read or create Generic workflows', async ({ request }) => {
+  const { token } = await getWellness(request);
+  expect(token, 'Wellness administrator can log in').toBeTruthy();
+  expect((await get(request, token, '/api/workflows')).status()).toBe(403);
+  const response = await post(request, token, '/api/workflows', {
+    name: `${RUN_TAG} denied`, triggerType: 'contact.created', actionType: 'send_sms',
+  });
+  expect(response.status()).toBe(403);
+});
 
 test.describe('Workflows API — GET /triggers (static catalog)', () => {
   test('200 returns non-empty array of {value,label,description} entries', async ({ request }) => {
@@ -276,10 +329,10 @@ test.describe('Workflows API — GET /history', () => {
     expect((await big.json()).limit).toBe(200);
   });
 
-  test('history is tenant-scoped — wellness rule executions do not leak to generic', async ({ request }) => {
+  test('history is tenant-scoped — foreign Generic rule executions do not leak to generic', async ({ request }) => {
     const { token: genTok } = await getGeneric(request);
-    // Force a wellness execution by /test on a wellness rule, then assert
-    // the wellness rule's id does NOT appear in generic admin's history.
+    // Force a foreign Generic execution by /test on a foreign Generic rule, then assert
+    // the foreign Generic rule's id does NOT appear in generic admin's history.
     //
     // Pre-fix this asserted exact `afterTotal === beforeTotal` count
     // equality; on demo (where background cron engines — workflow,
@@ -289,27 +342,31 @@ test.describe('Workflows API — GET /history', () => {
     // per-push gate (local stack with DISABLE_CRONS=1) had no such
     // background activity so the count was always exact.
     //
-    // The actual leak signal we care about: does the wellness rule's
+    // The actual leak signal we care about: does the foreign Generic rule's
     // entityId appear in generic's history? That's tenant-id-specific
     // and immune to background-cron noise. Search generic's recent
-    // history for the wellness rule's id; expect not-found.
-    const wellnessRule = await createRule(request, 'wellness', {
+    // history for the foreign Generic rule's id; expect not-found.
+    const foreignRule = await createRule(request, 'foreign', {
       name: `${RUN_TAG} hist-iso-${Date.now()}`,
       actionType: 'send_sms',
     });
-    const { token: wellTok } = await getWellness(request);
-    const fire = await post(request, wellTok, `/api/workflows/${wellnessRule.id}/test`, {});
+    const { token: wellTok } = await getForeign(request);
+    const fire = await post(request, wellTok, `/api/workflows/${foreignRule.id}/test`, {});
     expect(fire.status()).toBe(200);
-    const after = await get(request, genTok, '/api/workflows/history?limit=200');
+    const ownHistory = await get(request, wellTok, `/api/workflows/history?workflowId=${foreignRule.id}`);
+    expect(ownHistory.status()).toBe(200);
+    expect((await ownHistory.json()).logs.some((row) => row.workflowId === foreignRule.id)).toBe(true);
+    const after = await get(request, genTok, `/api/workflows/history?workflowId=${foreignRule.id}`);
+    expect(after.status()).toBe(200);
     const afterBody = await after.json();
     // History rows come from WorkflowExecution now and expose `workflowId`.
     // This probe used to read `row.entityId` (the AuditLog column name); after
     // the rename that predicate matched nothing, so the test would have passed
     // for the wrong reason and stopped detecting a real cross-tenant leak.
-    const leakedRow = (afterBody.logs || []).find((row) => row.workflowId === wellnessRule.id);
+    const leakedRow = (afterBody.logs || []).find((row) => row.workflowId === foreignRule.id);
     expect(
       leakedRow,
-      `wellness rule id ${wellnessRule.id} should NOT appear in generic history (would prove cross-tenant leak)`
+      `foreign Generic rule id ${foreignRule.id} should NOT appear in generic history (would prove cross-tenant leak)`
     ).toBeFalsy();
   });
 });
@@ -459,11 +516,11 @@ test.describe('Workflows API — run-now + health', () => {
 
   test('404 for a workflow in another tenant', async ({ request }) => {
     const { token: genTok } = await getGeneric(request);
-    const wellnessRule = await createRule(request, 'wellness', {
+    const foreignRule = await createRule(request, 'foreign', {
       name: `${RUN_TAG} runnow-iso-${Date.now()}`,
       actionType: 'send_sms',
     });
-    const res = await post(request, genTok, `/api/workflows/${wellnessRule.id}/run-now`, {});
+    const res = await post(request, genTok, `/api/workflows/${foreignRule.id}/run-now`, {});
     expect(res.status()).toBe(404);
   });
 
@@ -503,13 +560,13 @@ test.describe('Workflows API — GET / (list)', () => {
     expect(typeof row.targetState).toBe('string'); // stored stringified
   });
 
-  test('list scoped to caller tenant — wellness rules do not leak to generic', async ({ request }) => {
+  test('list scoped to caller tenant — foreign Generic rules do not leak to generic', async ({ request }) => {
     const { token: genTok } = await getGeneric(request);
-    const wellnessRule = await createRule(request, 'wellness', { name: `${RUN_TAG} cross-tenant-list-${Date.now()}` });
+    const foreignRule = await createRule(request, 'foreign', { name: `${RUN_TAG} cross-tenant-list-${Date.now()}` });
     const res = await get(request, genTok, '/api/workflows');
     expect(res.status()).toBe(200);
     const list = await res.json();
-    expect(list.some((r) => r.id === wellnessRule.id)).toBe(false);
+    expect(list.some((r) => r.id === foreignRule.id)).toBe(false);
   });
 });
 
@@ -949,20 +1006,20 @@ test.describe('Workflows API — POST /:id/test', () => {
   });
 });
 
-// ── Tenant isolation — single wellness rule, every record-scoped op 404s ──
+// ── Tenant isolation — single foreign Generic rule, every record-scoped op 404s ──
 
 test.describe('Workflows API — tenant isolation', () => {
-  test('generic admin gets 404 on every record-scoped op against a wellness rule', async ({ request }) => {
+  test('generic admin gets 404 on every record-scoped op against a foreign Generic rule', async ({ request }) => {
     const { token: genTok } = await getGeneric(request);
-    const wellnessRule = await createRule(request, 'wellness', {
+    const foreignRule = await createRule(request, 'foreign', {
       name: `${RUN_TAG} cross-tenant-iso-${Date.now()}`,
     });
 
     const checks = [
-      ['PUT',    `/api/workflows/${wellnessRule.id}`,         () => put(request, genTok, `/api/workflows/${wellnessRule.id}`, { name: 'should not happen' })],
-      ['DELETE', `/api/workflows/${wellnessRule.id}`,         () => del(request, genTok, `/api/workflows/${wellnessRule.id}`)],
-      ['PUT',    `/api/workflows/${wellnessRule.id}/toggle`,  () => put(request, genTok, `/api/workflows/${wellnessRule.id}/toggle`, {})],
-      ['POST',   `/api/workflows/${wellnessRule.id}/test`,    () => post(request, genTok, `/api/workflows/${wellnessRule.id}/test`, {})],
+      ['PUT',    `/api/workflows/${foreignRule.id}`,         () => put(request, genTok, `/api/workflows/${foreignRule.id}`, { name: 'should not happen' })],
+      ['DELETE', `/api/workflows/${foreignRule.id}`,         () => del(request, genTok, `/api/workflows/${foreignRule.id}`)],
+      ['PUT',    `/api/workflows/${foreignRule.id}/toggle`,  () => put(request, genTok, `/api/workflows/${foreignRule.id}/toggle`, {})],
+      ['POST',   `/api/workflows/${foreignRule.id}/test`,    () => post(request, genTok, `/api/workflows/${foreignRule.id}/test`, {})],
     ];
 
     for (const [method, path, fn] of checks) {
@@ -970,13 +1027,13 @@ test.describe('Workflows API — tenant isolation', () => {
       expect(res.status(), `${method} ${path} should 404 cross-tenant; got ${res.status()}`).toBe(404);
     }
 
-    // Also verify the wellness rule did NOT get flipped/deleted by any of the
+    // Also verify the foreign Generic rule did NOT get flipped/deleted by any of the
     // probes above — read it through the wellness token list.
-    const { token: wellTok } = await getWellness(request);
+    const { token: wellTok } = await getForeign(request);
     const wellList = await get(request, wellTok, '/api/workflows');
-    const stillThere = (await wellList.json()).find((r) => r.id === wellnessRule.id);
-    expect(stillThere, 'wellness rule should survive every cross-tenant probe').toBeTruthy();
-    expect(stillThere.name).toBe(wellnessRule.name);
+    const stillThere = (await wellList.json()).find((r) => r.id === foreignRule.id);
+    expect(stillThere, 'foreign Generic rule should survive every cross-tenant probe').toBeTruthy();
+    expect(stillThere.name).toBe(foreignRule.name);
     expect(stillThere.isActive).toBe(true);
   });
 });

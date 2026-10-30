@@ -1235,6 +1235,30 @@ function dragOverAt(target, dataTransfer, clientY) {
   fireEvent(target, event);
 }
 
+test('folder menus escape the library clipping area and dismiss when their anchor moves', async () => {
+  installFetchMock();
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  const trigger = await screen.findByRole('button', { name: 'Move Brand intake to folder' });
+  fireEvent.click(trigger);
+  let menu = screen.getByRole('menu', { name: 'Folders for Brand intake' });
+  expect(menu.parentElement).toBe(document.body);
+  expect(menu.closest('.wf-library-content-scroll')).toBeNull();
+  expect(menu).toHaveStyle({ position: 'fixed', boxSizing: 'border-box' });
+  fireEvent.pointerDown(screen.getByRole('menuitem', { name: 'New Folder' }));
+  expect(screen.getByRole('menu')).toBeInTheDocument();
+  fireEvent.scroll(menu);
+  expect(screen.getByRole('menu')).toBeInTheDocument();
+  fireEvent.scroll(document.querySelector('.wf-library-content-scroll'));
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  fireEvent.click(trigger);
+  menu = screen.getByRole('menu');
+  fireEvent.keyDown(menu, { key: 'Escape' });
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  fireEvent.click(trigger);
+  fireEvent.resize(window);
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
+
 test('Generic forms can be filed into a manually created folder', async () => {
   installFetchMock();
   const baseFetch = fetchApiMock.getMockImplementation();

@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import WebFormLeadsModal from "../components/WebFormLeadsModal";
 import LeadFieldCreateModal from "../components/LeadFieldCreateModal";
 import { createPortal } from "react-dom";
+import { anchoredMenuPosition } from "../utils/anchoredMenuPosition";
 
 
 
@@ -7384,7 +7385,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
   const [deletingFolder, setDeletingFolder] = useState(false);
   const [movingFormId, setMovingFormId] = useState(null);
   const [openFormMenuId, setOpenFormMenuId] = useState(null);
-  const [formMenuPlacement, setFormMenuPlacement] = useState("down");
+  const [formMenuPosition, setFormMenuPosition] = useState({});
   const [creatingFolderForFormId, setCreatingFolderForFormId] = useState(null);
   const [newFolderName, setNewFolderName] = useState("");
   const [savingFolderForFormId, setSavingFolderForFormId] = useState(null);
@@ -7489,14 +7490,29 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
   useEffect(() => {
     if (openFormMenuId == null) return undefined;
     const closeOnOutsideClick = (event) => {
-      if (!(event.target instanceof Element) || !event.target.closest(".wf-form-menu")) {
+      if (!(event.target instanceof Element) || !event.target.closest(".wf-form-menu, .wf-form-menu-panel")) {
         setOpenFormMenuId(null);
         setCreatingFolderForFormId(null);
         setNewFolderName("");
       }
     };
+    const closeOnViewportChange = (event) => {
+      // Scrolling the menu itself must not dismiss it. A moved anchor or a
+      // resized viewport does, so fixed coordinates can never become stale.
+      if (event.type === "scroll" && event.target instanceof Element
+        && event.target.closest(".wf-form-menu-panel")) return;
+      setOpenFormMenuId(null);
+      setCreatingFolderForFormId(null);
+      setNewFolderName("");
+    };
     document.addEventListener("pointerdown", closeOnOutsideClick);
-    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    window.addEventListener("resize", closeOnViewportChange);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+      window.removeEventListener("resize", closeOnViewportChange);
+    };
   }, [openFormMenuId]);
 
 
@@ -20486,9 +20502,9 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                       <span className={form.isActive ? "wf-status-pill active" : "wf-status-pill"}>{form.isActive ? "Active" : "Paused"}</span>
                       {canViewFormLeads && (
                         <div className="wf-form-menu" onKeyDown={(event) => { if (event.key === "Escape") { setOpenFormMenuId(null); setCreatingFolderForFormId(null); setNewFolderName(""); } }}>
-                          <button type="button" className="wf-form-menu-trigger" aria-label={`Move ${form.name} to folder`} aria-haspopup="menu" aria-expanded={openFormMenuId === form.id} onClick={(event) => { const nextOpen = openFormMenuId !== form.id; setOpenFormMenuId(nextOpen ? form.id : null); if (nextOpen) setFormMenuPlacement(window.innerHeight - event.currentTarget.getBoundingClientRect().bottom < 360 ? "up" : "down"); setCreatingFolderForFormId(null); setNewFolderName(""); }}><FolderPlus size={17} aria-hidden="true" /></button>
-                          {openFormMenuId === form.id && (
-                            <div className={`wf-form-menu-panel${formMenuPlacement === "up" ? " wf-form-menu-open-up" : ""}`} role="menu" aria-label={`Folders for ${form.name}`}>
+                          <button type="button" className="wf-form-menu-trigger" aria-label={`Move ${form.name} to folder`} aria-haspopup="menu" aria-expanded={openFormMenuId === form.id} onClick={(event) => { const nextOpen = openFormMenuId !== form.id; setOpenFormMenuId(nextOpen ? form.id : null); if (nextOpen) setFormMenuPosition(anchoredMenuPosition(event.currentTarget.getBoundingClientRect(), window.innerWidth, window.innerHeight)); setCreatingFolderForFormId(null); setNewFolderName(""); }}><FolderPlus size={17} aria-hidden="true" /></button>
+                          {openFormMenuId === form.id && createPortal(
+                            <div className="wf-form-menu-panel" style={formMenuPosition} role="menu" aria-label={`Folders for ${form.name}`}>
                               <button type="button" role="menuitem" onClick={() => setCreatingFolderForFormId(form.id)}><FolderPlus size={16} aria-hidden="true" />New Folder</button>
                               {creatingFolderForFormId === form.id && (
                                 <form className="wf-form-menu-create" onSubmit={(event) => createFolderForForm(event, form)}>
@@ -20501,7 +20517,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                               <span className="wf-form-menu-heading">MOVE TO FOLDER</span>
                               {folders.length === 0 && <p>No folders yet</p>}
                               {folders.map((folder) => <button key={folder.id} type="button" role="menuitem" aria-current={form.folderId === folder.id ? "true" : undefined} className={form.folderId === folder.id ? "wf-form-menu-current" : ""} disabled={movingFormId === form.id} onClick={() => { moveForm(form, String(folder.id)); setOpenFormMenuId(null); }}><Folder size={16} aria-hidden="true" />{folder.name}{form.folderId === folder.id && <Check className="wf-form-menu-check" size={16} aria-hidden="true" />}</button>)}
-                            </div>
+                            </div>, document.body
                           )}
                         </div>
                       )}

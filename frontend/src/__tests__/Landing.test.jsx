@@ -99,7 +99,7 @@ describe('Landing (public marketing page)', () => {
       'Dashboard', 'Pipeline (Kanban)', 'Contacts 360', 'Leads', 'Clients',
       'Agent Reports', 'BI Analytics', 'Auto Email Reports', 'AI Lead Scoring',
       'Sequences', 'Workflows', 'Inbox', 'Marketing', 'Invoices', 'Estimates',
-      'Expenses', 'Contracts', 'CPQ Builder', 'Projects', 'Task Queue',
+      'Expenses', 'Contracts', 'Quotes', 'Projects', 'Task Queue',
       'Tickets', 'Support', 'App Builder', 'Developer Portal', 'Staff / RBAC',
       'Notifications', 'Audit Log', 'CSV Import', 'Softphone', 'Command Palette',
     ];

@@ -65,7 +65,9 @@ describe('<TransportPersons />', () => {
 
     expect(screen.getByTestId('transport-directory-page')).toHaveStyle({ overflow: 'hidden', minHeight: '0' });
     expect(screen.getByTestId('transport-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
-    expect(screen.getByTestId('transport-directory-table-scroll')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
+    expect(screen.getByTestId('transport-directory-table-scroll')).toHaveStyle({
+      flex: '0 0 auto', maxHeight: 'calc(100vh - 260px)', overflowY: 'auto', minHeight: '0',
+    });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
       position: 'sticky', top: '0px', color: 'var(--text-primary)',
       background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
@@ -517,7 +519,9 @@ describe('<PlotBrokers />', () => {
 
     expect(screen.getByTestId('broker-directory-page')).toHaveStyle({ overflow: 'hidden', minHeight: '0' });
     expect(screen.getByTestId('broker-directory-table-scroll')).toHaveClass('pickup-plot-table-scroll', 'pickup-plot-table-body-scroll');
-    expect(screen.getByTestId('broker-directory-table-scroll')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
+    expect(screen.getByTestId('broker-directory-table-scroll')).toHaveStyle({
+      flex: '0 0 auto', maxHeight: 'calc(100vh - 260px)', overflowY: 'auto', minHeight: '0',
+    });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
       position: 'sticky', top: '0px', color: 'var(--text-primary)',
       background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',

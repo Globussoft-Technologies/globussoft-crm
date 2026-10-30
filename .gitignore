@@ -238,3 +238,14 @@ agentic-orchcrm/brochure-run_*.pdf
 
 # PEM Keys
 *.pem
+
+# Local agent workspace notes and wellness staging artifacts
+.vibe-wise/profile.md
+.vibe-wise/progress.md
+.vibe-wise/project-map.md
+scripts/staging/apply-wellness-client-1-catalog.js
+scripts/staging/apply-wellness-client-1-complete.js
+scripts/staging/export-wellness-client-1-complete.js
+scripts/staging/export-wellness-client-1.js
+staging/wellness-client-1-catalog.json
+staging/wellness-client-1-complete.json

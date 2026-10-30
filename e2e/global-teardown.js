@@ -154,8 +154,8 @@ module.exports = async function globalTeardown() {
     );
     results.locations = l.affectedRows || 0;
 
-    // G-8: low-stock-api.spec.js (and cpq-api.spec.js) create Product rows
-    // tagged with their RUN_TAG prefix. routes/cpq.js exposes no DELETE
+    // G-8: low-stock-api.spec.js creates Product rows tagged with its RUN_TAG
+    // prefix. The wellness inventory route exposes no DELETE
     // endpoint, so the in-spec afterAll cannot clean them. Bulk-delete by
     // name regex here. Product has FK from QuoteLineItem.productId
     // (onDelete: SetNull per schema), so removing test products doesn't

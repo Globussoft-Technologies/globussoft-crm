@@ -32,7 +32,8 @@
  *     - 200 with admin/manager — returns { products, notifications, emails }.
  *
  * Cleanup notes (drift hazard):
- *   routes/cpq.js exposes POST/GET /api/cpq/products but NO DELETE / PUT.
+ *   The wellness inventory route exposes POST/GET /api/wellness/products but
+ *   no delete/update fixture endpoint is needed here.
  *   So our test-created Product rows cannot be cleaned via API. We
  *   add `Product` to e2e/global-teardown.js (see same-PR change), and
  *   every Product name carries the `E2E_FLOW_LOWSTOCK_<ts>` prefix so the
@@ -113,7 +114,7 @@ async function authPost(request, path, body, who = 'admin') {
 
 // ── factories ──────────────────────────────────────────────────────────
 
-// Product is created via /api/cpq/products. Engine reads `threshold` and
+// Product is created via /api/wellness/products. Engine reads `threshold` and
 // `currentStock`; both pass through stripDangerous (only id/createdAt/
 // updatedAt/tenantId/userId are stripped). Must include `price` (Float,
 // required by Prisma schema). `sku` is unique, so we prefix with RUN_TAG
@@ -128,7 +129,7 @@ async function createProduct(request, overrides = {}, who = 'admin') {
     currentStock: overrides.currentStock != null ? overrides.currentStock : 0,
     description: overrides.description || `${RUN_TAG} test product`,
   };
-  const res = await authPost(request, '/api/cpq/products', payload, who);
+  const res = await authPost(request, '/api/wellness/products', payload, who);
   expect(res.status(), `product create: ${await res.text()}`).toBe(201);
   return res.json();
 }

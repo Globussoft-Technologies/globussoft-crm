@@ -98,8 +98,8 @@ describe('filterSidebarPages', () => {
     expect(manager.some((page) => page.path === '/settings')).toBe(true);
   });
 
-  it('lets an explicit permission grant override a legacy manager tier', () => {
-    const page = getGenericAccessByPath('/cpq');
+  it('uses quote permissions for the canonical quote workspace', () => {
+    const page = getGenericAccessByPath('/quotes');
     expect(canUseGenericSidebarPage(page, {
       isManager: false,
       permissionsReady: true,
@@ -108,7 +108,7 @@ describe('filterSidebarPages', () => {
     expect(canUseGenericSidebarPage(page, {
       isManager: false,
       permissionsReady: true,
-      hasPermission: (module, action) => module === 'cpq' && action === 'read',
+      hasPermission: (module, action) => module === 'quotes' && action === 'read',
     })).toBe(true);
   });
 

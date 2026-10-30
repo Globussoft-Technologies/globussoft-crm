@@ -5,7 +5,6 @@ const { requirePermission } = require('./requirePermission');
 // mounted after authentication at /api and deliberately bypasses non-generic
 // tenants, preserving wellness and travel behavior.
 const GENERIC_API_MODULES = new Map([
-  ['/cpq', 'cpq'],
   ['/playbooks', 'playbooks'],
   ['/territories', 'territories'],
   ['/live-chat', 'live_chat'],

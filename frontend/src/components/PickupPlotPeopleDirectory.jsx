@@ -4,6 +4,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import CompactPickupLocationCell from './CompactPickupLocationCell';
+import PickupPlotEmptyState from './PickupPlotEmptyState';
 import ResizableTableHeader from './ResizableTableHeader';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { serviceAreasForPlots } from '../utils/plotServiceAreas';
@@ -543,6 +544,12 @@ export default function PickupPlotPeopleDirectory({ type }) {
     });
   }, [assignmentFilter, rows, searchQuery, statusFilter, type]);
 
+  const clearFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setAssignmentFilter('all');
+  };
+
   const selectedCustomers = useMemo(() => {
     const selectedIds = new Set((form.customerIds || []).map(Number));
     const completedIds = new Set((form.assignments || [])
@@ -622,7 +629,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
           className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid={`${type}-directory-table-scroll`}
           style={{
-            flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
+            flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
             overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
@@ -655,8 +662,21 @@ export default function PickupPlotPeopleDirectory({ type }) {
                 </tr>
               ))}
               {loading && !loadedRef.current && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading {config.title.toLowerCase()}…</td></tr>}
-              {!loading && rows.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No {config.title.toLowerCase()} yet.</td></tr>}
-              {!loading && rows.length > 0 && filteredRows.length === 0 && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No {config.title.toLowerCase()} match the selected filters.</td></tr>}
+              {!loading && filteredRows.length === 0 && <tr>
+                <td colSpan="9" className="pickup-plot-empty-cell">
+                  <PickupPlotEmptyState
+                    icon={Icon}
+                    testId={`${type}-directory-empty-state`}
+                    title={rows.length === 0 ? `No ${config.title.toLowerCase()} yet.` : `No ${config.title.toLowerCase()} match the selected filters.`}
+                    description={rows.length === 0
+                      ? `Add your first ${config.singular} to start managing assignments and workflow ownership.`
+                      : 'Try another search or reset the filters to see more records.'}
+                    actionLabel={rows.length === 0 ? `Add first ${config.singular}` : 'Clear filters'}
+                    actionVariant={rows.length === 0 ? 'primary' : 'secondary'}
+                    onAction={rows.length === 0 ? () => open() : clearFilters}
+                  />
+                </td>
+              </tr>}
             </tbody>
           </table>
           </div>

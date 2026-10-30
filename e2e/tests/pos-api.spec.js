@@ -176,7 +176,7 @@ test.afterAll(async ({ request }) => {
   for (const id of createdWorkflowIds) {
     await authDelete(request, `/api/workflows/${id}`).catch(() => {});
   }
-  // Products: no DELETE endpoint exposed for cpq/products today; the rows
+  // Products: the inventory route has no DELETE endpoint needed by this flow;
   // ride the broader teardown sweep via the RUN_TAG-prefixed name.
 });
 
@@ -530,10 +530,10 @@ test.describe('POS — Sale completion hooks (inventory + loyalty)', () => {
   let initialStock = 50;
 
   test.beforeAll(async ({ request }) => {
-    // Create a Product via /api/cpq/products with a known starting stock so
+    // Create a Product via /api/wellness/products with a known starting stock so
     // the assertion can be exact (avoids race with concurrent test runs that
     // might mutate a seed product's stock between read and re-read).
-    const created = await authPost(request, '/api/cpq/products', {
+    const created = await authPost(request, '/api/wellness/products', {
       name: `${RUN_TAG} Stock Test Product`,
       sku: `${RUN_TAG}-SKU`,
       price: 250,
@@ -553,11 +553,11 @@ test.describe('POS — Sale completion hooks (inventory + loyalty)', () => {
 
   test('PRODUCT line decrements Product.currentStock by quantity', async ({ request }) => {
     test.skip(!seededProductId, 'Product seed unavailable; cannot exercise stock decrement.');
-    const beforeRes = await authGet(request, '/api/cpq/products');
+    const beforeRes = await authGet(request, '/api/wellness/products');
     expect(beforeRes.status()).toBe(200);
     const beforeList = await beforeRes.json();
     const before = beforeList.find((p) => p.id === seededProductId);
-    expect(before, `seeded product ${seededProductId} should be present in /api/cpq/products`).toBeTruthy();
+    expect(before, `seeded product ${seededProductId} should be present in /api/wellness/products`).toBeTruthy();
     const beforeStock = before.currentStock;
 
     // Ring up a sale with a PRODUCT line for quantity=3 against this product.
@@ -570,7 +570,7 @@ test.describe('POS — Sale completion hooks (inventory + loyalty)', () => {
     }));
     expect(res.status(), `create PRODUCT sale: ${await res.text()}`).toBe(201);
 
-    const afterRes = await authGet(request, '/api/cpq/products');
+    const afterRes = await authGet(request, '/api/wellness/products');
     const afterList = await afterRes.json();
     const after = afterList.find((p) => p.id === seededProductId);
     expect(after, `seeded product ${seededProductId} should still exist after sale`).toBeTruthy();
@@ -579,7 +579,7 @@ test.describe('POS — Sale completion hooks (inventory + loyalty)', () => {
 
   test('SERVICE-only line does NOT touch Product.currentStock', async ({ request }) => {
     test.skip(!seededProductId, 'Product seed unavailable.');
-    const beforeRes = await authGet(request, '/api/cpq/products');
+    const beforeRes = await authGet(request, '/api/wellness/products');
     const before = (await beforeRes.json()).find((p) => p.id === seededProductId);
     const beforeStock = before.currentStock;
 
@@ -591,7 +591,7 @@ test.describe('POS — Sale completion hooks (inventory + loyalty)', () => {
     }));
     expect(res.status()).toBe(201);
 
-    const afterRes = await authGet(request, '/api/cpq/products');
+    const afterRes = await authGet(request, '/api/wellness/products');
     const after = (await afterRes.json()).find((p) => p.id === seededProductId);
     // SERVICE line is not a Product line — stock is untouched.
     expect(after.currentStock).toBe(beforeStock);

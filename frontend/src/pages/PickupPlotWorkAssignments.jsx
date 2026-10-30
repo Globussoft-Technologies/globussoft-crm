@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BriefcaseBusiness, Check, Receipt, Search, Truck, UsersRound } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import PickupPlotEmptyState from '../components/PickupPlotEmptyState';
 
 const WORK_TYPES = [
   { key: 'transport', label: 'Transport', description: 'Pickup and drop-off trips', icon: Truck, color: '#2563eb' },
@@ -106,6 +107,8 @@ export default function PickupPlotWorkAssignments() {
       .some((value) => String(value || '').toLowerCase().includes(needle)));
   }, [search, staff]);
 
+  const clearSearch = () => setSearch('');
+
   const assignedCount = staff.filter((person) => (person.workTypes || []).length > 0).length;
   const headerCellStyle = {
     position: 'sticky', top: 0, zIndex: 2, padding: '13px 14px',
@@ -115,7 +118,7 @@ export default function PickupPlotWorkAssignments() {
   };
 
   return (
-    <main data-testid="staff-work-assignment-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', padding: '2rem', boxSizing: 'border-box' }}>
+    <main className="staff-work-assignment-page" data-testid="staff-work-assignment-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', padding: '2rem', boxSizing: 'border-box' }}>
       <header style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 18, marginBottom: 24 }}>
         <div style={{ minWidth: 0 }}>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -159,7 +162,7 @@ export default function PickupPlotWorkAssignments() {
       <div
           className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="staff-work-assignment-table-scroll"
-          style={{ flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
+          style={{ flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
@@ -216,15 +219,21 @@ export default function PickupPlotWorkAssignments() {
               )}
               {!loading && visibleStaff.length === 0 && (
                 <tr>
-                  <td colSpan="5" style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>
-                    {loadError ? (
-                      <>
-                        <div>{loadError}</div>
-                        <button type="button" className="btn-secondary" onClick={load} style={{ marginTop: 12 }}>Retry</button>
-                      </>
-                    ) : search.trim()
-                      ? 'No staff members match your search.'
-                      : 'No active staff accounts are available.'}
+                  <td colSpan="5" className="pickup-plot-empty-cell">
+                    <PickupPlotEmptyState
+                      icon={UsersRound}
+                      compact
+                      testId="staff-work-assignment-empty-state"
+                      title={loadError ? 'Staff assignments unavailable' : search.trim() ? 'No staff members match your search.' : 'No active staff accounts are available.'}
+                      description={loadError
+                        ? loadError
+                        : search.trim()
+                          ? 'Try another search term to find an active staff member.'
+                          : 'Active staff accounts will appear here when they are ready to receive work assignments.'}
+                      actionLabel={loadError ? 'Retry' : search.trim() ? 'Clear search' : 'Refresh staff'}
+                      actionVariant="secondary"
+                      onAction={loadError ? load : search.trim() ? clearSearch : load}
+                    />
                   </td>
                 </tr>
               )}

@@ -10,6 +10,7 @@
 .pickup-refresh { min-height:clamp(34px, 3.4vw, 42px); display:inline-flex; align-items:center; gap:5px; padding:clamp(.4rem, .65vw, .6rem) clamp(.7rem, 1vw, 1.25rem); font-size:clamp(.7rem, .62rem + .18vw, .82rem); }
 .pickup-master-detail { display:grid; grid-template-columns:minmax(300px, 37%) minmax(0, 1fr); gap:clamp(8px, 1.25vw, 16px); flex:1 1 0; min-width:0; min-height:0; }
 .pickup-customer-directory,.pickup-detail-pane { min-width:0; min-height:0; overflow:hidden; padding:0; }
+.pickup-customer-directory { align-self:start; max-height:calc(100vh - 260px); }
 .pickup-detail-pane { container-type:inline-size; }
 .pickup-customer-directory { display:flex; flex-direction:column; container-type:inline-size; }
 .pickup-directory-toolbar { display:grid; grid-template-columns:minmax(0, 1fr) clamp(112px, 12vw, 150px); gap:clamp(5px, .65vw, 8px); padding:clamp(8px, 1vw, 14px); border-bottom:1px solid var(--border-color); }
@@ -42,7 +43,8 @@
   background: transparent !important;
   box-shadow: none !important;
 }
-.pickup-directory-scroll,.pickup-detail-pane { overflow:auto; scrollbar-gutter:stable; }
+.pickup-directory-scroll { flex:1 1 auto; min-height:0; overflow:auto; scrollbar-gutter:stable; }
+.pickup-detail-pane { overflow:auto; scrollbar-gutter:stable; }
 .pickup-refresh-status { display:block; position:sticky; top:8px; z-index:3; width:max-content; max-width:100%; margin:8px 8px 0 auto; padding:.25rem .55rem; border:1px solid var(--border-color); border-radius:999px; background:var(--surface-color); color:var(--text-secondary); font-size:.7rem; pointer-events:none; }
 
 @media (min-width: 641px) and (max-width: 1199px) {
@@ -129,7 +131,10 @@
 .pickup-payment-empty span,.pickup-muted { color:var(--text-secondary); font-size:.76rem; }
 .pickup-location-link { display:inline-flex; align-items:flex-start; gap:6px; color:inherit; text-decoration:none; }
 .pickup-location-link svg { flex:0 0 auto; margin-top:1px; color:var(--primary-color, var(--accent-color)); }
-.pickup-detail-placeholder { display:grid; place-items:center; align-content:center; gap:8px; min-height:300px; color:var(--text-secondary); }
+.pickup-detail-placeholder { display:grid; place-items:center; align-content:center; gap:8px; min-height:300px; padding:2.5rem; box-sizing:border-box; color:var(--text-secondary); text-align:center; background:linear-gradient(145deg, color-mix(in srgb, var(--primary-color, var(--accent-color)) 4%, var(--surface-color)), var(--surface-color)); }
+.pickup-detail-placeholder>svg { width:48px; height:48px; padding:12px; box-sizing:border-box; color:var(--primary-color, var(--accent-color)); border:1px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 24%, var(--border-color)); border-radius:15px; background:color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent); }
+.pickup-detail-placeholder strong { color:var(--text-primary); font-size:.98rem; }
+.pickup-detail-placeholder span { font-size:.8rem; }
 .pickup-modal-backdrop { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:16px; background:rgba(15,23,42,.48); }
 .pickup-edit-dialog { width:min(520px, 100%); padding:1.25rem; opacity:1; background:var(--popover-bg, #fff); backdrop-filter:none; }
 .pickup-history-dialog { width:min(920px, 100%); max-height:calc(100vh - 32px); overflow-x:hidden; overflow-y:auto; }

@@ -122,7 +122,6 @@ const MANAGER_PERMISSIONS = [
 // filter alone is insufficient because names such as `calendar` also exist on
 // wellness; explicit vertical selection keeps those role matrices unchanged.
 const GENERIC_MANAGER_PERMISSIONS = [
-  'cpq.read', 'cpq.write', 'cpq.update',
   'playbooks.read', 'playbooks.write', 'playbooks.update',
   'territories.read', 'territories.write', 'territories.update',
   'live_chat.read', 'live_chat.write', 'live_chat.update',

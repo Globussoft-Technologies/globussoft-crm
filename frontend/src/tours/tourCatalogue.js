@@ -10,7 +10,7 @@ export const TOUR_CATEGORIES = [
 const CATEGORY_TERMS = {
   Sales: ["contact", "lead", "deal", "pipeline", "estimate", "quote", "sequence", "callified", "marketplace", "task", "calendar", "gmail", "inbox"],
   Marketing: ["marketing", "campaign", "landing", "web-form", "survey", "social", "email-template", "whatsapp"],
-  Finance: ["invoice", "payment", "expense", "contract", "subscription", "product", "price", "cpq", "tax"],
+  Finance: ["invoice", "quote", "payment", "expense", "contract", "subscription", "product", "price", "tax"],
   Support: ["support", "ticket", "knowledge", "sla", "customer-success"],
   Analytics: ["dashboard", "report", "analytics", "forecast", "insight", "attribution", "goal", "kpi"],
 };

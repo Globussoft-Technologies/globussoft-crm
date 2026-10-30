@@ -88,10 +88,26 @@ describe('tenant page visibility normalization', () => {
       label: 'Deals and Pipeline',
       category: 'Sales',
     });
-    expect(catalog.find((page) => page.path === '/cpq')).toMatchObject({
-      label: 'CPQ',
+    expect(catalog.find((page) => page.path === '/quotes')).toMatchObject({
+      label: 'Quotes',
       category: 'Finance',
     });
+  });
+
+  it('includes the Generic CRM Quotes page in the Finance visibility catalog', () => {
+    const genericPage = visibility.getTenantPageVisibilityCatalog('generic')
+      .find((page) => page.path === '/quotes');
+    expect(genericPage).toMatchObject({
+      path: '/quotes',
+      label: 'Quotes',
+      category: 'Finance',
+      vertical: 'generic',
+      requiredPermissions: [{ module: 'quotes', action: 'read' }],
+    });
+    expect(visibility.getTenantPageVisibilityCatalog('wellness')
+      .some((page) => page.path === '/quotes')).toBe(false);
+    expect(visibility.getTenantPageVisibilityCatalog('travel')
+      .some((page) => page.path === '/quotes')).toBe(false);
   });
 });
 

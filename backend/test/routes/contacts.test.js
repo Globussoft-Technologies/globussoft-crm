@@ -1612,8 +1612,16 @@ describe('DELETE /api/contacts/:id — hard-delete (ADMIN-gated)', () => {
       SAMPLE_CONTACT.id,
       USER_ID,
       TENANT_ID,
-      { contactId: SAMPLE_CONTACT.id },
+      expect.objectContaining({
+        contactId: SAMPLE_CONTACT.id,
+        name: SAMPLE_CONTACT.name,
+        email: SAMPLE_CONTACT.email,
+        status: SAMPLE_CONTACT.status,
+        assignedToId: SAMPLE_CONTACT.assignedToId,
+      }),
     );
+    expect(writeAuditMock.mock.invocationCallOrder[0])
+      .toBeLessThan(hardDeleteContactMock.mock.invocationCallOrder[0]);
 
     // A legacy soft-deleted row is also permanently removed rather than
     // returning the old idempotent soft-delete envelope.
@@ -1872,9 +1880,37 @@ describe('DELETE /api/contacts/bulk-delete', () => {
     expect(res.body).toEqual({ deleted: 2 });
     expect(prisma.contact.findMany).toHaveBeenCalledWith({
       where: { id: { in: [9001, 9002] }, tenantId: TENANT_ID },
-      select: { id: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        company: true,
+        status: true,
+        assignedToId: true,
+      },
     });
     expect(hardDeleteContactsMock).toHaveBeenCalledWith(expect.anything(), [9001, 9002]);
+    expect(writeAuditMock).toHaveBeenCalledTimes(2);
+    expect(writeAuditMock).toHaveBeenNthCalledWith(
+      1,
+      'Contact',
+      'HARD_DELETE',
+      9001,
+      USER_ID,
+      TENANT_ID,
+      expect.objectContaining({ contactId: 9001, bulk: true }),
+    );
+    expect(writeAuditMock).toHaveBeenNthCalledWith(
+      2,
+      'Contact',
+      'HARD_DELETE',
+      9002,
+      USER_ID,
+      TENANT_ID,
+      expect.objectContaining({ contactId: 9002, bulk: true }),
+    );
+    expect(writeAuditMock.mock.invocationCallOrder[0])
+      .toBeLessThan(hardDeleteContactsMock.mock.invocationCallOrder[0]);
   });
 });
 

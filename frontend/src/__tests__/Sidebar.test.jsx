@@ -137,7 +137,7 @@ const GENERIC_BASE_PERMS = [
   'invoices.read', 'estimates.read', 'expenses.read', 'contracts.read',
   'forecasting.read', 'quotas.read', 'dashboards.read', 'analytics.read',
   'sequences.read', 'surveys.read', 'social.read', 'sla.read',
-  'payments.read', 'lead_scoring.read', 'cpq.read', 'territories.read',
+  'payments.read', 'lead_scoring.read', 'quotes.read', 'territories.read',
   'calendar.read',
 ];
 const GENERIC_ADMIN_WORKSPACE_PERMS = [

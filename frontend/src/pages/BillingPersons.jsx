@@ -3,6 +3,7 @@ import { Edit2, MapPin, Phone, Plus, Power, Receipt, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import MultiSelectDropdown from '../components/MultiSelectDropdown';
+import PickupPlotEmptyState from '../components/PickupPlotEmptyState';
 import ResizableTableHeader from '../components/ResizableTableHeader';
 import useResizableColumnWidths from '../utils/useResizableColumnWidths';
 import { validatePersonName, validatePhoneNumber } from '../utils/pickupPlotValidation';
@@ -184,6 +185,11 @@ export default function BillingPersons() {
       .some((value) => String(value || '').toLowerCase().includes(needle));
   }), [rows, search, status]);
 
+  const clearFilters = () => {
+    setSearch('');
+    setStatus('all');
+  };
+
   return (
     <div className="billing-directory-page" data-testid="billing-directory-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '2rem' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16, marginBottom: '1.5rem' }}>
@@ -205,7 +211,7 @@ export default function BillingPersons() {
           className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="billing-directory-table-scroll"
           style={{
-            flex: '1 1 0', minHeight: 0, width: '100%', maxWidth: '100%',
+            flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
             overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
@@ -226,7 +232,21 @@ export default function BillingPersons() {
                 <td style={{ padding: '.55rem .65rem' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button type="button" className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button type="button" className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggle(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
               </tr>)}
               {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading billing persons…</td></tr>}
-              {!loading && visibleRows.length === 0 && <tr><td colSpan="8" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No billing persons found.</td></tr>}
+              {!loading && visibleRows.length === 0 && <tr>
+                <td colSpan="8" className="pickup-plot-empty-cell">
+                  <PickupPlotEmptyState
+                    icon={Receipt}
+                    testId="billing-directory-empty-state"
+                    title={rows.length === 0 ? 'No billing persons found.' : 'No billing persons match the selected filters.'}
+                    description={rows.length === 0
+                      ? 'Add a billing person to manage invoice access, payment follow-up, and booking completion.'
+                      : 'Try another search or reset the status filter to see more billing persons.'}
+                    actionLabel={rows.length === 0 ? 'Add first billing person' : 'Clear filters'}
+                    actionVariant={rows.length === 0 ? 'primary' : 'secondary'}
+                    onAction={rows.length === 0 ? () => open() : clearFilters}
+                  />
+                </td>
+              </tr>}
             </tbody>
           </table>
           </div>

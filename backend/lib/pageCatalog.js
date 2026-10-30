@@ -428,6 +428,16 @@ const PAGE_CATALOG = [
 
   //  Finance 
   {
+    // Generic CRM quote builder. Keep this in the tenant page catalog so
+    // Super Admin can enable or hide Quotes independently per organization.
+    path: '/quotes',
+    label: 'Quotes',
+    description: 'Build, send, and track customer quotes with GST line items',
+    category: 'Finance',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'quotes', action: 'read' }],
+  },
+  {
     path: '/wellness/pos',
     label: 'Point of Sale',
     description: 'Cash-and-carry sales + shifts',
@@ -1103,13 +1113,6 @@ const PAGE_CATALOG = [
 
   //  Sales & Pipeline (missing generic CRM routes) 
   {
-    path: '/cpq',
-    label: 'Configure Price Quote',
-    description: 'Product configuration + quote engine',
-    category: 'Sales',
-    requiredPermissions: [{ module: 'cpq', action: 'read' }],
-  },
-  {
     path: '/clients',
     label: 'Clients',
     description: 'Company/organization directory',
@@ -1309,14 +1312,6 @@ const PAGE_CATALOG = [
     description: 'Email, SMS, document templates',
     category: 'Admin',
     requiredPermissions: [{ module: 'document_templates', action: 'read' }],
-  },
-  {
-    path: '/document-tracking',
-    label: 'Document Tracking',
-    description: 'Track + sign documents',
-    category: 'Finance',
-    vertical: 'generic',
-    requiredPermissions: [{ module: 'documents', action: 'read' }],
   },
   {
     path: '/objects',

@@ -171,9 +171,9 @@ jobs:
             tests/ai-scoring-api.spec.js \
             tests/contracts-api.spec.js \
             tests/custom-objects-api.spec.js \
-            tests/cpq-api.spec.js \
             tests/tasks-api.spec.js \
             tests/estimates-api.spec.js \
+            tests/quotes-api.spec.js \
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \

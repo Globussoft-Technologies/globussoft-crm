@@ -4,6 +4,12 @@ The connector runs on the Windows computer that hosts Tally. It makes an outboun
 
 ## First-time setup (CRM download)
 
+### Temporary unsigned installer scripts
+
+`install-startup.ps1` and `uninstall-startup.ps1` are temporarily distributed **unsigned**, not as signed or signature-verified scripts. Download them only from your trusted CRM and review them before running. No signing certificate is required for this temporary distribution.
+
+Use the process-scoped execution-policy command below only in the PowerShell window where you install or uninstall. Do not change the machine-wide or user-wide execution policy. Organization Group Policy or application-control rules may still prohibit unsigned scripts; if blocked, contact your IT administrator rather than attempting to bypass those controls. Unblocking downloaded files does not sign them or verify their publisher.
+
 1. Extract the entire downloaded `TallyConnector.zip` into a writable folder, such as `C:\TallyConnector`. Keep all files together; the ZIP already contains the CRM-generated `config.json`.
 2. Open the correct company in Tally and enable its HTTP/XML service on port 9000.
 3. In File Explorer, open the extracted folder, click the address bar, type `powershell`, and press **Enter**. In the PowerShell window, run:
@@ -63,6 +69,7 @@ Open the correct company in Tally and enable its HTTP/XML service on port 9000. 
 From PowerShell in the deployment folder, run:
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\install-startup.ps1
 ```
 

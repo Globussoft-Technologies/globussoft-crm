@@ -130,6 +130,8 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
     render(<TallyExportPreviewPage />);
 
     const setup = await screen.findByRole("note", { name: "First-time Tally connector setup" });
+    expect(setup).toHaveTextContent("installer scripts are temporarily unsigned");
+    expect(setup).toHaveTextContent("organization policies may still block unsigned scripts");
     for (const command of [
       "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass",
       "Unblock-File .\\TallyConnector.exe",

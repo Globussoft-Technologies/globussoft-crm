@@ -443,6 +443,7 @@ export default function TallyExportPreviewPage() {
       </div>
       <div role="note" aria-label="First-time Tally connector setup" style={connectorSetup}>
         <strong>First-time setup</strong>
+        <p>The installer scripts are temporarily unsigned. Use only a download from your trusted CRM. The execution-policy change below is process-only; organization policies may still block unsigned scripts. Contact your IT administrator if blocked.</p>
         <ol style={connectorSetupSteps}>
           <li>Click <b>Download Tally Connector</b> and extract the ZIP on the Windows computer that runs Tally.</li>
           <li>Open the company in Tally and enable its HTTP/XML service on localhost port 9000.</li>

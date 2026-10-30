@@ -50,18 +50,22 @@ async function createQuote(request, overrides = {}) {
   const response = await request.post(`${BASE_URL}/api/quotes`, {
     headers: jsonHeaders(await authToken(request)),
     data: {
-      subject: `${RUN_TAG} ${overrides.subject || 'builder'}`,
       quoteOwnerName: 'E2E Admin',
       customerName: 'Quote Test Customer',
       currency: 'USD',
       validUntil: '2030-12-31',
       lineItems: [{ productName: 'Implementation', quantity: 2, cost: 40, unitPrice: 100, discountPercent: 10, gstRate: 18 }],
       ...overrides,
+      // Keep the run tag after applying overrides: search and cleanup both
+      // depend on it, including callers that supply a subject suffix.
+      subject: `${RUN_TAG} ${overrides.subject || 'builder'}`,
     },
     timeout: REQUEST_TIMEOUT,
   });
   expect(response.status(), await response.text()).toBe(201);
-  return response.json();
+  const quote = await response.json();
+  expect(quote.title).toBe(`${RUN_TAG} ${overrides.subject || 'builder'}`);
+  return quote;
 }
 
 test('POST /api/quotes validates required data and computes GST server-side', async ({ request }) => {

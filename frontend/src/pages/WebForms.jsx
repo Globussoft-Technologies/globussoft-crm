@@ -13620,6 +13620,68 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           background: var(--surface-color);
           box-shadow: var(--wf-field-shadow);
         }
+        /* Keep the page utilities and library controls available while the
+           form cards move underneath them. Builder mode keeps the original
+           layout because its header wrapper uses display: contents there. */
+        .wf-page-header {
+          display: contents;
+        }
+        .wf-library-page-header {
+          display: grid;
+          gap: 16px;
+          min-width: 0;
+          position: relative;
+          z-index: 2;
+          background: var(--bg-color);
+        }
+        .wf-library-controls-sticky {
+          display: grid;
+          gap: 16px;
+          min-width: 0;
+          position: relative;
+          z-index: 2;
+          background: var(--surface-color);
+        }
+        .wf-library-content-scroll {
+          min-width: 0;
+          min-height: 0;
+          overflow-x: hidden;
+          overflow-y: auto;
+          scrollbar-width: thin;
+        }
+        /* In library mode, the page frame stays fixed and only the form list
+           gets an overflow area. This prevents cards from painting beneath
+           the title, search, and folder controls. */
+        body[data-vertical="generic"] .app-main > main.generic-page-content:has(> .web-form-builder > .wf-library-page-header) {
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          overflow: hidden !important;
+        }
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder:has(> .wf-library-page-header) {
+          flex: 1 1 auto;
+          grid-template-rows: auto minmax(0, 1fr);
+          align-content: stretch !important;
+          min-height: 0;
+          height: 100%;
+          box-sizing: border-box;
+          overflow: hidden;
+        }
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder:has(> .wf-library-page-header) > .wf-forms-library {
+          min-height: 0;
+          grid-template-rows: auto minmax(0, 1fr);
+          overflow: hidden;
+        }
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder:has(> .wf-library-page-header) > .wf-forms-library > .wf-library-content-scroll {
+          min-height: 0;
+        }
+        /* Only form titles get the readability adjustment. All other library
+           typography, controls, dimensions, and responsive rules stay as-is. */
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-forms-library .wf-library-card h4,
+        .web-form-builder .wf-forms-library .wf-library-card h4 {
+          font-size: clamp(0.95rem, calc(0.9rem + 0.1vw), 1rem) !important;
+          line-height: 1.25;
+        }
         .wf-library-head {
           display: flex;
           align-items: flex-start;
@@ -13668,9 +13730,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         .wf-folder-delete-dialog p { margin: 0 0 20px; color: var(--text-secondary); }
         .wf-folder-delete-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
         .wf-folder-delete-actions .wf-delete-folder-and-forms { background: #e44b45; border-color: #e44b45; color: #fff; }
-        .wf-form-status-actions { display: flex; align-items: flex-start; gap: 6px; }
+        .wf-form-status-actions { display: flex; align-items: center; gap: 8px; }
         .wf-form-menu { position: relative; }
-        .wf-form-menu-trigger { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--surface-color); color: var(--text-primary); cursor: pointer; }
+        .wf-form-menu-trigger { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 9px; background: var(--surface-color); color: var(--text-primary); cursor: pointer; transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease; }
+        .wf-form-menu-trigger:hover { border-color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 6%, var(--surface-color)); }
+        .wf-form-menu-trigger:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
         .wf-form-menu-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; width: 264px; max-height: min(420px, calc(100dvh - 24px)); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--surface-color); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25); }
         .wf-form-menu-panel.wf-form-menu-open-up { top: auto; bottom: calc(100% + 6px); }
         .wf-form-menu-panel button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
@@ -13697,11 +13761,25 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: clamp(8px, 1.1vw, 14px);
         }
-        @container (max-width: 639px) {
+        @container (max-width: 959px) {
           .wf-library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
-        @container (max-width: 359px) {
+        @container (max-width: 559px) {
           .wf-library-grid { grid-template-columns: minmax(0, 1fr); }
+        }
+        @container (max-width: 959px) {
+          /* The shared medium-density rule gives cards a fixed height. Once
+             the library becomes two-up, let each card grow with its action
+             rows so buttons never escape the card surface. */
+          body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-card {
+            height: auto !important;
+            min-height: 260px !important;
+          }
+        }
+        @container (max-width: 559px) {
+          body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-card {
+            min-height: 0 !important;
+          }
         }
         .wf-library-card {
           container-type: inline-size;
@@ -13732,6 +13810,13 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           gap: 12px;
           align-items: flex-start;
         }
+        .wf-library-card-top > :first-child {
+          min-width: 0;
+        }
+        .wf-form-status-actions {
+          min-width: 0;
+          flex-shrink: 0;
+        }
         .wf-library-card h4,
         .wf-library-card p,
         .wf-library-meta span {
@@ -13740,16 +13825,41 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           white-space: nowrap;
         }
         .wf-status-pill {
-          padding: 0.24rem 0.55rem;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 30px;
+          box-sizing: border-box;
+          padding: 0.3rem 0.62rem;
           border-radius: 999px;
           background: rgba(148, 163, 184, 0.14);
           color: var(--text-secondary);
           font-size: 0.72rem;
+          line-height: 1;
           font-weight: 700;
+          white-space: nowrap;
         }
         .wf-status-pill.active {
           background: rgba(16, 185, 129, 0.14);
           color: #10b981;
+        }
+        /* Keep the status and folder controls as a compact, aligned header
+           group even when the generic density layer is active. */
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-card-top .wf-form-status-actions {
+          align-items: center;
+          gap: 8px;
+        }
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-card-top .wf-status-pill {
+          min-height: 30px !important;
+          padding: 0.3rem 0.62rem !important;
+          font-size: 0.72rem !important;
+          line-height: 1 !important;
+        }
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-card-top .wf-form-menu-trigger {
+          flex: 0 0 30px;
+          width: 30px !important;
+          height: 30px !important;
+          border-radius: 9px;
         }
         .wf-library-meta {
           display: grid;
@@ -13812,11 +13922,87 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           font-size: 0.85rem;
           white-space: nowrap;
         }
+        /* The Generic density layer also scales shared controls. Keep the
+           card actions readable without changing their existing dimensions. */
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-actions .wf-library-primary-row > .btn-primary,
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-actions .wf-library-action-buttons > .btn-secondary,
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-actions .wf-library-landing {
+          font-size: clamp(0.8rem, calc(0.76rem + 0.08vw), 0.86rem) !important;
+          line-height: 1.25 !important;
+        }
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-actions .wf-library-landing {
+          color: var(--text-primary) !important;
+          font-weight: 500;
+        }
         .wf-landing-checkbox {
           cursor: pointer;
+          justify-content: center;
+          text-align: center;
+          box-sizing: border-box;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          background: var(--surface-color);
+          padding: 0.5rem 0.7rem;
+          transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        .wf-landing-checkbox:hover {
+          border-color: color-mix(in srgb, var(--accent-color) 58%, var(--border-color));
+          background: color-mix(in srgb, var(--accent-color) 5%, var(--surface-color));
+        }
+        .wf-landing-checkbox:focus-within {
+          border-color: var(--accent-color);
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent);
+        }
+        .wf-landing-checkbox span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .wf-library-landing input {
+          appearance: none;
+          width: 16px;
+          height: 16px;
+          flex: 0 0 16px;
+          display: grid;
+          place-items: center;
+          margin: 0;
+          border: 1px solid var(--border-color);
+          border-radius: 4px;
+          background: var(--surface-color);
           accent-color: var(--accent-color);
+          cursor: pointer;
+        }
+        .wf-library-landing input::after {
+          content: "";
+          width: 7px;
+          height: 4px;
+          border: solid #fff;
+          border-width: 0 0 2px 2px;
+          transform: translateY(-1px) rotate(-45deg) scale(0);
+          transition: transform 0.15s ease;
+        }
+        .wf-library-landing input:checked {
+          border-color: var(--accent-color);
+          background: var(--accent-color);
+        }
+        .wf-library-landing input:checked::after {
+          transform: translateY(-1px) rotate(-45deg) scale(1);
+        }
+        .wf-library-landing input:focus-visible {
+          outline: 2px solid var(--accent-color);
+          outline-offset: 2px;
+        }
+        /* Generic controls receive page-wide padding/min-height rules. Keep
+           this checkbox a compact, vertically centered 16px control so it
+           aligns with the neighbouring action button. */
+        body[data-vertical="generic"] .app-main > main.generic-page-content > .web-form-builder .wf-library-landing input {
+          width: 16px !important;
+          height: 16px !important;
+          min-width: 16px !important;
+          min-height: 16px !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          line-height: 1 !important;
         }
         .wf-library-actions .wf-icon-btn {
           padding: 0.6rem;
@@ -20194,6 +20380,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         }
 
       `}</style>
+    <div className={builderOpen ? "wf-page-header" : "wf-page-header wf-library-page-header"}>
     <header style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
      <div style={{ minWidth: 0 }}>
      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -20226,9 +20413,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           </div>
         ) : null}
       </div>
+    </div>
 
       {!builderOpen ? (
         <section className="wf-forms-library" aria-label="Saved web forms">
+          <div className="wf-library-controls-sticky">
           <div className="wf-library-head">
             <div>
               <h3>All web forms</h3>
@@ -20273,6 +20462,8 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
               )}
             </>
           ) : null}
+          </div>
+          <div className="wf-library-content-scroll">
           {loading ? (
             <div className="wf-library-empty"><span className="wf-muted">Loading forms...</span></div>
           ) : filteredForms.length === 0 ? (
@@ -20348,6 +20539,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
               ))}
             </div>
           )}
+          </div>
         </section>
       ) : null}
 

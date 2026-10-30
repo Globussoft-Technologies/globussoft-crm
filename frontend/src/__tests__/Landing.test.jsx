@@ -127,6 +127,27 @@ describe('Landing (public marketing page)', () => {
     expect(portalLinks.length).toBe(1);
   });
 
+  it('renders the Blog link in both the header and footer', () => {
+    renderLanding();
+    const blogLinks = screen.getAllByRole('link', { name: 'Blog' });
+
+    expect(blogLinks).toHaveLength(2);
+    blogLinks.forEach((link) => {
+      expect(link).toHaveAttribute('href', 'https://globuscrm.com/blog/');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    });
+
+    const headerLinks = screen.getByRole('banner').querySelectorAll('nav .nav-link');
+    expect(Array.from(headerLinks).map((link) => link.textContent)).toEqual([
+      'Features',
+      'Screenshots',
+      'Pricing',
+      'Blog',
+      'Login',
+    ]);
+  });
+
   it('renders the bottom CTA section with /get-started + /pricing links', () => {
     renderLanding();
     expect(

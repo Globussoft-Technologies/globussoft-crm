@@ -240,6 +240,42 @@ describe("<Inbox />", () => {
     });
   });
 
+  it("shows one Generic CRM summary line below each sender and opens the full email from it", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    const subject = await screen.findByText("client itinerary update");
+    const summary = subject.closest(".inbox-email-row__preview");
+    const row = summary.closest(".inbox-email-row");
+
+    expect(row).toBeTruthy();
+    expect(summary).toHaveTextContent(
+      "client itinerary update — Please confirm the revised itinerary.",
+    );
+    expect(row.querySelectorAll(".inbox-email-row__preview")).toHaveLength(1);
+    expect(row.querySelector(".inbox-email-row__subject")).toBeNull();
+
+    await user.click(summary);
+
+    expect(await screen.findByRole("heading", { name: "client itinerary update" })).toBeInTheDocument();
+    expect(screen.getByText("Please confirm the revised itinerary.")).toBeInTheDocument();
+  });
+
+  it("shows a one-line fallback for Generic CRM emails without a subject or body", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if ((!opts || !opts.method || opts.method === "GET") && typeof url === "string" && url.startsWith("/api/communications/inbox")) {
+        return Promise.resolve([{ ...sampleInboxEmail, id: 103, subject: "", body: "" }]);
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderInbox();
+
+    const fallback = await screen.findByText("(No email content)");
+    expect(fallback).toHaveClass("inbox-email-row__preview");
+    expect(fallback).toHaveStyle({ whiteSpace: "nowrap", textOverflow: "ellipsis" });
+  });
+
   it("uses the shared full-width Generic CRM content shell", async () => {
     renderInbox();
 

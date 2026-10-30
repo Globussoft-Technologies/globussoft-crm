@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -448,7 +448,6 @@ export default function Quotes() {
     });
   }, []);
 
-  const visibleTotal = useMemo(() => quotes.reduce((sum, quote) => sum + (Number(quote.totalAmount) || 0), 0), [quotes]);
 
   const openCreate = () => {
     const dealId = typeof window !== 'undefined'
@@ -638,7 +637,7 @@ export default function Quotes() {
         <div className="quotes-stat-card"><span className="quotes-stat-label">Total quotes</span><strong>{stats.total ?? 0}</strong><span className="quotes-stat-foot"><FileText size={13} /> All records</span></div>
         <div className="quotes-stat-card"><span className="quotes-stat-label">Drafts</span><strong>{stats.byStatus?.Draft || 0}</strong><span className="quotes-stat-foot quotes-stat-muted">Work in progress</span></div>
         <div className="quotes-stat-card"><span className="quotes-stat-label">Awaiting response</span><strong>{(stats.byStatus?.Sent || 0) + (stats.byStatus?.Draft || 0)}</strong><span className="quotes-stat-foot quotes-stat-blue">Draft + sent</span></div>
-        <div className="quotes-stat-card quotes-stat-card-accent"><span className="quotes-stat-label">Quote value</span><strong>{formatMoney(stats.totalValue || visibleTotal, { currency: getDefaultCurrency(), minimumFractionDigits: 0, maximumFractionDigits: 0 })}</strong><span className="quotes-stat-foot quotes-stat-purple">Across all quotes</span></div>
+        <div className="quotes-stat-card quotes-stat-card-accent"><span className="quotes-stat-label">Quote value</span><strong>{stats.totalValue == null ? '—' : formatMoney(stats.totalValue, { currency: stats.currency || getDefaultCurrency(), minimumFractionDigits: 0, maximumFractionDigits: 0 })}</strong><span className="quotes-stat-foot quotes-stat-purple">{stats.missingRateCount ? 'Exchange rates unavailable' : 'Across all quotes'}</span></div>
       </section>
 
       <section className="quotes-list-card">

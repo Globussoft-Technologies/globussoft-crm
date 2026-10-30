@@ -25,6 +25,7 @@ const csvColumns = [
   { key: "status", header: "Status" },
   { key: "validUntil", header: "Valid Until" },
   { key: "currency", header: "Currency" },
+  { key: "adjustment", header: "Adjustment" },
   { key: "customerName", header: "Customer Name" },
   { key: "customerEmail", header: "Customer Email" },
   { key: "accountName", header: "Account Name" },
@@ -111,9 +112,11 @@ function addressText(value) {
 function lineTotals(item) {
   const quantity = Math.max(1, Math.min(999999, numberValue(item.quantity, 1)));
   const cost = Math.max(0, numberValue(item.cost, 0));
-  const unitPrice = Math.max(0, numberValue(item.unitPrice, 0));
-  const discountPercent = Math.max(0, Math.min(100, numberValue(item.discountPercent ?? item.discount, 0)));
-  const gstRate = Math.max(0, Math.min(100, numberValue(item.gstRate, 0)));
+  // Calculate from exactly the precision persisted on the line so subsequent
+  // metadata-only edits cannot change its price.
+  const unitPrice = Number(Math.max(0, numberValue(item.unitPrice, 0)).toFixed(2));
+  const discountPercent = Number(Math.max(0, Math.min(100, numberValue(item.discountPercent ?? item.discount, 0))).toFixed(2));
+  const gstRate = Number(Math.max(0, Math.min(100, numberValue(item.gstRate, 0))).toFixed(2));
   const amount = Number((quantity * unitPrice).toFixed(2));
   const discountAmount = Number((amount * discountPercent / 100).toFixed(2));
   const taxableAmount = Number((amount - discountAmount).toFixed(2));
@@ -174,6 +177,12 @@ async function prepareQuotePayload({ body, tenantId, existingQuote = null }) {
   if (!subject) return { error: "subject is required", code: "SUBJECT_REQUIRED" };
 
   const sourceLines = body.lineItems === undefined ? existingQuote?.lineItems : body.lineItems;
+  if (Array.isArray(sourceLines) && sourceLines.some((item) => {
+    const quantity = Number(item?.quantity ?? 1);
+    return !Number.isInteger(quantity) || quantity < 1 || quantity > 999999;
+  })) {
+    return { error: "Line item quantity must be an integer between 1 and 999999", code: "INVALID_QUANTITY" };
+  }
   const lines = normalizeLines(sourceLines);
   if (!lines.length) return { error: "At least one line item is required", code: "LINE_ITEMS_REQUIRED" };
   if (Array.isArray(sourceLines) && sourceLines.length > MAX_LINE_ITEMS) {
@@ -311,6 +320,7 @@ function exportRowsFromQuotes(quotes) {
       status: quote.status,
       validUntil: quote.validUntil ? new Date(quote.validUntil).toISOString().slice(0, 10) : "",
       currency: quote.currency,
+      adjustment: quote.adjustment,
       customerName: quote.customerName,
       customerEmail: quote.customerEmail,
       accountName: quote.accountName,
@@ -355,6 +365,7 @@ function importGroupsFromRows(rows) {
         status: clean(get("Status"), "Draft"),
         validUntil: clean(get("Valid Until")),
         currency: clean(get("Currency"), "USD"),
+        adjustment: get("Adjustment"),
         customerName: clean(get("Customer Name")),
         customerEmail: clean(get("Customer Email")),
         accountName: clean(get("Account Name")),
@@ -453,6 +464,7 @@ router.get("/export.csv", verifyToken, requirePermission("quotes", "export"), as
         status: quote.status,
         validUntil: quote.validUntil ? quote.validUntil.toISOString().slice(0, 10) : "",
         currency: quote.currency,
+        adjustment: quote.adjustment,
         customerName: quote.customerName,
         customerEmail: quote.customerEmail,
         accountName: quote.accountName,
@@ -507,6 +519,7 @@ router.post("/import.csv", verifyToken, requirePermission("quotes", "write"), up
           status: clean(get("Status"), "Draft"),
           validUntil: clean(get("Valid Until")),
           currency: clean(get("Currency"), "USD"),
+          adjustment: get("Adjustment"),
           customerName: clean(get("Customer Name")),
           customerEmail: clean(get("Customer Email")),
           accountName: clean(get("Account Name")),
@@ -563,13 +576,32 @@ router.post("/import.xlsx", verifyToken, requirePermission("quotes", "write"), u
 
 router.get("/stats", verifyToken, requirePermission("quotes", "read"), async (req, res) => {
   try {
-    const rows = await prisma.quote.findMany({
-      where: { tenantId: req.user.tenantId },
-      select: { status: true, totalAmount: true },
-    });
+    const tenantId = req.user.tenantId;
+    const [rows, tenant, currencies] = await Promise.all([
+      prisma.quote.findMany({ where: { tenantId }, select: { status: true, totalAmount: true, currency: true } }),
+      prisma.tenant.findUnique({ where: { id: tenantId }, select: { defaultCurrency: true } }),
+      prisma.currency.findMany({ where: { tenantId }, select: { code: true, exchangeRate: true } }),
+    ]);
+    const currency = String(tenant?.defaultCurrency || "USD").toUpperCase();
+    const rates = new Map(currencies.map((row) => [String(row.code).toUpperCase(), Number(row.exchangeRate)]));
+    let totalValue = 0;
+    let missingRateCount = 0;
+    for (const row of rows) {
+      const source = String(row.currency || currency).toUpperCase();
+      const amount = Number(row.totalAmount) || 0;
+      if (source === currency) {
+        totalValue += amount;
+      } else if (Number.isFinite(rates.get(source)) && rates.get(source) > 0
+        && Number.isFinite(rates.get(currency)) && rates.get(currency) > 0) {
+        totalValue += amount * rates.get(currency) / rates.get(source);
+      } else {
+        missingRateCount += 1;
+      }
+    }
     const byStatus = {};
     for (const row of rows) byStatus[row.status] = (byStatus[row.status] || 0) + 1;
-    res.json({ total: rows.length, byStatus, totalValue: rows.reduce((sum, row) => sum + (Number(row.totalAmount) || 0), 0) });
+    res.json({ total: rows.length, byStatus, currency, missingRateCount,
+      totalValue: missingRateCount ? null : Number(totalValue.toFixed(2)) });
   } catch (error) {
     console.error("[quotes] stats error:", error.message);
     res.status(500).json({ error: "Failed to fetch quote stats", code: "QUOTE_STATS_FAILED" });

@@ -15,10 +15,11 @@ const notify = {
   confirm: vi.fn(() => Promise.resolve(true)),
 };
 vi.mock('../utils/notify', () => ({ useNotify: () => notify }));
-vi.mock('../utils/money', () => ({ formatMoney: (value) => `$${(Number(value) || 0).toFixed(2) }` }));
+vi.mock('../utils/money', () => ({ formatMoney: vi.fn((value) => `$${(Number(value) || 0).toFixed(2) }`) }));
 vi.mock('../utils/date', () => ({ formatDate: (value) => value ? '2026-12-31' : '—' }));
 
 import Quotes from '../pages/Quotes';
+import { formatMoney } from '../utils/money';
 
 const quote = {
   id: 1,
@@ -63,6 +64,7 @@ describe('<Quotes />', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetch);
     Object.values(notify).forEach((fn) => fn.mockClear());
+    formatMoney.mockClear();
   });
 
   it('renders the quote workspace and a quote row', async () => {
@@ -73,6 +75,26 @@ describe('<Quotes />', () => {
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create quote/i })).toBeInTheDocument();
     expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/quotes/catalog')).toBe(false);
+  });
+
+  it.each([null, 0])('does not replace the server total %s with raw visible quote amounts', async (totalValue) => {
+    fetchApiMock.mockImplementation((url, options) => url === '/api/quotes/stats'
+      ? Promise.resolve({ total: 1, byStatus: { Draft: 1 }, totalValue, currency: 'USD', missingRateCount: totalValue === null ? 1 : 0 })
+      : defaultFetch(url, options));
+    render(<Quotes />);
+    await screen.findByText('QUO-001');
+    const summary = screen.getByText('Quote value').closest('.quotes-stat-card');
+    expect(summary.querySelector('strong').textContent).toBe(totalValue === null ? '—' : '$0.00');
+    if (totalValue === null) expect(summary).toHaveTextContent('Exchange rates unavailable');
+  });
+
+  it('formats the converted KPI in the currency returned by the server', async () => {
+    fetchApiMock.mockImplementation((url, options) => url === '/api/quotes/stats'
+      ? Promise.resolve({ total: 1, byStatus: {}, totalValue: 8300, currency: 'INR', missingRateCount: 0 })
+      : defaultFetch(url, options));
+    render(<Quotes />);
+    await screen.findByText('QUO-001');
+    expect(formatMoney).toHaveBeenCalledWith(8300, expect.objectContaining({ currency: 'INR' }));
   });
 
   it('opens the builder and posts quote information plus line items', async () => {

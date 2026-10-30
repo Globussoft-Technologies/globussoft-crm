@@ -248,12 +248,18 @@ describe("<Inbox />", () => {
       padding: "0px",
       maxWidth: "100%",
       margin: "0px",
+      height: "100%",
+      minHeight: "0",
+      overflowY: "hidden",
     });
 
     const listCard = screen.getByTestId("inbox-list-card");
     expect(listCard).toHaveStyle({
       width: "100%",
       flex: "1 1 auto",
+      maxHeight: "none",
+      minHeight: "0",
+      overflowY: "auto",
     });
 
     const messageScroll = listCard.querySelector(".inbox-message-scroll--generic");

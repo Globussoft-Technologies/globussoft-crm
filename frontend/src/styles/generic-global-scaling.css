@@ -324,20 +324,29 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   font-size: var(--generic-ui-small) !important;
 }
 
-/* Generic Inbox uses the page/main scroll container. Do not create a second
-   scrollbar inside the card and again inside the message list. */
+/* Keep Generic Inbox within the page viewport. The list card owns the vertical
+   scrollbar; message rows retain their natural sizing and original layout. */
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(
+    .inbox-page-shell--generic
+  ) {
+  overflow-y: hidden !important;
+}
+
 body[data-vertical="generic"] .app-main > main.generic-page-content
   .inbox-page-shell--generic {
-  height: auto !important;
-  min-height: 100%;
-  overflow: visible !important;
+  height: 100% !important;
+  min-height: 0;
+  overflow: hidden !important;
 }
 
 body[data-vertical="generic"] .app-main > main.generic-page-content
   .inbox-list-card--generic {
+  flex: 1 1 auto !important;
   min-height: 0 !important;
   max-height: none !important;
-  overflow: visible !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
 }
 
 body[data-vertical="generic"] .app-main > main.generic-page-content

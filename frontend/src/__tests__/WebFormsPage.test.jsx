@@ -448,12 +448,80 @@ describe('WebForms builder page', () => {
 
     expect(screen.getByText('Conditional flow')).toBeInTheDocument();
     expect(screen.getByText('Show question')).toBeInTheDocument();
+    expect(screen.getByText('Add a sub question for an answer')).toBeInTheDocument();
+    expect(screen.getByText('Each sub question stays attached to the answer that created it. A sub question can become the next parent.')).toBeInTheDocument();
     const childCard = container.querySelector('.wf-conditional-child-card');
     expect(childCard).toBeInTheDocument();
     expect(childCard).toHaveTextContent('Shopify');
     expect(childCard).toHaveTextContent('Shopify Store URL');
     expect(childCard.querySelector('[data-testid="wf-field-editor-grid"]')).toBeInTheDocument();
     expect(childCard.querySelector('.wf-conditional-config')).toBeNull();
+  });
+
+  test('limits conditional parents to dropdown and radio while children keep all editable field types', async () => {
+    const { container } = renderPage({ ...FORM_FIXTURE, scope: 'generic' });
+    await openBuilder();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add conditional flow/i }));
+
+    const parentType = Array.from(container.querySelectorAll('select[aria-label^="Field type for"]'))
+      .find((select) => Array.from(select.options).some((option) => option.value === 'radio'));
+    expect(parentType).toBeTruthy();
+    expect(parentType).not.toBeDisabled();
+    expect(Array.from(parentType.options).map((option) => option.value)).toEqual(['dropdown', 'radio']);
+
+    const parentCard = parentType.closest('.wf-field-card');
+    fireEvent.change(parentCard.querySelector('.wf-generic-options-input'), { target: { value: 'Yes\nNo' } });
+    fireEvent.click(screen.getByRole('button', { name: '+ Yes' }));
+
+    const childCard = container.querySelector('.wf-conditional-child-card');
+    const childType = childCard.querySelector('select[aria-label^="Field type for"]');
+    expect(childType).not.toBeDisabled();
+    expect(Array.from(childType.options).map((option) => option.value)).toEqual([
+      'text', 'email', 'tel', 'textarea', 'number', 'dropdown', 'radio', 'date', 'url', 'checkbox', 'multiselect',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Yes' }));
+    expect(notifyError).toHaveBeenCalledWith('A sub question already exists for Yes.');
+
+    fireEvent.change(childType, { target: { value: 'radio' } });
+    fireEvent.change(childCard.querySelector('.wf-generic-options-input'), { target: { value: 'A\nB' } });
+    fireEvent.click(within(childCard).getByRole('button', { name: '+ A' }));
+    expect(container.querySelectorAll('.wf-conditional-child-card')).toHaveLength(2);
+
+    const liveChildCard = container.querySelector('.wf-conditional-child-card');
+    fireEvent.change(liveChildCard.querySelector('select[aria-label^="Field type for"]'), { target: { value: 'email' } });
+
+    expect(container.querySelectorAll('.wf-conditional-child-card')).toHaveLength(1);
+    expect(liveChildCard.querySelector('select[aria-label^="Field type for"]')).toHaveValue('email');
+  });
+
+  test('offers dropdown and radio for an existing field that can create conditional children', async () => {
+    const parentField = {
+      id: 'lead-parent',
+      sourceKind: 'lead_custom',
+      sourceKey: 'business_type',
+      fieldType: 'dropdown',
+      label: 'Business type',
+      optionsText: 'SaaS\nAgency',
+      options: ['SaaS', 'Agency'],
+      required: false,
+      hidden: false,
+      showWhen: null,
+    };
+    renderPage({ ...FORM_FIXTURE, scope: 'generic', fields: [parentField] }, [
+      { id: 7, fieldKey: 'business_type', label: 'Business type', fieldType: 'dropdown', options: ['SaaS', 'Agency'] },
+    ]);
+    await openBuilder();
+
+    const parentType = screen.getByRole('combobox', { name: 'Field type for Business type' });
+    expect(parentType).not.toBeDisabled();
+    expect(Array.from(parentType.options).map((option) => option.value)).toEqual(['dropdown', 'radio']);
+    expect(screen.getByRole('button', { name: '+ SaaS' })).toBeInTheDocument();
+
+    fireEvent.change(parentType, { target: { value: 'radio' } });
+    expect(parentType).toHaveValue('radio');
+    expect(screen.getByText('Radio layout')).toBeInTheDocument();
   });
 
   test('preserves comma separators while editing conditional flow options', async () => {
@@ -728,6 +796,47 @@ describe('WebForms builder page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Business type.*custom/i }));
 
     expect(await screen.findByDisplayValue('SaaS, E-Commerce, Freelancer')).toBeInTheDocument();
+  });
+
+  test('keeps edited lead custom choice options isolated to the current web form', async () => {
+    const leadFields = [
+      { id: 7, fieldKey: 'business_type', label: 'Business type', fieldType: 'dropdown', options: ['Organization default'] },
+    ];
+    const form = {
+      ...FORM_FIXTURE,
+      name: 'Per-form choices',
+      fields: [{
+        id: 'business-type',
+        sourceKind: 'lead_custom',
+        sourceKey: 'business_type',
+        fieldType: 'dropdown',
+        label: 'Business type',
+        options: ['Form A', 'Form B'],
+        optionsCustomized: true,
+        required: false,
+        hidden: false,
+        width: 'full',
+      }],
+    };
+
+    renderPage(form, leadFields);
+    await openBuilder('Per-form choices');
+
+    const optionsInput = await screen.findByDisplayValue('Form A, Form B');
+    expect(screen.queryByDisplayValue('Organization default')).toBeNull();
+    fireEvent.change(optionsInput, { target: { value: 'Form A, Exclusive option' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      expect(JSON.parse(saveCall[1].body).fields[0]).toEqual(expect.objectContaining({
+        options: ['Form A', 'Exclusive option'],
+        optionsCustomized: true,
+      }));
+    });
   });
 
   test('creates a lead field from the Generic contact picker plus action', async () => {
@@ -1216,16 +1325,19 @@ test('Changing folder views closes and resets the new folder editor', async () =
   render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
   await screen.findByText('Brand intake');
 
-  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Folder name' }), { target: { value: 'Unused draft' } });
-  fireEvent.click(screen.getByRole('button', { name: 'All Forms (1)' }));
-  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
+  // Keep role/name assertions scoped to the small folder toolbar instead of
+  // repeatedly computing accessibility styles across the entire builder DOM.
+  const toolbar = within(document.querySelector('.wf-folder-toolbar'));
+  fireEvent.click(toolbar.getByRole('button', { name: 'New Folder' }));
+  fireEvent.change(screen.getByLabelText('Folder name'), { target: { value: 'Unused draft' } });
+  fireEvent.click(toolbar.getByRole('button', { name: 'All Forms (1)' }));
+  expect(screen.queryByLabelText('Folder name')).toBeNull();
 
-  fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
-  expect(screen.getByRole('textbox', { name: 'Folder name' })).toHaveValue('');
-  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
-  expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*0/ }));
+  fireEvent.click(toolbar.getByRole('button', { name: 'New Folder' }));
+  expect(screen.getByLabelText('Folder name')).toHaveValue('');
+  fireEvent.click(toolbar.getByRole('button', { name: 'All Folders' }));
+  expect(screen.queryByLabelText('Folder name')).toBeNull();
+  fireEvent.click(toolbar.getByRole('button', { name: /Campaigns.*0/ }));
   expect(screen.getByText('Campaigns')).toBeInTheDocument();
 });
 
@@ -1234,6 +1346,30 @@ function dragOverAt(target, dataTransfer, clientY) {
   Object.defineProperties(event, { clientY: { value: clientY }, dataTransfer: { value: dataTransfer } });
   fireEvent(target, event);
 }
+
+test('folder menus escape the library clipping area and dismiss when their anchor moves', async () => {
+  installFetchMock();
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
+  const trigger = await screen.findByRole('button', { name: 'Move Brand intake to folder' });
+  fireEvent.click(trigger);
+  let menu = screen.getByRole('menu', { name: 'Folders for Brand intake' });
+  expect(menu.parentElement).toBe(document.body);
+  expect(menu.closest('.wf-library-content-scroll')).toBeNull();
+  expect(menu).toHaveStyle({ position: 'fixed', boxSizing: 'border-box' });
+  fireEvent.pointerDown(screen.getByRole('menuitem', { name: 'New Folder' }));
+  expect(screen.getByRole('menu')).toBeInTheDocument();
+  fireEvent.scroll(menu);
+  expect(screen.getByRole('menu')).toBeInTheDocument();
+  fireEvent.scroll(document.querySelector('.wf-library-content-scroll'));
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  fireEvent.click(trigger);
+  menu = screen.getByRole('menu');
+  fireEvent.keyDown(menu, { key: 'Escape' });
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  fireEvent.click(trigger);
+  fireEvent.resize(window);
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+});
 
 test('Generic forms can be filed into a manually created folder', async () => {
   installFetchMock();
@@ -1448,12 +1584,14 @@ test.each([
     return baseFetch(url, opts);
   });
   render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 14, vertical: 'generic' } }}><WebForms /></AuthContext.Provider>);
-  fireEvent.click(await screen.findByRole('button', { name: 'All Folders' }));
-  await screen.findByRole('button', { name: /Campaigns.*1/ });
-  fireEvent.click(screen.getByRole('button', { name: /Campaigns.*1/ }));
-  fireEvent.click(screen.getByRole('button', { name: 'Delete folder' }));
-  expect(screen.getByRole('dialog', { name: 'Delete folder?' })).toHaveTextContent('1 form');
-  fireEvent.click(screen.getByRole('button', { name: actionLabel }));
+  await screen.findByText('Brand intake');
+  const toolbar = within(document.querySelector('.wf-folder-toolbar'));
+  fireEvent.click(toolbar.getByRole('button', { name: 'All Folders' }));
+  fireEvent.click(await toolbar.findByRole('button', { name: /Campaigns.*1/ }));
+  fireEvent.click(within(document.querySelector('.wf-folder-manage')).getByRole('button', { name: 'Delete folder' }));
+  const dialog = screen.getByRole('dialog', { name: 'Delete folder?' });
+  expect(dialog).toHaveTextContent('1 form');
+  fireEvent.click(within(dialog).getByRole('button', { name: actionLabel }));
   await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/forms/folders/9', expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ deleteForms }) })));
   if (deleteForms) {
     await waitFor(() => expect(screen.queryByText('Brand intake')).toBeNull());

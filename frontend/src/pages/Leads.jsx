@@ -363,10 +363,7 @@ const TRAVEL_LEAD_COLUMN_KEYS = new Set([
   "assignedTo",
   "createdAt",
 ]);
-// Keep collecting Referrer URL in web-form tracking, but do not expose it as
-// a Generic CRM Leads-table column. This also strips stale saved preferences
-// that may still contain the formerly visible key.
-const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set(["referrerUrl"]);
+const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set();
 // These columns are system-populated and must not be offered as CSV import
 // destinations. The remaining Customize Table catalog entries are valid CRM
 // field choices for generic lead imports.
@@ -383,8 +380,19 @@ const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
   "utm_source",
   "utm_medium",
   "utm_campaign",
+  "utm_id",
   "utm_term",
   "utm_content",
+  "gbraid",
+  "wbraid",
+  "campaign_id",
+  "adset_id",
+  "ad_id",
+  "campaign_name",
+  "adset_name",
+  "ad_name",
+  "placement",
+  "site_source_name",
   "gclid",
   "fbclid",
   "fbc",
@@ -5501,12 +5509,23 @@ const Leads = () => {
             "utm_source",
             "utm_medium",
             "utm_campaign",
+            "utm_id",
             "utm_term",
             "utm_content",
             "gclid",
+            "gbraid",
+            "wbraid",
             "fbclid",
             "fbc",
             "fbp",
+            "campaign_id",
+            "adset_id",
+            "ad_id",
+            "campaign_name",
+            "adset_name",
+            "ad_name",
+            "placement",
+            "site_source_name",
             "submittedAt",
             "browser",
             "operatingSystem",
@@ -5560,12 +5579,23 @@ const Leads = () => {
         utm_source: "UTM Source",
         utm_medium: "UTM Medium",
         utm_campaign: "UTM Campaign",
+        utm_id: "UTM ID",
         utm_term: "UTM Term",
         utm_content: "UTM Content",
         gclid: "Google Click ID",
+        gbraid: "Google Braid ID",
+        wbraid: "Google Wbraid ID",
         fbclid: "Meta Click ID",
         fbc: "Meta Click Cookie",
         fbp: "Meta Browser ID",
+        campaign_id: "Campaign ID",
+        adset_id: "Ad Set ID",
+        ad_id: "Ad ID",
+        campaign_name: "Campaign Name",
+        adset_name: "Ad Set Name",
+        ad_name: "Ad Name",
+        placement: "Placement",
+        site_source_name: "Site Source Name",
         submittedAt: "Submission Timestamp",
         browser: "Browser",
         operatingSystem: "Operating System",
@@ -7106,12 +7136,23 @@ const Leads = () => {
       "utm_source",
       "utm_medium",
       "utm_campaign",
+      "utm_id",
       "utm_term",
       "utm_content",
       "gclid",
+      "gbraid",
+      "wbraid",
       "fbclid",
       "fbc",
       "fbp",
+      "campaign_id",
+      "adset_id",
+      "ad_id",
+      "campaign_name",
+      "adset_name",
+      "ad_name",
+      "placement",
+      "site_source_name",
       "submittedAt",
       "browser",
       "operatingSystem",
@@ -7119,8 +7160,13 @@ const Leads = () => {
     ];
     if (isGeneric && trackingKeys.includes(column.key)) {
       const metadata = leadTrackingMetadata(lead);
+      const aliasValue = column.key === "landingPageUrl"
+        ? metadata.landing_page
+        : column.key === "referrerUrl"
+          ? metadata.referrer
+          : "";
       const value =
-        metadata[column.key] ||
+        metadata[column.key] || aliasValue ||
         (column.key === "submittedAt"
           ? lead?.webFormSubmissions?.[0]?.submittedAt
           : "");

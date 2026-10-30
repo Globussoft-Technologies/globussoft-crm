@@ -656,6 +656,9 @@ export default function Inbox({
   const renderEmailRow = (email) => {
     const participant = emailFolder === "sent" ? email.to : email.from;
     const participantLabel = String(participant || "Unknown sender").trim();
+    const summarySubject = getInboxPreviewText(email.subject);
+    const summaryBody = getInboxPreviewText(email.body);
+    const showSummaryBody = summaryBody && summaryBody !== summarySubject;
     return (
     <div
       key={email.id}
@@ -687,7 +690,7 @@ export default function Inbox({
         <User size={20} color="#fff" />
         <span className="inbox-email-row__avatar-letter" aria-hidden="true">{participantLabel.charAt(0).toUpperCase()}</span>
       </div>
-      <div style={{ minWidth: 0, overflow: "hidden", display: "grid", gridTemplateRows: "auto auto auto", alignContent: "start" }}>
+      <div style={{ minWidth: 0, overflow: "hidden", display: "grid", gridTemplateRows: "auto auto", alignContent: "start" }}>
         <div className="inbox-email-row__meta" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", justifyContent: "normal", gap: "1rem", marginBottom: "0.5rem", minWidth: 0 }}>
           <p className="inbox-email-row__address" style={{ minWidth: 0, margin: 0, fontWeight: "bold", fontSize: "1.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             <span className="inbox-email-row__desktop-address">{email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}</span>
@@ -698,9 +701,10 @@ export default function Inbox({
             <span className="inbox-email-row__mobile-date">{formatMobileInboxDate(email.createdAt)}</span>
           </span>
         </div>
-        <h4 className="inbox-email-row__subject" style={{ margin: "0 0 0.5rem", fontWeight: "600", lineHeight: "1.35", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", overflowWrap: "normal" }}>{email.subject}</h4>
         <p className="inbox-email-row__preview" style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: "1.5", overflowWrap: "normal", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {isGeneric ? getInboxPreviewText(email.body) : email.body}
+          {summarySubject && <span className="inbox-email-row__summary-subject" style={{ color: "var(--text-primary)", fontWeight: 600 }}>{summarySubject}</span>}
+          {summarySubject && showSummaryBody ? " — " : ""}
+          {showSummaryBody ? summaryBody : (!summarySubject ? summaryBody || "(No email content)" : "")}
         </p>
       </div>
       {!email.read && <div className="inbox-email-row__unread-dot" style={{ width: "10px", height: "10px", borderRadius: "50%", background: "var(--accent-color)", alignSelf: "center" }} />}
@@ -731,6 +735,8 @@ export default function Inbox({
       })
     : composeRecipientOptions;
   const visibleRecipientSuggestions = filteredRecipientSuggestions.slice(0, 6);
+  const recipientSuggestionsOpen =
+    showRecipientSuggestions && visibleRecipientSuggestions.length > 0;
 
   const handleRecipientSelect = (recipient) => {
     setComposeData((prev) => ({
@@ -1123,10 +1129,10 @@ export default function Inbox({
         margin: isGeneric ? 0 : "0 auto",
         padding: isGeneric ? 0 : "2rem",
         boxSizing: "border-box",
+        height: isGeneric ? "100%" : undefined,
+        minHeight: isGeneric ? 0 : undefined,
         overflowX: "hidden",
         overflowY: isGeneric ? "hidden" : undefined,
-        height: isGeneric ? "100%" : undefined,
-        minHeight: 0,
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -1169,14 +1175,14 @@ export default function Inbox({
       <div
         className={`card inbox-list-card${isGeneric ? " inbox-list-card--generic" : ""}`}
         data-testid="inbox-list-card"
-        ref={inboxScrollRef}
-        onScroll={handleInboxScroll}
+        ref={isGeneric ? undefined : inboxScrollRef}
+        onScroll={isGeneric ? undefined : handleInboxScroll}
         style={{
           width: "100%",
           flex: isGeneric ? "1 1 auto" : "0 0 auto",
+          minHeight: isGeneric ? 0 : undefined,
           maxHeight: isGeneric ? "none" : "calc(100vh - 320px)",
-          minHeight: 0,
-          overflowY: "auto",
+          overflowY: isGeneric ? "hidden" : "auto",
           overflowX: "hidden",
           padding: "1.25rem",
         }}
@@ -1286,7 +1292,9 @@ export default function Inbox({
 
             <div
               className={isGeneric ? "inbox-message-scroll--generic" : undefined}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
+              ref={isGeneric ? inboxScrollRef : undefined}
+              onScroll={isGeneric ? handleInboxScroll : undefined}
+              style={{ display: "flex", flex: isGeneric ? "1 1 auto" : undefined, flexDirection: "column", gap: "1rem", minWidth: 0, minHeight: isGeneric ? 0 : undefined, overflowY: isGeneric ? "auto" : undefined, overflowX: isGeneric ? "hidden" : undefined }}
             >
             {emails.length === 0 ? (
               <p
@@ -1539,6 +1547,10 @@ export default function Inbox({
                     type="text"
                     required
                     autoComplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={recipientSuggestionsOpen}
+                    aria-controls="compose-recipient-suggestions"
                     className="input-field"
                     value={composeData.to}
                     onFocus={() => setShowRecipientSuggestions(true)}
@@ -1553,10 +1565,12 @@ export default function Inbox({
                     placeholder="client@company.com (comma-separated for multiple)"
                   />
 
-                  {showRecipientSuggestions && visibleRecipientSuggestions.length > 0 && (
+                  {recipientSuggestionsOpen && (
                     <div
+                      id="compose-recipient-suggestions"
                       role="listbox"
                       aria-label="Recipient suggestions"
+                      className="compose-recipient-suggestions"
                       style={{
                         position: "absolute",
                         top: "calc(100% + 0.35rem)",
@@ -1577,30 +1591,26 @@ export default function Inbox({
                           key={entry.key || `${entry.email}-${index}`}
                           role="option"
                           aria-label={entry.email}
+                          className="compose-recipient-suggestion"
                           onMouseDown={(event) => {
                             event.preventDefault();
                             handleRecipientSelect(entry);
                           }}
-                          style={{
-                            width: "100%",
-                            textAlign: "left",
-                            background: "transparent",
-                            border: "none",
-                            borderBottom:
-                              index === visibleRecipientSuggestions.length - 1
-                                ? "none"
-                                : "1px solid var(--border-color)",
-                            padding: "0.85rem 1rem",
-                            cursor: "pointer",
-                            color: "var(--text-primary)",
-                          }}
+                          style={{ borderBottom: index === visibleRecipientSuggestions.length - 1
+                            ? "none"
+                            : "1px solid var(--border-color)" }}
                         >
-                          <div style={{ fontWeight: 600, marginBottom: "0.15rem" }}>{entry.email}</div>
-                          {entry.name && (
-                            <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-                              {entry.name}
-                            </div>
-                          )}
+                          <span className="compose-recipient-suggestion__avatar" aria-hidden="true">
+                            {(entry.name || entry.email).trim().charAt(0).toUpperCase()}
+                          </span>
+                          <span className="compose-recipient-suggestion__details">
+                            <span className="compose-recipient-suggestion__name">
+                              {entry.name || entry.email}
+                            </span>
+                            {entry.name && (
+                              <span className="compose-recipient-suggestion__email">{entry.email}</span>
+                            )}
+                          </span>
                         </button>
                       ))}
                     </div>

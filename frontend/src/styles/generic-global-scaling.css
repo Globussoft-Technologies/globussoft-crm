@@ -324,14 +324,14 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   font-size: var(--generic-ui-small) !important;
 }
 
-/* Keep Generic Inbox within the page viewport. The list card owns the vertical
-   scrollbar; message rows retain their natural sizing and original layout. */
+/* Keep the Generic Inbox frame within the page viewport. */
 body[data-vertical="generic"] .app-main > main.generic-page-content:has(
     .inbox-page-shell--generic
   ) {
   overflow-y: hidden !important;
 }
 
+/* The toolbar stays fixed in the card while only the message rows scroll. */
 body[data-vertical="generic"] .app-main > main.generic-page-content
   .inbox-page-shell--generic {
   height: 100% !important;
@@ -344,17 +344,23 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   flex: 1 1 auto !important;
   min-height: 0 !important;
   max-height: none !important;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] .app-main > main.generic-page-content
+  .inbox-message-scroll--generic {
+  flex: 1 1 auto !important;
+  min-height: 0;
   overflow-y: auto !important;
   overflow-x: hidden !important;
   overscroll-behavior: contain;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .inbox-message-scroll--generic {
-  flex: none !important;
-  min-height: 0;
-  overflow: visible !important;
-  overscroll-behavior: auto;
+/* Keep the webhook configuration action visible below its URL field, matching
+   the Generic CRM workflow builder layout. */
+body[data-vertical="generic"] .workflow-webhook-edit-button {
+  grid-column: 1 / -1;
+  justify-self: start;
 }
 
 body[data-vertical="generic"] .app-main > main.generic-page-content

@@ -224,6 +224,7 @@ describe('GET /actions — list supported action types', () => {
     expect(values).toContain('create_task');
     expect(values).toContain('send_webhook');
     expect(values).toContain('create_approval');
+    expect(res.body.find((action) => action.value === 'send_webhook').config).toContain('selectedFields');
     for (const a of res.body) {
       expect(typeof a.value).toBe('string');
       expect(typeof a.label).toBe('string');

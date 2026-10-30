@@ -78,6 +78,18 @@ describe('generic billing workspace page', () => {
   });
 });
 
+describe('Generic CRM Workflows page', () => {
+  it('is catalogued only for Generic CRM with its read permission', () => {
+    expect(getCatalogForVertical('generic').find((page) => page.path === '/workflows')).toMatchObject({
+      label: 'Workflows',
+      vertical: 'generic',
+      requiredPermissions: [{ module: 'workflows', action: 'read' }],
+    });
+    expect(getCatalogForVertical('wellness').some((page) => page.path === '/workflows')).toBe(false);
+    expect(getCatalogForVertical('travel').some((page) => page.path === '/workflows')).toBe(false);
+  });
+});
+
 describe('customerOnly storefront pages', () => {
   // The customer-facing surfaces (Buy Gift Cards storefront + My
   // Transactions history) are open to any authenticated session

@@ -240,6 +240,42 @@ describe("<Inbox />", () => {
     });
   });
 
+  it("shows one Generic CRM summary line below each sender and opens the full email from it", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    const subject = await screen.findByText("client itinerary update");
+    const summary = subject.closest(".inbox-email-row__preview");
+    const row = summary.closest(".inbox-email-row");
+
+    expect(row).toBeTruthy();
+    expect(summary).toHaveTextContent(
+      "client itinerary update — Please confirm the revised itinerary.",
+    );
+    expect(row.querySelectorAll(".inbox-email-row__preview")).toHaveLength(1);
+    expect(row.querySelector(".inbox-email-row__subject")).toBeNull();
+
+    await user.click(summary);
+
+    expect(await screen.findByRole("heading", { name: "client itinerary update" })).toBeInTheDocument();
+    expect(screen.getByText("Please confirm the revised itinerary.")).toBeInTheDocument();
+  });
+
+  it("shows a one-line fallback for Generic CRM emails without a subject or body", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if ((!opts || !opts.method || opts.method === "GET") && typeof url === "string" && url.startsWith("/api/communications/inbox")) {
+        return Promise.resolve([{ ...sampleInboxEmail, id: 103, subject: "", body: "" }]);
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderInbox();
+
+    const fallback = await screen.findByText("(No email content)");
+    expect(fallback).toHaveClass("inbox-email-row__preview");
+    expect(fallback).toHaveStyle({ whiteSpace: "nowrap", textOverflow: "ellipsis" });
+  });
+
   it("uses the shared full-width Generic CRM content shell", async () => {
     renderInbox();
 
@@ -259,13 +295,15 @@ describe("<Inbox />", () => {
       flex: "1 1 auto",
       maxHeight: "none",
       minHeight: "0",
-      overflowY: "auto",
+      overflowY: "hidden",
     });
 
     const messageScroll = listCard.querySelector(".inbox-message-scroll--generic");
     expect(messageScroll).toContainElement(await screen.findByText(sampleInboxEmail.subject));
     expect(messageScroll).not.toContainElement(screen.getByRole("searchbox", { name: "Search mail" }));
     expect(messageScroll).not.toContainElement(screen.getByRole("tablist", { name: "Email folder" }));
+    expect(messageScroll).toHaveStyle({ flex: "1 1 auto", overflowY: "auto" });
+    expect(listCard.querySelector(".inbox-toolbar--generic")).toBeTruthy();
   });
 
   it("opens the restored composer with autocomplete, Cc/Bcc, and theme-aware modal surfaces", async () => {
@@ -291,7 +329,12 @@ describe("<Inbox />", () => {
     expect(screen.getByRole("button", { name: /send email/i })).toBeInTheDocument();
 
     const toInput = screen.getByPlaceholderText(/client@company.com/i);
+    expect(toInput).toHaveAttribute("aria-expanded", "false");
+    await user.click(toInput);
+    expect(screen.getByRole("listbox", { name: "Recipient suggestions" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "rishu@x.in" })).toBeInTheDocument();
     await user.type(toInput, "rishu");
+    expect(toInput).toHaveAttribute("aria-expanded", "true");
     const suggestion = await screen.findByRole("option", { name: "rishu@x.in" });
     expect(suggestion).toHaveTextContent("Rishu Goyal");
     await user.click(suggestion);

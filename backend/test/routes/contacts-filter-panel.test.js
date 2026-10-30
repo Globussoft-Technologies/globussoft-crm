@@ -80,6 +80,11 @@ const SAMPLE_CONTACT = {
   assignedTo: null,
 };
 
+const ADDED_TRACKING_FIELDS = [
+  'utm_id', 'gbraid', 'wbraid', 'campaign_id', 'adset_id', 'ad_id',
+  'campaign_name', 'adset_name', 'ad_name', 'placement', 'site_source_name',
+];
+
 function makeApp({ tenantId = 1, userId = 7, role = "ADMIN" } = {}) {
   const app = express();
   app.use(express.json());
@@ -175,12 +180,23 @@ describe("GET /api/contacts/filter-fields", () => {
       "utm_source",
       "utm_medium",
       "utm_campaign",
+      "utm_id",
       "utm_term",
       "utm_content",
       "gclid",
+      "gbraid",
+      "wbraid",
       "fbclid",
       "fbc",
       "fbp",
+      "campaign_id",
+      "adset_id",
+      "ad_id",
+      "campaign_name",
+      "adset_name",
+      "ad_name",
+      "placement",
+      "site_source_name",
       "submittedAt",
       "browser",
       "operatingSystem",
@@ -864,6 +880,47 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
     expect(res.status).toBe(200);
     const call = prisma.contact.findMany.mock.calls[0][0];
     expect(call.where).toEqual(expect.objectContaining({ status: "Lead", name: { startsWith: "D" } }));
+  });
+
+  test.each(ADDED_TRACKING_FIELDS)('new tracking field %s supports lookup and filtering with tenant/owner scoping', async (field) => {
+    const app = makeApp({ tenantId: 14, userId: 7, role: 'USER' });
+    const catalog = await request(app).get('/api/contacts/filter-fields?status=Lead');
+    expect(catalog.status).toBe(200);
+    expect(catalog.body.fields).toContainEqual(expect.objectContaining({ field, kind: 'text' }));
+
+    prisma.$queryRaw.mockResolvedValueOnce([{ value: 'campaign-match' }]);
+    const lookup = await request(app).get(`/api/contacts/filter-values/${field}?status=Lead`);
+    expect(lookup.status).toBe(200);
+    expect(lookup.body.values).toContainEqual({ value: 'campaign-match', label: 'campaign-match' });
+    const lookupQuery = prisma.$queryRaw.mock.calls[0][0];
+    expect(lookupQuery.values).toEqual(expect.arrayContaining([14, 'Lead', 7, `$._meta.tracking.${field}`]));
+    expect(lookupQuery.sql).toContain('s.tenantId = c.tenantId');
+
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: 9001 }]);
+    const filters = [{ field, operator: 'contains', values: ['campaign-match'] }];
+    const response = await request(app).get(`/api/contacts?status=Lead&filters=${encodeURIComponent(JSON.stringify(filters))}`);
+    expect(response.status).toBe(200);
+    const where = prisma.contact.findMany.mock.calls.at(-1)[0].where;
+    expect(where).toMatchObject({ tenantId: 14, assignedToId: 7, status: 'Lead' });
+    expect(where.AND).toContainEqual({ id: { in: [9001] } });
+    const filterQuery = prisma.$queryRaw.mock.calls[1][0];
+    expect(filterQuery.values).toEqual(expect.arrayContaining([14, 'Lead', 7, `$._meta.tracking.${field}`, '%campaign-match%']));
+  });
+
+  test('new tracking fields stay unavailable for non-Generic tenants', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    const response = await request(makeApp()).get('/api/contacts/filter-values/campaign_id?status=Lead');
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('UNKNOWN_FIELD');
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  test('a new tracking filter with no matches does not silently return all leads', async () => {
+    prisma.$queryRaw.mockResolvedValue([]);
+    const filters = [{ field: 'campaign_id', operator: 'contains', values: ['missing-campaign'] }];
+    const response = await request(makeApp()).get(`/api/contacts?status=Lead&filters=${encodeURIComponent(JSON.stringify(filters))}`);
+    expect(response.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].where.AND).toContainEqual({ id: { in: [] } });
   });
 
   test("web-form tracking filters are tenant-safe relation clauses", async () => {

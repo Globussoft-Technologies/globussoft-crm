@@ -210,7 +210,16 @@ describe("travel Tally connector routes", () => {
       "uninstall-startup.ps1",
       "README.md",
     ]);
+    expect(response.body.files.find((file) => file.name === "install-startup.ps1").data).toContain("Unblock-File");
+    expect(response.body.files.find((file) => file.name === "install-startup.ps1").data).toContain("process verified");
     expect(response.body.files.find((file) => file.name === "uninstall-startup.ps1").data).toContain("Stop-Process");
+    for (const name of ["install-startup.ps1", "uninstall-startup.ps1"]) {
+      const script = response.body.files.find((file) => file.name === name).data;
+      expect(script).toContain("Temporarily distributed unsigned");
+      expect(script).not.toContain("# SIG # Begin signature block");
+      expect(script).not.toContain("# SIG # End signature block");
+    }
+    expect(response.body.files.find((file) => file.name === "README.md").data).toContain("Temporary unsigned installer scripts");
   });
 
   test("generates a one-time token and stores only its hash", async () => {

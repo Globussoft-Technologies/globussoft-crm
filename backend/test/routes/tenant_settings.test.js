@@ -240,6 +240,32 @@ describe('GET /api/tenant-settings/:key', () => {
   });
 });
 
+describe('generic Field Config setting', () => {
+  test('accepts a valid tenant-scoped field configuration for generic CRM', async () => {
+    const config = { fieldOverrides: { email: { required: true } }, customGroups: [] };
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    prisma.tenantSetting.upsert.mockResolvedValue({ id: 77, key: KEYS.GENERIC_FIELD_CONFIG, value: JSON.stringify(config), category: 'fields' });
+
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.GENERIC_FIELD_CONFIG}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: JSON.stringify(config), category: 'fields' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.value).toBe(JSON.stringify(config));
+  });
+
+  test('rejects malformed field configuration JSON', async () => {
+    const res = await request(makeApp())
+      .put(`/api/tenant-settings/${KEYS.GENERIC_FIELD_CONFIG}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ value: '{bad json', category: 'fields' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_FIELD_CONFIG' });
+  });
+});
+
 describe('PUT /api/tenant-settings/:key', () => {
   test('renaming a deal type atomically moves only this tenant’s existing deals', async () => {
     const oldTypes = [{ id: 'new-business', name: 'New Business', stages: [{ id: 'lead', name: 'Lead' }] }];

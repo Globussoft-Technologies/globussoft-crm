@@ -14,6 +14,17 @@ describe('Generic CRM filled input contrast', () => {
     );
   });
 
+  it('keeps additional Generic CRM Create Lead fields inside a scrollable form', () => {
+    const css = readFileSync(join(process.cwd(), 'src/pages/Leads.css'), 'utf8');
+
+    expect(css).toMatch(
+      /\.create-lead-form--generic\.create-lead-form--scrollable\s*\{[^}]*overflow-y:\s*auto;/s,
+    );
+    expect(css).toMatch(
+      /\.create-lead-form--generic \.create-lead-form__actions\s*\{[^}]*position:\s*sticky;/s,
+    );
+  });
+
   it('keeps public web-form values emphasized after the field loses focus', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 

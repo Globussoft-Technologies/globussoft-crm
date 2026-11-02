@@ -1489,6 +1489,17 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'reports', action: 'read' }],
   },
   {
+    // Generic CRM-only field-definition and table-field configuration.
+    // Keep this in the page catalog so Super Admin page visibility, the
+    // role-page picker, and the omnibar all describe the same page.
+    path: '/field-config',
+    label: 'Field Config',
+    description: 'Configure Generic CRM lead fields, groups, and table columns',
+    category: 'Leads',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'settings', action: 'manage' }],
+  },
+  {
     path: '/booking-pages',
     label: 'Booking Pages',
     description: 'Customer booking form builder',

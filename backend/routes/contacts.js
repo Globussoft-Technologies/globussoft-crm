@@ -328,9 +328,12 @@ function normalizeContactTagsInput(raw) {
 }
 
 // #160 #166 #168: shared validator for create + update payloads on Contact.
-function validateContactInput(body, { isUpdate = false } = {}) {
+function validateContactInput(
+  body,
+  { isUpdate = false, requireEmail = !isUpdate } = {},
+) {
   // Email — required on create, optional on update; if present, must parse.
-  const emailErr = ensureEmail(body.email, { required: !isUpdate });
+  const emailErr = ensureEmail(body.email, { required: requireEmail });
   if (emailErr) return emailErr;
   // Name — string length cap, prevents Prisma column-overflow 500s (#165).
   // #337: name is a required field on create AND must contain non-whitespace
@@ -2741,7 +2744,21 @@ router.post("/", async (req, res) => {
     }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
-    const inputErr = validateContactInput(req.body, { isUpdate: false });
+    let requireEmail = !isGenericCrmRequest(req);
+    if (!requireEmail && !String(req.body.email ?? "").trim()) {
+      const config = JSON.parse(await getSetting(req.user.tenantId, KEYS.GENERIC_FIELD_CONFIG, {
+        coerce: String,
+        fallback: "{}",
+      }));
+      const emailRule = config?.fieldOverrides?.email;
+      // Personal Create Lead preferences cannot relax a tenant requirement.
+      // Without an explicit tenant rule, preserve Generic's optional-email API.
+      requireEmail = (emailRule?.required ?? emailRule?.isRequired) === true;
+    }
+    const inputErr = validateContactInput(req.body, {
+      isUpdate: false,
+      requireEmail,
+    });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // #337: persist the trimmed name so we don't leak the user's accidental
     // leading/trailing whitespace into search indexes, exports, etc. The

@@ -98,6 +98,11 @@ describe('tenant page visibility normalization', () => {
       category: 'Work Management',
       requiredPermissions: [{ module: 'workflows', action: 'read' }],
     });
+    expect(catalog.find((page) => page.path === '/field-config')).toMatchObject({
+      label: 'Field Config',
+      category: 'Leads',
+      requiredPermissions: [{ module: 'settings', action: 'manage' }],
+    });
   });
 
   it('includes the Generic CRM Quotes page in the Finance visibility catalog', () => {

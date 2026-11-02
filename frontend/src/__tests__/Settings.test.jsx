@@ -297,6 +297,44 @@ describe("<Settings /> — page shell + representative card pin", () => {
     ).toBeTruthy();
   });
 
+  it("copies the Generic CRM cookie setup function", async () => {
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      writable: true,
+      configurable: true,
+    });
+
+    renderSettings({
+      authValue: {
+        tenant: baseTenant,
+        user: { role: "ADMIN" },
+        setTenant: vi.fn(),
+      },
+    });
+
+    await user.click(await screen.findByRole("button", {
+      name: "Get cookie setup function",
+    }));
+    expect(screen.getByRole("dialog", { name: "Cookie setup function" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Cookie setup function" }).value)
+      .toContain("function saveGlobussoftTrackingCookies()");
+
+    await user.click(screen.getByRole("button", { name: "Copy function" }));
+
+    await waitFor(() => expect(writeTextMock).toHaveBeenCalledTimes(1));
+    const copiedCode = writeTextMock.mock.calls[0][0];
+    expect(copiedCode).toContain("function saveGlobussoftTrackingCookies()");
+    expect(copiedCode).toContain('"utm_source"');
+    expect(copiedCode).toContain('"gclid"');
+    expect(copiedCode).toContain('"gbs_" + key');
+    expect(copiedCode).toContain("90 * 24 * 60 * 60");
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Cookie setup function" })).not.toBeInTheDocument();
+  });
+
   it("does not show Generic CRM tracking cookie keys for travel tenants", async () => {
     const travelTenant = { ...baseTenant, vertical: "travel" };
     fetchApiMock.mockImplementation(

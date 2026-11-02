@@ -136,6 +136,44 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     navigateMock.mockReset();
   });
 
+  it.each([false, true])('preserves unspecified quick-add defaults when Phone visibility is %s', async (quickAdd) => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { phone: { quickAdd } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Company')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('Organic')).toBeInTheDocument();
+    expect(Boolean(within(dialog).queryByPlaceholderText(/Phone \(/))).toBe(quickAdd);
+  });
+
+  it('keeps tenant-required email required despite saved personal preferences', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'company'], required: ['name'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { email: { required: true } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Email Address')).toBeRequired();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Require Email Address' })).toBeChecked();
+    expect(within(picker).getByRole('checkbox', { name: 'Require Email Address' })).toBeDisabled();
+  });
+
   it('rejects <script> tags in the name and never POSTs', async () => {
     renderLeads();
     // Wait for initial fetch to settle
@@ -426,7 +464,26 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(wellnessDialog.querySelector('.create-lead-form--generic')).toBeNull();
   });
 
-  it('shows only the six standard sections in the generic Create Lead modal', async () => {
+  it('defaults to six standard fields and lets generic users opt into custom fields', async () => {
+    window.localStorage.setItem(
+      'globuscrm.leads.createFields.v1.1.1',
+      JSON.stringify([
+        'name',
+        'email',
+        'company',
+        'title',
+        'phone',
+        'source',
+        'custom:priority',
+      ]),
+    );
+    window.localStorage.setItem(
+      'globuscrm.leads.createFields.v2.1.1',
+      JSON.stringify({
+        visible: ['name', 'email', 'company', 'title'],
+        required: ['name'],
+      }),
+    );
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/lead-custom-fields') {
         return Promise.resolve([
@@ -436,7 +493,7 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
             label: 'Priority',
             fieldType: 'text',
             placeholder: 'Priority level',
-            isRequired: true,
+            isRequired: false,
           },
         ]);
       }
@@ -464,6 +521,102 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(within(dialog).getByPlaceholderText(/Phone \(/)).toBeInTheDocument();
     expect(within(dialog).getByDisplayValue('Organic')).toBeInTheDocument();
     expect(within(dialog).queryByPlaceholderText('Priority level')).toBeNull();
+    const createForm = dialog.querySelector('.create-lead-form--generic');
+    expect(createForm).not.toHaveClass('create-lead-form--scrollable');
+    const customizeButton = within(dialog).getByRole('button', {
+      name: 'Customize Create Lead fields',
+    });
+    expect(customizeButton).toBeInTheDocument();
+    fireEvent.click(customizeButton);
+    const picker = await screen.findByRole('dialog', {
+      name: 'Customize Create Lead fields',
+    });
+    expect(within(picker).getByRole('checkbox', { name: 'Full Name' })).toBeDisabled();
+    for (const fieldName of [
+      'Full Name',
+      'Email Address',
+      'Company',
+      'Job Title',
+      'Phone',
+      'Lead Source',
+    ]) {
+      expect(
+        within(picker).getByRole('checkbox', { name: fieldName }),
+      ).toBeChecked();
+    }
+    expect(
+      within(picker).getByRole('checkbox', { name: 'Priority' }),
+    ).not.toBeChecked();
+    expect(
+      within(picker).getByRole('checkbox', { name: 'Require Email Address' }),
+    ).toBeEnabled();
+    fireEvent.click(
+      within(picker).getByRole('checkbox', { name: 'Require Email Address' }),
+    );
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Require Company' }));
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Priority' }));
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Require Priority' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
+
+    expect(within(dialog).getByPlaceholderText('Company')).toBeRequired();
+    expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Priority level *')).toBeRequired();
+    expect(createForm).toHaveClass('create-lead-form--scrollable');
+    expect(within(dialog).getByPlaceholderText('Full Name')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Email Address (optional)')).not.toBeRequired();
+    const savedPrefs = JSON.parse(window.localStorage.getItem(
+      'globuscrm.leads.createFields.v3.1.1',
+    ));
+    expect(savedPrefs.visible).toContain('title');
+    expect(savedPrefs.visible).toContain('custom:priority');
+    expect(savedPrefs.required).not.toContain('email');
+    expect(savedPrefs.required).toContain('company');
+    expect(savedPrefs.required).toContain('custom:priority');
+
+    fetchApiMock.mockClear();
+    fillForm({
+      name: 'Priya Sharma',
+      company: 'Acme',
+    });
+    submitForm();
+    expect(notifyError).toHaveBeenCalledWith('Priority is required');
+    expect(
+      fetchApiMock.mock.calls.some(([, opts]) => opts?.method === 'POST'),
+    ).toBe(false);
+  });
+
+  it('keeps the in-modal customization option exclusive to generic CRM', async () => {
+    const baseAuth = {
+      user: { userId: 1, role: 'ADMIN' },
+      loading: false,
+    };
+    const { unmount } = renderLeads({
+      ...baseAuth,
+      tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Create Lead' })).queryByRole(
+        'button',
+        { name: 'Customize Create Lead fields' },
+      ),
+    ).toBeNull();
+    unmount();
+
+    fetchApiMock.mockClear();
+    renderLeads({
+      ...baseAuth,
+      tenant: { id: 3, vertical: 'wellness', name: 'Wellness CRM' },
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Create Lead' })).queryByRole(
+        'button',
+        { name: 'Customize Create Lead fields' },
+      ),
+    ).toBeNull();
   });
 });
 

@@ -1345,6 +1345,19 @@ describe('POST /api/contacts — create', () => {
     expect(prisma.contact.create.mock.calls[0][0].data.email).toBeUndefined();
   });
 
+  test('malformed email is rejected without writes or audit even when email is optional', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ fieldOverrides: { email: { required: false } } }),
+    });
+    const res = await request(makeApp()).post('/api/contacts').send({
+      name: 'Invalid Address Lead', email: 'not-an-email',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_EMAIL');
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
   test.each([{ required: true }, { isRequired: true }])('tenant-required email cannot be bypassed (%j)', async (emailRule) => {
     prisma.tenantSetting.findUnique.mockResolvedValue({
       value: JSON.stringify({ fieldOverrides: { email: emailRule } }),

@@ -254,12 +254,29 @@ test.describe('Contacts API — POST /', () => {
     expect(c.name).toContain('trim-me');
   });
 
-  test('400 when email is missing', async ({ request }) => {
+  test('missing email follows the tenant field requirement', async ({ request }) => {
     const { token } = await getAdmin(request);
+    const settings = await get(request, token, '/api/tenant-settings/generic.fieldConfig');
+    expect(settings.status()).toBe(200);
+    const setting = await settings.json();
+    const config = setting.value ? JSON.parse(setting.value) : {};
+    const emailRule = config?.fieldOverrides?.email;
+    const required = (emailRule?.required ?? emailRule?.isRequired) === true;
     const res = await post(request, token, '/api/contacts', {
       name: `${RUN_TAG} no-email`,
     });
-    expect(res.status()).toBe(400);
+    const body = await res.json();
+    // Track successful writes before asserting, including unexpected success,
+    // so a validation regression cannot leak this test's contact fixture.
+    if (res.status() === 201 && body.id) createdContactIds.push(body.id);
+    expect(res.status()).toBe(required ? 400 : 201);
+    if (required) {
+      expect(body.code).toBe('EMAIL_REQUIRED');
+    } else {
+      expect(body.id).toBeGreaterThan(0);
+      expect(body.name).toBe(`${RUN_TAG} no-email`);
+      expect(body.email ?? null).toBeNull();
+    }
   });
 
   test('400 when email is malformed', async ({ request }) => {

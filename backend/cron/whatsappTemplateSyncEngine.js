@@ -39,6 +39,25 @@ async function syncTemplatesForTenant(tenantId) {
 
   const r = await provider.listTemplates({ wabaId: cfg.businessAccountId, accessToken: token, limit: 200 });
   if (!r.ok) {
+    if (Number(r.code) === 190 && (Number(r.subcode) === 463 || /expired/i.test(String(r.error || "")))) {
+      return {
+        ok: false,
+        code: "WHATSAPP_TOKEN_EXPIRED",
+        error:
+          "WhatsApp template sync failed because the Meta access token has expired. " +
+          "Generate a new permanent System User token, open Configure WhatsApp, replace the access token, " +
+          "then click Re-validate & Save.",
+      };
+    }
+    if (Number(r.code) === 190) {
+      return {
+        ok: false,
+        code: "WHATSAPP_ACCESS_TOKEN_INVALID",
+        error:
+          "Meta rejected the WhatsApp access token. Generate a new permanent System User token, " +
+          "open Configure WhatsApp, replace the access token, then click Re-validate & Save.",
+      };
+    }
     return { ok: false, code: "GRAPH_ERROR", error: r.error };
   }
   const list = r.data?.data || [];

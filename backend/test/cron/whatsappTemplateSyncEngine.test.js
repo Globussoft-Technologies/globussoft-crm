@@ -3,6 +3,7 @@
 // Pins:
 //   • syncTemplatesForTenant: NOT_CONNECTED when no active config exists
 //   • syncTemplatesForTenant: INCOMPLETE_CONFIG when wabaId/token missing
+//   • syncTemplatesForTenant: actionable expired/invalid-token errors
 //   • syncTemplatesForTenant: GRAPH_ERROR when Meta listTemplates fails
 //   • syncTemplatesForTenant: maps Meta payload components → schema fields
 //   • syncTemplatesForTenant: handles APPROVED/REJECTED/PENDING/PAUSED/FLAGGED status
@@ -55,6 +56,46 @@ describe('syncTemplatesForTenant', () => {
     expect(r.ok).toBe(false);
     expect(r.code).toBe('GRAPH_ERROR');
     expect(r.error).toBe('rate limited');
+  });
+
+  test('Meta code 190/subcode 463 returns an actionable expired-token error', async () => {
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ businessAccountId: 'W', accessToken: 'tok' });
+    provider.listTemplates.mockResolvedValue({
+      ok: false,
+      code: 190,
+      subcode: 463,
+      error: 'Error validating access token: Session has expired.',
+    });
+
+    const r = await syncTemplatesForTenant(1);
+
+    expect(r).toMatchObject({
+      ok: false,
+      code: 'WHATSAPP_TOKEN_EXPIRED',
+    });
+    expect(r.error).toMatch(/Meta access token has expired/i);
+    expect(r.error).toMatch(/open Configure WhatsApp/i);
+    expect(r.error).toMatch(/Re-validate & Save/);
+  });
+
+  test('other Meta code 190 failures identify an invalid access token', async () => {
+    prisma.whatsAppConfig.findFirst.mockResolvedValue({ businessAccountId: 'W', accessToken: 'tok' });
+    provider.listTemplates.mockResolvedValue({
+      ok: false,
+      code: 190,
+      subcode: 467,
+      error: 'Invalid OAuth access token.',
+    });
+
+    const r = await syncTemplatesForTenant(1);
+
+    expect(r).toMatchObject({
+      ok: false,
+      code: 'WHATSAPP_ACCESS_TOKEN_INVALID',
+    });
+    expect(r.error).toMatch(/Meta rejected the WhatsApp access token/i);
+    expect(r.error).toMatch(/open Configure WhatsApp/i);
+    expect(r.error).toMatch(/Re-validate & Save/);
   });
 
   test('maps components → schema fields (header/body/footer/buttons)', async () => {

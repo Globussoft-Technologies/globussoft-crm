@@ -210,6 +210,20 @@ describe('utils/api — fetchApi', () => {
     });
   });
 
+  it('shows the actionable WhatsApp token-expired message instead of the server-unreachable fallback', async () => {
+    const message = 'WhatsApp template sync failed because the Meta access token has expired. Generate a new permanent System User token, open Configure WhatsApp, replace the access token, then click Re-validate & Save.';
+    mockFetch({
+      status: 422,
+      body: { error: message, code: 'WHATSAPP_TOKEN_EXPIRED' },
+    });
+
+    await expect(fetchApi('/api/whatsapp/templates/sync')).rejects.toMatchObject({
+      message,
+      code: 'WHATSAPP_TOKEN_EXPIRED',
+      status: 422,
+    });
+  });
+
   it('shows the Generic Leads Callified authentication error once per login session', async () => {
     const notifyError = vi.fn();
     registerGlobalNotify({ error: notifyError });

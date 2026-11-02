@@ -217,6 +217,49 @@ describe('buildWebFormScriptEmbedCode', () => {
     expect(() => Function(code.slice('<script>'.length, -'</script>'.length))).not.toThrow();
   });
 
+  test('forwards stored host cookies when a script embed URL has no tracking query', () => {
+    const code = buildWebFormScriptEmbedCode(
+      { id: 107, name: 'Cookie Contact', scope: 'generic' },
+      'https://crm.example.com',
+    );
+    const scriptBody = code.slice('<script>'.length, -'</script>'.length);
+    const insertedFrames = [];
+    const script = {
+      parentNode: {
+        insertBefore: (frame) => insertedFrames.push(frame),
+      },
+      nextSibling: null,
+    };
+    const originalUrl = window.location.href;
+
+    document.cookie = 'utm_source=stored-source; Path=/';
+    document.cookie = 'utm_campaign=stored-campaign; Path=/';
+    document.cookie = '_fbc=fb.1.1234567890.saved; Path=/';
+    window.history.replaceState({}, '', '/contact');
+    globalThis.__gbsScriptEmbedTag = script;
+
+    try {
+      Function(scriptBody.replace('document.currentScript);', 'globalThis.__gbsScriptEmbedTag);'))();
+
+      expect(insertedFrames).toHaveLength(1);
+      const frameUrl = new URL(insertedFrames[0].src);
+      expect(frameUrl.searchParams.get('utm_source')).toBe('stored-source');
+      expect(frameUrl.searchParams.get('utm_campaign')).toBe('stored-campaign');
+      expect(frameUrl.searchParams.get('fbc')).toBe('fb.1.1234567890.saved');
+      expect(document.cookie).toContain('gbs_utm_source=stored-source');
+      expect(document.cookie).toContain('gbs_fbc=fb.1.1234567890.saved');
+    } finally {
+      delete globalThis.__gbsScriptEmbedTag;
+      document.cookie = 'utm_source=; Max-Age=0; Path=/';
+      document.cookie = 'utm_campaign=; Max-Age=0; Path=/';
+      document.cookie = '_fbc=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_utm_campaign=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_fbc=; Max-Age=0; Path=/';
+      window.history.replaceState({}, '', originalUrl);
+    }
+  });
+
   test('does not generate the script-only option for non-Generic CRM forms', () => {
     expect(buildWebFormScriptEmbedCode(
       { id: 105, name: 'Travel Enquiry', scope: 'travel' },

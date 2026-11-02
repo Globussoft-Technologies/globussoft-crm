@@ -2409,10 +2409,16 @@ router.post(
         const status =
           r.code === "NOT_CONNECTED"
             ? 404
+            : r.code === "WHATSAPP_TOKEN_EXPIRED" ||
+                r.code === "WHATSAPP_ACCESS_TOKEN_INVALID"
+              ? 422
             : r.code === "GRAPH_ERROR"
               ? 502
               : 400;
-        return res.status(status).json({ error: r.code, detail: r.error });
+        return res.status(status).json({
+          error: r.error || "WhatsApp template sync failed.",
+          code: r.code,
+        });
       }
       res.json({ success: true, synced: r.synced, total: r.total });
     } catch (err) {

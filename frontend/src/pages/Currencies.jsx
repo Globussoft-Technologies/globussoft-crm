@@ -59,13 +59,18 @@ export default function Currencies() {
       // React StrictMode's duplicate mount effect from sending two seed calls.
       if (Array.isArray(c) && c.some((currency) => currency.id <= 0)) {
         if (!seedPromiseRef.current) {
-          seedPromiseRef.current = fetchApi('/api/currencies/seed', { method: 'POST' });
+          seedPromiseRef.current = fetchApi('/api/currencies/seed', { method: 'POST' })
+            .catch((error) => {
+              seedPromiseRef.current = null;
+              throw error;
+            });
         }
         c = await seedPromiseRef.current;
-        if (typeof setTenant === 'function') {
-          setTenant({ ...(tenant || {}), defaultCurrency: 'INR' });
+        const seededBase = c.find((currency) => currency.isBase);
+        if (seededBase && typeof setTenant === 'function') {
+          setTenant({ ...(tenant || {}), defaultCurrency: seededBase.code });
         }
-        // The first pivot used preview data; refresh its INR metadata now.
+        // The first pivot used preview data; refresh after initialization.
         p = await fetchApi('/api/currencies/pivot/deals').catch(() => null);
       }
       setCurrencies(c || []);
@@ -83,14 +88,18 @@ export default function Currencies() {
     if (!form.code || !form.symbol || !form.name) return notify.error('Code, symbol, and name are required');
     const rate = Number(form.exchangeRate);
     if (!Number.isFinite(rate) || rate <= 0) return notify.error('Enter an exchange rate greater than zero');
+    if (form.isBase && !await confirmCurrencyChange(form)) return;
     try {
-      await fetchApi('/api/currencies', {
+      const created = await fetchApi('/api/currencies', {
         method: 'POST',
         body: JSON.stringify({ ...form, exchangeRate: rate }),
       });
+      if (form.isBase && typeof setTenant === 'function') {
+        setTenant({ ...(tenant || {}), defaultCurrency: created.code || form.code.toUpperCase() });
+      }
       setShowAdd(false);
       setForm({ code: '', symbol: '', name: '', exchangeRate: '', isBase: false });
-      load();
+      await load();
     } catch (e) { notify.error(e.message || 'Failed to create currency'); }
   };
 

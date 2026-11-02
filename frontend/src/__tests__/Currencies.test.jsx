@@ -13,8 +13,7 @@
  *      `/api/currencies/pivot/deals` (parallel `Promise.all`).
  *   3. Currency rows render with code / symbol / name / 4-decimal rate.
  *   4. Preview rows are automatically persisted through `/api/currencies/seed`
- *      without a manual initialization prompt; INR becomes the reporting
- *      and base currency.
+ *      without a manual initialization prompt, preserving reporting currency.
  *   5. Add Currency modal opens, submits POST `/api/currencies` with the
  *      five-field body shape `{code, symbol, name, exchangeRate, isBase}`,
  *      and rejects submission when required fields are missing (notify.error).
@@ -198,27 +197,47 @@ describe('<Currencies /> — page surface', () => {
     expect(screen.getByText('3.7500')).toBeInTheDocument();
   });
 
-  it('automatically persists preview defaults with INR and shows no initialization prompt', async () => {
+  it.each(['USD', 'INR', 'EUR'])('initializes without changing reporting currency (%s)', async (baseCode) => {
     const setTenant = vi.fn();
-    const inrDefaults = previewCurrencies.map((currency, index) => ({
+    const preview = persistedCurrencies.map((currency) => ({ ...currency, id: -currency.id }));
+    const baseRate = preview.find((currency) => currency.code === baseCode).exchangeRate;
+    const seededDefaults = preview.map((currency, index) => ({
       ...currency,
       id: index + 1,
-      exchangeRate: currency.code === 'INR' ? 1 : 1 / 83.25,
-      isBase: currency.code === 'INR',
+      exchangeRate: currency.exchangeRate / baseRate,
+      isBase: currency.code === baseCode,
     }));
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/currencies') return Promise.resolve(previewCurrencies);
-      if (url === '/api/currencies/seed' && opts?.method === 'POST') return Promise.resolve(inrDefaults);
+      if (url === '/api/currencies') return Promise.resolve(preview);
+      if (url === '/api/currencies/seed' && opts?.method === 'POST') return Promise.resolve(seededDefaults);
       if (url === '/api/currencies/pivot/deals') return Promise.resolve(null);
       return Promise.resolve(null);
     });
-    render(<MemoryRouter><AuthContext.Provider value={{ tenant: { defaultCurrency: 'USD' }, setTenant }}><Currencies /></AuthContext.Provider></MemoryRouter>);
+    render(<MemoryRouter><AuthContext.Provider value={{ tenant: { defaultCurrency: baseCode }, setTenant }}><Currencies /></AuthContext.Provider></MemoryRouter>);
     expect(await screen.findByText(/Active Currencies/i)).toBeInTheDocument();
     expect(screen.queryByText(/Default currencies \(preview\)/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Initialize Defaults/i })).not.toBeInTheDocument();
     expect(fetchApiMock).toHaveBeenCalledWith('/api/currencies/seed', { method: 'POST' });
-    expect(setTenant).toHaveBeenCalledWith({ defaultCurrency: 'INR' });
-    expect(screen.getAllByText('INR (₹)').length).toBeGreaterThanOrEqual(1);
+    expect(setTenant).toHaveBeenCalledWith({ defaultCurrency: baseCode });
+    expect(notifyConfirm).not.toHaveBeenCalled();
+  });
+
+  it('retries automatic initialization after a transient failure when refreshed', async () => {
+    let attempts = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/currencies') return Promise.resolve(previewCurrencies);
+      if (url === '/api/currencies/seed' && opts?.method === 'POST') {
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new Error('Temporary seed failure')) : Promise.resolve(persistedCurrencies);
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderCurrencies();
+    await screen.findByText('Temporary seed failure');
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
+    await screen.findByText('US Dollar');
+    expect(attempts).toBe(2);
+    expect(screen.queryByText('Temporary seed failure')).not.toBeInTheDocument();
   });
 
   it('preview banner HIDES when every row has a positive id (#473 every-row gate)', async () => {
@@ -270,6 +289,37 @@ describe('<Currencies /> — page surface', () => {
       expect(body.exchangeRate).toBe(149.5);
       expect(body.isBase).toBe(false);
     });
+  });
+
+  it.each([false, true])('confirms a new base currency and only saves on approval (%s)', async (approved) => {
+    const setTenant = vi.fn();
+    notifyConfirm.mockResolvedValue(approved);
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/currencies' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 99, code: 'JPY', isBase: true, exchangeRate: 1 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    render(<MemoryRouter><AuthContext.Provider value={{ tenant: { defaultCurrency: 'USD' }, setTenant }}><Currencies /></AuthContext.Provider></MemoryRouter>);
+    await screen.findByText('US Dollar');
+    fireEvent.click(screen.getByRole('button', { name: /Add Currency/i }));
+    await screen.findByRole('option', { name: /Japanese Yen \(JPY\)/i });
+    fireEvent.change(screen.getByRole('combobox', { name: /Select currency/i }), { target: { value: 'JPY' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Set as base currency' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Change base currency to JPY?',
+    })));
+    if (approved) {
+      await waitFor(() => expect(setTenant).toHaveBeenCalledWith({ defaultCurrency: 'JPY' }));
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/currencies', expect.objectContaining({
+        method: 'POST', body: JSON.stringify({ code: 'JPY', symbol: '¥', name: 'Japanese Yen', exchangeRate: 149.5, isBase: true }),
+      }));
+    } else {
+      expect(fetchApiMock.mock.calls.some(([url, opts]) => url === '/api/currencies' && opts?.method === 'POST')).toBe(false);
+      expect(setTenant).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /^Create$/ })).toBeInTheDocument();
+    }
   });
 
   it('Add Currency with missing fields fires notify.error and does NOT POST', async () => {

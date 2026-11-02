@@ -165,7 +165,7 @@ router.post("/", ...adminOnly, async (req, res) => {
           data: { isBase: false },
         });
       }
-      return tx.currency.create({
+      const currency = await tx.currency.create({
         data: {
           code: String(code).toUpperCase(),
           symbol,
@@ -175,6 +175,13 @@ router.post("/", ...adminOnly, async (req, res) => {
           tenantId,
         },
       });
+      if (makeBase) {
+        await tx.tenant.update({
+          where: { id: tenantId },
+          data: { defaultCurrency: currency.code },
+        });
+      }
+      return currency;
     });
     res.status(201).json(created);
   } catch (err) {
@@ -194,7 +201,18 @@ router.post("/seed", ...adminOnly, async (req, res) => {
     if (existing > 0) {
       return res.status(400).json({ error: "Currencies already initialized" });
     }
-    const defaults = defaultsWithBase("INR");
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { defaultCurrency: true },
+    });
+    const baseCode = tenant?.defaultCurrency || "USD";
+    if (!DEFAULTS.some((currency) => currency.code === baseCode)) {
+      return res.status(400).json({
+        error: "The reporting currency is not in the starter set. Add it explicitly instead of changing the reporting currency automatically.",
+        code: "REPORTING_CURRENCY_NOT_IN_STARTER_SET",
+      });
+    }
+    const defaults = defaultsWithBase(baseCode);
     const created = await prisma.$transaction(async (tx) => {
       const rows = [];
       for (const currency of defaults) {
@@ -205,7 +223,7 @@ router.post("/seed", ...adminOnly, async (req, res) => {
       // Keep the base rate and the reporting currency consistent everywhere.
       await tx.tenant.update({
         where: { id: tenantId },
-        data: { defaultCurrency: "INR" },
+        data: { defaultCurrency: baseCode },
       });
       return rows;
     });

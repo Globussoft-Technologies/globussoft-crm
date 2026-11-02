@@ -68,6 +68,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
 
   { path: '/leads', label: 'All Leads', category: 'Leads' },
   { path: '/lead-reports', label: 'Lead Reports', category: 'Leads' },
+  { path: '/field-config', label: 'Field Config', category: 'Leads' },
 
   { path: '/inbox', label: 'Inbox', category: 'Communication' },
   { path: '/whatsapp', label: 'WhatsApp', category: 'Communication' },

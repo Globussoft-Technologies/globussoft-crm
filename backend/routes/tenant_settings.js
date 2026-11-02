@@ -78,6 +78,20 @@ function defaultCategoryFor(key) {
 // { ok: true } or { ok: false, code, error } so callers can return 400
 // with a canonical envelope before touching the DB.
 function validateTenantSettingValue(key, rawValue) {
+  if (key === KEYS.GENERIC_FIELD_CONFIG) {
+    let config;
+    try {
+      config = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_FIELD_CONFIG", error: "Field configuration must be valid JSON." };
+    }
+    if (!config || typeof config !== "object" || Array.isArray(config) || String(rawValue).length > 100000) {
+      return { ok: false, code: "INVALID_FIELD_CONFIG", error: "Field configuration must be a JSON object smaller than 100 KB." };
+    }
+    if (config.customGroups !== undefined && (!Array.isArray(config.customGroups) || config.customGroups.length > 50)) {
+      return { ok: false, code: "INVALID_FIELD_CONFIG", error: "Field configuration supports at most 50 custom groups." };
+    }
+  }
   if (key === KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES) {
     let stages;
     try {
@@ -377,14 +391,14 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       });
     }
 
-    if (key === KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES) {
+    if ([KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES, KEYS.GENERIC_FIELD_CONFIG].includes(key)) {
       const tenant = await prisma.tenant.findUnique({
         where: { id: tenantId },
         select: { vertical: true },
       });
       if (tenant?.vertical !== "generic") {
         return res.status(404).json({
-          error: "Lifecycle stage customization is available only for Generic CRM",
+          error: "This configuration is available only for Generic CRM",
           code: "GENERIC_ONLY",
         });
       }

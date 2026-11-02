@@ -135,6 +135,7 @@ describe('filterSidebarPages', () => {
     expect(manager).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: '/whatsapp' }),
       expect.objectContaining({ path: '/lead-reports' }),
+      expect.objectContaining({ path: '/field-config', label: 'Field Config' }),
       expect.objectContaining({ id: 'adsgpt', actionTarget: '[data-tour-feature="adsgpt"]' }),
       expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
     ]));
@@ -142,6 +143,22 @@ describe('filterSidebarPages', () => {
     expect(genericRoleGuardProps('/workflows')).toEqual({
       requiredPermission: { module: 'workflows', action: 'read' },
     });
+  });
+
+  it('keeps Field Config in Generic admin search only and respects tenant page visibility', () => {
+    const hasPermission = () => true;
+    const adminPages = getGenericSidebarPages({ isAdmin: true, isManager: true, permissionsReady: true, hasPermission });
+    const userPages = getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission });
+    const hiddenPages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission,
+      hiddenPagePaths: ['/field-config'],
+    });
+    expect(adminPages.some((page) => page.path === '/field-config')).toBe(true);
+    expect(userPages.some((page) => page.path === '/field-config')).toBe(false);
+    expect(hiddenPages.some((page) => page.path === '/field-config')).toBe(false);
   });
 
   it('keeps only travel sidebar-visible pages and rewrites their labels', () => {

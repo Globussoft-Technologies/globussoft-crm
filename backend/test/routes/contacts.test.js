@@ -31,7 +31,7 @@
  *   POST /api/contacts:
  *    7. happy create → 201 + emitEvent + writeAudit; dedup preflight
  *       returns null then prisma.contact.create fires with tenantId injected
- *    8. missing required email → 400 EMAIL_REQUIRED (#160)
+ *    8. Generic CRM may omit email; other verticals still require it
  *    9. dedup hit → 409 DUPLICATE_CONTACT with existingContactId +
  *       matchedBy + projection envelope (PRD §4.5)
  *
@@ -1321,8 +1321,28 @@ describe('POST /api/contacts — create', () => {
       contact: created,
     }));
   });
-  test('missing required email → 400 EMAIL_REQUIRED (#160); prisma NOT called', async () => {
+  test('Generic CRM can create a Lead without email when the field is optional', async () => {
+    const created = {
+      ...SAMPLE_CONTACT,
+      id: 7778,
+      name: 'Phone Only Lead',
+      email: null,
+      phone: '+919811000778',
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
     const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({ name: 'Phone Only Lead', phone: '+919811000778' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 7778, email: null });
+    expect(prisma.contact.create.mock.calls[0][0].data.email).toBeUndefined();
+  });
+
+  test('missing required email outside Generic CRM → 400 EMAIL_REQUIRED; prisma NOT called', async () => {
+    const res = await request(makeApp({ vertical: 'travel' }))
       .post('/api/contacts')
       .send({ name: 'No Email Person' });
 

@@ -154,8 +154,16 @@
   display: grid !important;
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: visible;
+}
+
+.create-lead-modal--generic
+  .create-lead-form--generic.create-lead-form--scrollable {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.25rem;
 }
 
 .create-lead-form--generic > * {

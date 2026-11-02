@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 // These assertions check source contracts, not the formatter's quote style
 // or whitespace. Runtime/layout assertions below remain unchanged.
@@ -21,6 +21,36 @@ describe('webForms helpers', () => {
   test('slugifies a form name for public URLs', () => {
     expect(slugifyWebFormName('EmpMonitor Demo')).toBe('empmonitor-demo');
     expect(slugifyWebFormName('   ')).toBe('web-form');
+  });
+
+  test('builds a website snippet that preserves first-touch Generic tracking cookies', () => {
+    const source = buildGenericTrackingCookieSetupCode()
+      .replace(/^<script>\s*/, '')
+      .replace(/\s*<\/script>$/, '');
+    const cookies = new Map();
+    const document = {};
+    Object.defineProperty(document, 'cookie', {
+      get: () => [...cookies].map(([key, value]) => `${key}=${value}`).join('; '),
+      set: (value) => {
+        const pair = value.split(';', 1)[0];
+        const separator = pair.indexOf('=');
+        cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+      },
+    });
+    const context = {
+      document,
+      URLSearchParams,
+      window: { location: { search: '?utm_source=google&gclid=click-123', protocol: 'https:' } },
+    };
+
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('google');
+    expect(cookies.get('gbs_gclid')).toBe('click-123');
+
+    context.window.location.search = '?utm_source=facebook&gclid=click-456';
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('google');
+    expect(cookies.get('gbs_gclid')).toBe('click-123');
   });
 });
 

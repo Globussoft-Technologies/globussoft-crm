@@ -654,6 +654,25 @@ function emptyRule(template) {
   };
 }
 
+function emptyWebhookRule() {
+  return emptyRule({
+    name: "Untitled webhook workflow",
+    module: "contact",
+    action: "send_webhook",
+    actionConfig: defaultWebhookConfig("contact"),
+  });
+}
+
+function isWebhookWorkflow(workflow) {
+  if (workflow?.actionType === "send_webhook") return true;
+  try {
+    const target = typeof workflow?.targetState === "string" ? JSON.parse(workflow.targetState) : workflow?.targetState;
+    return Array.isArray(target?.actions) && target.actions.some((action) => action?.type === "send_webhook");
+  } catch {
+    return false;
+  }
+}
+
 function fromRule(rule) {
   let target = {};
   try { target = rule.targetState ? JSON.parse(rule.targetState) : {}; } catch { target = {}; }
@@ -884,7 +903,7 @@ function ScheduleBuilder({ schedule, module, onChange }) {
   );
 }
 
-function ActionCard({ action, index, module, workflowId, updateAction, removeAction, pickers }) {
+function ActionCard({ action, index, module, workflowId, updateAction, removeAction, pickers, webhookOnly = false }) {
   const [showWebhookSettings, setShowWebhookSettings] = useState(false);
   const selected = catalogue.actions.find((item) => item.value === action.type) || catalogue.actions[0];
   const ActionIcon = selected.icon;
@@ -896,8 +915,8 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
         <span className="workflow-group-number">{index + 1}</span>
         <div className="workflow-action-content">
           <div className="workflow-action-title">Action for: {MODULES.find((item) => item.value === module)?.label || "Contacts"} <ChevronDown size={14} /></div>
-          <Select aria-label={`Action ${index + 1}`} value={action.type} onChange={(type) => updateAction(index, { type, config: type === "update_field" ? { entity: module } : {} })}>
-            {actionsForModule(module).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          <Select aria-label={`Action ${index + 1}`} value={action.type} onChange={(type) => updateAction(index, { type, config: type === "update_field" ? { entity: module } : type === "send_webhook" ? defaultWebhookConfig(module) : {} })}>
+            {actionsForModule(module).filter((item) => !webhookOnly || item.value === "send_webhook").map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </Select>
           {(action.type === "send_email" || action.type === "send_sms") && <input aria-label={`Action ${index + 1} recipient`} value={config.to || ""} onChange={(event) => updateConfig("to", event.target.value)} placeholder={action.type === "send_email" ? "Recipient email or record field" : "Recipient phone or record field"} />}
           {action.type === "send_notification" && <input aria-label={`Action ${index + 1} recipient user`} value={config.userId || ""} onChange={(event) => updateConfig("userId", event.target.value)} placeholder="Recipient user ID (optional)" inputMode="numeric" />}
@@ -997,7 +1016,7 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
   );
 }
 
-export default function Workflows() {
+export default function Workflows({ webhookOnly = false, embedded = false }) {
   const notify = useNotify();
   const [view, setView] = useState("all");
   const [templateCategory, setTemplateCategory] = useState("all");
@@ -1082,7 +1101,11 @@ export default function Workflows() {
   // closes over `notify`, so exhaustive-deps is satisfied without a suppression.
   useEffect(() => { loadWorkflows(); }, []);
 
-  const filteredWorkflows = useMemo(() => workflows.filter((workflow) => view === "all" || (view === "active" ? workflow.isActive : !workflow.isActive)), [workflows, view]);
+  const scopedWorkflows = useMemo(
+    () => webhookOnly ? workflows.filter(isWebhookWorkflow) : workflows,
+    [webhookOnly, workflows],
+  );
+  const filteredWorkflows = useMemo(() => scopedWorkflows.filter((workflow) => view === "all" || (view === "active" ? workflow.isActive : !workflow.isActive)), [scopedWorkflows, view]);
   const filteredTemplates = TEMPLATES
     .filter((template) => (templateCategory === "all" || template.category === templateCategory) && template.name.toLowerCase().includes(templateSearch.toLowerCase()))
     .sort((a, b) => Number(a.name === "Junk Lead Suppression to Meta") - Number(b.name === "Junk Lead Suppression to Meta"));
@@ -1190,24 +1213,40 @@ export default function Workflows() {
     }
   };
 
+  const createWorkflow = () => setEditor(webhookOnly ? emptyWebhookRule() : emptyRule());
+
   if (editor) {
-    return <WorkflowEditor editor={editor} setEditor={setEditor} saving={saving} save={save} onTest={testEditor} onCancel={() => setEditor(null)} pickers={pickers} onRunNow={runNow} />;
+    return <WorkflowEditor editor={editor} setEditor={setEditor} saving={saving} save={save} onTest={testEditor} onCancel={() => setEditor(null)} pickers={pickers} onRunNow={runNow} webhookOnly={webhookOnly} />;
   }
 
   if (history) return <HistoryPanel workflow={history} onClose={() => setHistory(null)} />;
 
+  if (embedded) {
+    return (
+      <div className="workflow-page workflow-embedded-page">
+        <div className="workflow-topbar">
+          <div className="workflow-breadcrumb"><b>Webhook workflows</b></div>
+          <button className="workflow-primary" onClick={createWorkflow}><Plus size={17} /> Create webhook workflow</button>
+        </div>
+        <main className="workflow-main">
+          <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view="embedded" onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="workflow-page">
-      <div className="workflow-topbar"><div className="workflow-breadcrumb"><b>Workflows</b></div><button className="workflow-primary" onClick={() => setEditor(emptyRule())}><Plus size={17} /> Create workflow</button></div>
+      <div className="workflow-topbar"><div className="workflow-breadcrumb"><b>Workflows</b></div><button className="workflow-primary" onClick={createWorkflow}><Plus size={17} /> Create workflow</button></div>
       <div className="workflow-layout">
         <aside className="workflow-sidebar">
           <h2>Workflow templates</h2>
           <nav>{TEMPLATE_CATEGORIES.map((category) => <button key={category.value} className={templateCategory === category.value ? "is-selected" : ""} onClick={() => { setTemplateCategory(category.value); setView("templates"); }}><span>{category.label}</span><small>{category.value === "all" ? TEMPLATES.length : TEMPLATES.filter((template) => template.category === category.value).length}</small></button>)}</nav>
-          <div className="workflow-status-nav"><h2>Workflows by status</h2>{[["all", "All workflows"], ["active", "Active"], ["inactive", "Inactive"]].map(([value, label]) => <button key={value} className={view === value ? "is-selected" : ""} onClick={() => setView(value)}><span><i className={`workflow-status-dot ${value}`} />{label}</span><small>{value === "all" ? workflows.length : workflows.filter((workflow) => value === "active" ? workflow.isActive : !workflow.isActive).length}</small></button>)}</div>
+          <div className="workflow-status-nav"><h2>Workflows by status</h2>{[["all", "All workflows"], ["active", "Active"], ["inactive", "Inactive"]].map(([value, label]) => <button key={value} className={view === value ? "is-selected" : ""} onClick={() => setView(value)}><span><i className={`workflow-status-dot ${value}`} />{label}</span><small>{value === "all" ? scopedWorkflows.length : scopedWorkflows.filter((workflow) => value === "active" ? workflow.isActive : !workflow.isActive).length}</small></button>)}</div>
           <div className="workflow-help"><b>What are workflows?</b><p>Automate repetitive CRM work when records change.</p></div>
         </aside>
         <main className="workflow-main">
-          {view === "templates" ? <TemplateGallery search={templateSearch} setSearch={setTemplateSearch} category={templateCategory} templates={filteredTemplates} onUse={(template) => setEditor(emptyRule(template))} onCreate={() => setEditor(emptyRule())} /> : <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view={view} onCreate={() => setEditor(emptyRule())} onReorder={reorderWorkflows} onRunNow={runNow} />}
+          {view === "templates" ? <TemplateGallery search={templateSearch} setSearch={setTemplateSearch} category={templateCategory} templates={filteredTemplates} onUse={(template) => setEditor(emptyRule(template))} onCreate={createWorkflow} /> : <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view={view} onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} />}
         </main>
       </div>
     </div>
@@ -1233,7 +1272,7 @@ function TemplateGallery({ search, setSearch, category, templates, onUse, onCrea
   return <div className="workflow-template-main"><div className="workflow-heading"><div><h1>Start by selecting a workflow template</h1><p>Choose a ready-made workflow or create your own.</p></div></div><label className="workflow-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search for a template" /></label><h2>{TEMPLATE_CATEGORIES.find((item) => item.value === category)?.label || "All templates"}</h2><div className="workflow-template-grid">{templates.map((template, index) => <article className="workflow-template-card" key={`${template.name}-${index}`}><div className="workflow-template-icon"><Activity size={21} /></div><h3>{template.name}</h3><button className="workflow-dark-button" onClick={() => onUse(template)}>Use template</button></article>)}</div>{templates.length === 0 && <div className="workflow-empty">No templates match your search.</div>}<div className="workflow-create-footer">Could not find a template which works for you?<button className="workflow-dark-button" onClick={onCreate}>Create your own workflow</button></div></div>;
 }
 
-function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pickers, onRunNow }) {
+function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pickers, onRunNow, webhookOnly = false }) {
   const update = (patch) => setEditor((current) => ({ ...current, ...patch }));
   const updateGroup = (index, patch) => update({ groups: editor.groups.map((group, currentIndex) => currentIndex === index ? { ...group, ...patch } : group) });
   const updateAction = (index, patch) => update({ actions: editor.actions.map((action, currentIndex) => currentIndex === index ? { ...action, ...patch } : action) });
@@ -1258,7 +1297,7 @@ function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pic
   return (
     <div className="workflow-page workflow-editor-page">
       <div className="workflow-editor-topbar">
-        <button className="workflow-back" onClick={onCancel}><ArrowLeft size={16} /> Workflows</button>
+        <button className="workflow-back" onClick={onCancel}><ArrowLeft size={16} /> {webhookOnly ? "Webhook workflows" : "Workflows"}</button>
         <div>
           <button className="workflow-secondary" onClick={onCancel}>Cancel</button>
           <button className="workflow-secondary" onClick={() => save(false)} disabled={saving}>Save as draft</button>
@@ -1305,8 +1344,8 @@ function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pic
         </section>
         <section>
           <h2>What actions should be executed?</h2>
-          {editor.actions.map((action, index) => <ActionCard key={index} action={action} index={index} module={editor.module} workflowId={editor.id} pickers={pickers} updateAction={updateAction} removeAction={(actionIndex) => update({ actions: editor.actions.filter((_, currentIndex) => currentIndex !== actionIndex) })} />)}
-          <button className="workflow-link-button" onClick={() => update({ actions: [...editor.actions, { type: "send_notification", config: {} }] })}><Plus size={15} /> Add action</button>
+          {editor.actions.map((action, index) => <ActionCard key={index} action={action} index={index} module={editor.module} workflowId={editor.id} pickers={pickers} webhookOnly={webhookOnly} updateAction={updateAction} removeAction={(actionIndex) => update({ actions: editor.actions.filter((_, currentIndex) => currentIndex !== actionIndex) })} />)}
+          <button className="workflow-link-button" onClick={() => update({ actions: [...editor.actions, webhookOnly ? { type: "send_webhook", config: defaultWebhookConfig(editor.module) } : { type: "send_notification", config: {} }] })}><Plus size={15} /> Add action</button>
         </section>
       </div>
     </div>

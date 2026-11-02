@@ -139,6 +139,7 @@ import {
   Brain,
   PanelLeftClose,
   PanelLeftOpen,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { AuthContext } from "../App";
@@ -2774,6 +2775,7 @@ function renderGenericNav({
             affecting Callified's separate assigning-staff controls. */}
         {/* <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} /> */}
         <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+        <Link to="/field-config" icon={SlidersHorizontal} label="Field Config" adminOnly />
       </>, "leads-group")}
 
       {renderGroup("Communication", <>

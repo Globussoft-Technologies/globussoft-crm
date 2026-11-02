@@ -57,6 +57,47 @@ const EMBED_ATTRIBUTION_QUERY_KEYS = [
   'hsa_net', 'hsa_ver',
 ];
 
+export const GENERIC_TRACKING_COOKIE_KEYS = [
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_id', 'utm_term', 'utm_content',
+  'gclid', 'gbraid', 'wbraid', 'fbclid', 'fbc', 'fbp', 'campaign_id',
+  'adset_id', 'ad_id', 'campaign_name', 'adset_name', 'ad_name', 'placement',
+  'site_source_name', 'landing_page', 'referrer',
+];
+
+/**
+ * Return a self-contained snippet customers can paste into their website.
+ * It preserves the first campaign value for 90 days, matching Generic CRM's
+ * embedded-form attribution runtime. The `gbs_` prefix avoids overwriting a
+ * website's own analytics cookies.
+ */
+export function buildGenericTrackingCookieSetupCode() {
+  const keys = JSON.stringify(GENERIC_TRACKING_COOKIE_KEYS);
+  return `<script>
+(function saveGlobussoftTrackingCookies() {
+  var keys = ${keys};
+  var maxAge = 90 * 24 * 60 * 60;
+  var params = new URLSearchParams(window.location.search);
+  function readCookie(name) {
+    var prefix = name + "=";
+    var cookies = document.cookie.split(";");
+    for (var i = 0; i < cookies.length; i += 1) {
+      var cookie = cookies[i].trim();
+      if (cookie.indexOf(prefix) === 0) return cookie.substring(prefix.length);
+    }
+    return "";
+  }
+  keys.forEach(function (key) {
+    if (readCookie("gbs_" + key)) return;
+    var value = params.get(key);
+    if (!value) return;
+    document.cookie = "gbs_" + key + "=" + encodeURIComponent(value.slice(0, 2000))
+      + "; Max-Age=" + maxAge + "; Path=/; SameSite=Lax"
+      + (window.location.protocol === "https:" ? "; Secure" : "");
+  });
+})();
+</script>`;
+}
+
 function buildEmbedHostRuntime(enableAttribution, frameExpression = 'document.currentScript.previousElementSibling') {
   if (!enableAttribution) {
     return `(function(frame){if(!frame)return;var lastDevice="";function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(${frameExpression});`;

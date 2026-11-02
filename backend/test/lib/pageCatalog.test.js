@@ -90,6 +90,19 @@ describe('Generic CRM Workflows page', () => {
   });
 });
 
+describe('Generic CRM Field Config page', () => {
+  it('is catalogued only for Generic CRM and uses the settings-manage permission', () => {
+    expect(getCatalogForVertical('generic').find((page) => page.path === '/field-config')).toMatchObject({
+      label: 'Field Config',
+      category: 'Leads',
+      vertical: 'generic',
+      requiredPermissions: [{ module: 'settings', action: 'manage' }],
+    });
+    expect(getCatalogForVertical('wellness').some((page) => page.path === '/field-config')).toBe(false);
+    expect(getCatalogForVertical('travel').some((page) => page.path === '/field-config')).toBe(false);
+  });
+});
+
 describe('customerOnly storefront pages', () => {
   // The customer-facing surfaces (Buy Gift Cards storefront + My
   // Transactions history) are open to any authenticated session

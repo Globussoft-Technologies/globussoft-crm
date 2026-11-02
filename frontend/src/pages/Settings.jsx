@@ -30,6 +30,7 @@ import {
   Bot,
   Globe2,
   Server,
+  Copy,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -47,6 +48,7 @@ import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEf
 import ProductTourSettings from "../components/ProductTourSettings";
 import GoogleMapsSettingsCard from "../components/GoogleMapsSettingsCard";
 import TwilioSettingsCard from "../components/TwilioSettingsCard";
+import { buildGenericTrackingCookieSetupCode } from "../utils/webForms";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -3790,6 +3792,10 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
 }
 
 function GenericWebFormAutomaticTrackingCard() {
+  const [showSetupModal, setShowSetupModal] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const setupCode = buildGenericTrackingCookieSetupCode();
   const cookieKeys = [
     ["UTM Source", "utm_source"],
     ["UTM Medium", "utm_medium"],
@@ -3814,6 +3820,30 @@ function GenericWebFormAutomaticTrackingCard() {
     ["Landing Page", "landing_page"],
     ["Referrer", "referrer"],
   ];
+  useEffect(() => {
+    if (!showSetupModal) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setShowSetupModal(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showSetupModal]);
+  const closeSetupModal = () => {
+    setShowSetupModal(false);
+    setCopied(false);
+    setCopyError(false);
+  };
+  const copySetupCode = async () => {
+    try {
+      await navigator.clipboard.writeText(setupCode);
+      setCopyError(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+      setCopyError(true);
+    }
+  };
   return (
     <div
       className="card"
@@ -3826,6 +3856,20 @@ function GenericWebFormAutomaticTrackingCard() {
       <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", lineHeight: 1.55, marginBottom: "1rem" }}>
         Add these keys to the page URL. Generic CRM saves their values to internal cookies and attaches them to the lead.
       </p>
+      <div style={{ marginBottom: "1rem" }}>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setShowSetupModal(true)}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}
+        >
+          <Copy size={16} />
+          Get cookie setup function
+        </button>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5, margin: "0.6rem 0" }}>
+          Copy the ready-to-use function and paste it once before the closing <code>&lt;/body&gt;</code> tag on your website.
+        </p>
+      </div>
       <div
         style={{
           display: "grid",
@@ -3844,6 +3888,78 @@ function GenericWebFormAutomaticTrackingCard() {
         Page URL, page source, current domain, form name, submission time, browser, operating system, device type,
         and permitted location are fetched automatically. Landing page and referrer are also detected automatically when their keys are absent.
       </p>
+      {showSetupModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cookie-setup-modal-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeSetupModal();
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            display: "grid",
+            placeItems: "center",
+            padding: "20px",
+            background: "rgba(3, 6, 16, 0.72)",
+          }}
+        >
+          <div
+            style={{
+              width: "min(100%, 920px)",
+              maxHeight: "90vh",
+              overflow: "auto",
+              color: "var(--text-primary)",
+              background: "var(--surface-color, var(--bg-primary))",
+              border: "1px solid var(--border-color)",
+              borderRadius: "18px",
+              boxShadow: "0 24px 80px rgba(0, 0, 0, 0.36)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "18px", padding: "20px 22px 18px", borderBottom: "1px solid var(--border-color)" }}>
+              <div>
+                <h3 id="cookie-setup-modal-title" style={{ fontSize: "1.05rem", fontWeight: 800, margin: 0 }}>
+                  Cookie setup function
+                </h3>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>
+                  Paste this function before the closing <code>&lt;/body&gt;</code> tag on your website. It keeps the first tracking value for 90 days.
+                </p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={closeSetupModal} aria-label="Close cookie setup modal" style={{ minWidth: "42px", minHeight: "42px", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ display: "grid", gap: "16px", padding: "20px 22px 22px" }}>
+              <label style={{ display: "grid", gap: "8px" }}>
+                <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website cookie function</span>
+                <textarea
+                  className="input-field"
+                  readOnly
+                  aria-label="Cookie setup function"
+                  value={setupCode}
+                  onFocus={(event) => event.target.select()}
+                  rows={12}
+                  style={{ width: "100%", minHeight: "260px", resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "0.82rem", lineHeight: 1.45 }}
+                />
+              </label>
+              {copyError && (
+                <p role="alert" style={{ color: "var(--danger-color)", fontSize: "0.8rem", margin: 0 }}>
+                  Clipboard access is unavailable. Select the code above and copy it manually.
+                </p>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
+                <button type="button" className="btn-secondary" onClick={copySetupCode} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                  {copied ? <Check size={16} /> : <Copy size={16} />}
+                  {copied ? "Copied" : "Copy function"}
+                </button>
+                <button type="button" className="btn-primary" onClick={closeSetupModal}>Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -384,14 +384,44 @@ export function SmsModal({ contact, onClose, onDone }) {
 
 export function WhatsappModal({ contact, onClose, onDone }) {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const [body, setBody] = useState('');
+  const [templates, setTemplates] = useState([]);
+  const [useTemplate, setUseTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState('');
   const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let cancelled = false;
+    fetchApi('/api/whatsapp/templates', { silent: true })
+      .then((result) => {
+        if (cancelled) return;
+        const rows = Array.isArray(result) ? result : result?.templates || [];
+        setTemplates(rows.filter((template) => template?.status === 'APPROVED'));
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates([]);
+      });
+    return () => { cancelled = true; };
+  }, [isGeneric]);
+
+  const selectedTemplate = templates.find((template) => template.name === templateName);
   const submit = async (e) => {
     e.preventDefault();
+    if (useTemplate && !templateName) {
+      notify.error('Select an approved WhatsApp template.');
+      return;
+    }
     setSending(true);
     try {
-      await sendWhatsapp({ to: contact.whatsappPhone || contact.phone, body, contactId: contact.id });
-      notify.success('WhatsApp message sent.');
+      const result = await sendWhatsapp({
+        to: contact.whatsappPhone || contact.phone,
+        ...(useTemplate ? { templateName } : { body }),
+        contactId: contact.id,
+      });
+      notify.success(result?.status === 'QUEUED' ? 'WhatsApp message queued for sending.' : 'WhatsApp message sent.');
       onDone();
       onClose();
     } catch {
@@ -404,10 +434,47 @@ export function WhatsappModal({ contact, onClose, onDone }) {
     <Modal title={`WhatsApp ${contact.name || ''}`} onClose={onClose}>
       <form onSubmit={submit} className="cp-form">
         <FormRow label="To"><input className="cp-input" value={contact.whatsappPhone || contact.phone || ''} disabled /></FormRow>
-        <FormRow label="Message"><textarea className="cp-textarea" required rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your message…" /></FormRow>
+        {isGeneric && templates.length > 0 && (
+          <label className="cp-task-check">
+            <input
+              type="checkbox"
+              checked={useTemplate}
+              onChange={(e) => {
+                setUseTemplate(e.target.checked);
+                if (!e.target.checked) setTemplateName('');
+              }}
+              disabled={sending}
+            />
+            Use approved template
+          </label>
+        )}
+        {useTemplate ? (
+          <>
+            <FormRow label="Approved template">
+              <select
+                aria-label="Approved template"
+                className="cp-input"
+                required
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                disabled={sending}
+              >
+                <option value="">Select a template</option>
+                {templates.map((template) => <option key={template.id} value={template.name}>{template.name}</option>)}
+              </select>
+            </FormRow>
+            {selectedTemplate?.body && (
+              <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                {selectedTemplate.body}
+              </div>
+            )}
+          </>
+        ) : (
+          <FormRow label="Message"><textarea className="cp-textarea" required rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your message…" /></FormRow>
+        )}
         <div className="cp-btn-row">
           <button type="button" className="cp-action-btn" onClick={onClose}>Cancel</button>
-          <button type="submit" className="cp-action-btn cp-action-primary" disabled={sending}>{sending ? 'Sending…' : 'Send'}</button>
+          <button type="submit" className="cp-action-btn cp-action-primary" disabled={sending || (useTemplate ? !templateName : !body.trim())}>{sending ? 'Sending…' : 'Send'}</button>
         </div>
       </form>
     </Modal>

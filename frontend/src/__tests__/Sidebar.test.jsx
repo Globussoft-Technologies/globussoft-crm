@@ -1701,6 +1701,26 @@ describe('Sidebar — load-bearing render surface', () => {
   // which are the equivalent "automation cluster" navs.
 
   describe('Generic Reports cluster sub-items', () => {
+    it('shows Field Config only in the generic ADMIN Leads group', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const fieldConfigLink = screen.getByText('Field Config').closest('a');
+      expect(fieldConfigLink).toBeTruthy();
+      expect(fieldConfigLink.getAttribute('href')).toBe('/field-config');
+    });
+
+    it('does not expose Field Config to generic non-admins or other verticals', () => {
+      const genericUser = renderSidebar({ vertical: 'generic', role: 'USER' });
+      expect(screen.queryByText('Field Config')).toBeNull();
+      genericUser.unmount();
+
+      const travelAdmin = renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      expect(screen.queryByText('Field Config')).toBeNull();
+      travelAdmin.unmount();
+
+      renderSidebar({ vertical: 'wellness', role: 'ADMIN' });
+      expect(screen.queryByText('Field Config')).toBeNull();
+    });
+
     it('renders remaining Reports cluster items for MANAGER while custom shortcuts stay hidden', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       // "Reports" appears twice (the bare label + potential section header

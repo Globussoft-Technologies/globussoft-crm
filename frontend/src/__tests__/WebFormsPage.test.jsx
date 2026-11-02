@@ -291,8 +291,10 @@ test('contact notification channel controls are limited to Generic web forms', a
 
 
 async function openBuilder(formName = 'Brand intake') {
-  await screen.findByText(formName);
-  fireEvent.click(screen.getByRole('button', { name: /Open builder/i }));
+  const title = await screen.findByText(formName);
+  const card = title.closest('.wf-library-card');
+  expect(card).not.toBeNull();
+  fireEvent.click(within(card).getByRole('button', { name: /Open builder/i }));
   await screen.findAllByDisplayValue(formName);
 }
 
@@ -792,8 +794,10 @@ describe('WebForms builder page', () => {
     ]);
 
     await openBuilder();
-    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /Business type.*custom/i }));
+    const fieldActions = within(document.querySelector('#wf-fields .wf-section-actions'));
+    fireEvent.click(fieldActions.getByRole('button', { name: /Add contact fields/i }));
+    const picker = within(document.querySelector('.wf-field-picker'));
+    fireEvent.click(await picker.findByRole('button', { name: /Business type.*custom/i }));
 
     expect(await screen.findByDisplayValue('SaaS, E-Commerce, Freelancer')).toBeInTheDocument();
   });
@@ -1560,16 +1564,18 @@ test('All Folders searches folders without adding them to the toolbar', async ()
   await screen.findByText('Brand intake');
   const toolbar = screen.getByLabelText('Form folders');
   expect(toolbar.children).toHaveLength(3);
-  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
-  fireEvent.change(screen.getByRole('textbox', { name: 'Search folders' }), { target: { value: 'proj' } });
-  expect(screen.getByRole('button', { name: /Projects.*0/ })).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /Campaigns.*0/ })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Projects.*0/ }));
-  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveAttribute('aria-expanded', 'false');
-  expect(screen.getByRole('button', { name: 'All Folders' })).toHaveClass('wf-folder-active');
-  fireEvent.click(screen.getByRole('button', { name: 'All Folders' }));
-  expect(screen.getByRole('textbox', { name: 'Search folders' })).toHaveValue('');
-  expect(screen.getByRole('button', { name: /Campaigns.*0/ })).toBeInTheDocument();
+  const folders = within(toolbar);
+  const toggle = folders.getByRole('button', { name: 'All Folders' });
+  fireEvent.click(toggle);
+  fireEvent.change(folders.getByLabelText('Search folders'), { target: { value: 'proj' } });
+  expect(folders.getByRole('button', { name: /Projects.*0/ })).toBeInTheDocument();
+  expect(folders.queryByRole('button', { name: /Campaigns.*0/ })).toBeNull();
+  fireEvent.click(folders.getByRole('button', { name: /Projects.*0/ }));
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(toggle).toHaveClass('wf-folder-active');
+  fireEvent.click(toggle);
+  expect(folders.getByLabelText('Search folders')).toHaveValue('');
+  expect(folders.getByRole('button', { name: /Campaigns.*0/ })).toBeInTheDocument();
 });
 
 test.each([

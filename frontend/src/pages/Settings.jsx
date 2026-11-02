@@ -1278,7 +1278,7 @@ export default function Settings() {
                   link" moment. The URL is built from window.location.origin
                   + slug; SSR doesn't apply (Settings is auth-required, never
                   rendered server-side). */}
-                {tenant.slug && (
+                {tenant.vertical === "wellness" && tenant.slug && (
                   // #484: gridColumn:'1 / -1' (full row) replaces 'span 2' so
                   // the cell still spans every column whether the auto-fit grid
                   // resolved to 1, 2, or more columns. flexWrap on the inner
@@ -1338,11 +1338,8 @@ export default function Settings() {
                         color: "var(--text-secondary)",
                       }}
                     >
-                      Share this with{" "}
-                      {tenant.vertical === "wellness"
-                        ? "patients"
-                        : "customers"}{" "}
-                      to let them self-book without logging in.
+                      Share this with patients to let them self-book without
+                      logging in.
                     </p>
                   </div>
                 )}

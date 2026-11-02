@@ -3366,6 +3366,158 @@ table.stable-table tbody tr:hover td {
   transform: none;
   box-shadow: none;
 }
+
+.currency-rates-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: clamp(0.75rem, 3vw, 2rem);
+  background: var(--overlay-bg, rgba(15, 23, 42, 0.58));
+  backdrop-filter: blur(8px);
+}
+
+.currency-rates-dialog.card {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(760px, calc(100dvh - 2rem));
+  padding: clamp(1rem, 2.5vw, 1.5rem);
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+}
+
+.currency-rates-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.currency-rates-close {
+  display: grid;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--subtle-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.currency-rates-close:hover {
+  color: var(--text-primary);
+  border-color: var(--primary-color, var(--accent-color));
+}
+
+.currency-rates-control-group {
+  min-width: 0;
+  margin-bottom: 1rem;
+}
+
+.currency-rates-controls-label {
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.currency-rates-controls {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.15fr) minmax(220px, 0.85fr);
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.currencies-page .currency-rates-controls > select.currency-rates-select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.65rem 2.25rem 0.65rem 0.875rem !important;
+}
+
+.currency-rates-search {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  padding: 0 0.875rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  transition: var(--transition);
+}
+
+.currency-rates-search:focus-within {
+  background: var(--input-bg-focus);
+  border-color: var(--primary-color, var(--accent-color));
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+}
+
+.currency-rates-search > svg {
+  position: static !important;
+  flex: 0 0 16px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  transform: none !important;
+}
+
+/* The icon is a separate flex item rather than being overlaid on the input.
+ * This remains safe even when vertical-specific density rules alter padding. */
+.currencies-page .currency-rates-dialog .currency-rates-search > input.currency-rates-search-input {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.7rem 0 !important;
+  text-indent: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0;
+  box-shadow: none !important;
+}
+
+.currency-rates-table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.currency-rates-dialog table.stable-table {
+  min-width: 620px;
+}
+
+@media (max-width: 720px) {
+  .currency-rates-controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 540px) {
+  .currency-rates-overlay {
+    padding: 0.5rem;
+  }
+
+  .currency-rates-dialog.card {
+    max-height: calc(100dvh - 1rem);
+    border-radius: 12px;
+  }
+
+  .currency-rates-header {
+    margin-bottom: 1rem;
+  }
+
+  .currency-rates-dialog table.stable-table {
+    min-width: 560px;
+  }
+}
+
 table.stable-table th,
 table.stable-table td {
   overflow: hidden;

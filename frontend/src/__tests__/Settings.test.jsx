@@ -1399,6 +1399,10 @@ describe("<Settings /> — extended card coverage", () => {
       configurable: true,
     });
 
+    fetchApiMock.mockImplementation(
+      buildDefaultFetch({ tenant: { ...baseTenant, vertical: "wellness" } }),
+    );
+
     renderSettings();
     await waitFor(() =>
       expect(screen.getByDisplayValue("acme")).toBeInTheDocument(),
@@ -1415,6 +1419,17 @@ describe("<Settings /> — extended card coverage", () => {
     expect(notifyObj.success).toHaveBeenCalledWith(
       expect.stringMatching(/copied/i),
     );
+  });
+
+  it("does not advertise the wellness booking URL for a generic tenant", async () => {
+    renderSettings();
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("acme")).toBeInTheDocument(),
+    );
+
+    expect(screen.queryByText("Public Booking URL")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy URL/i })).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/\/book\/acme$/i)).not.toBeInTheDocument();
   });
 });
 

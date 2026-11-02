@@ -2958,7 +2958,7 @@ const Leads = () => {
   const createLeadFieldCatalog = useMemo(
     () => [
       { key: "name", configId: "name", label: "Full Name", required: true, lockedVisible: true, lockedRequired: true },
-      { key: "email", configId: "email", label: "Email Address", required: true, lockedVisible: true, lockedRequired: false },
+      { key: "email", configId: "email", label: "Email Address", required: true, lockedVisible: true, lockedRequired: (tenantFieldConfig?.fieldOverrides?.email?.required ?? tenantFieldConfig?.fieldOverrides?.email?.isRequired) === true },
       { key: "company", configId: "company", label: "Company", required: false, lockedVisible: false, lockedRequired: false },
       { key: "title", configId: "title", label: "Job Title", required: false, lockedVisible: false, lockedRequired: false },
       { key: "phone", configId: "phone", label: "Phone", required: false, lockedVisible: false, lockedRequired: false },
@@ -2972,16 +2972,15 @@ const Leads = () => {
         lockedRequired: false,
       })),
     ],
-    [customFieldDefs],
+    [customFieldDefs, tenantFieldConfig],
   );
   const createLeadVisibleFieldKeys = useMemo(() => {
     const overrides = tenantFieldConfig?.fieldOverrides || {};
-    const hasTenantQuickAddConfig = Object.values(overrides).some((value) => value && Object.prototype.hasOwnProperty.call(value, "quickAdd"));
     const saved = Array.isArray(savedCreateLeadFieldPrefs.visible)
       ? new Set(savedCreateLeadFieldPrefs.visible)
-      : hasTenantQuickAddConfig
-        ? new Set(createLeadFieldCatalog.filter((field) => overrides[field.configId]?.quickAdd).map((field) => field.key))
-        : new Set(DEFAULT_CREATE_LEAD_VISIBLE_FIELDS);
+      : new Set(createLeadFieldCatalog
+          .filter((field) => overrides[field.configId]?.quickAdd ?? DEFAULT_CREATE_LEAD_VISIBLE_FIELDS.includes(field.key))
+          .map((field) => field.key));
     return createLeadFieldCatalog
       .filter((field) => field.lockedVisible || saved.has(field.key))
       .map((field) => field.key);

@@ -136,6 +136,44 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     navigateMock.mockReset();
   });
 
+  it.each([false, true])('preserves unspecified quick-add defaults when Phone visibility is %s', async (quickAdd) => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { phone: { quickAdd } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Company')).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('Organic')).toBeInTheDocument();
+    expect(Boolean(within(dialog).queryByPlaceholderText(/Phone \(/))).toBe(quickAdd);
+  });
+
+  it('keeps tenant-required email required despite saved personal preferences', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'company'], required: ['name'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { email: { required: true } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Email Address')).toBeRequired();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Require Email Address' })).toBeChecked();
+    expect(within(picker).getByRole('checkbox', { name: 'Require Email Address' })).toBeDisabled();
+  });
+
   it('rejects <script> tags in the name and never POSTs', async () => {
     renderLeads();
     // Wait for initial fetch to settle

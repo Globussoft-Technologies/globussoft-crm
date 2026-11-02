@@ -2744,11 +2744,20 @@ router.post("/", async (req, res) => {
     }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
+    let requireEmail = !isGenericCrmRequest(req);
+    if (!requireEmail && !String(req.body.email ?? "").trim()) {
+      const config = JSON.parse(await getSetting(req.user.tenantId, KEYS.GENERIC_FIELD_CONFIG, {
+        coerce: String,
+        fallback: "{}",
+      }));
+      const emailRule = config?.fieldOverrides?.email;
+      // Personal Create Lead preferences cannot relax a tenant requirement.
+      // Without an explicit tenant rule, preserve Generic's optional-email API.
+      requireEmail = (emailRule?.required ?? emailRule?.isRequired) === true;
+    }
     const inputErr = validateContactInput(req.body, {
       isUpdate: false,
-      // Generic CRM's field picker can make email optional. Other verticals
-      // retain the established create-time API requirement.
-      requireEmail: !isGenericCrmRequest(req),
+      requireEmail,
     });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // #337: persist the trimmed name so we don't leak the user's accidental

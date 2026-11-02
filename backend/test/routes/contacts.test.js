@@ -1322,6 +1322,10 @@ describe('POST /api/contacts — create', () => {
     }));
   });
   test('Generic CRM can create a Lead without email when the field is optional', async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(async ({ where }) =>
+      where.tenantId_key.key === 'generic.fieldConfig'
+        ? { value: JSON.stringify({ fieldOverrides: { email: { required: false } } }) }
+        : null);
     const created = {
       ...SAMPLE_CONTACT,
       id: 7778,
@@ -1339,6 +1343,20 @@ describe('POST /api/contacts — create', () => {
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ id: 7778, email: null });
     expect(prisma.contact.create.mock.calls[0][0].data.email).toBeUndefined();
+  });
+
+  test.each([{ required: true }, { isRequired: true }])('tenant-required email cannot be bypassed (%j)', async (emailRule) => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ fieldOverrides: { email: emailRule } }),
+    });
+    const res = await request(makeApp()).post('/api/contacts').send({ name: 'Phone Only Lead' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('EMAIL_REQUIRED');
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: TENANT_ID, key: 'generic.fieldConfig' } },
+      select: { value: true },
+    });
   });
 
   test('missing required email outside Generic CRM → 400 EMAIL_REQUIRED; prisma NOT called', async () => {

@@ -18,19 +18,23 @@ const DEFAULTS = [
   { code: "AUD", symbol: "A$", name: "Australian Dollar",exchangeRate: 1.4371, isBase: false },
 ];
 
-// Preview and initialization follow the tenant's reporting currency when it
-// is part of the starter set. Keep the published cross-rates unchanged.
-async function defaultsForTenant(tenantId) {
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { defaultCurrency: true },
-  });
-  const base = DEFAULTS.find((currency) => currency.code === tenant?.defaultCurrency) || DEFAULTS[0];
+function defaultsWithBase(baseCode) {
+  const base = DEFAULTS.find((currency) => currency.code === baseCode) || DEFAULTS[0];
   return DEFAULTS.map((currency) => ({
     ...currency,
     exchangeRate: currency.exchangeRate / base.exchangeRate,
     isBase: currency.code === base.code,
   }));
+}
+
+// Preview follows the tenant's reporting currency when it is part of the
+// starter set. Keep the published cross-rates unchanged.
+async function defaultsForTenant(tenantId) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { defaultCurrency: true },
+  });
+  return defaultsWithBase(tenant?.defaultCurrency);
 }
 
 // GET /api/currencies — list currencies for tenant (fall back to defaults if none)
@@ -114,7 +118,9 @@ router.get("/catalog", async (req, res) => {
         code: currency.iso_code,
         symbol: currency.symbol,
         name: currency.name,
-        exchangeRate: Number(latest.rates[currency.iso_code]),
+        // Frankfurter omits the requested base from `rates`. Include it in
+        // the catalog explicitly so consumers can show the complete list.
+        exchangeRate: currency.iso_code === baseCode ? 1 : Number(latest.rates[currency.iso_code]),
       }))
       .filter((currency) => /^[A-Z]{3}$/.test(currency.code)
         && typeof currency.name === "string" && currency.name.trim()
@@ -188,14 +194,21 @@ router.post("/seed", ...adminOnly, async (req, res) => {
     if (existing > 0) {
       return res.status(400).json({ error: "Currencies already initialized" });
     }
-    const defaults = await defaultsForTenant(tenantId);
-    const created = await prisma.$transaction(
-      defaults.map((d) =>
-        prisma.currency.create({
-          data: { ...d, tenantId },
-        })
-      )
-    );
+    const defaults = defaultsWithBase("INR");
+    const created = await prisma.$transaction(async (tx) => {
+      const rows = [];
+      for (const currency of defaults) {
+        rows.push(await tx.currency.create({
+          data: { ...currency, tenantId },
+        }));
+      }
+      // Keep the base rate and the reporting currency consistent everywhere.
+      await tx.tenant.update({
+        where: { id: tenantId },
+        data: { defaultCurrency: "INR" },
+      });
+      return rows;
+    });
     res.status(201).json(created);
   } catch (err) {
     console.error(err);
@@ -288,10 +301,18 @@ router.post("/:id/set-base", ...adminOnly, async (req, res) => {
           data: { exchangeRate: currency.id === id ? 1.0 : Number(currency.exchangeRate) / newBaseRate },
         });
       }
-      return tx.currency.update({
+      const currency = await tx.currency.update({
         where: { id },
         data: { isBase: true, exchangeRate: 1.0 },
       });
+      // Base and reporting currency are one setting in the product UI. Keep
+      // both records in the same transaction so either both selectors move
+      // together or neither change is committed.
+      await tx.tenant.update({
+        where: { id: tenantId },
+        data: { defaultCurrency: existing.code },
+      });
+      return currency;
     });
     res.json(updated);
   } catch (err) {

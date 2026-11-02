@@ -12,10 +12,9 @@
  *   2. Initial mount fires BOTH `/api/currencies` AND
  *      `/api/currencies/pivot/deals` (parallel `Promise.all`).
  *   3. Currency rows render with code / symbol / name / 4-decimal rate.
- *   4. Preview banner ("Default currencies (preview)") renders when ANY row
- *      has a non-positive id; clicking "Initialize Defaults" POSTs
- *      `/api/currencies/seed` (#473 — banner gates on every row being
- *      persisted, not just the first).
+ *   4. Preview rows are automatically persisted through `/api/currencies/seed`
+ *      without a manual initialization prompt; INR becomes the reporting
+ *      and base currency.
  *   5. Add Currency modal opens, submits POST `/api/currencies` with the
  *      five-field body shape `{code, symbol, name, exchangeRate, isBase}`,
  *      and rejects submission when required fields are missing (notify.error).
@@ -84,7 +83,10 @@ const samplePivot = {
 const sampleCatalog = {
   baseCode: 'USD',
   asOf: '2026-10-19',
-  currencies: [{ code: 'JPY', symbol: '¥', name: 'Japanese Yen', exchangeRate: 149.5 }],
+  currencies: [
+    { code: 'USD', symbol: '$', name: 'US Dollar', exchangeRate: 1 },
+    { code: 'JPY', symbol: '¥', name: 'Japanese Yen', exchangeRate: 149.5 },
+  ],
 };
 
 function defaultFetchMock(url, opts) {
@@ -138,8 +140,35 @@ describe('<Currencies /> — page surface', () => {
   it('renders heading "Currencies" + Refresh + Add Currency CTAs', async () => {
     renderCurrencies();
     expect(await screen.findByRole('heading', { name: /Currencies/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Check Currency Rates/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add Currency/i })).toBeInTheDocument();
+  });
+
+  it('opens a read-only rate dialog and recalculates rates for the selected reference currency', async () => {
+    renderCurrencies();
+    await screen.findByText('US Dollar');
+
+    fireEvent.click(screen.getByRole('button', { name: /Check Currency Rates/i }));
+
+    expect(await screen.findByRole('dialog', { name: /Currency Exchange Rates/i })).toBeInTheDocument();
+    expect(screen.getByText(/Published rates for 1 USD, as of 2026-10-19/i)).toBeInTheDocument();
+    expect(screen.getByText('Japanese Yen')).toBeInTheDocument();
+    expect(screen.getByText('149.5')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Rate reference currency/i }), { target: { value: 'JPY' } });
+    expect(screen.getByText(/Published rates for 1 JPY, as of 2026-10-19/i)).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Rate \(1 JPY\)/i })).toBeInTheDocument();
+    expect(screen.getByText('0.006689')).toBeInTheDocument();
+    const rateSearch = screen.getByRole('textbox', { name: /Search currency rates/i });
+    expect(rateSearch).toHaveClass('currency-rates-search-input');
+    expect(rateSearch.closest('.currency-rates-controls')).toContainElement(
+      screen.getByRole('combobox', { name: /Rate reference currency/i }),
+    );
+    fireEvent.change(rateSearch, { target: { value: 'eur' } });
+    expect(screen.getByText(/No currencies match your search/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close currency rates dialog/i }));
+    expect(screen.queryByRole('dialog', { name: /Currency Exchange Rates/i })).not.toBeInTheDocument();
   });
 
   it('initial mount fires BOTH /api/currencies and /api/currencies/pivot/deals (parallel)', async () => {
@@ -169,18 +198,27 @@ describe('<Currencies /> — page surface', () => {
     expect(screen.getByText('3.7500')).toBeInTheDocument();
   });
 
-  it('preview banner renders when ANY row has a non-positive id (#473)', async () => {
-    fetchApiMock.mockImplementation((url) => {
+  it('automatically persists preview defaults with INR and shows no initialization prompt', async () => {
+    const setTenant = vi.fn();
+    const inrDefaults = previewCurrencies.map((currency, index) => ({
+      ...currency,
+      id: index + 1,
+      exchangeRate: currency.code === 'INR' ? 1 : 1 / 83.25,
+      isBase: currency.code === 'INR',
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/currencies') return Promise.resolve(previewCurrencies);
+      if (url === '/api/currencies/seed' && opts?.method === 'POST') return Promise.resolve(inrDefaults);
       if (url === '/api/currencies/pivot/deals') return Promise.resolve(null);
       return Promise.resolve(null);
     });
-    renderCurrencies();
-    expect(await screen.findByText(/Default currencies \(preview\)/i)).toBeInTheDocument();
-    // Stat tile label switches to "Available Currencies (preview)" too.
-    expect(screen.getByText(/Available Currencies \(preview\)/i)).toBeInTheDocument();
-    // Initialize Defaults CTA is the call to action inside the banner.
-    expect(screen.getByRole('button', { name: /Initialize Defaults/i })).toBeInTheDocument();
+    render(<MemoryRouter><AuthContext.Provider value={{ tenant: { defaultCurrency: 'USD' }, setTenant }}><Currencies /></AuthContext.Provider></MemoryRouter>);
+    expect(await screen.findByText(/Active Currencies/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Default currencies \(preview\)/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Initialize Defaults/i })).not.toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/currencies/seed', { method: 'POST' });
+    expect(setTenant).toHaveBeenCalledWith({ defaultCurrency: 'INR' });
+    expect(screen.getAllByText('INR (₹)').length).toBeGreaterThanOrEqual(1);
   });
 
   it('preview banner HIDES when every row has a positive id (#473 every-row gate)', async () => {
@@ -190,28 +228,6 @@ describe('<Currencies /> — page surface', () => {
     expect(screen.queryByText(/Default currencies \(preview\)/i)).not.toBeInTheDocument();
     // Stat tile label switches to "Active Currencies".
     expect(screen.getByText(/Active Currencies/i)).toBeInTheDocument();
-  });
-
-  it('clicking "Initialize Defaults" POSTs /api/currencies/seed and reloads', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/currencies' && (!opts || !opts.method || opts.method === 'GET')) {
-        return Promise.resolve(previewCurrencies);
-      }
-      if (url === '/api/currencies/seed' && opts?.method === 'POST') {
-        return Promise.resolve({ ok: true });
-      }
-      if (url === '/api/currencies/pivot/deals') return Promise.resolve(null);
-      return Promise.resolve(null);
-    });
-    renderCurrencies();
-    const seedBtn = await screen.findByRole('button', { name: /Initialize Defaults/i });
-    fireEvent.click(seedBtn);
-    await waitFor(() => {
-      const seedCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/currencies/seed' && o?.method === 'POST',
-      );
-      expect(seedCall).toBeTruthy();
-    });
   });
 
   it('opens the Add Currency modal and POSTs /api/currencies with the 5-field body', async () => {
@@ -314,6 +330,74 @@ describe('<Currencies /> — page surface', () => {
       );
       expect(setBaseCall).toBeTruthy();
     });
+    expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/Change base currency to/i),
+      message: expect.stringMatching(/existing deals, invoices, and payments will keep their original currency and amount/i),
+      confirmText: expect.stringMatching(/Change to/i),
+    }));
+  });
+
+  it('moves the base selector when the reporting currency changes', async () => {
+    const setTenant = vi.fn();
+    let rows = persistedCurrencies;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/currencies/2/set-base' && opts?.method === 'POST') {
+        rows = persistedCurrencies.map((currency) => ({
+          ...currency,
+          exchangeRate: currency.exchangeRate / 83.25,
+          isBase: currency.id === 2,
+        }));
+        return Promise.resolve({ ...rows[1] });
+      }
+      if (url === '/api/currencies') return Promise.resolve(rows);
+      return defaultFetchMock(url, opts);
+    });
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ tenant: { defaultCurrency: 'USD' }, setTenant }}>
+          <Currencies />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Indian Rupee');
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Reporting currency/i }), {
+      target: { value: 'INR' },
+    });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/currencies/2/set-base', { method: 'POST' });
+      expect(screen.getByText('Indian Rupee').closest('tr').querySelector('input[type="radio"]')).toBeChecked();
+    });
+    expect(setTenant).toHaveBeenCalledWith({ defaultCurrency: 'INR' });
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/tenants/current', expect.anything());
+  });
+
+  it('keeps the current currency when the base-change confirmation is cancelled', async () => {
+    notifyConfirm.mockResolvedValue(false);
+    const setTenant = vi.fn();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ tenant: { defaultCurrency: 'USD' }, setTenant }}>
+          <Currencies />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Indian Rupee');
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Reporting currency/i }), {
+      target: { value: 'INR' },
+    });
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Change base currency to INR?',
+      confirmText: 'Change to INR',
+    })));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /Reporting currency/i })).toHaveValue('USD'));
+    expect(fetchApiMock.mock.calls.some(([url]) => /\/set-base$/.test(url))).toBe(false);
+    expect(setTenant).not.toHaveBeenCalled();
   });
 
   it('edit-rate flow PUTs /api/currencies/:id with { exchangeRate }', async () => {

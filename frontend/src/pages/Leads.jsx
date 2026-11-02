@@ -184,6 +184,8 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const GENERIC_LEADS_PAGE_SIZE_OPTIONS = [10, 15, 25, 50, 100];
+const MAX_LEADS_PAGE_SIZE = 500;
 const GENERIC_LEADS_PAGE_SIZE = 10;
 const LEAD_CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
@@ -2670,6 +2672,9 @@ const Leads = () => {
   const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(
     GENERIC_LEADS_PAGE_SIZE,
   );
+  const [customLeadsPageSizeOpen, setCustomLeadsPageSizeOpen] = useState(false);
+  const [customLeadsPageSizeDraft, setCustomLeadsPageSizeDraft] = useState("");
+  const [customLeadsPageSizeError, setCustomLeadsPageSizeError] = useState("");
   const [leadPagination, setLeadPagination] = useState({
     total: 0,
     totalPages: 1,
@@ -7122,6 +7127,19 @@ const Leads = () => {
       ? leadPagination.totalPages
       : Math.ceil(sortedLeads.length / leadsPageSize),
   );
+  const leadsPageSizeOptions = isGeneric
+    ? GENERIC_LEADS_PAGE_SIZE_OPTIONS
+    : LEADS_PAGE_SIZE_OPTIONS;
+  const currentLeadsPageSize = isGeneric
+    ? genericLeadsPageSize
+    : leadsPageSize;
+  const hasCustomLeadsPageSize = !leadsPageSizeOptions.includes(
+    currentLeadsPageSize,
+  );
+  const pageSizeSelectValue =
+    customLeadsPageSizeOpen || hasCustomLeadsPageSize
+      ? "custom"
+      : String(currentLeadsPageSize);
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
   const pageStart =
     sortedLeads.length === 0
@@ -7266,6 +7284,29 @@ const Leads = () => {
     const clampedPage = Math.min(nextPage, leadsPageCount);
     setLeadsPage(clampedPage - 1);
     setPageInput(String(clampedPage));
+  };
+
+  const applyCustomLeadsPageSize = (event) => {
+    event.preventDefault();
+    const nextPageSize = Number(customLeadsPageSizeDraft);
+    if (
+      !Number.isInteger(nextPageSize) ||
+      nextPageSize < 1 ||
+      nextPageSize > MAX_LEADS_PAGE_SIZE
+    ) {
+      setCustomLeadsPageSizeError(
+        `Enter a whole number between 1 and ${MAX_LEADS_PAGE_SIZE}.`,
+      );
+      return;
+    }
+    if (isGeneric) {
+      setGenericLeadsPageSize(nextPageSize);
+    } else {
+      setLeadsPageSize(nextPageSize);
+    }
+    setLeadsPage(0);
+    setCustomLeadsPageSizeError("");
+    setCustomLeadsPageSizeOpen(false);
   };
 
   useEffect(() => {
@@ -8739,7 +8780,7 @@ const Leads = () => {
                               padding: "0 0.25rem",
                             }}
                           >
-                            <span>On</span>
+                            <span className="auto-campaign-rule-on-heading">On</span>
                             <span>Lead column</span>
                             <span>Value</span>
                             <span>Campaign</span>
@@ -8797,6 +8838,7 @@ const Leads = () => {
                                 }}
                               >
                                 <input
+                                  className="auto-campaign-rule-checkbox"
                                   type="checkbox"
                                   checked={!!rule.enabled}
                                   disabled={autoCampaignRulesSaving || !isAdmin}
@@ -13121,7 +13163,12 @@ const Leads = () => {
             >
               <div
                 className="leads-pagination-page-size"
-                style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  flexWrap: "wrap",
+                }}
               >
                 <label
                   htmlFor="leads-page-size"
@@ -13134,13 +13181,26 @@ const Leads = () => {
                 </label>
                 <select
                   id="leads-page-size"
-                  value={isGeneric ? genericLeadsPageSize : leadsPageSize}
+                  value={pageSizeSelectValue}
                   onChange={(e) => {
-                    if (isGeneric) {
-                      setGenericLeadsPageSize(Number(e.target.value));
-                    } else {
-                      setLeadsPageSize(Number(e.target.value));
+                    if (e.target.value === "custom") {
+                      setCustomLeadsPageSizeDraft(
+                        hasCustomLeadsPageSize
+                          ? String(currentLeadsPageSize)
+                          : "",
+                      );
+                      setCustomLeadsPageSizeError("");
+                      setCustomLeadsPageSizeOpen(true);
+                      return;
                     }
+                    const nextPageSize = Number(e.target.value);
+                    if (isGeneric) {
+                      setGenericLeadsPageSize(nextPageSize);
+                    } else {
+                      setLeadsPageSize(nextPageSize);
+                    }
+                    setCustomLeadsPageSizeOpen(false);
+                    setCustomLeadsPageSizeError("");
                     setLeadsPage(0);
                   }}
                   className="input-field"
@@ -13152,15 +13212,97 @@ const Leads = () => {
                   }}
                   aria-label="Rows per page"
                 >
-                  {(isGeneric
-                    ? [10, 15, 25, 50, 100]
-                    : LEADS_PAGE_SIZE_OPTIONS
-                  ).map((size) => (
+                  {leadsPageSizeOptions.map((size) => (
                     <option key={size} value={size}>
                       {size}
                     </option>
                   ))}
+                  <option value="custom">
+                    {hasCustomLeadsPageSize
+                      ? `Custom (${currentLeadsPageSize})`
+                      : "Custom"}
+                  </option>
                 </select>
+                {customLeadsPageSizeOpen && (
+                  <form
+                    onSubmit={applyCustomLeadsPageSize}
+                    aria-label="Set custom rows per page"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.35rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <label
+                      htmlFor="leads-custom-page-size"
+                      style={{
+                        color: "var(--text-secondary)",
+                        fontSize: "0.8125rem",
+                      }}
+                    >
+                      Custom
+                    </label>
+                    <input
+                      id="leads-custom-page-size"
+                      type="number"
+                      min="1"
+                      max={MAX_LEADS_PAGE_SIZE}
+                      step="1"
+                      inputMode="numeric"
+                      value={customLeadsPageSizeDraft}
+                      onChange={(e) => {
+                        setCustomLeadsPageSizeDraft(e.target.value);
+                        setCustomLeadsPageSizeError("");
+                      }}
+                      placeholder="Rows"
+                      aria-label="Custom rows per page"
+                      style={{
+                        width: "4.5rem",
+                        padding: "0.35rem 0.4rem",
+                        textAlign: "center",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 6,
+                        background: "var(--input-bg)",
+                        color: "var(--text-primary)",
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      className="btn-secondary"
+                      style={{ padding: "0.35rem 0.55rem" }}
+                    >
+                      Apply
+                    </button>
+                    {customLeadsPageSizeError && (
+                      <span
+                        role="alert"
+                        style={{
+                          flexBasis: "100%",
+                          color: "var(--danger-color, #dc2626)",
+                          fontSize: "0.75rem",
+                        }}
+                      >
+                        {customLeadsPageSizeError}
+                      </span>
+                    )}
+                  </form>
+                )}
+                {hasCustomLeadsPageSize && !customLeadsPageSizeOpen && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    aria-label="Change custom rows per page"
+                    onClick={() => {
+                      setCustomLeadsPageSizeDraft(String(currentLeadsPageSize));
+                      setCustomLeadsPageSizeError("");
+                      setCustomLeadsPageSizeOpen(true);
+                    }}
+                    style={{ padding: "0.35rem 0.55rem" }}
+                  >
+                    Change
+                  </button>
+                )}
               </div>
               <div
                 className="leads-pagination-navigation"

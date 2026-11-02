@@ -489,6 +489,21 @@ export default function PickupPlotInventory() {
     setAvailabilityFilter('all');
   };
 
+  const showEmptyState = !loading && filteredPlots.length === 0;
+  const emptyState = (
+    <PickupPlotEmptyState
+      icon={MapPin}
+      testId="plot-inventory-empty-state"
+      title={data.plots.length === 0 ? 'No plots or sites yet.' : 'No plots or sites match the selected filters.'}
+      description={data.plots.length === 0
+        ? 'Add your first plot or site to start tracking availability, pricing, addresses, and customer assignments.'
+        : 'Try another search or reset the filters to see more plots and sites.'}
+      actionLabel={data.plots.length === 0 ? 'Add first plot / site' : 'Clear filters'}
+      actionVariant={data.plots.length === 0 ? 'primary' : 'secondary'}
+      onAction={data.plots.length === 0 ? () => openPlot() : clearFilters}
+    />
+  );
+
   return (
     <div
       className="pickup-plot-inventory-page"
@@ -626,24 +641,14 @@ export default function PickupPlotInventory() {
                 </tr>
               ))}
               {loading && !loadedRef.current && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading inventory…</td></tr>}
-              {!loading && filteredPlots.length === 0 && <tr>
-                <td colSpan="14" className="pickup-plot-empty-cell">
-                  <PickupPlotEmptyState
-                    icon={MapPin}
-                    testId="plot-inventory-empty-state"
-                    title={data.plots.length === 0 ? 'No plots or sites yet.' : 'No plots or sites match the selected filters.'}
-                    description={data.plots.length === 0
-                      ? 'Add your first plot or site to start tracking availability, pricing, addresses, and customer assignments.'
-                      : 'Try another search or reset the filters to see more plots and sites.'}
-                    actionLabel={data.plots.length === 0 ? 'Add first plot / site' : 'Clear filters'}
-                    actionVariant={data.plots.length === 0 ? 'primary' : 'secondary'}
-                    onAction={data.plots.length === 0 ? () => openPlot() : clearFilters}
-                  />
-                </td>
-              </tr>}
             </tbody>
           </table>
           </div>}
+          {(!loadError || loadedRef.current) && showEmptyState && (
+            <div className="pickup-plot-empty-viewport">
+              {emptyState}
+            </div>
+          )}
         </div>
 
       {plotDialog && <Modal title={plotDialog.id ? 'Edit Plot / Site' : 'Add Plot / Site'} onClose={() => setPlotDialog(null)} onSave={savePlot} saving={saving} saveDisabled={duplicatePlotNumber} wide>

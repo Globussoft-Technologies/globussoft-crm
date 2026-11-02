@@ -88,6 +88,17 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.queryByText('Total active plots/sites')).not.toBeInTheDocument();
   });
 
+  it('keeps the empty state in the visible viewport instead of the wide table body', async () => {
+    fetchApiMock.mockResolvedValueOnce({ ...inventory, plots: [] });
+    renderPage();
+
+    const emptyState = await screen.findByTestId('plot-inventory-empty-state');
+
+    expect(emptyState.closest('table')).toBeNull();
+    expect(emptyState.parentElement).toHaveClass('pickup-plot-empty-viewport');
+    expect(screen.getByRole('columnheader', { name: 'Plot / Site' })).toBeInTheDocument();
+  });
+
   it('shows linked plots and sites inventory data', async () => {
     renderPage();
     expect(await screen.findByText('Plot A-9')).toBeInTheDocument();

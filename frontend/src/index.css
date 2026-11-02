@@ -464,8 +464,14 @@ body[data-vertical="generic"] [data-testid="staff-work-assignment-page"] {
 /* Refresh status must not take a row/table-space slot. Keeping it over the
    existing scroll viewport prevents a refresh from shifting the table down
    and back up while the response is in flight. */
-body[data-vertical="generic"] .card.pickup-plot-table-scroll {
+body[data-vertical="generic"] .card.pickup-plot-table-scroll,
+body[data-vertical="generic"] .app-shell .app-main > main.generic-page-content .card.pickup-plot-table-scroll {
   position: relative;
+  /* The viewport-density stylesheet gives every app-shell card responsive
+     padding with !important. A table scroll viewport must have no inset:
+     otherwise rows can scroll into the padded band while the sticky header
+     starts below it. Keep this override scoped to Pickup & Plot tables. */
+  padding: 0 !important;
 }
 
 body[data-vertical="generic"] .card.pickup-plot-table-scroll > .pickup-module-refresh-status[role="status"] {
@@ -3887,15 +3893,6 @@ html[data-theme="dark"] .travel-flight-details-box {
   background: rgba(128, 128, 128, 0.9);
   border: 2px solid transparent;
   background-clip: padding-box;
-}
-
-/* Generic CRM pickup/plot directories keep the complete column-header row
-   visually separate from the scrolling records. The viewport and sticky
-   table mechanics stay unchanged; only the vertical scrollbar rail is
-   inset by the shared header height so it runs beside the body rows. */
-body[data-vertical="generic"]
-  .pickup-plot-table-body-scroll::-webkit-scrollbar-track-piece:vertical {
-  margin-top: 44px;
 }
 
 .top-scroll-sync__bottom--hidden-scrollbar {
@@ -9384,12 +9381,27 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
   max-height: calc(100vh - 260px);
 }
 
+/* Plot inventory keeps a deliberately wide table for column scrolling. Its
+   empty state should still center in the visible card viewport, not in the
+   off-screen width of that table. Keep this treatment local to this page. */
+.pickup-plot-inventory-page .pickup-plot-empty-viewport {
+  position: sticky;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 /* Generic CRM Pickup & Plot tables intentionally keep their resting visual
    state on pointer hover. Row click handlers (for example Customer Status
    selection) remain active, and the selected-row class keeps its highlight. */
 body[data-vertical="generic"] table.pickup-plot-leads-table {
   width: 100%;
   background-color: var(--surface-color);
+  /* Sticky table cells are reliable across Chromium only when the table is
+     not using the collapsed-border painting path. */
+  border-collapse: separate !important;
+  border-spacing: 0;
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
@@ -9403,6 +9415,76 @@ body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
   color: var(--text-primary) !important;
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+/* The Pickup & Plot tables own their vertical scroll. Keep the complete
+   header row in the same stacking context as that viewport so body rows can
+   never paint through it while scrolling. The opaque surface is intentional:
+   sticky table cells otherwise expose the rows moving underneath them. */
+body[data-vertical="generic"] .pickup-plot-table-body-scroll {
+  isolation: isolate;
+}
+
+body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead,
+body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead tr {
+  /* Do not make the table section and its row sticky as well. Chromium can
+     composite the row independently and let the first body row show above
+     the header. The cells below are the sole sticky layer. */
+  position: static !important;
+  z-index: auto;
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+}
+
+body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead th {
+  position: sticky !important;
+  top: 0 !important;
+  inset-block-start: 0 !important;
+  z-index: 20 !important;
+  display: table-cell;
+  height: 44px !important;
+  min-height: 44px;
+  padding: 0.75rem 0.8rem !important;
+  vertical-align: middle;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+  background-clip: padding-box;
+  box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+/* Customer Status has a separate directory viewport instead of the shared
+   table-body scroll class. Apply the same stacking boundary to its directory
+   and to the bounded payment/installment ledgers. */
+body[data-vertical="generic"] .pickup-customers-page .pickup-directory-scroll,
+body[data-vertical="generic"] .pickup-installment-table-wrap,
+body[data-vertical="generic"] .pickup-payment-history-wrap {
+  isolation: isolate;
+}
+
+body[data-vertical="generic"] .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table thead,
+body[data-vertical="generic"] .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table thead tr,
+body[data-vertical="generic"] .pickup-installment-table-wrap table.pickup-installment-table thead,
+body[data-vertical="generic"] .pickup-installment-table-wrap table.pickup-installment-table thead tr,
+body[data-vertical="generic"] .pickup-payment-history-wrap table.pickup-payment-table thead,
+body[data-vertical="generic"] .pickup-payment-history-wrap table.pickup-payment-table thead tr {
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+}
+
+body[data-vertical="generic"] .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table thead th,
+body[data-vertical="generic"] .pickup-installment-table-wrap table.pickup-installment-table thead th,
+body[data-vertical="generic"] .pickup-payment-history-wrap table.pickup-payment-table thead th {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 11 !important;
+  height: 44px !important;
+  min-height: 44px;
+  padding: 0.75rem 0.8rem !important;
+  vertical-align: middle;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+  background-clip: padding-box;
+  box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table th,

@@ -2242,6 +2242,45 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true);
   });
 
+  it('allows Generic CRM Leads to use a custom rows-per-page value', async () => {
+    renderLeads(ADMIN_AUTH);
+
+    await screen.findByText('Alice Smith');
+    fireEvent.change(screen.getByLabelText('Rows per page'), {
+      target: { value: 'custom' },
+    });
+
+    const customForm = await screen.findByRole('form', {
+      name: 'Set custom rows per page',
+    });
+    fireEvent.change(
+      within(customForm).getByRole('spinbutton', {
+        name: 'Custom rows per page',
+      }),
+      { target: { value: '37' } },
+    );
+    fireEvent.click(within(customForm).getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        typeof url === 'string'
+          && url.startsWith('/api/contacts?status=Lead')
+          && url.includes('page=1&limit=37'),
+      )).toBe(true);
+    });
+    expect(screen.getByLabelText('Rows per page')).toHaveValue('custom');
+    expect(screen.getByRole('option', { name: 'Custom (37)' })).toBeInTheDocument();
+    expect(screen.queryByRole('form', {
+      name: 'Set custom rows per page',
+    })).toBeNull();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Change custom rows per page',
+    }));
+    expect(screen.getByRole('spinbutton', {
+      name: 'Custom rows per page',
+    })).toHaveValue(37);
+  });
+
   it('renders seeded leads with name + email + company + lead-score badge', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
@@ -3797,6 +3836,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     const panelHeading = await screen.findByText('Auto-assign Callified Campaigns rules');
     const panel = panelHeading.closest('.card');
     expect(panel).toBeTruthy();
+    expect(within(panel).getAllByRole('checkbox')[1]).toHaveClass('auto-campaign-rule-checkbox');
     const columnSelect = within(panel).getAllByRole('combobox')[0];
     const optionLabels = Array.from(columnSelect.options).map((option) => option.textContent);
 

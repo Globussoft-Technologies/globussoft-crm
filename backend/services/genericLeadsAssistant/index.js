@@ -4,6 +4,10 @@ const { writeAudit } = require("../../lib/audit");
 const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
 const { TOOL_DEFINITIONS, buildSystemPrompt } = require("./prompts");
+const {
+  LEAD_ASSISTANT_FALLBACK_REPLY,
+  normalizeLeadAssistantText,
+} = require("../../lib/leadAssistantText");
 
 const TASK_NAME = "generic-leads-assistant";
 const SURFACE = "generic-crm-leads-assistant";
@@ -693,7 +697,7 @@ function formatToolReply(toolResults, sideEffects, userMessage = "") {
 }
 
 function requestedLeadFields(message) {
-  const text = String(message || "").toLowerCase();
+  const text = normalizeLeadAssistantText(message);
   const fields = [];
   if (/\b(contact number|phone|mobile|telephone)\b/.test(text)) fields.push(["phone", "Contact number"]);
   if (/\b(email|email id|email address)\b/.test(text)) fields.push(["email", "Email"]);
@@ -726,19 +730,19 @@ function formatLeadRecordReply(lead) {
 }
 
 function isListRequest(message) {
-  const text = String(message || "").toLowerCase();
+  const text = normalizeLeadAssistantText(message);
   return /\b(list|matching leads?|which leads?|find (?:all|any|the )?leads?|search leads?|filter(?:ed|ing)?|how many|count|total|report|summary|breakdown|group(?:ed)?|download|downloadable|export|xlsx|excel|pdf|document|file)\b/.test(text)
     || /\b(all|every)\s+(?:the\s+)?(?:leads?|records?|matches?|results?)\b/.test(text)
     || /\bleads\b/.test(text) && !/\b(this|that|the) lead\b/.test(text);
 }
 
 function requestsDownload(message) {
-  return /\b(download|downloadable|export|xlsx|excel|pdf|document|file)\b/i.test(String(message || ""));
+  return /\b(download|downloadable|export|xlsx|excel|pdf|document|file)\b/i.test(normalizeLeadAssistantText(message));
 }
 
 function inferLeadFilterArgs(message, args) {
   const normalized = { ...(args || {}) };
-  const text = String(message || "").toLowerCase();
+  const text = normalizeLeadAssistantText(message);
   if (normalized.hasPhone === undefined && normalized.missingPhone === undefined && /\b(?:have|has|with|having)\b[\s\S]*\b(?:contact\s+number|phone|mobile|telephone)\b/.test(text)) {
     normalized.hasPhone = true;
   }
@@ -761,7 +765,7 @@ function inferLeadFilterArgs(message, args) {
 }
 
 function isResetFilterRequest(message) {
-  const text = String(message || "").trim();
+  const text = normalizeLeadAssistantText(message);
   return /^(?:reset|clear|remove)\s+(?:the\s+)?filters?[.!?]*$/i.test(text)
     || /^(?:show|list)\s+all\s+(?:the\s+)?leads?[.!?]*$/i.test(text);
 }
@@ -774,20 +778,29 @@ function directLeadFromToolResults(toolResults) {
 }
 
 function isGreeting(message) {
-  return /^(hi|hello|hey|good morning|good afternoon|good evening)(?: there)?[!,.?]*$/i.test(String(message || "").trim());
+  return /^(hi|hello|hey|good morning|good afternoon|good evening)(?: there)?[!,.?]*$/i.test(normalizeLeadAssistantText(message));
 }
 
 function casualReply(message) {
-  const cleanMessage = String(message || "").trim();
+  const cleanMessage = normalizeLeadAssistantText(message);
   if (isGreeting(cleanMessage)) return "Hi! How can I help you with your leads today?";
   if (/^(how are you|how're you|how are you doing)(?: today)?[!,.?]*$/i.test(cleanMessage)) {
     return "I'm doing well, thank you! How can I help you with your leads, deals, or pipelines today?";
+  }
+  if (/^(?:what(?:'s| is) up|how(?:'s| is) it going|how do you do|how is everything|what are you up to)[!,.?]*$/i.test(cleanMessage)) {
+    return "I'm doing well and ready to help. What would you like to work on with your leads?";
   }
   if (/^(who are you|what are you|tell me about yourself)[!,.?]*$/i.test(cleanMessage)) {
     return "I'm your Leads assistant. I can help you find leads, answer questions about records, filter the Leads view, and prepare reports.";
   }
   if (/^(what can you do|what do you do|how can you help(?: me)?(?: with my leads)?|help)[!,.?]*$/i.test(cleanMessage)) {
     return "I can help you search and filter leads, answer questions about records, manage lead and deal details, and prepare downloadable reports when you request them.";
+  }
+  if (/^(?:no|nope|nah|no help needed|not now|nothing for now)(?:,?\s+(?:thanks|thank you))?[!,.?]*$/i.test(cleanMessage)) {
+    return "No problem. I'll be here if you need help with your leads.";
+  }
+  if (/^(?:yes|yeah|yep|sure|okay|ok)(?:,?\s+(?:thanks|thank you))?[!,.?]*$/i.test(cleanMessage)) {
+    return "Great. What would you like to work on with your leads?";
   }
   if (/^(thanks|thank you|thx)[!,.?]*$/i.test(cleanMessage)) return "You're welcome! Let me know if you need anything with your leads.";
   if (/^(bye|goodbye|see you)[!,.?]*$/i.test(cleanMessage)) return "Goodbye! I'll be here when you need help with your leads.";
@@ -811,13 +824,17 @@ async function handleChatMessage({ tenantId, userId, role, canLeadWrite, canLead
     };
   }
   const ctx = { tenantId, userId, role, canLeadWrite, canLeadUpdate, canDealWrite, canDealUpdate, canDealRead, canPipelineRead, canReportRead, selectedLeadId: asPositiveInt(selectedLeadId) };
+  const normalizedMessage = normalizeLeadAssistantText(cleanMessage);
   const messages = [
     { role: "system", content: buildSystemPrompt({ selectedLeadId: ctx.selectedLeadId, activeFilters }) },
     ...history
       .filter((item) => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string")
       .slice(-MAX_HISTORY_TURNS)
-      .map((item) => ({ role: item.role, content: item.content.slice(0, MAX_HISTORY_MESSAGE_CHARS) })),
-    { role: "user", content: cleanMessage.slice(0, MAX_USER_MESSAGE_CHARS) },
+      .map((item) => ({
+        role: item.role,
+        content: (item.role === "user" ? normalizeLeadAssistantText(item.content) : item.content).slice(0, MAX_HISTORY_MESSAGE_CHARS),
+      })),
+    { role: "user", content: normalizedMessage.slice(0, MAX_USER_MESSAGE_CHARS) },
   ];
   const toolsUsed = [];
   const sideEffects = { records: [], links: [], report: null, matchCount: null, filterSpec: null, pendingAction: null };
@@ -828,7 +845,7 @@ async function handleChatMessage({ tenantId, userId, role, canLeadWrite, canLead
     const response = await callModel({ tenantId, task: TASK_NAME, surface: SURFACE, userId, messages, tools: TOOL_DEFINITIONS, fetchImpl });
     lastResponse = response;
     if (!response.toolCalls?.length) {
-      reply = response.text || "I could not produce an answer. Please try rephrasing the request.";
+      reply = response.text || LEAD_ASSISTANT_FALLBACK_REPLY;
       break;
     }
     messages.push({ role: "assistant", content: response.text || "", toolCalls: response.toolCalls });
@@ -872,7 +889,7 @@ async function handleChatMessage({ tenantId, userId, role, canLeadWrite, canLead
   if (!reply) {
     const response = await callModel({ tenantId, task: TASK_NAME, surface: SURFACE, userId, messages, fetchImpl });
     lastResponse = response;
-    reply = response.text || "I could not summarise the CRM results. Please try again.";
+    reply = response.text || LEAD_ASSISTANT_FALLBACK_REPLY;
   }
   const directQuestion = !isListRequest(cleanMessage);
   const downloadRequested = requestsDownload(cleanMessage);

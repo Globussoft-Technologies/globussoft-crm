@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+const pickupCustomersCss = readFileSync(resolve(process.cwd(), 'src/pages/PickupCustomers.css'), 'utf8');
 
 const PICKUP_PLOT_TABLE_SOURCES = [
   'pages/PickupPlotInventory.jsx',
@@ -25,6 +26,10 @@ describe('Pickup & Plot table scroll cards', () => {
     expect(hoverRule[1]).toMatch(/transform:\s*none\s*;/);
     expect(hoverRule[1]).toMatch(/box-shadow:\s*0 4px 15px rgba\(0, 0, 0, 0\.2\)\s*;/);
     expect(hoverRule[1]).toMatch(/border-color:\s*var\(--border-color\)\s*;/);
+  });
+
+  it('removes responsive card padding from the shared table scroll viewport', () => {
+    expect(css).toMatch(/body\[data-vertical="generic"\]\s+\.card\.pickup-plot-table-scroll,[\s\S]*?\.card\.pickup-plot-table-scroll\s*\{[^}]*padding:\s*0\s*!important\s*;/s);
   });
 
   it('sizes directory and plot-inventory cards from their table content', () => {
@@ -60,6 +65,24 @@ describe('Pickup & Plot table scroll cards', () => {
     expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+tr,[\s\S]*?background-color:\s*var\(--popover-bg,\s*var\(--modal-bg,\s*var\(--surface-color\)\)\)/);
     expect(css).not.toMatch(/table\.pickup-plot-leads-table\s+thead\s+th[^{}]*\{[^}]*background-color:\s*var\(--table-header-bg/s);
     expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+th\s*\{\s*color:\s*var\(--text-primary\)\s*!important\s*;/);
+  });
+
+  it('keeps Plot & Pickup table rows behind an opaque, elevated header while scrolling', () => {
+    expect(css).toMatch(/body\[data-vertical="generic"\]\s+\.pickup-plot-table-body-scroll\s*\{[^}]*isolation:\s*isolate\s*;/s);
+    expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s*\{[^}]*border-collapse:\s*separate\s*!important[^}]*border-spacing:\s*0/s);
+    expect(css).toMatch(/\.pickup-plot-table-body-scroll table\.pickup-plot-leads-table thead[\s,\n]*[^{}]*\{[^}]*position:\s*static\s*!important/s);
+    expect(css).toMatch(/\.pickup-plot-table-body-scroll table\.pickup-plot-leads-table thead th\s*\{[^}]*position:\s*sticky\s*!important[^}]*top:\s*0\s*!important[^}]*z-index:\s*20\s*!important[^}]*background-color:\s*var\(--popover-bg/s);
+    expect(css).toMatch(/\.pickup-plot-table-body-scroll table\.pickup-plot-leads-table thead th\s*\{[^}]*height:\s*44px\s*!important[^}]*padding:\s*0\.75rem 0\.8rem\s*!important[^}]*vertical-align:\s*middle/s);
+    expect(css).not.toMatch(/pickup-plot-table-body-scroll[\s\S]{0,180}scrollbar-track-piece:vertical[\s\S]{0,120}margin-top:\s*44px/);
+    expect(css).toMatch(/\.pickup-customers-page \.pickup-directory-scroll table\.pickup-customer-table thead th,[\s\S]*?z-index:\s*11\s*!important/);
+  });
+
+  it('keeps the Customer Status directory table readable', () => {
+    expect(pickupCustomersCss).toContain('font-size:clamp(.8rem, .72rem + .16vw, .9rem) !important');
+    expect(pickupCustomersCss).toContain('font-size:clamp(.78rem, .7rem + .16vw, .9rem)');
+    expect(pickupCustomersCss).toContain('.pickup-customers-page .pickup-customer-table .pickup-plot-empty-copy h2 { font-size:1.1rem; }');
+    expect(pickupCustomersCss).toMatch(/table\.pickup-customer-table th \{\s*font-size: 0\.85rem !important/);
+    expect(pickupCustomersCss).toMatch(/table\.pickup-customer-table td \{\s*font-size: 0\.84rem !important/);
   });
 
   it('uses an opaque themed surface for the active customer filter', () => {

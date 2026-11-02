@@ -2355,8 +2355,6 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 
 .inbox-toolbar--generic {
   flex: none;
-  position: relative !important;
-  top: auto !important;
 }
 
 .inbox-message-scroll--generic {

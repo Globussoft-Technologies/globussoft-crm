@@ -136,7 +136,7 @@ const plotTableHeaderStyle = {
   color: 'var(--text-primary)',
   background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
   borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'normal', overflowWrap: 'anywhere',
-  position: 'relative',
+  position: 'sticky', top: 0, zIndex: 1,
 };
 const plotTableCellStyle = {
   padding: '0.8rem 0.75rem', textAlign: 'left', verticalAlign: 'middle',
@@ -561,7 +561,7 @@ export default function PickupPlotInventory() {
           data-testid="plot-inventory-table"
           style={{
             flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
-            boxSizing: 'border-box', overflowX: 'auto', overflowY: 'hidden', padding: 0,
+            boxSizing: 'border-box', overflowX: 'auto', overflowY: 'auto', padding: 0,
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
@@ -572,7 +572,7 @@ export default function PickupPlotInventory() {
           </div>}
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           {(!loadError || loadedRef.current) && <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'block', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
+          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={PLOT_INVENTORY_COLUMNS[index].label} style={{ width }} />)}
             </colgroup>
@@ -642,21 +642,6 @@ export default function PickupPlotInventory() {
                 </tr>
               ))}
               {loading && !loadedRef.current && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}><td style={{ ...plotTableCellStyle, gridColumn: '1 / -1', textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading inventory…</td></tr>}
-              {!loading && filteredPlots.length === 0 && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}>
-                <td className="pickup-plot-empty-cell" style={{ gridColumn: '1 / -1' }}>
-                  <PickupPlotEmptyState
-                    icon={MapPin}
-                    testId="plot-inventory-empty-state"
-                    title={data.plots.length === 0 ? 'No plots or sites yet.' : 'No plots or sites match the selected filters.'}
-                    description={data.plots.length === 0
-                      ? 'Add your first plot or site to start tracking availability, pricing, addresses, and customer assignments.'
-                      : 'Try another search or reset the filters to see more plots and sites.'}
-                    actionLabel={data.plots.length === 0 ? 'Add first plot / site' : 'Clear filters'}
-                    actionVariant={data.plots.length === 0 ? 'primary' : 'secondary'}
-                    onAction={data.plots.length === 0 ? () => openPlot() : clearFilters}
-                  />
-                </td>
-              </tr>}
             </tbody>
           </table>
           </div>}

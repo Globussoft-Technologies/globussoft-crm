@@ -170,29 +170,7 @@ export default function Currencies() {
     setCatalog(null);
     setCatalogError('');
     setCatalogLoading(true);
-    const loadExternalCatalog = async () => {
-      const baseCode = tenant?.defaultCurrency || 'USD';
-      const [detailsResponse, ratesResponse] = await Promise.all([
-        fetch('https://api.frankfurter.dev/v2/currencies'),
-        fetch(`https://api.frankfurter.dev/v1/latest?base=${encodeURIComponent(baseCode)}`),
-      ]);
-      if (!detailsResponse.ok || !ratesResponse.ok) throw new Error('Currency catalog unavailable');
-      const [details, latest] = await Promise.all([detailsResponse.json(), ratesResponse.json()]);
-      const currencies = (Array.isArray(details) ? details : [])
-        .map((currency) => ({
-          code: currency.iso_code,
-          symbol: currency.symbol,
-          name: currency.name,
-          exchangeRate: Number(latest?.rates?.[currency.iso_code]),
-        }))
-        .filter((currency) => /^[A-Z]{3}$/.test(currency.code)
-          && currency.name && currency.symbol
-          && Number.isFinite(currency.exchangeRate) && currency.exchangeRate > 0)
-        .sort((a, b) => a.name.localeCompare(b.name));
-      return { baseCode, asOf: latest?.date || null, currencies };
-    };
-    fetchApi('/api/currencies/catalog', { silent: true })
-      .catch(() => loadExternalCatalog())
+    fetchApi('/api/currencies/catalog')
       .then((result) => {
         if (active) {
           setCatalog(result);
@@ -207,7 +185,7 @@ export default function Currencies() {
       })
       .finally(() => { if (active) setCatalogLoading(false); });
     return () => { active = false; };
-  }, [showAdd, showRates, tenant?.defaultCurrency]);
+  }, [showAdd, showRates]);
 
   const availableCurrencies = (catalog?.currencies || []).filter(
     (currency) => !currencies.some((existing) => existing.code === currency.code),

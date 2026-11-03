@@ -82,7 +82,7 @@ const PEOPLE_TABLE_COLUMNS = {
     { label: 'Actions', width: 120, minWidth: 100 },
   ],
 };
-const directoryHeaderStyle = { position: 'relative', padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', boxSizing: 'border-box' };
+const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 1, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', boxSizing: 'border-box' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';
@@ -631,7 +631,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
           data-testid={`${type}-directory-table-scroll`}
           style={{
             flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
-            overflowX: 'auto', overflowY: 'hidden', padding: 0, boxSizing: 'border-box',
+            overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >

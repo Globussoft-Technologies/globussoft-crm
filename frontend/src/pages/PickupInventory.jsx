@@ -285,13 +285,13 @@ export default function PickupInventory() {
           data-testid="pickup-inventory-table-scroll"
           style={{
             flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
-            overflowX: 'auto', overflowY: 'hidden', padding: 0, boxSizing: 'border-box',
+            overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           {(!error || loadedRef.current) && <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead style={{ display: 'block', width: '100%' }}><tr style={{ display: 'grid', gridTemplateColumns, width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
               <ResizableTableHeader
@@ -469,5 +469,5 @@ export default function PickupInventory() {
   );
 }
 
-const headerStyle = { position: 'relative', padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', boxSizing: 'border-box', fontSize: '0.78rem' };
+const headerStyle = { position: 'sticky', top: 0, zIndex: 1, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', boxSizing: 'border-box', fontSize: '0.78rem' };
 const cellStyle = { padding: '0.85rem', verticalAlign: 'middle', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', overflowWrap: 'anywhere', boxSizing: 'border-box' };

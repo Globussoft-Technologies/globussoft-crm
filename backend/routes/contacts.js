@@ -1436,7 +1436,13 @@ router.get("/assignees", requireAnyPermission([
 router.get("/", async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
-    if (req.query.status) where.status = req.query.status;
+    const includeCrmStatuses =
+      req.query.includeCrmStatuses === "true" &&
+      (req.user.vertical || "generic") === "generic";
+    if (req.query.status && !includeCrmStatuses) where.status = req.query.status;
+    if (includeCrmStatuses) {
+      where.status = { in: ["Lead", "Prospect", "Customer", "Churned", "Junk"] };
+    }
     if (req.query.assignedToId)
       where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === "true") where.assignedToId = null;

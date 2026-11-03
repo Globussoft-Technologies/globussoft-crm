@@ -416,6 +416,30 @@ describe("CsvImportExportToolbar", () => {
     expect(JSON.parse(payload.get('mapping'))).toEqual({ name: 'name', Tier: 'tier' });
   });
 
+  it("explains when an XLSX has data in the first row instead of headers", async () => {
+    fetchApiMock.mockResolvedValue([]);
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" formats={['csv', 'xlsx']} genericLeadWizard skipMeta
+      endpoints={{ import: '/api/csv/contacts/import.csv' }} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['12006225923', 'Abdellah', 'Afif'],
+      ['12006225924', 'Dask', 'Kdkaskd'],
+    ]), 'Leads');
+    const buffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+    const file = new File([buffer], 'leads.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => buffer });
+    fireEvent.change(screen.getByLabelText('Select CSV or Excel file'), { target: { files: [file] } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm import' }));
+    expect(await screen.findByText(/Invalid or missing column headers/)).toBeInTheDocument();
+    expect(screen.getByText(/first row must contain column names/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+  });
+
   it('rejects option sets over the API limit rather than silently dropping values', async () => {
     fetchApiMock.mockResolvedValue([]);
     render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta

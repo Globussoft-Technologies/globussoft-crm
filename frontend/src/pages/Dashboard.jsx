@@ -403,7 +403,7 @@ export default function Dashboard() {
                     especially for large pipelines (for example ₹3,800.00Cr).
                     Reserve enough room so Recharts does not clip the leading
                     digits and currency symbol. */}
-                <YAxis width={88} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickMargin={8} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
+                <YAxis width={isGenericCrm ? 124 : 88} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickMargin={8} tickFormatter={(value) => formatMoneyCompact(value, moneyOptions)} />
                 <Tooltip
                   allowEscapeViewBox={{ x: false, y: false }}
                   wrapperStyle={{ zIndex: 20, pointerEvents: 'none', maxWidth: 'calc(100% - 8px)' }}

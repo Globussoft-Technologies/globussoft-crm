@@ -3,7 +3,7 @@ import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Mail, Phone, MessageSquare, StickyNote, CheckSquare,
   Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap,
+  Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap, Image as ImageIcon,
   Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -24,6 +24,7 @@ import {
   AccountsTab, ActivitiesTab, ConversationsTab, DealsTab, FilesTab, InsightsTab,
 } from '../components/contact/ProfileTabs';
 import ContactDetailsDrawer, { GENERIC_TAG_COLORS, dedupeTags, fallbackTagColor, normalizeTagRecords, tagKey, tagTextColor } from '../components/contact/ContactDetailsDrawer';
+import { sanitizeRichTextHtml } from '../utils/richText';
 import CallifiedCallDialog from '../components/CallifiedCallDialog';
 import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 import Contacts from './Contacts';
@@ -329,6 +330,7 @@ export default function ContactDetail() {
   const [editingNote, setEditingNote] = useState(null);
   const [noteFormatting, setNoteFormatting] = useState({});
   const noteComposerRef = useRef(null);
+  const noteImageInputRef = useRef(null);
   const genericNoteInitialValueRef = useRef('');
   const [tagDraft, setTagDraft] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
@@ -993,7 +995,7 @@ export default function ContactDetail() {
     setNoteComposerOpen(true);
     setTimeout(() => {
       if (!noteComposerRef.current) return;
-      noteComposerRef.current.textContent = activity.description || '';
+      noteComposerRef.current.innerHTML = sanitizeRichTextHtml(activity.description || '');
       noteComposerRef.current.focus();
     }, 60);
   };
@@ -1002,7 +1004,7 @@ export default function ContactDetail() {
     if (!isGeneric || !noteComposerOpen || !noteComposerRef.current) return;
     // Initialise immediately after the generic composer mounts. The previous
     // delayed callback could clear characters entered during its 60 ms window.
-    noteComposerRef.current.textContent = genericNoteInitialValueRef.current;
+    noteComposerRef.current.innerHTML = sanitizeRichTextHtml(genericNoteInitialValueRef.current);
     noteComposerRef.current.focus();
   }, [isGeneric, noteComposerOpen, editingNote]);
 
@@ -1043,6 +1045,42 @@ export default function ContactDetail() {
     setNoteFormatting((current) => ({ ...current, [command]: isActive }));
   };
 
+  const insertNoteImage = () => {
+    noteImageInputRef.current?.click();
+  };
+
+  const handleNoteImageFile = (event) => {
+    const image = event.target.files?.[0];
+    event.target.value = '';
+    if (!image || !image.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      noteComposerRef.current?.focus();
+      document.execCommand('insertImage', false, String(reader.result || ''));
+    };
+    reader.readAsDataURL(image);
+  };
+
+  const handleNotePaste = (event) => {
+    const image = Array.from(event.clipboardData?.files || []).find((file) => file.type.startsWith('image/'));
+    if (image) {
+      event.preventDefault();
+      const reader = new FileReader();
+      reader.onload = () => {
+        noteComposerRef.current?.focus();
+        document.execCommand('insertImage', false, String(reader.result || ''));
+      };
+      reader.readAsDataURL(image);
+      return;
+    }
+    if (event.clipboardData?.getData('text/html')) return;
+    const pastedText = event.clipboardData?.getData('text/plain')?.trim() || '';
+    if (!/^(?:https?:\/\/|mailto:)[^\s]+$/i.test(pastedText)) return;
+    event.preventDefault();
+    const safeText = pastedText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    document.execCommand('insertHTML', false, `<a href="${safeText}" target="_blank" rel="noopener noreferrer">${safeText}</a>`);
+  };
+
   useEffect(() => {
     if (!noteComposerOpen) return undefined;
     const updateFormatting = () => {
@@ -1058,15 +1096,16 @@ export default function ContactDetail() {
   }, [noteComposerOpen]);
 
   const handleRichNoteSave = async () => {
+    const html = sanitizeRichTextHtml(noteComposerRef.current?.innerHTML || '');
     const body = noteComposerRef.current?.innerText?.trim()
       || noteComposerRef.current?.textContent?.trim()
       || '';
-    if (!body) return;
+    if (!body && !html.includes('<img')) return;
     setNoteSaving(true);
     try {
       const activity = editingNote
-        ? await patchActivity(id, editingNote.id, { description: body })
-        : await postActivity(id, { type: 'Note', description: body });
+        ? await patchActivity(id, editingNote.id, { description: html })
+        : await postActivity(id, { type: 'Note', description: html });
       notify.success(editingNote ? 'Note updated.' : 'Note added.');
       setNoteComposerOpen(false);
       setEditingNote(null);
@@ -2116,7 +2155,7 @@ export default function ContactDetail() {
                             {isGeneric && a.type === 'Note' ? (
                               <button type="button" className="cp-note-edit" onClick={() => openNoteEditor(a)} aria-label={`Edit note ${a.description || a.id}`} title="Edit note"><Pencil size={11} /></button>
                             ) : <Pencil size={11} />}
-                            {authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}
+                            {isGeneric && a.type === 'Note' ? timeAgo(a.createdAt) : <>{authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}</>}
                           </div>
                         </div>
                       ))}
@@ -2225,11 +2264,13 @@ export default function ContactDetail() {
               <button type="button" className="cp-icon-btn" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }} aria-label="Close"><X size={16} /></button>
             </div>
             <div className="cp-note-related">Contact: <strong>{contact.name}</strong></div>
+            <input ref={noteImageInputRef} type="file" accept="image/*" onChange={handleNoteImageFile} hidden aria-hidden="true" />
             <div
               ref={noteComposerRef}
               className={`cp-note-editor${isGeneric ? ' cp-note-editor--generic' : ''}`}
               contentEditable
               suppressContentEditableWarning
+              onPaste={handleNotePaste}
               data-placeholder="Start typing your note..."
               role="textbox"
               aria-label="Note content"
@@ -2245,6 +2286,7 @@ export default function ContactDetail() {
               <button type="button" className={noteFormatting.insertOrderedList ? 'active' : ''} onClick={() => formatNote('insertOrderedList')} aria-label="Numbered list" aria-pressed={Boolean(noteFormatting.insertOrderedList)}>1≡</button>
               <button type="button" className={noteFormatting.justifyLeft ? 'active' : ''} onClick={() => formatNote('justifyLeft')} aria-label="Align left" aria-pressed={Boolean(noteFormatting.justifyLeft)}>≡</button>
               <button type="button" className={noteFormatting.justifyCenter ? 'active' : ''} onClick={() => formatNote('justifyCenter')} aria-label="Align center" aria-pressed={Boolean(noteFormatting.justifyCenter)}>☰</button>
+              <button type="button" onClick={insertNoteImage} aria-label="Insert image" title="Insert image"><ImageIcon size={14} /></button>
             </div>
             <div className="cp-btn-row">
               <button type="button" className="cp-action-btn" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }}>Cancel</button>

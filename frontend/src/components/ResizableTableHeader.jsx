@@ -5,6 +5,7 @@ export default function ResizableTableHeader({
   minWidth = 80,
   onResize,
   style,
+  fluid = false,
 }) {
   const startResize = (event) => {
     if (event.button !== 0) return;
@@ -32,7 +33,7 @@ export default function ResizableTableHeader({
   };
 
   return (
-    <th aria-label={label} style={{ ...style, width, minWidth }}>
+    <th aria-label={label} style={{ ...style, width: fluid ? 'auto' : width, minWidth: fluid ? 0 : minWidth }}>
       {children}
       <span
         role="separator"

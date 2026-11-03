@@ -7,6 +7,10 @@ on:
         description: Run all six gates without deployment
         type: boolean
         default: true
+    outputs:
+      validation_summary:
+        description: Result of each validation gate
+        value: ${{ jobs.validation_summary.outputs.summary }}
   push:
     branches: [main]
     paths-ignore:
@@ -842,6 +846,32 @@ jobs:
             echo "::warning::No HEAD~1 schema available (first commit?) - skipping diff"
           fi
           echo "::notice::Migration safety check passed"
+
+  # Keep the reusable workflow's aggregate failure useful to callers. GitHub
+  # exposes only the called workflow result by default, so without this job a
+  # PR sees "full-validation: failure" but not the gate that failed.
+  validation_summary:
+    if: ${{ always() }}
+    needs: [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      summary: ${{ steps.summary.outputs.summary }}
+    steps:
+      - name: Summarize validation gates
+        id: summary
+        env:
+          BUILD: ${{ needs.build.result }}
+          API_TESTS: ${{ needs.api_tests.result }}
+          UNIT_TESTS: ${{ needs.unit_tests.result }}
+          LINT: ${{ needs.lint.result }}
+          FRONTEND_UNIT_TESTS: ${{ needs.frontend_unit_tests.result }}
+          MIGRATION_CHECK: ${{ needs.migration_check.result }}
+        run: |
+          set -euo pipefail
+          summary="build=${BUILD} api_tests=${API_TESTS} unit_tests=${UNIT_TESTS} lint=${LINT} frontend_unit_tests=${FRONTEND_UNIT_TESTS} migration_check=${MIGRATION_CHECK}"
+          echo "Validation gates: ${summary}"
+          echo "summary=${summary}" >> "$GITHUB_OUTPUT"
 
   #  7. DEPLOY: only runs if every upstream gate passes. 
   deploy:

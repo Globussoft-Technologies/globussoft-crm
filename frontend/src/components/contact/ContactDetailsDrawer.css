@@ -81,6 +81,71 @@
 .cd-tag-picker-apply:disabled { cursor: wait; opacity: 0.65; }
 .cd-tag-picker-message, .cd-tag-picker-error { padding: 0.5rem 0; color: var(--text-secondary); font-size: 0.72rem; }
 .cd-tag-picker-error { color: #b91c1c; }
+
+/* Generic CRM tag picker refinement. Wellness and travel keep the shared
+   picker dimensions and spacing above unchanged. */
+body[data-vertical="generic"] .cd-tag-picker {
+  box-sizing: border-box;
+  padding: 0.9rem;
+}
+body[data-vertical="generic"] .cd-tag-picker-head {
+  margin-bottom: 0.75rem;
+}
+body[data-vertical="generic"] .cd-tag-picker-search {
+  min-height: 42px;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+body[data-vertical="generic"] .cd-tag-picker-list {
+  margin: 0.75rem 0;
+}
+body[data-vertical="generic"] .cd-tag-option {
+  min-height: 34px;
+}
+body[data-vertical="generic"] .cd-tag-color input,
+body[data-vertical="generic"] .cd-create-tag-row input[type="color"] {
+  flex: 0 0 1.75rem;
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0.15rem;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--surface-color, transparent);
+}
+body[data-vertical="generic"] .cd-tag-color input::-webkit-color-swatch-wrapper,
+body[data-vertical="generic"] .cd-create-tag-row input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+body[data-vertical="generic"] .cd-tag-color input::-webkit-color-swatch,
+body[data-vertical="generic"] .cd-create-tag-row input[type="color"]::-webkit-color-swatch,
+body[data-vertical="generic"] .cd-tag-color input::-moz-color-swatch,
+body[data-vertical="generic"] .cd-create-tag-row input[type="color"]::-moz-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+body[data-vertical="generic"] .cd-create-tag-row {
+  margin-top: 0.6rem;
+}
+body[data-vertical="generic"] .cd-create-tag-row button,
+body[data-vertical="generic"] .cd-tag-picker-apply,
+body[data-vertical="generic"] .cd-tag-picker-cancel {
+  min-height: 32px;
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+body[data-vertical="generic"] .cd-tag-picker-actions {
+  justify-content: flex-end;
+  margin-top: 0.8rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color);
+}
 .cd-tag-values > span:not(.cd-tag-chip) { padding: 0.2rem 0.5rem; border-radius: 999px; background: var(--subtle-bg-2); color: var(--text-primary); }
 .cd-tag-value { padding: 0.2rem 0.5rem; border: none; border-radius: 999px; background: var(--subtle-bg-2); color: var(--text-primary); cursor: pointer; font: inherit; font-size: 0.75rem; }
 .cd-tag-form input { width: 7rem; padding: 0.2rem 0.35rem; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-primary); font: inherit; font-size: 0.75rem; }

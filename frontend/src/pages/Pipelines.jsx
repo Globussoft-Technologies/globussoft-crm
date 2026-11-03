@@ -235,7 +235,7 @@ const Pipelines = () => {
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.75rem' }}>
-          <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={backButton}>
+          <button type="button" onClick={() => { window.location.href = '/pipeline'; }} aria-label="Go back" style={backButton}>
             <ArrowLeft size={16} /> Back
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -376,7 +376,7 @@ const Pipelines = () => {
           <div
             onClick={(e) => e.stopPropagation()}
             className="card"
-            style={{ width: '90%', maxWidth: '480px', maxHeight: '90vh', padding: '1.75rem', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+            style={{ width: '90%', maxWidth: '480px', maxHeight: '90vh', padding: '1.75rem', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--modal-bg, #fff)', opacity: 1, backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>

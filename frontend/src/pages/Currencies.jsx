@@ -539,7 +539,7 @@ export default function Currencies() {
       {/* Add Modal */}
       {showAdd && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.6))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card" style={{ padding: '2rem', width: 460 }}>
+          <div className="card" style={{ padding: '2rem', width: 460, opacity: 1, background: 'var(--modal-bg, #ffffff)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold' }}>Add Currency</h3>
               <button onClick={() => setShowAdd(false)} aria-label="Close add currency dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>

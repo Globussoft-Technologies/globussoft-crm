@@ -36,6 +36,11 @@ describe('Pickup & Plot table scroll cards', () => {
     expect(css).toMatch(/\.pickup-person-directory-page \.pickup-plot-table-scroll,[\s\S]*?\.pickup-plot-inventory-page \.pickup-plot-table-scroll,[\s\S]*?\.pickup-inventory-page \.pickup-plot-table-scroll,[\s\S]*?\.billing-directory-page \.pickup-plot-table-scroll,[\s\S]*?\.staff-work-assignment-page \.pickup-plot-table-scroll\s*\{[^}]*flex:\s*0 0 auto\s*;[^}]*max-height:\s*calc\(100vh - 260px\)\s*;/s);
   });
 
+  it('keeps Generic CRM Pickup Inventory inside one bounded scroll viewport', () => {
+    expect(css).toMatch(/body\[data-vertical="generic"\] \.app-main > main\.generic-page-content:has\(\.pickup-inventory-page\)\s*\{[^}]*overflow-y:\s*hidden\s*!important\s*;/s);
+    expect(css).toMatch(/body\[data-vertical="generic"\] \.pickup-inventory-page > \.pickup-plot-table-body-scroll\s*\{[^}]*flex:\s*1 1 auto\s*!important\s*;[^}]*max-height:\s*none\s*!important\s*;/s);
+  });
+
   it('removes row hover styling only for Generic CRM Pickup & Plot tables', () => {
     expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-no-row-hover\s+tbody\s+tr:not\(\.is-selected\):hover/);
     expect(css).toMatch(/table\.pickup-plot-no-row-hover\s+tbody\s+tr:not\(\.is-selected\):hover[^{}]*\{[^}]*background-color:\s*transparent\s*!important\s*;/s);

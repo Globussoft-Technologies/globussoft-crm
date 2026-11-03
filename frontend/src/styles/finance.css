@@ -277,6 +277,25 @@ html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page > .inv
   margin-bottom: 0.75rem;
 }
 
+/* Generic Expenses uses the same fixed application viewport as the invoice
+   ledger. Keep the page itself stationary and let its table viewport own the
+   vertical scroll, so the app-level scrollbar is not duplicated. */
+html[data-vertical="generic"] .expenses-page {
+  display: flex;
+  flex-direction: column;
+  height: 100% !important;
+  max-height: 100%;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+@media (min-width: 769px) {
+  .app-main > main.generic-page-content:has(.expenses-page) {
+    min-height: 0 !important;
+    overflow-y: hidden !important;
+  }
+}
+
 html[data-vertical="generic"] .invoices-mobile-page.invoices-generic-page
   :is(.invoice-summary-badges > span, .invoice-filter-pill, .invoice-create-button) {
   min-height: 34px;

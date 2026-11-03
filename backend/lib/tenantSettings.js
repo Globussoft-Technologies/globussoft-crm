@@ -177,7 +177,7 @@ const DEFAULTS = {
     { id: "won-churned", title: "Won / Churned", options: [{ id: "won", label: "Won", status: "Customer", negative: false }, { id: "churned", label: "Churned", status: "Churned", negative: true }] },
   ]),
   [KEYS.GENERIC_DEAL_TYPES]: JSON.stringify([
-    { id: "new-business", name: "New Business", description: "", isDefault: true, stages: [{ id: "new-lead", name: "New Lead", color: "#3b82f6" }, { id: "contracted", name: "Contracted", color: "#0891b2" }, { id: "negotiation", name: "Negotiation", color: "#7c3aed" }, { id: "won", name: "Won", color: "#10b981" }, { id: "lost", name: "Lost", color: "#ef4444" }] },
+    { id: "new-business", name: "New Business", description: "", isDefault: true, stages: [{ id: "new-deal", name: "New Deal", color: "#3b82f6" }, { id: "contracted", name: "Contracted", color: "#0891b2" }, { id: "negotiation", name: "Negotiation", color: "#7c3aed" }, { id: "won", name: "Won", color: "#10b981" }, { id: "lost", name: "Lost", color: "#ef4444" }] },
   ]),
   [KEYS.GENERIC_FIELD_CONFIG]: JSON.stringify({
     fieldOverrides: {},

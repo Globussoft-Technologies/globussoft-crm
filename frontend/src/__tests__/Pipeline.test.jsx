@@ -61,7 +61,8 @@ function mockApi({ deals = DEALS, stages = STAGES, pipelines = [] } = {}) {
       const filtered = deals.filter((deal) =>
         (!query || [deal.title, deal.company, deal.contactName, deal.ownerName].some((value) => String(value || '').toLowerCase().includes(query)))
         && (!params.get('stage') || deal.stage === params.get('stage'))
-        && (!params.get('ownerId') || String(deal.ownerId) === params.get('ownerId')),
+        && (!params.get('ownerId') || String(deal.ownerId) === params.get('ownerId'))
+        && (!params.get('dealKind') || deal.dealKind === params.get('dealKind')),
       );
       return Promise.resolve({ data: filtered, total: filtered.length, page: 1, limit: 50, totalPages: 1 });
     }
@@ -328,6 +329,28 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByText('Initech Deal')).toBeInTheDocument();
   });
 
+  it('filters Generic CRM deals by pipeline', async () => {
+    mockApi({
+      pipelines: [{ id: 7, name: 'Sales Pipeline', isDefault: true }],
+      deals: [
+        { ...DEALS[0], pipelineId: 7 },
+        { ...DEALS[1], pipelineId: 8 },
+      ],
+    });
+    renderGenericPipeline();
+    await screen.findByText('Acme Corp Renewal');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pipeline' }));
+    fireEvent.click(screen.getAllByRole('option', { name: 'Sales Pipeline' }).find((option) => option.tagName === 'BUTTON'));
+
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map(([url]) => url);
+      expect(urls.some((url) => url.startsWith('/api/deals?') && new URL(url, 'http://localhost').searchParams.get('pipelineId') === '7')).toBe(true);
+      expect(urls.some((url) => url.startsWith('/api/deals/stats?') && new URL(url, 'http://localhost').searchParams.get('pipelineId') === '7')).toBe(true);
+    });
+    expect(screen.getByText('Acme Corp Renewal')).toBeInTheDocument();
+  });
+
   it('keeps the configured stage columns stable while searching legacy-stage deals', async () => {
     mockApi({
       stages: [
@@ -348,7 +371,7 @@ describe('Deals and Pipelines page', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /search deals/i }), { target: { value: 'legacy' } });
     await waitFor(() => expect(screen.getByText('Legacy contacted deal')).toBeInTheDocument());
     expect(screen.getAllByRole('heading', { name: /.+/ })).toEqual(expect.arrayContaining([
-      screen.getByRole('heading', { name: 'New Lead' }),
+      screen.getByRole('heading', { name: 'New Deal' }),
       screen.getByRole('heading', { name: 'Contracted' }),
       screen.getByRole('heading', { name: 'Negotiation' }),
       screen.getByRole('heading', { name: 'Won' }),

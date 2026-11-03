@@ -141,7 +141,7 @@ describe('<PickupInventory />', () => {
       flex: '0 0 auto', maxHeight: 'calc(100vh - 260px)', overflowX: 'auto', overflowY: 'auto', minHeight: '0',
     });
     expect(screen.getByTestId('pickup-inventory-table-width')).toHaveStyle({ width: '1265px', minWidth: '100%' });
-    expect(screen.getByRole('table')).toHaveStyle({ width: '100%', tableLayout: 'fixed' });
+    expect(screen.getByRole('table')).toHaveStyle({ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: '0px' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Pickup location' })).toHaveStyle({ position: 'sticky', top: '0px', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' });
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();

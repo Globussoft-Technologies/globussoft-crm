@@ -71,7 +71,7 @@ describe('PickupPlotWorkAssignments', () => {
     expect(screen.getByTestId('staff-work-assignment-table-scroll')).toHaveStyle({
       flex: '0 0 auto', maxHeight: 'calc(100vh - 260px)', overflow: 'auto', minHeight: '0',
     });
-    expect(screen.getByRole('table', { name: 'Staff work assignments' })).toHaveStyle({ tableLayout: 'fixed' });
+    expect(screen.getByRole('table', { name: 'Staff work assignments' })).toHaveStyle({ display: 'block', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: '0px' });
     expect(screen.getByRole('columnheader', { name: 'Staff' })).toHaveStyle({ position: 'sticky', top: '0px' });
   });
 

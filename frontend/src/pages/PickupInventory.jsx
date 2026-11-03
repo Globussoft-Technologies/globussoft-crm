@@ -291,7 +291,7 @@ export default function PickupInventory() {
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           {(!error || loadedRef.current) && <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
             <thead style={{ display: 'block', width: '100%' }}><tr style={{ display: 'grid', gridTemplateColumns, width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
               <ResizableTableHeader

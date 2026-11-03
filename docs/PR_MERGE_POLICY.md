@@ -31,7 +31,8 @@ Two metadata-only statuses are published on the actual PR head:
   latest commit has a valid GitHub-verified **OpenPGP/GPG** signature. SSH and
   S/MIME signatures do not satisfy this specific request. Older commits are
   not required to be signed by this policy.
-* **PR approval (akhil-glb)**: `akhil-glb` has approved the exact current head.
+* **PR approval (akhil-glb)**: `akhil-glb` has approved the exact current head,
+  or the PR is authored by `akhil-glb` (explicit review-only exception).
   A later request for changes/dismissal or a new commit invalidates approval.
   Comment-only reviews do not revoke an existing approval.
 
@@ -60,9 +61,9 @@ After these files land on `main`, run the checks once so their names appear in
 Settings. An admin must edit the existing main branch rule (or create one if
 none exists), preserving any unrelated existing protection:
 
-1. Require a pull request before merging, at least one approving review, and
-   review from Code Owners. `.github/CODEOWNERS` assigns all files to
-   `@akhil-glb`. Confirm that this account retains Write or higher access.
+1. Require a pull request before merging, with zero native required approvals
+   and no native Code Owner approval requirement. The mandatory custom approval
+   status enforces author-dependent approval; CODEOWNERS remains review routing.
 2. Dismiss stale approvals when new commits are pushed. Do not allow other
    users to dismiss reviews or bypass the rule unless the policy is explicitly
    changed. Do not enable an admin/bot bypass list.
@@ -76,18 +77,22 @@ none exists), preserving any unrelated existing protection:
 6. Verify with a negative PR: unsigned head, stale base, missing approval,
    approval on an older head, and a failing test must each block merging.
    Only a signed, up-to-date PR with all six gates green and a current
-   `akhil-glb` approval should be mergeable by its author.
+   `akhil-glb` approval (or the explicit author exception) should be mergeable.
 
 Native "Require signed commits" is optional stronger protection: GitHub applies
 it to all commits, not just the latest commit requested here. The mandatory
 `PR branch policy` status checks the narrower latest-GPG-commit requirement.
 
-**Self-authored PRs:** GitHub does not allow self-approval. Under this strict
-policy a PR authored by `akhil-glb` cannot be merged with `akhil-glb` as its sole
-required approver. This is deliberate fail-closed behavior, not an exemption.
-An alternate named approver/ownership policy requires an explicit decision.
-Similarly, if `akhil-glb` is unavailable, PRs remain blocked. Earlier requests
-to skip checks must not be used to bypass this new policy after activation.
+**Self-authored PRs:** GitHub does not allow self-approval. PRs authored by
+`akhil-glb` are explicitly exempt from review only. All required validation,
+GPG signature, linear history and latest-main checks still apply. Every other
+author still requires current-head approval from `akhil-glb`.
+
+**Activation order:** merge the updated trusted evaluator into main first,
+then change the live ruleset review count to zero and Code Owner requirement
+to false. Keep all three required statuses and an empty bypass list. Until
+both steps are complete the exception is not active. For the bootstrap PR,
+another contributor must open it so `akhil-glb` can approve under the old rule.
 
 ## Optional local pre-commit / pre-push hooks
 

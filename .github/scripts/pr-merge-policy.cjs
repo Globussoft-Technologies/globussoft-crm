@@ -17,9 +17,9 @@ function evaluatePolicy({ pr, mainSha, comparison, commits, verification, review
       || !verification.signature?.startsWith('-----BEGIN PGP SIGNATURE-----')) {
     branch.push('The latest commit must have a GitHub-verified GPG signature (not SSH/S/MIME).');
   }
-  if (pr.user?.login?.toLowerCase() === APPROVER) {
-    approval.push('GitHub disallows self-approval: a PR authored by akhil-glb cannot satisfy this strict policy.');
-  } else {
+  // Explicit author-only exception, not a ruleset bypass: branch/signature
+  // checks above and the independent required validation check still apply.
+  if (pr.user?.login?.toLowerCase() !== APPROVER) {
     // A later comment does not revoke an approval, but a changes-requested or
     // dismissed review does. Approval must belong to the exact current head.
     const decisive = reviews.filter((review) => review.user?.login?.toLowerCase() === APPROVER

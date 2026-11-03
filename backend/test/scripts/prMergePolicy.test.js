@@ -58,10 +58,15 @@ describe('PR merge policy', () => {
   test('comment-only reviews do not revoke approval', () => {
     expect(evaluatePolicy({ ...fixture(), reviews: [approved, { ...approved, id: 2, state: 'COMMENTED' }] }).approval).toEqual([]);
   });
-  test('self-authored PRs have no self-approval exemption', () => {
+  test('akhil-authored PRs have an explicit review-only exception', () => {
     const data = fixture();
     data.pr.user.login = 'akhil-glb';
-    expect(evaluatePolicy(data).approval.join(' ')).toMatch(/self-approval/);
+    data.reviews = [];
+    expect(evaluatePolicy(data).approval).toEqual([]);
+    data.verification = { verified: false, reason: 'unsigned' };
+    data.comparison.merge_base_commit.sha = NEXT;
+    expect(evaluatePolicy(data).branch.join(' ')).toMatch(/GPG/);
+    expect(evaluatePolicy(data).branch.join(' ')).toMatch(/Rebase/);
   });
   test('draft PRs are blocked', () => {
     const data = fixture();
@@ -217,9 +222,9 @@ describe('PR workflow wiring', () => {
     expect(ruleset.bypass_actors).toEqual([]);
     expect(ruleset.conditions.ref_name).toEqual({ include: ['refs/heads/main'], exclude: [] });
     const prRule = ruleset.rules.find((rule) => rule.type === 'pull_request').parameters;
-    expect(prRule.required_approving_review_count).toBe(1);
+    expect(prRule.required_approving_review_count).toBe(0);
     expect(prRule.dismiss_stale_reviews_on_push).toBe(true);
-    expect(prRule.require_code_owner_review).toBe(true);
+    expect(prRule.require_code_owner_review).toBe(false);
     const checks = ruleset.rules.find((rule) => rule.type === 'required_status_checks').parameters;
     expect(checks.strict_required_status_checks_policy).toBe(true);
     expect(checks.required_status_checks).toEqual([

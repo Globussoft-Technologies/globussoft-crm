@@ -123,6 +123,11 @@
   padding-bottom: 0;
 }
 
+#root .travel-app-shell .travel-content-frame
+  .create-lead-travel-phone input.travel-lead-phone-input {
+  padding-left: 116px !important;
+}
+
 .create-lead-travel-phone .iti__country-container {
   width: 102px;
   padding: 0;

@@ -20,9 +20,10 @@
  * settings-CRUD page this pattern was pulled from.
  */
 
-import { useContext, useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
-import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, GripVertical, Search, Folder, ChevronDown, Info, Type, Hash, Link2, AlignLeft, List } from "lucide-react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { Link, Navigate } from "react-router-dom";
+import { createPortal } from "react-dom";
+import { Plus, Trash2, Loader, ListChecks, ArrowLeft, ArrowUp, ArrowDown, Pencil, GripVertical, Search, Folder, ChevronDown, Info, Type, Hash, Link2, AlignLeft, List } from "lucide-react";
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -233,6 +234,7 @@ const th = {
   letterSpacing: "0.04em",
   color: "var(--text-secondary)",
   fontWeight: 600,
+  textAlign: "left",
   // Theme-driven, not a fixed dark hex. --subtle-bg composites over the
   // table body's --bg-color to sit a shade apart from the rows in BOTH
   // themes (white 5% over near-black in dark, black 4% over #f0f2f5 in
@@ -363,7 +365,7 @@ function SortableLeadFieldRow({
           style={{ cursor: "pointer" }}
         />
       </td>
-      <td style={{ ...td, textAlign: "right" }}>
+      <td style={td}>
         <div style={{ display: "inline-flex", gap: "0.4rem" }}>
           <button
             type="button"
@@ -469,6 +471,164 @@ function renderFieldPreview(field, optionsText) {
   return <input {...sharedProps} type="text" />;
 }
 
+function FieldTypeSelect({ value, onChange }) {
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.max(0, FIELD_TYPE_OPTIONS.findIndex((option) => option.value === value)),
+  );
+  const [menuStyle, setMenuStyle] = useState(null);
+  const menuId = "lead-field-type-options";
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const positionMenu = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const gap = 4;
+      const viewportPadding = 8;
+      const rowHeight = 24;
+      const menuHeight = FIELD_TYPE_OPTIONS.length * rowHeight;
+      const below = Math.max(0, window.innerHeight - rect.bottom - gap - viewportPadding);
+      const above = Math.max(0, rect.top - gap - viewportPadding);
+      const openBelow = below >= menuHeight || below >= above;
+      const availableHeight = openBelow ? below : above;
+      const height = Math.min(menuHeight, availableHeight);
+      const width = Math.min(rect.width, window.innerWidth - viewportPadding * 2);
+      const triggerStyle = window.getComputedStyle(triggerRef.current);
+
+      setMenuStyle({
+        position: "fixed",
+        left: Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - width - viewportPadding)),
+        top: openBelow ? rect.bottom + gap : Math.max(viewportPadding, rect.top - height - gap),
+        width,
+        maxHeight: height,
+        zIndex: 1400,
+        fontFamily: triggerStyle.fontFamily,
+        fontSize: triggerStyle.fontSize,
+        fontWeight: triggerStyle.fontWeight,
+        lineHeight: triggerStyle.lineHeight,
+      });
+    };
+
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    const closeOnOutsideClick = (event) => {
+      if (!triggerRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    document.getElementById(`${menuId}-${activeIndex}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, open, menuId]);
+
+  const selectOption = (option) => {
+    onChange(option.value);
+    setActiveIndex(FIELD_TYPE_OPTIONS.indexOf(option));
+    setOpen(false);
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      setOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        setActiveIndex(Math.max(0, FIELD_TYPE_OPTIONS.findIndex((option) => option.value === value)));
+        setOpen(true);
+      } else {
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setActiveIndex((current) => (
+          current + direction + FIELD_TYPE_OPTIONS.length
+        ) % FIELD_TYPE_OPTIONS.length);
+      }
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      if (!open) return;
+      event.preventDefault();
+      setActiveIndex(event.key === "Home" ? 0 : FIELD_TYPE_OPTIONS.length - 1);
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && open) {
+      event.preventDefault();
+      selectOption(FIELD_TYPE_OPTIONS[activeIndex]);
+    }
+  };
+
+  return (
+    <>
+      <select
+        ref={triggerRef}
+        id="lf-new-type"
+        className="input-field lead-field-type-select"
+        role="combobox"
+        aria-label="Field Type"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={menuId}
+        aria-activedescendant={open ? `${menuId}-${activeIndex}` : undefined}
+        value={value}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          triggerRef.current?.focus();
+          setActiveIndex(Math.max(0, FIELD_TYPE_OPTIONS.findIndex((option) => option.value === value)));
+          setOpen((current) => !current);
+        }}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={handleKeyDown}
+      >
+        {FIELD_TYPE_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+      {open && menuStyle && createPortal(
+        <div
+          ref={menuRef}
+          id={menuId}
+          role="listbox"
+          aria-label="Field Type options"
+          className="lead-field-type-menu"
+          style={menuStyle}
+        >
+          {FIELD_TYPE_OPTIONS.map((option, index) => (
+            <button
+              key={option.value}
+              id={`${menuId}-${index}`}
+              type="button"
+              role="option"
+              tabIndex={-1}
+              aria-selected={value === option.value}
+              className="lead-field-type-option"
+              data-active={activeIndex === index}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => selectOption(option)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 export default function LeadFields({
   pageTitle = "Lead Fields",
   pageDescription = "Add extra fields to your Leads. Once created, a field appears on every lead’s create/edit form and detail view for your organization only.",
@@ -497,15 +657,16 @@ export default function LeadFields({
   const [savingNew, setSavingNew] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [reordering, setReordering] = useState(false);
-  // Editing options (add/rename/remove choices) for a dropdown/radio/
-  // multiselect field. Renaming or removing a choice that's already stored
-  // on some lead's value doesn't retroactively fix that lead's data (the
-  // stored string just stops matching any option) — surfaced as a one-time
-  // warning on save rather than blocked outright, since adding options is
-  // always safe and blocking the whole editor would punish the safe case too.
-  const [editingOptionsId, setEditingOptionsId] = useState(null);
+  // Field type stays immutable after creation, but the remaining attributes
+  // can be managed here. Removing a stored choice requires confirmation
+  // because existing leads retain the old value.
+  const [editingField, setEditingField] = useState(null);
+  const [editingLabel, setEditingLabel] = useState("");
+  const [editingTooltip, setEditingTooltip] = useState("");
+  const [editingPlaceholder, setEditingPlaceholder] = useState("");
   const [editingOptionsText, setEditingOptionsText] = useState("");
-  const [savingOptions, setSavingOptions] = useState(false);
+  const [editingRequired, setEditingRequired] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [fieldSearch, setFieldSearch] = useState("");
   const [expandedConfigRow, setExpandedConfigRow] = useState(null);
   const [collapsedConfigGroups, setCollapsedConfigGroups] = useState(() => readCollapsedConfigGroups(collapsedGroupsStorageKey));
@@ -750,52 +911,68 @@ export default function LeadFields({
   };
 
   const openEditModal = (field) => {
-    if (FIELD_TYPES_WITH_OPTIONS.has(field.fieldType)) {
-      openOptionsEditor(field);
-      return;
-    }
-    notify.info("Editing is currently available for option-based fields from this table.");
-  };
-  const openOptionsEditor = (field) => {
-    setEditingOptionsId(field.id);
+    setEditingField(field);
+    setEditingLabel(field.label || "");
+    setEditingTooltip(field.tooltip || "");
+    setEditingPlaceholder(field.placeholder || "");
     setEditingOptionsText(Array.isArray(field.options) ? field.options.join(", ") : "");
+    setEditingRequired(Boolean(field.isRequired));
   };
 
-  const cancelOptionsEditor = () => {
-    setEditingOptionsId(null);
+  const cancelFieldEditor = () => {
+    setEditingField(null);
+    setEditingLabel("");
+    setEditingTooltip("");
+    setEditingPlaceholder("");
     setEditingOptionsText("");
+    setEditingRequired(false);
   };
 
-  const handleSaveOptions = async (field) => {
-    const newOpts = editingOptionsText.split(",").map((o) => o.trim()).filter(Boolean);
-    if (!newOpts.length) {
-      notify.error("Enter at least one option, separated by commas");
+  const handleSaveField = async () => {
+    if (!editingField) return;
+    const label = editingLabel.trim();
+    if (!label) {
+      notify.error("Label is required");
       return;
     }
-    const oldOpts = Array.isArray(field.options) ? field.options : [];
-    const removedOrRenamed = oldOpts.filter((o) => !newOpts.includes(o));
-    if (removedOrRenamed.length) {
-      const ok = await notify.confirm({
-        title: "Some existing choices are being removed",
-        message: `"${removedOrRenamed.join('", "')}" ${removedOrRenamed.length > 1 ? "are" : "is"} no longer in the list. Any lead that already has one of these values saved will keep showing it, but it won't match any selectable option going forward. Continue?`,
-        confirmText: "Save anyway",
-        destructive: true,
-      });
-      if (!ok) return;
+    const body = {
+      label,
+      tooltip: editingTooltip.trim(),
+      placeholder: editingPlaceholder.trim(),
+      isRequired: editingRequired,
+    };
+    if (FIELD_TYPES_WITH_OPTIONS.has(editingField.fieldType)) {
+      const newOptions = editingOptionsText.split(",").map((option) => option.trim()).filter(Boolean);
+      if (!newOptions.length) {
+        notify.error("Enter at least one option, separated by commas");
+        return;
+      }
+      const oldOptions = Array.isArray(editingField.options) ? editingField.options : [];
+      const removedOrRenamed = oldOptions.filter((option) => !newOptions.includes(option));
+      if (removedOrRenamed.length) {
+        const ok = await notify.confirm({
+          title: "Some existing choices are being removed",
+          message: `"${removedOrRenamed.join('", "')}" ${removedOrRenamed.length > 1 ? "are" : "is"} no longer in the list. Any lead that already has one of these values saved will keep showing it, but it won't match any selectable option going forward. Continue?`,
+          confirmText: "Save anyway",
+          destructive: true,
+        });
+        if (!ok) return;
+      }
+      body.options = newOptions;
     }
-    setSavingOptions(true);
+    setSavingEdit(true);
     try {
-      await fetchApi(`/api/lead-custom-fields/${field.id}`, {
+      await fetchApi(`/api/lead-custom-fields/${editingField.id}`, {
         method: "PUT",
-        body: JSON.stringify({ options: newOpts }),
+        body: JSON.stringify(body),
       });
-      notify.success("Options updated");
-      cancelOptionsEditor();
+      notify.success("Field updated");
+      cancelFieldEditor();
       await load({ silent: true });
     } catch (err) {
-      notify.error(err?.message || "Failed to update options");
+      notify.error(err?.message || "Failed to update field");
     } finally {
-      setSavingOptions(false);
+      setSavingEdit(false);
     }
   };
 
@@ -1248,11 +1425,23 @@ export default function LeadFields({
   }
 
   return (
-    <div style={{ padding: "2rem", paddingBottom: "3rem", maxWidth: showSystemFields ? "1180px" : "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
-      <h1 style={{ fontSize: "1.5rem", fontWeight: "bold", marginBottom: "0.25rem" }}>{pageTitle}</h1>
-      <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-        {pageDescription}
-      </p>
+    <div
+      className={tenant?.vertical === "travel" ? "lead-fields-page" : undefined}
+      style={{ padding: "2rem", paddingBottom: "3rem", maxWidth: showSystemFields ? "1180px" : "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}
+    >
+      {tenant?.vertical === "travel" && (
+        <Link to="/leads" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: 13, textDecoration: "none", marginBottom: 16 }}>
+          <ArrowLeft size={16} /> Back to Leads
+        </Link>
+      )}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: "bold", margin: "0 0 0.25rem" }}>{pageTitle}</h1>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", margin: 0 }}>
+            {pageDescription}
+          </p>
+        </div>
+      </div>
 
       <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: "1.5rem" }}>
         <div style={{ padding: "1.25rem 1.25rem 0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
@@ -1287,13 +1476,13 @@ export default function LeadFields({
                   <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
                     <thead>
                       <tr style={{ background: "var(--subtle-bg)", display: "table", width: "100%", tableLayout: "fixed" }}>
-                        <th style={{ ...th, width: "88px" }}>Order</th>
-                        <th style={th}>Label</th>
-                        <th style={th}>Type</th>
-                        <th style={th}>Key</th>
-                        <th style={th}>Options</th>
-                        <th style={th}>Required</th>
-                        <th style={{ ...th, textAlign: "right" }}></th>
+                        <th scope="col" style={th}>Order</th>
+                        <th scope="col" style={th}>Label</th>
+                        <th scope="col" style={th}>Type</th>
+                        <th scope="col" style={th}>Key</th>
+                        <th scope="col" style={th}>Options</th>
+                        <th scope="col" style={th}>Required</th>
+                        <th scope="col" style={th}>Action</th>
                       </tr>
                     </thead>
                     <SortableContext items={visibleFields.map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
@@ -1350,16 +1539,7 @@ export default function LeadFields({
             </FormField>
 
             <FormField label="Field Type" htmlFor="lf-new-type">
-              <select
-                id="lf-new-type"
-                className="input-field"
-                value={newFieldType}
-                onChange={(e) => setNewFieldType(e.target.value)}
-              >
-                {FIELD_TYPE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+              <FieldTypeSelect value={newFieldType} onChange={setNewFieldType} />
             </FormField>
 
             {FIELD_TYPES_WITH_OPTIONS.has(newFieldType) && (
@@ -1420,10 +1600,105 @@ export default function LeadFields({
           </div>
         </div>
       )}
+
+      {editingField && (
+        <div
+          className="field-config-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !savingEdit) cancelFieldEditor();
+          }}
+        >
+          <section
+            className="field-config-create"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lead-field-edit-title"
+          >
+            <div className="field-config-create-heading">
+              <div>
+                <Pencil size={18} />
+                <strong id="lead-field-edit-title">Edit {editingField.label}</strong>
+              </div>
+              <button
+                type="button"
+                className="field-config-icon-button"
+                onClick={cancelFieldEditor}
+                disabled={savingEdit}
+                aria-label="Close edit field"
+              >
+                &times;
+              </button>
+            </div>
+            <div className="field-config-dialog-fields">
+              <FormField label="Label" htmlFor="lf-edit-label">
+                <input
+                  id="lf-edit-label"
+                  className="input-field"
+                  value={editingLabel}
+                  onChange={(event) => setEditingLabel(event.target.value)}
+                  maxLength={80}
+                  autoFocus
+                />
+              </FormField>
+              <FormField label="Field type" hint="Field type cannot be changed after creation" htmlFor="lf-edit-type">
+                <input
+                  id="lf-edit-type"
+                  className="input-field"
+                  value={FIELD_TYPE_LABELS[editingField.fieldType] || editingField.fieldType}
+                  readOnly
+                />
+              </FormField>
+              {FIELD_TYPES_WITH_OPTIONS.has(editingField.fieldType) && (
+                <FormField label="Options" hint="Comma-separated choices" htmlFor="lf-edit-options">
+                  <input
+                    id="lf-edit-options"
+                    className="input-field"
+                    value={editingOptionsText}
+                    onChange={(event) => setEditingOptionsText(event.target.value)}
+                    placeholder="Google, Referral, Event"
+                  />
+                </FormField>
+              )}
+              <FormField label="Tooltip" htmlFor="lf-edit-tooltip">
+                <textarea
+                  id="lf-edit-tooltip"
+                  className="input-field"
+                  rows={3}
+                  value={editingTooltip}
+                  onChange={(event) => setEditingTooltip(event.target.value)}
+                  maxLength={255}
+                />
+              </FormField>
+              <FormField label="Placeholder" htmlFor="lf-edit-placeholder">
+                <input
+                  id="lf-edit-placeholder"
+                  className="input-field"
+                  value={editingPlaceholder}
+                  onChange={(event) => setEditingPlaceholder(event.target.value)}
+                  maxLength={255}
+                />
+              </FormField>
+              <label className="field-config-create-required">
+                <input
+                  type="checkbox"
+                  checked={editingRequired}
+                  onChange={(event) => setEditingRequired(event.target.checked)}
+                />
+                Required
+              </label>
+            </div>
+            <div className="field-config-create-actions">
+              <button type="button" className="field-config-button" onClick={cancelFieldEditor} disabled={savingEdit}>
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={handleSaveField} disabled={savingEdit}>
+                {savingEdit ? "Saving..." : "Save changes"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
-
-
-
-

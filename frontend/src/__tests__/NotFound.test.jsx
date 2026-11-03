@@ -16,6 +16,7 @@
  *   (d) the quick-link button row:
  *         - logged-in + generic tenant   -> "Go to Dashboard" -> /dashboard
  *         - logged-in + wellness tenant  -> "Go to Wellness Dashboard" -> /wellness
+ *         - logged-in + travel tenant    -> "Go to Dashboard" -> /travel
  *         - logged-out                   -> "Go to Login" -> /login
  *         - logged-in ONLY also renders  -> "Search the help" -> /knowledge-base
  *
@@ -81,6 +82,15 @@ const wellnessLoggedIn = {
   user: { userId: 2, email: 'rishu@enhancedwellness.in', role: 'ADMIN' },
   token: 'jwt-test-token-wellness',
   tenant: { id: 2, vertical: 'wellness' },
+  setUser: vi.fn(),
+  setToken: vi.fn(),
+  setTenant: vi.fn(),
+};
+
+const travelLoggedIn = {
+  user: { userId: 3, email: 'owner@travel.demo', role: 'ADMIN' },
+  token: 'jwt-test-token-travel',
+  tenant: { id: 3, vertical: 'travel' },
   setUser: vi.fn(),
   setToken: vi.fn(),
   setTenant: vi.fn(),
@@ -156,6 +166,15 @@ describe('<NotFound /> -- global catch-all 404 page', () => {
     expect(helpLink.getAttribute('href')).toBe('/knowledge-base');
     // The generic "Go to Dashboard" label MUST NOT render.
     expect(screen.queryByText(/Go to Dashboard$/i)).not.toBeInTheDocument();
+  });
+
+  it('travel-tenant + logged-in renders "Go to Dashboard" pointing at /travel', () => {
+    renderNotFound(travelLoggedIn);
+    const homeLink = screen
+      .getAllByRole('link')
+      .find((a) => /Go to Dashboard/i.test(a.textContent || ''));
+    expect(homeLink).toBeTruthy();
+    expect(homeLink.getAttribute('href')).toBe('/travel');
   });
 
   it('logged-out renders "Go to Login" and does NOT render the help link', () => {

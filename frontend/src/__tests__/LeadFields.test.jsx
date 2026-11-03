@@ -198,6 +198,53 @@ beforeEach(() => {
 });
 
 describe("<LeadFields />", () => {
+  it("keeps the Field Type menu inside the viewport and preserves option selection", async () => {
+    const previousInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 250,
+    });
+    const boundsSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function getBounds() {
+        if (this.id === "lf-new-type") {
+          return {
+            x: 100, y: 160, left: 100, right: 500, top: 160, bottom: 190,
+            width: 400, height: 30, toJSON: () => ({}),
+          };
+        }
+        return {
+          x: 0, y: 0, left: 0, right: 0, top: 0, bottom: 0,
+          width: 0, height: 0, toJSON: () => ({}),
+        };
+      });
+
+    try {
+      const user = userEvent.setup();
+      renderLeadFields();
+      await screen.findByText("Alpha");
+      await user.click(screen.getByRole("button", { name: "Add Field" }));
+
+      const fieldType = screen.getByRole("combobox", { name: "Field Type" });
+      await user.click(fieldType);
+      const menu = await screen.findByRole("listbox", { name: "Field Type options" });
+
+      expect(menu.style.top).toBe("8px");
+      expect(menu.style.maxHeight).toBe("148px");
+      expect(menu.style.fontSize).toBe(window.getComputedStyle(fieldType).fontSize);
+      expect(within(menu).getAllByRole("option")).toHaveLength(9);
+
+      await user.click(within(menu).getByRole("option", { name: "URL" }));
+      expect(fieldType).toHaveTextContent("URL");
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    } finally {
+      boundsSpy.mockRestore();
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: previousInnerHeight,
+      });
+    }
+  });
+
   it("renders the generic Field Config view with grouped built-in fields and search", async () => {
     authContextValue.tenant = { vertical: "generic" };
     const user = userEvent.setup();
@@ -483,6 +530,65 @@ describe("<LeadFields />", () => {
 
     await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument());
     expect(fetchApiMock).toHaveBeenCalledWith(expect.stringContaining("/api/lead-custom-fields?"));
+    expect(screen.getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+  });
+
+  it("edits every configurable attribute of a Travel CRM lead field", async () => {
+    authContextValue.tenant = { vertical: "travel" };
+    const user = userEvent.setup();
+
+    renderLeadFields();
+    await screen.findByText("Alpha");
+    await user.click(screen.getByRole("button", { name: "Edit Alpha" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit Alpha" });
+    await user.clear(within(dialog).getByLabelText("Label"));
+    await user.type(within(dialog).getByLabelText("Label"), "Qualification Notes");
+    await user.type(within(dialog).getByLabelText("Tooltip"), "Notes collected during qualification");
+    await user.type(within(dialog).getByLabelText("Placeholder"), "Enter qualification notes");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Required" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(pendingPuts).toHaveLength(1));
+    expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields/1", {
+      method: "PUT",
+      body: JSON.stringify({
+        label: "Qualification Notes",
+        tooltip: "Notes collected during qualification",
+        placeholder: "Enter qualification notes",
+        isRequired: true,
+      }),
+    });
+
+    flushPendingPuts();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Edit Alpha" })).not.toBeInTheDocument();
+      expect(screen.getByText("Qualification Notes")).toBeInTheDocument();
+    });
+  });
+
+  it("updates the choices of a Travel CRM option-based lead field", async () => {
+    authContextValue.tenant = { vertical: "travel" };
+    const user = userEvent.setup();
+
+    renderLeadFields();
+    await screen.findByText("Beta");
+    await user.click(screen.getByRole("button", { name: "Edit Beta" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit Beta" });
+    const options = within(dialog).getByLabelText("Options");
+    await user.clear(options);
+    await user.type(options, "One, Two, Three");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(pendingPuts).toHaveLength(1));
+    const updateCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === "/api/lead-custom-fields/2" && opts?.method === "PUT",
+    );
+    expect(JSON.parse(updateCall[1].body).options).toEqual(["One", "Two", "Three"]);
+
+    flushPendingPuts();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Beta" })).not.toBeInTheDocument());
   });
 
   it("shows a drag handle and reorders without flashing the loading state", async () => {

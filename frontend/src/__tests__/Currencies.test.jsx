@@ -84,6 +84,7 @@ const sampleCatalog = {
   asOf: '2026-10-19',
   currencies: [
     { code: 'USD', symbol: '$', name: 'US Dollar', exchangeRate: 1 },
+    { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', exchangeRate: 1.52 },
     { code: 'JPY', symbol: '¥', name: 'Japanese Yen', exchangeRate: 149.5 },
   ],
 };
@@ -155,14 +156,38 @@ describe('<Currencies /> — page surface', () => {
     expect(screen.getByText('Japanese Yen')).toBeInTheDocument();
     expect(screen.getByText('149.5')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /Rate reference currency/i }), { target: { value: 'JPY' } });
+    const referenceCurrency = screen.getByRole('button', { name: /Rate reference currency/i });
+    const triggerRect = {
+      x: 320,
+      y: window.innerHeight - 68,
+      top: window.innerHeight - 68,
+      right: 620,
+      bottom: window.innerHeight - 34,
+      left: 320,
+      width: 300,
+      height: 34,
+      toJSON: () => ({}),
+    };
+    vi.spyOn(referenceCurrency, 'getBoundingClientRect').mockReturnValue(triggerRect);
+    const searchRectSpy = vi.spyOn(HTMLInputElement.prototype, 'getBoundingClientRect').mockReturnValue(triggerRect);
+    fireEvent.click(referenceCurrency);
+    const referenceCurrencyList = screen.getByRole('listbox', { name: /Rate reference currency/i });
+    searchRectSpy.mockRestore();
+    expect(referenceCurrencyList).toHaveStyle({ bottom: '72px', maxHeight: '238px', overflowY: 'auto' });
+    const referenceCurrencySearch = screen.getByRole('combobox', { name: /Search Rate reference currency/i });
+    expect(referenceCurrencySearch).toHaveFocus();
+    fireEvent.change(referenceCurrencySearch, { target: { value: 'aud' } });
+    expect(screen.getByRole('option', { name: /AUD — Australian Dollar/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /JPY — Japanese Yen/i })).not.toBeInTheDocument();
+    fireEvent.change(referenceCurrencySearch, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('option', { name: /JPY — Japanese Yen/i }));
     expect(screen.getByText(/Published rates for 1 JPY, as of 2026-10-19/i)).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Rate \(1 JPY\)/i })).toBeInTheDocument();
     expect(screen.getByText('0.006689')).toBeInTheDocument();
     const rateSearch = screen.getByRole('textbox', { name: /Search currency rates/i });
     expect(rateSearch).toHaveClass('currency-rates-search-input');
     expect(rateSearch.closest('.currency-rates-controls')).toContainElement(
-      screen.getByRole('combobox', { name: /Rate reference currency/i }),
+      screen.getByRole('button', { name: /Rate reference currency/i }),
     );
     fireEvent.change(rateSearch, { target: { value: 'eur' } });
     expect(screen.getByText(/No currencies match your search/i)).toBeInTheDocument();

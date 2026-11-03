@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 
@@ -26,12 +26,17 @@ export default function ScrollableSelect({
   ariaLabel,
   disabled = false,
   compact = false,
+  className = "",
+  searchable = false,
+  searchPlaceholder = "Search options…",
 }) {
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [popoverPos, setPopoverPos] = useState(null);
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
+  const listboxId = useId();
 
   const ROW_HEIGHT = 34;
 
@@ -39,11 +44,26 @@ export default function ScrollableSelect({
     const trigger = triggerRef.current;
     if (!trigger) return null;
     const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 12;
+    const desiredHeight = ROW_HEIGHT * maxVisibleRows;
+    const availableBelow = window.innerHeight - rect.bottom - viewportPadding - 4;
+    const availableAbove = rect.top - viewportPadding - 4;
+    const openUp = availableBelow < desiredHeight && availableAbove > availableBelow;
+    const availableHeight = openUp ? availableAbove : availableBelow;
+    const minimumWidth = typeof width === "number" ? width : rect.width;
+    const menuWidth = Math.min(
+      Math.max(minimumWidth, rect.width),
+      Math.max(0, window.innerWidth - (viewportPadding * 2)),
+    );
     return {
-      left: rect.left,
-      top: rect.bottom + 4,
-      width: Math.max(width, rect.width),
-      maxHeight: ROW_HEIGHT * maxVisibleRows,
+      left: Math.max(
+        viewportPadding,
+        Math.min(rect.left, window.innerWidth - menuWidth - viewportPadding),
+      ),
+      top: openUp ? undefined : rect.bottom + 4,
+      bottom: openUp ? window.innerHeight - rect.top + 4 : undefined,
+      width: menuWidth,
+      maxHeight: Math.max(ROW_HEIGHT, Math.min(desiredHeight, availableHeight)),
     };
   };
 
@@ -56,7 +76,13 @@ export default function ScrollableSelect({
       const insidePopover = popoverRef.current && popoverRef.current.contains(e.target);
       if (!insideWrap && !insidePopover) setOpen(false);
     };
-    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        setSearchQuery("");
+        requestAnimationFrame(() => triggerRef.current?.focus());
+      }
+    };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
     window.addEventListener("resize", recompute);
@@ -71,56 +97,88 @@ export default function ScrollableSelect({
   }, [open]);
 
   const selected = options.find((o) => o.value === value);
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const visibleOptions = searchable && normalizedSearch
+    ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
+    : options;
 
   const handleSelect = (val) => {
     onChange?.(val);
     setOpen(false);
+    setSearchQuery("");
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  const triggerStyle = {
+    width,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.4rem",
+    textAlign: "left",
+    opacity: disabled ? 0.7 : 1,
+    cursor: disabled ? "not-allowed" : "pointer",
+    ...(compact ? {
+      minHeight: 26,
+      height: 26,
+      padding: "0.2rem 0.35rem",
+      borderRadius: 6,
+      fontSize: "0.7rem",
+    } : {}),
   };
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-block", minWidth: 0, maxWidth: "100%" }}>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="input-field"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={ariaLabel}
-        disabled={disabled}
-        style={{
-          width,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "0.4rem",
-          textAlign: "left",
-          opacity: disabled ? 0.7 : 1,
-          cursor: disabled ? "not-allowed" : "pointer",
-          ...(compact ? {
-            minHeight: 26,
-            height: 26,
-            padding: "0.2rem 0.35rem",
-            borderRadius: 6,
-            fontSize: "0.7rem",
-          } : {}),
-        }}
-      >
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {selected ? selected.label : (placeholder || "Select…")}
-        </span>
-        <ChevronDown size={14} style={{ flexShrink: 0, color: "var(--text-secondary)" }} />
-      </button>
+      {open && searchable ? (
+        <input
+          ref={triggerRef}
+          type="search"
+          role="combobox"
+          autoFocus
+          className={`input-field ${className}`.trim()}
+          aria-label={`Search ${ariaLabel || "options"}`}
+          aria-controls={listboxId}
+          aria-expanded="true"
+          aria-haspopup="listbox"
+          placeholder={searchPlaceholder}
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          style={{ ...triggerStyle, cursor: "text" }}
+        />
+      ) : (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => {
+            setSearchQuery("");
+            setOpen((current) => !current);
+          }}
+          className={`input-field ${className}`.trim()}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={open ? listboxId : undefined}
+          aria-label={ariaLabel}
+          disabled={disabled}
+          style={triggerStyle}
+        >
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {selected ? selected.label : (placeholder || "Select…")}
+          </span>
+          <ChevronDown size={14} style={{ flexShrink: 0, color: "var(--text-secondary)" }} />
+        </button>
+      )}
 
       {open && popoverPos && createPortal(
         <div
           ref={popoverRef}
+          id={listboxId}
           role="listbox"
           aria-label={ariaLabel}
           style={{
             position: "fixed",
             left: popoverPos.left,
             top: popoverPos.top,
+            bottom: popoverPos.bottom,
             width: popoverPos.width,
             maxHeight: popoverPos.maxHeight,
             overflowY: "auto",
@@ -131,7 +189,7 @@ export default function ScrollableSelect({
             boxShadow: "var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.25))",
           }}
         >
-          {options.map((o) => (
+          {visibleOptions.map((o) => (
             <button
               key={o.value}
               type="button"
@@ -155,6 +213,11 @@ export default function ScrollableSelect({
               {o.label}
             </button>
           ))}
+          {visibleOptions.length === 0 && (
+            <div style={{ padding: "0.75rem", color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+              No matching options
+            </div>
+          )}
         </div>,
         document.body,
       )}

@@ -3521,10 +3521,14 @@ table.stable-table tbody tr:hover td {
   min-width: 0;
 }
 
-.currencies-page .currency-rates-controls > select.currency-rates-select {
+.currencies-page .currency-rates-controls .currency-rates-select {
   width: 100%;
   min-width: 0;
   padding: 0.65rem 2.25rem 0.65rem 0.875rem !important;
+}
+
+.currencies-page .currency-rates-controls > div {
+  width: 100%;
 }
 
 .currency-rates-search {

@@ -3326,16 +3326,31 @@ const Leads = () => {
     });
   }, []);
   useLayoutEffect(() => {
-    if (!travelCountryOpen) return;
     const modal = createLeadModalRef.current;
     const input = travelPhoneInputRef.current?.getInput();
-    const selector = input?.closest(".iti")?.querySelector(".iti__country-selector");
+    if (!input) return;
+    if (!travelCountryOpen) {
+      input.style.setProperty("padding-left", "116px", "important");
+      return;
+    }
+    const iti = input?.closest(".iti");
+    const countryButton = iti?.querySelector(".iti__selected-country");
+    const selectorId = countryButton?.getAttribute("aria-controls");
+    const selector = (selectorId && document.getElementById(selectorId))
+      || iti?.querySelector(".iti__country-selector");
     const phoneField = input?.closest(".create-lead-travel-phone");
     if (!modal || !selector || !phoneField) return;
+    const searchInput = selector.querySelector(".iti__search-input");
+    const previousPhonePadding = input.style.getPropertyValue("padding-left");
+    const previousPhonePaddingPriority = input.style.getPropertyPriority("padding-left");
+    const previousSearchPadding = searchInput?.style.getPropertyValue("padding-left") ?? "";
+    const previousSearchPaddingPriority = searchInput?.style.getPropertyPriority("padding-left") ?? "";
 
     // The library positions its menu absolutely. Reserve its measured height
     // in the form so the source field and actions follow directly beneath it.
     const reserveMenuSpace = () => {
+      input.style.setProperty("padding-left", "116px", "important");
+      searchInput?.style.setProperty("padding-left", "44px", "important");
       const menuHeight = selector.getBoundingClientRect().height;
       // The form already has a 14px row gap; subtract it so this reservation
       // leaves only a small visual gap after the menu.
@@ -3347,6 +3362,10 @@ const Leads = () => {
 
     return () => {
       window.cancelAnimationFrame(frame);
+      input.style.setProperty("padding-left", previousPhonePadding, previousPhonePaddingPriority);
+      if (searchInput) {
+        searchInput.style.setProperty("padding-left", previousSearchPadding, previousSearchPaddingPriority);
+      }
       phoneField.style.marginBottom = "";
     };
   }, [travelCountryOpen]);
@@ -7339,6 +7358,7 @@ const Leads = () => {
       const isRequired = requiredFieldKeys
         ? requiredFieldKeys.has(`custom:${f.fieldKey}`)
         : f.isRequired;
+      const inputId = `lead-custom-field-${f.id}`;
       const placeholder = isRequired
         ? `${f.placeholder || label} *`
         : (f.placeholder || `${label} (optional)`);
@@ -7365,21 +7385,23 @@ const Leads = () => {
 
       if (f.fieldType === "dropdown" || f.fieldType === "radio") {
         return (
-          <select
-            key={f.id}
-            className="input-field"
-            required={isRequired}
-            value={value}
-            onChange={(e) => handle(e.target.value)}
-            {...titleAttr}
-          >
-            <option value="">{placeholder}</option>
-            {(f.options || []).map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
+          <div key={f.id} {...titleAttr}>
+            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
+            <select
+              id={inputId}
+              className="input-field"
+              required={isRequired}
+              value={value}
+              onChange={(e) => handle(e.target.value)}
+            >
+              <option value="">{placeholder}</option>
+              {(f.options || []).map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
         );
       }
 
@@ -7429,18 +7451,20 @@ const Leads = () => {
 
       if (f.fieldType === "textarea") {
         return (
-          <textarea
-            key={f.id}
-            className="input-field"
-            required={isRequired}
-            value={value}
-            placeholder={placeholder}
-            maxLength={2000}
-            rows={3}
-            onChange={(e) => handle(e.target.value)}
-            {...titleAttr}
-            style={{ padding: "0.45rem", fontSize: "0.85rem" }}
-          />
+          <div key={f.id} {...titleAttr}>
+            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
+            <textarea
+              id={inputId}
+              className="input-field"
+              required={isRequired}
+              value={value}
+              placeholder={placeholder}
+              maxLength={2000}
+              rows={3}
+              onChange={(e) => handle(e.target.value)}
+              style={{ padding: "0.45rem", fontSize: "0.85rem" }}
+            />
+          </div>
         );
       }
 
@@ -7453,17 +7477,19 @@ const Leads = () => {
               ? "url"
               : "text";
       return (
-        <input
-          key={f.id}
-          type={inputType}
-          className="input-field"
-          required={isRequired}
-          value={value}
-          placeholder={placeholder}
-          onChange={(e) => handle(e.target.value)}
-          {...titleAttr}
-          style={{ padding: "0.45rem", fontSize: "0.85rem" }}
-        />
+        <div key={f.id} {...titleAttr}>
+          <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
+          <input
+            id={inputId}
+            type={inputType}
+            className="input-field"
+            required={isRequired}
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => handle(e.target.value)}
+            style={{ padding: "0.45rem", fontSize: "0.85rem" }}
+          />
+        </div>
       );
       });
   };
@@ -8451,8 +8477,8 @@ const Leads = () => {
             </div>
           </div>
         </div>
-        {/* Generic + Travel: Lead Fields opens in-place so admins can add a
-            tenant-scoped field without leaving the Leads table. */}
+        {/* Travel uses the full tenant-scoped custom-field manager. Generic
+            keeps its existing quick-add modal on the Leads page. */}
         {supportsLeadCustomFields && (
           <div
             className="leads-page-header__actions"
@@ -8471,7 +8497,11 @@ const Leads = () => {
                   notify.error("Lead field management requires admin access.");
                   return;
                 }
-                setLeadFieldModalOpen(true);
+                if (isTravel) {
+                  navigate("/settings/lead-fields");
+                } else {
+                  setLeadFieldModalOpen(true);
+                }
               }}
               title="Manage lead custom fields"
               style={{
@@ -12024,18 +12054,6 @@ const Leads = () => {
                             <Pencil size={15} />
                           </button>
                           <button
-                            onClick={() => handleConvert(lead.id)}
-                            title="Convert to Prospect"
-                            aria-label={`Convert ${lead.name || "lead"} to Prospect`}
-                            style={{
-                              ...actionIconBtn,
-                              color: "var(--success-color)",
-                              marginLeft: 6,
-                            }}
-                          >
-                            <ArrowRightCircle size={15} />
-                          </button>
-                          <button
                             onClick={() => handleDelete(lead)}
                             title="Delete lead"
                             style={{
@@ -13595,13 +13613,6 @@ const Leads = () => {
                 }}
               >
                 Edit lead
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => handleConvert(previewLeadCurrent.id)}
-              >
-                Convert to Prospect
               </button>
             </div>
 

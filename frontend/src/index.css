@@ -377,6 +377,17 @@ body,
   overflow-x: hidden;
 }
 
+/* A tilted mouse wheel or diagonal touchpad gesture can reach the viewport
+   boundary and be interpreted by Chromium as browser Back/Forward navigation.
+   Generic CRM navigation is explicit through the sidebar, so keep horizontal
+   overscroll inside the current page. Scope this to the document roots because
+   overscroll-behavior on an inner app container does not control the browser's
+   viewport-level history gesture. */
+html[data-vertical="generic"],
+body[data-vertical="generic"] {
+  overscroll-behavior-x: none;
+}
+
 /* Keep the application frame and page roots from becoming additional
    horizontal scroll containers. Data tables provide their own nested scroll
    area when their columns cannot fit. */
@@ -394,6 +405,62 @@ body,
    reference view. Keep verticalized modules on their existing page spacing. */
 .app-main > main.generic-page-content {
   padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 3vw, 2rem);
+}
+
+/* Generic Marketing is a viewport workspace on desktop. Keep its page chrome
+   inside the available app height, then let the active surface own scrolling.
+   The webhook editor gets a dedicated scrolling body so its title/action bars
+   stay visible while long conditions and actions move underneath them. */
+@media (min-width: 901px) {
+  .app-main
+    > main.generic-page-content:has(.marketing-page--generic) {
+    overflow-y: hidden !important;
+  }
+
+  .marketing-page--generic {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .marketing-page--generic > .marketing-page__header {
+    flex-shrink: 0;
+  }
+
+  .marketing-page--generic:has(> .workflow-page) {
+    overflow: hidden;
+  }
+
+  .marketing-page--generic
+    > .workflow-page {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .marketing-page--generic
+    > .workflow-editor-page {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .marketing-page--generic
+    > .workflow-editor-page
+    > .workflow-editor-topbar {
+    flex-shrink: 0;
+  }
+
+  .marketing-page--generic
+    > .workflow-editor-page
+    > .workflow-editor-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
 }
 
 /* Generic Leads must be able to grow beyond a short laptop viewport. Layout
@@ -7230,17 +7297,20 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: rgba(7, 13, 23, 0.58);
+  background: var(--overlay-bg, rgba(7, 13, 23, 0.72));
 }
 .workflow-webhook-panel {
-  position: absolute;
+  position: fixed;
   top: 0;
   right: 0;
-  bottom: 0;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   width: min(760px, 92vw);
   display: flex;
   flex-direction: column;
-  background: var(--surface-color);
+  overflow: hidden;
+  background: var(--modal-bg, #fff);
   color: var(--text-primary);
   box-shadow: -12px 0 38px rgba(7, 13, 23, 0.28);
 }
@@ -7262,7 +7332,10 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 }
 .workflow-webhook-body {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 18px;
 }
 .workflow-webhook-body > label {
@@ -7308,6 +7381,7 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   color: #5973f3;
 }
 .workflow-webhook-body fieldset {
+  flex-shrink: 0;
   margin: 0 0 18px;
   padding: 14px;
   border: 1px solid var(--border-color);
@@ -7346,13 +7420,60 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
-  margin-bottom: 12px;
+  margin: 0;
 }
 .workflow-webhook-fields {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(145px, 1fr));
+  align-content: start;
   gap: 10px;
-  padding-top: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 5px 6px 5px 0;
+}
+.workflow-webhook-request-body {
+  flex: 1 1 auto !important;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-bottom: 0 !important;
+}
+.workflow-webhook-body-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+.workflow-webhook-field-search {
+  position: relative;
+  display: flex;
+  flex: 0 1 320px;
+  align-items: center;
+  margin: 0;
+}
+.workflow-webhook-field-search svg {
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  z-index: 1;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.workflow-webhook-field-search input {
+  padding-left: 34px;
+}
+.workflow-webhook-fields-empty {
+  grid-column: 1 / -1;
+  padding: 12px 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 .workflow-webhook-footer {
   border-top: 1px solid var(--border-color);
@@ -7438,6 +7559,14 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
     flex-direction: column;
   }
 }
+@media (max-height: 700px) {
+  .workflow-webhook-body {
+    overflow-y: auto;
+  }
+  .workflow-webhook-request-body {
+    flex-basis: 240px !important;
+  }
+}
 @media (max-width: 700px) {
   .workflow-webhook-panel {
     width: 100%;
@@ -7448,6 +7577,14 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
   }
   .workflow-webhook-footer {
     flex-wrap: wrap;
+  }
+  .workflow-webhook-body-controls {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .workflow-webhook-field-search {
+    flex-basis: auto;
   }
 }
 

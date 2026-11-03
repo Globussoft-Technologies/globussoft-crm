@@ -29,15 +29,19 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
+import SearchableSelect from "../components/ui/SearchableSelect";
 
 const MODULES = [
-  { value: "contact", label: "Contacts", icon: Users },
   { value: "deal", label: "Deals", icon: Activity },
   { value: "task", label: "Tasks", icon: Check },
   { value: "ticket", label: "Tickets", icon: Activity },
   { value: "invoice", label: "Invoices", icon: FileText },
   { value: "payment", label: "Payments", icon: CreditCard },
-  { value: "lead", label: "Leads", icon: UserCheck },
+  // Generic CRM leads are stored as Contact records. Keep the internal
+  // `contact` value so existing triggers/actions/run-now behavior is unchanged,
+  // but present the single product-facing name instead of duplicate Contact
+  // and Lead tabs.
+  { value: "contact", label: "Leads", icon: UserCheck },
   { value: "approval", label: "Approvals", icon: ShieldCheck },
 ];
 
@@ -333,9 +337,9 @@ const TEMPLATES = [
 // `invoice.overdue` offered but inert. These constants are the offline
 // fallback used until that request resolves (and in unit tests).
 const FALLBACK_TRIGGERS = [
-  { module: "contact", value: "contact.created_or_updated", label: "When a contact is created or updated" },
-  { module: "contact", value: "contact.created", label: "When a contact is created" },
-  { module: "contact", value: "contact.updated", label: "When a contact is updated" },
+  { module: "contact", value: "contact.created_or_updated", label: "When a lead is created or updated" },
+  { module: "contact", value: "contact.created", label: "When a lead is created" },
+  { module: "contact", value: "contact.updated", label: "When a lead is updated" },
   { module: "deal", value: "deal.created", label: "When a deal is created" },
   // Corrected: fires on update only. It used to read "created or updated",
   // which is what deal.created is for.
@@ -428,16 +432,16 @@ const FALLBACK_OPERATORS = [
 
 
 const FALLBACK_FIELD_OPTIONS = {
-  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt"],
+  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt"],
   // fromStage / toStage ride on every deal.stage_changed payload but were
   // absent here, which is why "stage changed from X to Y" could not be built.
-  deal: ["dealId", "title", "amount", "currency", "stage", "probability", "fromStage", "toStage", "lostReason", "expectedClose", "contactId", "ownerId", "userId"],
-  task: ["taskId", "title", "status", "priority", "type", "outcome", "dueDate", "contactId", "userId"],
-  ticket: ["ticketId", "subject", "description", "status", "priority", "contactId", "assigneeId"],
-  invoice: ["invoiceId", "invoiceNum", "status", "amount", "dueDate", "daysOverdue", "contactId", "dealId"],
-  payment: ["paymentId", "invoiceId", "contactId", "amount", "currency", "status", "method"],
-  lead: ["contactId", "name", "email", "phone", "company", "source", "status", "tags", "aiScore", "assignedToId"],
-  approval: ["approvalId", "entity", "entityId", "status", "reason", "requesterId"],
+  deal: ["dealId", "title", "amount", "currency", "stage", "probability", "fromStage", "toStage", "lostReason", "expectedClose", "contactId", "ownerId", "userId", "dealType", "pipelineId", "winLossReasonId", "createdAt"],
+  task: ["taskId", "title", "status", "priority", "type", "outcome", "dueDate", "contactId", "userId", "notes", "createdAt", "projectId"],
+  ticket: ["ticketId", "subject", "description", "status", "priority", "contactId", "assigneeId", "slaResponseDue", "slaResolveDue", "firstResponseAt", "resolvedAt", "breached", "breachedAt", "createdAt", "updatedAt"],
+  invoice: ["invoiceId", "invoiceNum", "status", "amount", "dueDate", "daysOverdue", "contactId", "dealId", "issuedDate", "paidAt", "isRecurring", "recurFrequency", "nextRecurDate", "parentInvoiceId", "currency", "amountPaid", "balance"],
+  payment: ["paymentId", "invoiceId", "contactId", "amount", "currency", "status", "method", "description", "gateway", "gatewayId", "plotPaymentReference", "paidAt", "metadata", "createdAt"],
+  lead: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt"],
+  approval: ["approvalId", "entity", "entityId", "status", "reason", "requesterId", "approverId", "comment", "requestedAt", "approvedAt"],
 };
 
 // Date columns a schedule.date_field rule may anchor to. Mirrors
@@ -489,6 +493,7 @@ const catalogue = {
   operators: FALLBACK_OPERATORS,
   operatorArity: Object.fromEntries(FALLBACK_OPERATORS.map((op) => [op.value, op.arity])),
   fields: FALLBACK_FIELD_OPTIONS,
+  fieldLabels: {},
   scheduleDateFields: FALLBACK_SCHEDULE_DATE_FIELDS,
 };
 
@@ -541,6 +546,14 @@ function applyServerSchema(schema) {
         (Array.isArray(fields) ? fields : []).map((field) => (typeof field === "string" ? field : field.value)),
       ]),
     );
+    catalogue.fieldLabels = Object.fromEntries(
+      Object.entries(schema.fields).map(([module, fields]) => [
+        module,
+        Object.fromEntries((Array.isArray(fields) ? fields : []).map((field) => (
+          typeof field === "string" ? [field, field] : [field.value, field.label || field.value]
+        ))),
+      ]),
+    );
   }
 
   if (schema.scheduleEntities && typeof schema.scheduleEntities === "object") {
@@ -558,6 +571,33 @@ function applyServerSchema(schema) {
     );
   }
 
+  return true;
+}
+
+// The Generic CRM Leads table owns the tenant-specific field catalogue:
+// built-ins plus every Lead custom field configured by the tenant. Reuse that
+// exact list here so "Customize table" and workflow conditions cannot drift.
+// A few presentation keys map back to their real Contact payload names.
+function applyGenericLeadColumns(response) {
+  const columns = Array.isArray(response?.availableColumns) ? response.availableColumns : [];
+  if (!columns.length) return false;
+  const payloadFieldAliases = {
+    assignedTo: "assignedToId",
+    campaign: "callifiedCampaignId",
+    callStatus: "callifiedLeadStatus",
+    lastUpdated: "updatedAt",
+  };
+  const values = columns.map((column) => (
+    column.filterField || payloadFieldAliases[column.key] || column.key
+  ));
+  const labels = Object.fromEntries(columns.map((column, index) => [
+    values[index],
+    column.label || values[index],
+  ]));
+  catalogue.fields.contact = values;
+  catalogue.fields.lead = values;
+  catalogue.fieldLabels.contact = labels;
+  catalogue.fieldLabels.lead = labels;
   return true;
 }
 
@@ -607,7 +647,11 @@ const defaultScheduleConfig = (module) => {
 
 const defaultTriggerForModule = (module) => catalogue.triggers.find((trigger) => trigger.module === module)?.value || "contact.created";
 // `module: "*"` triggers (the time-based ones) are offered on every module.
-const triggersForModule = (module) => catalogue.triggers.filter((trigger) => trigger.module === module || trigger.module === "*");
+const triggersForModule = (module) => catalogue.triggers.filter((trigger) => (
+  trigger.module === module
+  || (module === "contact" && trigger.module === "lead")
+  || trigger.module === "*"
+));
 const actionsForModule = (module) => catalogue.actions.filter((action) => !catalogue.actionModules[action.value] || catalogue.actionModules[action.value].includes(module));
 const defaultCondition = (module = "contact") => ({ entity: module, field: "", op: "eq", value: "" });
 const defaultGroup = (module = "contact") => ({ name: "", match: "all", clauses: [defaultCondition(module)] });
@@ -676,22 +720,32 @@ function isWebhookWorkflow(workflow) {
 function fromRule(rule) {
   let target = {};
   try { target = rule.targetState ? JSON.parse(rule.targetState) : {}; } catch { target = {}; }
+  // Rules authored before the Generic CRM tabs were consolidated may carry
+  // target.module/entity = "lead". Contacts are the underlying lead records,
+  // so normalize only the editor representation and preserve the trigger.
+  const module = target.module === "lead" ? "contact" : (target.module || "contact");
   let groups = [];
   try {
     const parsed = rule.condition ? JSON.parse(rule.condition) : [];
     groups = parsed?.groups || (Array.isArray(parsed) && parsed.length ? [{ name: "", match: "all", clauses: parsed }] : []);
   } catch { groups = []; }
+  groups = groups.map((group) => ({
+    ...group,
+    clauses: (group.clauses || []).map((clause) => (
+      clause.entity === "lead" ? { ...clause, entity: "contact" } : clause
+    )),
+  }));
   return {
     id: rule.id,
     name: rule.name || "Untitled workflow",
     description: target.description || "",
-    module: target.module || "contact",
+    module,
     triggerType: rule.triggerType,
     execution: target.execution || "once",
-    groups: groups.length ? groups : [defaultGroup(target.module || "contact")],
+    groups: groups.length ? groups : [defaultGroup(module)],
     actions: target.actions?.length ? target.actions : [{ type: rule.actionType, config: target }],
     scheduleConfig: parseSchedule(rule.scheduleConfig)
-      || (isScheduleTrigger(rule.triggerType) ? defaultScheduleConfig(target.module || "contact") : null),
+      || (isScheduleTrigger(rule.triggerType) ? defaultScheduleConfig(module) : null),
     // sortOrder is a real column now; targetState.order is the fallback for
     // rules saved before the parity migration backfilled it.
     order: Number.isFinite(Number(rule.sortOrder))
@@ -739,9 +793,21 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup }) {
           <Select aria-label={`Condition ${index + 1} entity ${clauseIndex + 1}`} value={clause.entity} onChange={(entity) => updateClause(clauseIndex, { entity, field: "" })}>
             {MODULES.map((module) => <option key={module.value} value={module.value}>{module.label.replace(/s$/, "")}</option>)}
           </Select>
-          <Select aria-label={`Condition ${index + 1} field ${clauseIndex + 1}`} value={clause.field} onChange={(field) => updateClause(clauseIndex, { field })}>
-            <option value="">Select field</option>{(catalogue.fields[clause.entity] || []).map((field) => <option key={field} value={field}>{field}</option>)}
-          </Select>
+          <SearchableSelect
+            ariaLabel={`Condition ${index + 1} field ${clauseIndex + 1}`}
+            value={clause.field}
+            onChange={(field) => updateClause(clauseIndex, { field })}
+            options={[
+              { value: "", label: "Select field" },
+              ...(catalogue.fields[clause.entity] || []).map((field) => ({ value: field, label: catalogue.fieldLabels[clause.entity]?.[field] || field })),
+            ]}
+            placeholder="Select field"
+            emptyLabel="No matching fields"
+            allowClear={false}
+            className="workflow-select"
+            boundarySelector=".workflow-editor-content"
+            wrapperStyle={{ minWidth: 0 }}
+          />
           <Select aria-label={`Condition ${index + 1} operator ${clauseIndex + 1}`} value={clause.op} onChange={(op) => updateClause(clauseIndex, { op })}>
             {catalogue.operators.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
           </Select>
@@ -767,6 +833,7 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup }) {
 function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClose }) {
   const notify = useNotify();
   const [draft, setDraft] = useState({ ...defaultWebhookConfig(module), ...initialConfig });
+  const [fieldQuery, setFieldQuery] = useState("");
   const [testing, setTesting] = useState(false);
   useEffect(() => {
     const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
@@ -787,6 +854,12 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
     } catch (_error) { /* fetchApi already toasted */ }
     finally { setTesting(false); }
   };
+  const availableFields = catalogue.fields[module] || [];
+  const fieldLabel = (field) => catalogue.fieldLabels[module]?.[field] || field;
+  const visibleFields = availableFields.filter((field) => (
+    fieldLabel(field).toLowerCase().includes(fieldQuery.trim().toLowerCase())
+    || field.toLowerCase().includes(fieldQuery.trim().toLowerCase())
+  ));
   return <div className="workflow-webhook-overlay" onMouseDown={onClose}>
     <div className="workflow-webhook-panel" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Webhook settings">
       <div className="workflow-webhook-head"><h2>WEBHOOK SETTINGS</h2><button type="button" className="workflow-icon-button" onClick={onClose} aria-label="Close webhook settings"><X size={18} /></button></div>
@@ -801,8 +874,14 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
           <button type="button" className="workflow-icon-button" onClick={() => update({ headers: draft.headers.filter((_, index) => index !== headerIndex) })} aria-label={`Remove webhook header ${headerIndex + 1}`}><Trash2 size={15} /></button>
         </div>)}<button type="button" className="workflow-link-button" onClick={() => update({ headers: [...draft.headers, { key: "", value: "", secret: true }] })}><Plus size={15} /> Add custom header</button></fieldset>
         <fieldset><legend>Encoding format</legend><div className="workflow-webhook-options">{[["json", "JSON"], ["xml", "XML"], ["form", "Form URL encoded"]].map(([value, label]) => <label key={value}><input type="radio" checked={draft.encoding === value} onChange={() => update({ encoding: value })} /> {label}</label>)}</div></fieldset>
-        <fieldset><legend>Request body</legend><div className="workflow-webhook-options"><label><input type="radio" checked={draft.bodyMode === "simple"} onChange={() => update({ bodyMode: "simple" })} /> Simple</label><label><input type="radio" checked={draft.bodyMode === "advanced"} onChange={() => update({ bodyMode: "advanced" })} /> Advanced JSON</label></div>
-          {draft.bodyMode === "simple" ? <div className="workflow-webhook-fields">{(catalogue.fields[module] || []).map((field) => <label key={field}><input type="checkbox" checked={(draft.selectedFields || []).includes(field)} onChange={(event) => update({ selectedFields: event.target.checked ? [...(draft.selectedFields || []), field] : (draft.selectedFields || []).filter((item) => item !== field) })} /> {field}</label>)}</div> : <textarea aria-label="Advanced webhook JSON body" value={draft.bodyTemplate || ""} onChange={(event) => update({ bodyTemplate: event.target.value })} rows={10} spellCheck="false" />}
+        <fieldset className="workflow-webhook-request-body"><legend>Request body</legend><div className="workflow-webhook-body-controls"><div className="workflow-webhook-options"><label><input type="radio" checked={draft.bodyMode === "simple"} onChange={() => update({ bodyMode: "simple" })} /> Simple</label><label><input type="radio" checked={draft.bodyMode === "advanced"} onChange={() => update({ bodyMode: "advanced" })} /> Advanced JSON</label></div>
+          {draft.bodyMode === "simple" && <label className="workflow-webhook-field-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Search webhook fields" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} placeholder="Search fields" /></label>}
+        </div>
+          {draft.bodyMode === "simple" ? <>
+            <div className="workflow-webhook-fields" tabIndex="0" aria-label="Webhook fields">{visibleFields.map((field, fieldIndex) => <label key={`${field}-${fieldIndex}`} title={field}><input type="checkbox" checked={(draft.selectedFields || []).includes(field)} onChange={(event) => update({ selectedFields: event.target.checked ? [...(draft.selectedFields || []), field] : (draft.selectedFields || []).filter((item) => item !== field) })} /> {fieldLabel(field)}</label>)}
+              {visibleFields.length === 0 && <span className="workflow-webhook-fields-empty">No fields match “{fieldQuery.trim()}”.</span>}
+            </div>
+          </> : <textarea aria-label="Advanced webhook JSON body" value={draft.bodyTemplate || ""} onChange={(event) => update({ bodyTemplate: event.target.value })} rows={10} spellCheck="false" />}
         </fieldset>
       </div>
       <div className="workflow-webhook-footer"><button type="button" className="workflow-secondary" onClick={testWebhook} disabled={testing}>{testing ? "Testing..." : "Test this webhook"}</button><span /><button type="button" className="workflow-secondary" onClick={onClose}>Cancel</button><button type="button" className="workflow-primary" onClick={() => { onSave(draft); onClose(); }}>Save settings</button></div>
@@ -914,7 +993,7 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
       <div className="workflow-action-row">
         <span className="workflow-group-number">{index + 1}</span>
         <div className="workflow-action-content">
-          <div className="workflow-action-title">Action for: {MODULES.find((item) => item.value === module)?.label || "Contacts"} <ChevronDown size={14} /></div>
+          <div className="workflow-action-title">Action for: {MODULES.find((item) => item.value === module)?.label || "Leads"} <ChevronDown size={14} /></div>
           <Select aria-label={`Action ${index + 1}`} value={action.type} onChange={(type) => updateAction(index, { type, config: type === "update_field" ? { entity: module } : type === "send_webhook" ? defaultWebhookConfig(module) : {} })}>
             {actionsForModule(module).filter((item) => !webhookOnly || item.value === "send_webhook").map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </Select>
@@ -1045,12 +1124,21 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
       // is survivable: the FALLBACK_* constants keep the builder usable, so
       // this resolves to null rather than blocking the whole picker load.
       fetchApi("/api/workflows/schema").catch(() => null),
+      fetchApi("/api/table-column-prefs/leads", { silent: true }).catch(() => null),
       fetchApi("/api/workflows/email-templates").catch(() => []),
       fetchApi("/api/workflows/sequences").catch(() => []),
       fetchApi("/api/workflows/assignees").catch(() => []),
-    ]).then(([schema, emailTemplates, sequences, assignees]) => {
+    ]).then(([schema, leadColumns, emailTemplates, sequences, assignees]) => {
       if (cancelled) return;
-      if (applyServerSchema(schema)) setSchemaVersion((version) => version + 1);
+      const schemaApplied = applyServerSchema(schema);
+      // `/api/table-column-prefs/leads` already enforces vertical eligibility
+      // server-side. Do not additionally depend on the newer schema.vertical
+      // marker: during a rolling deploy an older backend can omit that marker
+      // while still returning the complete tenant field catalogue. The old
+      // double gate silently discarded all 199 fields and fell back to the 57
+      // Prisma Contact fields.
+      const leadColumnsApplied = applyGenericLeadColumns(leadColumns);
+      if (schemaApplied || leadColumnsApplied) setSchemaVersion((version) => version + 1);
       // Coerce rather than default: `|| []` still lets a non-array response
       // (an error envelope, an unexpected object) through to a `.map` in the
       // action config and take the whole builder down with it. A picker that
@@ -1276,12 +1364,16 @@ function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pic
   const update = (patch) => setEditor((current) => ({ ...current, ...patch }));
   const updateGroup = (index, patch) => update({ groups: editor.groups.map((group, currentIndex) => currentIndex === index ? { ...group, ...patch } : group) });
   const updateAction = (index, patch) => update({ actions: editor.actions.map((action, currentIndex) => currentIndex === index ? { ...action, ...patch } : action) });
-  const selectModule = (module) => update({
+  const selectModule = (module) => setEditor((current) => ({
+    ...current,
     module,
     triggerType: defaultTriggerForModule(module),
     scheduleConfig: null,
-    groups: editor.groups.map((group) => ({ ...group, clauses: group.clauses.map((clause) => ({ ...clause, entity: module, field: "" })) })),
-  });
+    groups: current.groups.map((group) => ({
+      ...group,
+      clauses: group.clauses.map((clause) => ({ ...clause, entity: module, field: "" })),
+    })),
+  }));
   // Switching to (or away from) a time-based trigger has to create or clear the
   // schedule, otherwise the rule saves as scheduled with nothing to schedule on
   // and the API rejects it.

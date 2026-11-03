@@ -143,11 +143,12 @@ router.get("/actions", canRead, (req, res) => {
 router.get("/schema", canRead, async (req, res) => {
   const vertical = await workflowTenantVertical(req);
   res.json({
+    vertical,
     modules: workflowSchema.MODULES,
     triggers: workflowSchema.publicTriggers(vertical),
     actions: ACTION_TYPES,
     operators: workflowSchema.CONDITION_OPS,
-    fields: workflowSchema.FIELD_OPTIONS,
+    fields: workflowSchema.fieldsForVertical(vertical),
     scheduleTriggers: SCHEDULE_TRIGGERS,
     scheduleEntities: Object.fromEntries(
       Object.entries(SCHEDULE_ENTITIES).map(([key, value]) => [key, { dateFields: value.dateFields }]),

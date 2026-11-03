@@ -228,7 +228,10 @@ describe('<Marketing /> — Generic campaign workflow', () => {
   it('shows Generic channel tabs and keeps legacy forms and push hidden', async () => {
     wireFetch();
     renderMarketing(GENERIC_USER);
-    expect(await screen.findByRole('heading', { name: 'Marketing Sequences' })).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: 'Marketing Sequences' });
+    expect(heading).toBeInTheDocument();
+    expect(heading.closest('.marketing-page')).toHaveClass('marketing-page--generic');
+    expect(heading.closest('.marketing-page__header')).toBeInTheDocument();
     for (const name of ['Webhooks', 'Email Sequences', 'SMS Sequences', 'WhatsApp Sequences']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
@@ -273,7 +276,9 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     wireFetch();
     renderMarketing(WELLNESS_USER);
 
-    expect(await screen.findByRole('heading', { name: 'Marketing' })).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: 'Marketing' });
+    expect(heading).toBeInTheDocument();
+    expect(heading.closest('.marketing-page')).not.toHaveClass('marketing-page--generic');
     expect(screen.queryByRole('button', { name: /Configure (SMS|WhatsApp)/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Webhooks' })).not.toBeInTheDocument();
   });

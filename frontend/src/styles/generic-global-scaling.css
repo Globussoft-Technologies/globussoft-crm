@@ -105,6 +105,13 @@ body[data-vertical="generic"]
   white-space: nowrap;
 }
 
+/* The generic density rule above intentionally normalizes input padding, but
+   this search has a leading icon and needs a reserved text gutter. */
+body[data-vertical="generic"] .app-main > main.generic-page-content
+  .workflow-webhook-field-search > input[type="search"] {
+  padding-left: 36px !important;
+}
+
 body[data-vertical="generic"]
   .app-main
   > main.generic-page-content

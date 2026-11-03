@@ -998,9 +998,9 @@ ${fields.map(f => {
   }
 
   return (
-    <div className="marketing-page" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className={`marketing-page${isGeneric ? ' marketing-page--generic' : ''}`} style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       {isGeneric && <SequenceUnsavedChangesGuard active={sequenceBuilderOpen && sequenceBuilderDirty} notify={notify} onDiscard={() => setSequenceBuilderDirty(false)} />}
-      <header style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+      <header className="marketing-page__header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>{pageTitle}</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage outbound campaigns and inbound lead capture forms.</p>

@@ -1,11 +1,10 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, ChevronUp, Info, ListChecks, PackagePlus, Plus, X } from 'lucide-react';
+import { Bold, Italic, Underline, Strikethrough, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, AlignJustify, Indent, Outdent, Image, Smile, Link2, RemoveFormatting, Paperclip, Send, Trash2, ChevronDown, ChevronUp, Info, ListChecks, PackagePlus, Plus, X, GitBranch } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import './ContactProfile.css';
 import { useNotify } from '../../utils/notify';
 import { tenantCurrency } from '../../utils/money';
-import { generatedDealName } from '../../utils/dealDisplay';
 import {
   createDeal, createTask, postActivity, sendEmail, sendSms, sendWhatsapp,
   syncMeetingToCalendar, updateDeal,
@@ -902,7 +901,7 @@ export function ActivityModal({ contact, presetType, onClose, onDone }) {
 const DEAL_TYPES = ['New Business'];
 const GENERIC_DEAL_TYPES_SETTING_KEY = 'generic.dealTypes';
 const DEFAULT_DEAL_TYPE_STAGES = [
-  { id: 'new-lead', name: 'New Lead', color: '#3b82f6', condition: 'positive' },
+  { id: 'new-deal', name: 'New Deal', color: '#3b82f6', condition: 'positive' },
   { id: 'contracted', name: 'Contracted', color: '#0891b2', condition: 'positive' },
   { id: 'negotiation', name: 'Negotiation', color: '#7c3aed', condition: 'positive' },
   { id: 'won', name: 'Won', color: '#10b981', condition: 'positive' },
@@ -1143,6 +1142,75 @@ const genericLifecycleStageOptions = (raw) => {
   }
 };
 
+function CreatePipelineModal({ onClose, onCreated }) {
+  const notify = useNotify();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [isDefault, setIsDefault] = useState(false);
+  const [stages, setStages] = useState([]);
+  const [availableStages, setAvailableStages] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetchApi('/api/pipeline_stages?reusable=true', { silent: true })
+      .then((data) => setAvailableStages(asList(data)))
+      .catch(() => setAvailableStages([]));
+  }, []);
+
+  const addExistingStage = (event) => {
+    const stageId = event.target.value;
+    event.target.value = '';
+    const selected = availableStages.find((stage) => String(stage.id) === String(stageId));
+    if (!selected || stages.some((stage) => String(stage.id) === String(selected.id))) return;
+    setStages((current) => [...current, { ...selected, isExisting: true }]);
+  };
+
+  const save = async () => {
+    if (!name.trim()) { notify.error('Pipeline name is required.'); return; }
+    if (stages.some((stage) => !stage.name.trim())) { notify.error('Stage name is required.'); return; }
+    setSaving(true);
+    try {
+      const created = await fetchApi('/api/pipelines', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: name.trim(),
+          description: description.trim(),
+          isDefault,
+          stages: stages.map((stage) => (stage.id ? { stageId: stage.id } : { name: stage.name.trim(), color: stage.color })),
+        }),
+      });
+      onCreated(created);
+    } catch (error) {
+      notify.error(error.message || 'Failed to create pipeline.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const labelStyle = { display: 'block', fontSize: '0.75rem', fontWeight: 500, marginBottom: '0.375rem', color: 'var(--text-secondary)' };
+  const inputStyle = { width: '100%', padding: '0.55rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: '0.875rem', boxSizing: 'border-box' };
+  const iconButtonStyle = { padding: '0.4rem 0.625rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
+  const unselectedStages = availableStages.filter((stage) => !stages.some((selected) => String(selected.id) === String(stage.id)));
+
+  return (
+    <div onClick={onClose} role="dialog" aria-modal="true" aria-label="Create Pipeline" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' }}>
+      <div onClick={(event) => event.stopPropagation()} className="card" style={{ width: '90%', maxWidth: '480px', maxHeight: '90vh', padding: '1.75rem', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--modal-bg, #fff)', opacity: 1, backdropFilter: 'none', WebkitBackdropFilter: 'none' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}><GitBranch size={20} style={{ color: 'var(--accent-color)' }} /><h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0 }}>Create Pipeline</h3></div>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={20} /></button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minHeight: 0, overflowY: 'auto' }}>
+          <div><label style={labelStyle}>Pipeline Name *</label><input autoFocus style={inputStyle} type="text" placeholder="e.g. Enterprise Sales" value={name} onChange={(event) => setName(event.target.value)} /></div>
+          <div><label style={labelStyle}>Description</label><textarea style={{ ...inputStyle, minHeight: '80px', resize: 'vertical' }} placeholder="Describe what this pipeline is for" value={description} onChange={(event) => setDescription(event.target.value)} /></div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /><span>Set as default pipeline</span></label>
+          <div><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}><label style={labelStyle}>Stages *</label><div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><select aria-label="Select Existing Stage" defaultValue="" onChange={addExistingStage} style={{ ...iconButtonStyle, maxWidth: '180px' }}><option value="">Select Existing Stage</option>{unselectedStages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select><button type="button" onClick={() => setStages((current) => [...current, { name: '', color: '#3b82f6' }])} style={iconButtonStyle}><Plus size={13} /> Add Stage</button></div></div><div style={{ maxHeight: 'min(35vh, 300px)', overflowY: 'auto', paddingRight: '0.25rem' }}>{stages.map((stage, index) => <div key={`new-pipeline-stage-${index}`} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}><input style={{ ...inputStyle, flex: 1 }} placeholder="Stage name" value={stage.name || ''} disabled={Boolean(stage.id)} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} /><button type="button" onClick={() => setStages((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={{ ...iconButtonStyle, color: '#ef4444' }} aria-label="Remove stage"><X size={13} /></button></div>)}{stages.length === 0 && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add at least one stage.</div>}</div></div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.625rem', marginTop: '1rem', flexShrink: 0 }}><button type="button" onClick={onClose} style={{ ...iconButtonStyle, padding: '0.5rem 1rem' }}>Cancel</button><button type="button" className="btn-primary" onClick={save} disabled={saving} style={{ padding: '0.5rem 1.25rem', fontSize: '0.875rem' }}>{saving ? 'Saving...' : 'Create Pipeline'}</button></div>
+      </div>
+    </div>
+  );
+}
+
 export function DealModal({ contact, deal, onClose, onDone }) {
   const notify = useNotify();
   const { tenant } = useContext(AuthContext);
@@ -1151,15 +1219,20 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const initialContact = deal?.contact || contact;
   const [contactId, setContactId] = useState(deal?.contactId ?? initialContact?.id ?? null);
   const [contactName, setContactName] = useState(initialContact?.name || '');
+  const [contactType, setContactType] = useState(deal?.contactType || (initialContact?.status === 'Customer' ? 'customer' : 'lead'));
   const [contactQuery, setContactQuery] = useState('');
   const [contactFocused, setContactFocused] = useState(false);
   const [account, setAccount] = useState(initialContact?.company || '');
   const [accountTouched, setAccountTouched] = useState(false);
   const [dealType, setDealType] = useState(deal?.dealType || '');
-  const [title, setTitle] = useState(deal && isGeneric ? generatedDealName(deal) : (deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? 'New Deal' : ''))));
+  const [dealKind, setDealKind] = useState(deal?.dealKind || 'one-time');
+  const [billingPeriod, setBillingPeriod] = useState(deal?.billingPeriod || '');
+  const [title, setTitle] = useState(deal?.title || (initialContact?.name ? `${initialContact.name} Deal` : (isGeneric ? '' : '')));
   const [titleTouched, setTitleTouched] = useState(Boolean(deal?.title));
   const [currency, setCurrency] = useState(deal?.currency || tenantCurrency());
   const [amount, setAmount] = useState(deal?.amount ?? '');
+  const [paymentInfo, setPaymentInfo] = useState(deal?.paymentInfo || '');
+  const [notes, setNotes] = useState(deal?.notes || '');
   const [productsOpen, setProductsOpen] = useState(false);
   const [products, setProducts] = useState([]);
   const [stage, setStage] = useState(deal?.stage || '');
@@ -1177,13 +1250,19 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const [staff, setStaff] = useState([]);
   const [listsLoading, setListsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [createPipelineOpen, setCreatePipelineOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const [c, s, p, u, dt] = await Promise.all([
-          fetchApi(isGeneric ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200', { silent: true }).catch(() => []),
+          isGeneric
+            ? Promise.all([
+              fetchApi('/api/contacts?status=Lead&limit=200', { silent: true }).catch(() => []),
+              fetchApi('/api/contacts?status=Customer&limit=200', { silent: true }).catch(() => []),
+            ]).then(([leads, customers]) => [...asList(leads), ...asList(customers)])
+            : fetchApi('/api/contacts?limit=200', { silent: true }).catch(() => []),
           isGeneric
             ? fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_LIFECYCLE_SETTING_KEY)}`, { silent: true })
               .then((setting) => genericLifecycleStageOptions(setting?.value))
@@ -1194,7 +1273,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
           isGeneric ? fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_DEAL_TYPES_SETTING_KEY)}`, { silent: true }).catch(() => null) : Promise.resolve(null),
         ]);
         if (!alive) return;
-        setContacts(asList(c));
+        setContacts(asList(c).filter((item, index, list) => list.findIndex((candidate) => String(candidate.id) === String(item.id)) === index));
         setStages(asList(s));
         setPipelines(asList(p));
         setStaff(asList(u));
@@ -1207,6 +1286,12 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   }, [isGeneric]);
 
   useEffect(() => {
+    if (!isGeneric || editing || pipelineId || !pipelines.length) return;
+    const defaultPipeline = pipelines.find((item) => item.isDefault) || pipelines[0];
+    if (defaultPipeline?.id != null) setPipelineId(String(defaultPipeline.id));
+  }, [editing, isGeneric, pipelineId, pipelines]);
+
+  useEffect(() => {
     if (!isGeneric || !pipelineId) return undefined;
     let alive = true;
     fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}`, { silent: true }).then((data) => {
@@ -1216,13 +1301,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       if (stage && !next.some((item) => slugifyStage(item.name) === stage)) setStage('');
     }).catch(() => { if (alive) setStages([]); });
     return () => { alive = false; };
-  }, [isGeneric, pipelineId]);
-
-  useEffect(() => {
-    if (isGeneric && !editing && !listsLoading && dealTypes.length === 0 && !dealTypeManagerOpen) {
-      setDealTypeManagerOpen(true);
-    }
-  }, [dealTypes.length, dealTypeManagerOpen, editing, isGeneric, listsLoading]);
+  }, [isGeneric, pipelineId, stage]);
 
   const selectedDealType = useMemo(() => dealTypes.find((type) => type.name === dealType || type.id === dealType) || dealTypes.find((type) => type.isDefault) || dealTypes[0], [dealTypes, dealType]);
 
@@ -1234,6 +1313,16 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   }, [dealType, dealTypes, isGeneric, selectedDealType]);
 
   const stageOptions = useMemo(() => {
+    if (isGeneric && pipelineId) {
+      const fromPipeline = stages
+        .map((item) => ({ value: slugifyStage(item.name), label: item.name }))
+        .filter((option) => option.value);
+      const currentStage = slugifyStage(deal?.stage);
+      const known = new Set(fromPipeline.map((option) => option.value));
+      return deal?.stage && currentStage && !known.has(currentStage)
+        ? [...fromPipeline, { value: currentStage, label: deal.stage }]
+        : fromPipeline;
+    }
     if (isGeneric && selectedDealType?.stages?.length) {
       const configured = selectedDealType.stages.map((item) => ({ value: slugifyStage(item.name), label: item.name }));
       const known = new Set(configured.map((item) => item.value));
@@ -1250,7 +1339,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       return [...base, { value: deal.stage, label: deal.stage }];
     }
     return base;
-  }, [isGeneric, selectedDealType, stages, deal?.stage]);
+  }, [isGeneric, pipelineId, selectedDealType, stages, deal?.stage]);
 
   useEffect(() => {
     if (stageOptions.length > 0 && (!stage || !stageOptions.some((option) => option.value === stage))) {
@@ -1271,13 +1360,14 @@ export function DealModal({ contact, deal, onClose, onDone }) {
   const contactResults = useMemo(() => {
     const q = contactQuery.trim().toLowerCase();
     return contacts
+      .filter((c) => !isGeneric || (contactType === 'customer' ? c.status === 'Customer' : c.status === 'Lead'))
       .filter((c) => String(c.id) !== String(contactId))
       .filter((c) => !q
         || String(c.name || '').toLowerCase().includes(q)
         || String(c.email || '').toLowerCase().includes(q)
         || String(c.company || '').toLowerCase().includes(q))
       .slice(0, 8);
-  }, [contacts, contactQuery, contactId]);
+  }, [contacts, contactQuery, contactId, contactType, isGeneric]);
 
   const currencyOptions = useMemo(() => {
     const tenant = tenantCurrency();
@@ -1291,6 +1381,11 @@ export function DealModal({ contact, deal, onClose, onDone }) {
     setContactFocused(false);
     if (!accountTouched) setAccount(c.company || '');
     if (!titleTouched && c.name) setTitle(`${c.name} Deal`);
+  };
+
+  const changeContactType = (nextType) => {
+    setContactType(nextType);
+    clearContact();
   };
 
   const clearContact = () => {
@@ -1318,6 +1413,19 @@ export function DealModal({ contact, deal, onClose, onDone }) {
     return sum + q * pr;
   }, 0), [products]);
 
+  const handlePipelineCreated = async (created) => {
+    let pipeline = created?.pipeline || created;
+    if (!pipeline?.id) {
+      const latest = await fetchApi('/api/pipelines?fields=summary', { silent: true }).catch(() => []);
+      pipeline = asList(latest).find((item) => item.name === created?.name);
+    }
+    if (!pipeline?.id) return;
+    setPipelines((current) => [...current.filter((item) => String(item.id) !== String(pipeline.id)), pipeline]);
+    setPipelineId(String(pipeline.id));
+    setStage('');
+    setCreatePipelineOpen(false);
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     const name = title.trim();
@@ -1325,8 +1433,12 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       notify.error('Select a related contact.');
       return;
     }
-    if (isGeneric && !dealType) {
-      notify.error('Select a deal type.');
+    if (isGeneric && !contactType) {
+      notify.error('Select a contact type.');
+      return;
+    }
+    if (isGeneric && dealKind === 'recurring' && !billingPeriod) {
+      notify.error('Select a billing period for recurring deals.');
       return;
     }
     if (isGeneric && (!stage || stage === '__new_stage__')) {
@@ -1337,17 +1449,18 @@ export function DealModal({ contact, deal, onClose, onDone }) {
       notify.error('Enter a deal name.');
       return;
     }
-    if (amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) {
-      notify.error('Enter a deal value of 0 or more.');
+    if (amount === '' || !Number.isFinite(Number(amount)) || (isGeneric ? Number(amount) <= 0 : Number(amount) < 0)) {
+      notify.error(isGeneric ? 'Enter a deal value greater than zero.' : 'Enter a deal value of 0 or more.');
       return;
     }
-    if (isGeneric && !editing && !hasValidTerminalDealStages(selectedDealType?.stages)) {
+    const activeStageConfigs = isGeneric && pipelineId ? stages : selectedDealType?.stages;
+    if (isGeneric && !editing && !pipelineId && !hasValidTerminalDealStages(activeStageConfigs)) {
       notify.error('This deal type must include Won and Lost terminal stages before creating a deal.');
       return;
     }
-    const selectedStageConfig = selectedDealType?.stages?.find((item) => slugifyStage(item.name) === stage);
+    const selectedStageConfig = activeStageConfigs?.find((item) => slugifyStage(item.name) === stage);
     const targetIsNegative = stage === 'lost' || selectedStageConfig?.condition === 'negative' || selectedStageConfig?.negative === true || selectedStageConfig?.conditions?.some((condition, index) => index === 1 || condition?.type === 'negative');
-    const previousStageConfig = deal ? selectedDealType?.stages?.find((item) => slugifyStage(item.name) === deal.stage) : null;
+    const previousStageConfig = deal ? activeStageConfigs?.find((item) => slugifyStage(item.name) === deal.stage) : null;
     const previousWasNegative = deal?.stage === 'lost' || previousStageConfig?.condition === 'negative' || previousStageConfig?.negative === true || previousStageConfig?.conditions?.some((condition, index) => index === 1 || condition?.type === 'negative');
     const currentStageKey = slugifyStage(deal?.stage);
     const targetStageKey = slugifyStage(stage);
@@ -1368,6 +1481,11 @@ export function DealModal({ contact, deal, onClose, onDone }) {
         stage: isGeneric ? stage : (stage || 'lead'),
         probability: Number(probability) || 50,
         currency,
+        contactType: isGeneric ? contactType : undefined,
+        dealKind: isGeneric ? dealKind : undefined,
+        billingPeriod: isGeneric && dealKind === 'recurring' ? billingPeriod : null,
+        paymentInfo: isGeneric ? paymentInfo.trim() : undefined,
+        notes: isGeneric ? notes.trim() : undefined,
       };
       if (!editing && isGeneric) payload.autoName = true;
       if (dealType) payload.dealType = dealType;
@@ -1402,6 +1520,13 @@ export function DealModal({ contact, deal, onClose, onDone }) {
         </header>
         <form onSubmit={submit}>
           <div className="cp-deal-body">
+            {isGeneric && <label className="cp-deal-field">
+              <span>Contact type <b>*</b></span>
+              <select aria-label="Contact type" className="cp-input" value={contactType} onChange={(event) => changeContactType(event.target.value)}>
+                <option value="lead">New Customer</option>
+                <option value="customer">Existing Customer</option>
+              </select>
+            </label>}
             <div className="cp-deal-field">
               <span>Related contact {isGeneric && <b>*</b>}</span>
               {contactId ? (
@@ -1435,6 +1560,13 @@ export function DealModal({ contact, deal, onClose, onDone }) {
                 </>
               )}
             </div>
+            {!isGeneric && <label className="cp-deal-field">
+              <span>Deal type</span>
+              <select className="cp-input" value={dealType} onChange={(e) => setDealType(e.target.value)}>
+                <option value="">Click to select</option>
+                {DEAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>}
             {!isGeneric && (
               <label className="cp-deal-field">
                 <span>Related account</span>
@@ -1448,20 +1580,27 @@ export function DealModal({ contact, deal, onClose, onDone }) {
                 </select>
               </label>
             )}
-            <label className="cp-deal-field">
-              <span>Deal type {isGeneric && <b aria-hidden="true">*</b>}</span>
-              {isGeneric ? <>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <select aria-label="Deal type" className="cp-input" value={dealType} onChange={(e) => { if (e.target.value === '__new_deal_type__') { setDealTypeManagerOpen(true); return; } setDealType(e.target.value); setStage(''); }}>
-                    <option value="__new_deal_type__">+ New deal type</option>
-                    {dealTypes.map((t) => <option key={t.id || t.name} value={t.name}>{t.name}</option>)}
-                  </select>
-                </div>
-              </> : <select className="cp-input" value={dealType} onChange={(e) => setDealType(e.target.value)}>
-                <option value="">Click to select</option>
-                {DEAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>}
-            </label>
+            {isGeneric && <label className="cp-deal-field">
+              <span>Deal name <b>*</b></span>
+              <input className="cp-input" value={title} onChange={(event) => { setTitle(event.target.value); setTitleTouched(true); }} aria-label="Deal name" />
+            </label>}
+            {isGeneric && <label className="cp-deal-field">
+              <span>Deal type <b>*</b></span>
+              <select aria-label="Deal type" className="cp-input" value={dealKind} onChange={(event) => { const next = event.target.value; setDealKind(next); if (next !== 'recurring') setBillingPeriod(''); }}>
+                <option value="one-time">One-Time Deal</option>
+                <option value="recurring">Recurring Deal</option>
+              </select>
+            </label>}
+            {isGeneric && dealKind === 'recurring' && <label className="cp-deal-field">
+              <span>Billing period <b>*</b></span>
+              <select aria-label="Billing period" className="cp-input" value={billingPeriod} onChange={(event) => setBillingPeriod(event.target.value)}>
+                <option value="">Select billing period</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="half-yearly">Half-Yearly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </label>}
             {!isGeneric && (
               <label className="cp-deal-field">
                 <span>Deal name <b>*</b></span>
@@ -1483,7 +1622,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
                 <input
                   className="cp-input"
                   type="number"
-                  min="0"
+                  min={isGeneric ? '0.01' : '0'}
                   step="any"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
@@ -1553,11 +1692,12 @@ export function DealModal({ contact, deal, onClose, onDone }) {
                   </button>
                 )}
               </div>}
-            {!isGeneric && showAll && (
+            {(isGeneric || showAll) && (
               <label className="cp-deal-field">
                 <span>Pipeline</span>
-                <select className="cp-input" value={pipelineId} onChange={(e) => { setPipelineId(e.target.value); if (isGeneric) setStage(''); }}>
-                  <option value="">Click to select</option>
+                <select aria-label="Pipeline" className="cp-input" value={pipelineId} onChange={(e) => { if (e.target.value === '__create_pipeline__') { setCreatePipelineOpen(true); return; } setPipelineId(e.target.value); if (isGeneric) setStage(''); }}>
+                  <option value="">{isGeneric ? 'Select pipeline' : 'Click to select'}</option>
+                  <option value="__create_pipeline__">+ Create pipeline</option>
                   {pipelines.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </label>
@@ -1565,11 +1705,19 @@ export function DealModal({ contact, deal, onClose, onDone }) {
             <label className="cp-deal-field">
               <span>Deal stage {isGeneric && <b aria-hidden="true">*</b>}</span>
               <select aria-label="Deal stage" className="cp-input" value={stage} onChange={(e) => { if (isGeneric && e.target.value === '__new_stage__') { setDealTypeManagerEdit(dealTypes.find((type) => type.name === dealType) || null); setDealTypeManagerOpen(true); return; } setStage(e.target.value); }}>
-                {isGeneric && <option value="__new_stage__">+ Add new stage</option>}
+                {isGeneric && !pipelineId && <option value="__new_stage__">+ Add new stage</option>}
                 {!isGeneric && <option value="">Click to select</option>}
                 {stageOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </label>
+            {isGeneric && <label className="cp-deal-field">
+              <span>Payment</span>
+              <input className="cp-input" value={paymentInfo} onChange={(event) => setPaymentInfo(event.target.value)} aria-label="Payment" />
+            </label>}
+            {isGeneric && <label className="cp-deal-field">
+              <span>Notes</span>
+              <textarea className="cp-textarea" rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add notes about this deal" aria-label="Notes" />
+            </label>}
             {showAll && !isGeneric && (
               <label className="cp-deal-field">
                 <span>Probability %</span>
@@ -1603,6 +1751,7 @@ export function DealModal({ contact, deal, onClose, onDone }) {
           </footer>
         </form>
       </aside>
+      {createPipelineOpen && <CreatePipelineModal onClose={() => setCreatePipelineOpen(false)} onCreated={handlePipelineCreated} />}
       {isGeneric && dealTypeManagerOpen && <GenericDealTypeManager types={dealTypes} startNew={!dealTypeManagerEdit} editType={dealTypeManagerEdit} onChange={(next) => { setDealTypes(next); const selected = dealTypeManagerEdit ? next.find((type) => type.id === dealTypeManagerEdit.id) : (next.find((type) => type.isDefault) || next[0]); setDealType(selected?.name || ''); setStage(''); setDealTypeManagerEdit(null); }} onClose={() => { setDealTypeManagerEdit(null); setDealTypeManagerOpen(false); }} />}
     </div>
   );

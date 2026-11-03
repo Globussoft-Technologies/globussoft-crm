@@ -2995,7 +2995,12 @@ export default function App() {
                         path="pipelines"
                         element={
                           <GenericOnly>
-                            <Pipelines />
+                            <RoleGuard
+                              requiredPermission={{ module: "pipeline", action: "write" }}
+                              feature="Pipelines"
+                            >
+                              <Pipelines />
+                            </RoleGuard>
                           </GenericOnly>
                         }
                       />

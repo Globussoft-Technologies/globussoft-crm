@@ -1,0 +1,6 @@
+ALTER TABLE `Deal`
+  ADD COLUMN `contactType` VARCHAR(191) NULL,
+  ADD COLUMN `dealKind` VARCHAR(191) NULL,
+  ADD COLUMN `billingPeriod` VARCHAR(191) NULL,
+  ADD COLUMN `paymentInfo` TEXT NULL,
+  ADD COLUMN `notes` TEXT NULL;

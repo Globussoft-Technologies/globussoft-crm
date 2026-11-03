@@ -419,11 +419,18 @@ const PAGE_CATALOG = [
   },
   {
     path: '/pipeline',
-    label: 'Deals',
+    label: 'Deals and Pipelines',
     description: 'Manage deals by deal type and stage',
     category: 'Sales',
     searchPath: false,
     requiredPermissions: [{ module: 'pipeline', action: 'read' }],
+  },
+  {
+    path: '/pipelines',
+    label: 'Pipelines',
+    description: 'Configure sales pipelines and stages',
+    category: 'Sales',
+    requiredPermissions: [{ module: 'pipeline', action: 'write' }],
   },
 
   //  Finance 

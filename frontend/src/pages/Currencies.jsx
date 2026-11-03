@@ -170,7 +170,29 @@ export default function Currencies() {
     setCatalog(null);
     setCatalogError('');
     setCatalogLoading(true);
-    fetchApi('/api/currencies/catalog')
+    const loadExternalCatalog = async () => {
+      const baseCode = tenant?.defaultCurrency || 'USD';
+      const [detailsResponse, ratesResponse] = await Promise.all([
+        fetch('https://api.frankfurter.dev/v2/currencies'),
+        fetch(`https://api.frankfurter.dev/v1/latest?base=${encodeURIComponent(baseCode)}`),
+      ]);
+      if (!detailsResponse.ok || !ratesResponse.ok) throw new Error('Currency catalog unavailable');
+      const [details, latest] = await Promise.all([detailsResponse.json(), ratesResponse.json()]);
+      const currencies = (Array.isArray(details) ? details : [])
+        .map((currency) => ({
+          code: currency.iso_code,
+          symbol: currency.symbol,
+          name: currency.name,
+          exchangeRate: Number(latest?.rates?.[currency.iso_code]),
+        }))
+        .filter((currency) => /^[A-Z]{3}$/.test(currency.code)
+          && currency.name && currency.symbol
+          && Number.isFinite(currency.exchangeRate) && currency.exchangeRate > 0)
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return { baseCode, asOf: latest?.date || null, currencies };
+    };
+    fetchApi('/api/currencies/catalog', { silent: true })
+      .catch(() => loadExternalCatalog())
       .then((result) => {
         if (active) {
           setCatalog(result);
@@ -185,7 +207,7 @@ export default function Currencies() {
       })
       .finally(() => { if (active) setCatalogLoading(false); });
     return () => { active = false; };
-  }, [showAdd, showRates]);
+  }, [showAdd, showRates, tenant?.defaultCurrency]);
 
   const availableCurrencies = (catalog?.currencies || []).filter(
     (currency) => !currencies.some((existing) => existing.code === currency.code),
@@ -539,7 +561,7 @@ export default function Currencies() {
       {/* Add Modal */}
       {showAdd && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.6))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card" style={{ padding: '2rem', width: 460 }}>
+          <div className="card" style={{ padding: '2rem', width: 460, opacity: 1, background: 'var(--modal-bg, #ffffff)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold' }}>Add Currency</h3>
               <button onClick={() => setShowAdd(false)} aria-label="Close add currency dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>

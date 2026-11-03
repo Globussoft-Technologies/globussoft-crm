@@ -306,6 +306,15 @@ function totalInCurrency(rows, targetCurrency, rateByCode, amountForRow = (row) 
   return missingRate ? `Unavailable (missing exchange rate): ${totalsByCurrency(rows, target, amountForRow)}` : formatCurrency(total, target);
 }
 
+function getOutstandingAmount(invoice) {
+  const amount = Number(invoice.amount) || 0;
+  const balance = Number(invoice.balance);
+  const amountPaid = Number(invoice.amountPaid) || 0;
+  if (Number.isFinite(balance) && balance > 0) return balance;
+  if (Number.isFinite(balance) && balance === 0 && amountPaid > 0) return 0;
+  return Math.max(0, amount - amountPaid);
+}
+
 function getInvoiceLineItems(invoice) {
   if (Array.isArray(invoice?.lineItems)) return invoice.lineItems;
   if (typeof invoice?.lineItemsJson !== "string") return [];
@@ -934,24 +943,36 @@ export default function Invoices() {
       (inv) => inv.status === "OVERDUE",
     ).length;
 
-    const fallbackCurrency = tenant?.defaultCurrency || "USD";
+    const fallbackCurrency = tenant?.defaultCurrency || user?.tenant?.defaultCurrency || "USD";
+    const hasSelectedCurrency = isGeneric && columnFilters.currency !== "ALL";
+    const selectedCurrency = hasSelectedCurrency
+      ? columnFilters.currency
+      : fallbackCurrency;
     return {
       totalOutstanding: isGeneric
-        ? totalInCurrency(outstanding, fallbackCurrency, currencyRateByCode, (inv) => Number(inv.balance ?? inv.amount))
+        ? hasSelectedCurrency
+          ? totalInCurrency(outstanding, selectedCurrency, currencyRateByCode, getOutstandingAmount)
+          : totalInCurrency(outstanding, fallbackCurrency, currencyRateByCode, getOutstandingAmount)
         : totalsByCurrency(outstanding, fallbackCurrency),
       totalPaidThisMonth: isGeneric
-        ? totalInCurrency(
-          paidThisMonth.flatMap((invoice) => invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice]),
-          fallbackCurrency,
-          currencyRateByCode,
-        )
+        ? hasSelectedCurrency
+          ? totalInCurrency(
+            paidThisMonth.flatMap((invoice) => invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice]),
+            selectedCurrency,
+            currencyRateByCode,
+          )
+          : totalInCurrency(
+            paidThisMonth.flatMap((invoice) => invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice]),
+            fallbackCurrency,
+            currencyRateByCode,
+          )
         : totalsByCurrency(
           paidThisMonth.flatMap((invoice) => invoice.receivedPayments?.length ? invoice.receivedPayments : [invoice]),
           fallbackCurrency,
         ),
       overdueCount,
     };
-  }, [invoices, isGeneric, tenant?.defaultCurrency, currencyRateByCode]);
+  }, [columnFilters.currency, invoices, isGeneric, tenant?.defaultCurrency, user?.tenant?.defaultCurrency, currencyRateByCode]);
 
   const filteredInvoices = useMemo(() => {
     let rows = invoices;
@@ -2791,7 +2812,9 @@ export default function Invoices() {
                         >
                           <select
                             value={columnFilters.currency}
-                            onChange={(event) => setColumnFilters((current) => ({ ...current, currency: event.target.value }))}
+                            onChange={(event) => {
+                              setColumnFilters((current) => ({ ...current, currency: event.target.value }));
+                            }}
                             aria-label="Filter by currency"
                             autoFocus
                           >
@@ -2799,7 +2822,6 @@ export default function Invoices() {
                             {[...new Set([
                               tenant?.defaultCurrency || "USD",
                               ...availableCurrencies.map((row) => row.code),
-                              ...invoices.map((invoice) => invoice.currency).filter(Boolean),
                             ])].map((currency) => (
                               <option key={currency} value={currency}>{currency}</option>
                             ))}

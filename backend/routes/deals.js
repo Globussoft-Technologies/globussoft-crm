@@ -123,7 +123,7 @@ async function addDealTypeFilter(where, tenantId, dealType) {
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, dealType, contactId, subBrand, from, to, channel, search } = req.query;
+    const { stage, ownerId, pipelineId, dealType, dealKind, contactId, subBrand, from, to, channel, search } = req.query;
     let where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
@@ -136,6 +136,7 @@ router.get("/", async (req, res) => {
       // make a valid deal disappear from the Deals page while it remains
       // visible in Reports. An explicit `stage` query above remains honored.
     }
+    if (dealKind) where.dealKind = String(dealKind);
     if (contactId) where.contactId = parseInt(contactId);
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
     // missing column on legacy tenants — Prisma matches by exact value.
@@ -530,7 +531,7 @@ router.get("/:id", async (req, res) => {
 // validator now resolves the allowed slug set from the tenant's own
 // PipelineStage rows; terminal "won" / "lost" are always honored as a
 // backstop for tenants whose stage list hasn't been seeded yet.
-const LEGACY_DEAL_STAGES = ["lead", "contacted", "proposal", "proposal-sent", "negotiation", "won", "lost"];
+const LEGACY_DEAL_STAGES = ["lead", "new-lead", "new-deal", "contacted", "proposal", "proposal-sent", "negotiation", "won", "lost"];
 const slugifyStageName = (name) =>
   String(name || "")
     .toLowerCase()
@@ -538,7 +539,19 @@ const slugifyStageName = (name) =>
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "");
 
-async function getAllowedStagesForTenant(tenantId, dealType) {
+async function getAllowedStagesForTenant(tenantId, dealType, pipelineId) {
+  if (pipelineId != null) {
+    const assignments = await prisma.pipelineStageAssignment.findMany({
+      where: {
+        tenantId,
+        pipelineId: Number(pipelineId),
+        pipeline: { tenantId },
+      },
+      include: { stage: { select: { name: true } } },
+      orderBy: { position: "asc" },
+    });
+    return new Set(assignments.map((assignment) => slugifyStageName(assignment.stage.name)).filter(Boolean));
+  }
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
     select: { vertical: true },
@@ -559,6 +572,10 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
           .filter(Boolean),
       );
       if (configured.size) {
+        // The built-in Generic CRM configuration was renamed from New Lead
+        // to New Deal. Keep the legacy slug accepted for existing callers and
+        // records while new deals use the renamed default stage.
+        if (String(dealType || "") === "New Business") configured.add("new-lead");
         return configured;
       }
     } catch (_error) {
@@ -579,8 +596,22 @@ async function getAllowedStagesForTenant(tenantId, dealType) {
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
 async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false, allowLegacyStages = false } = {}) {
+  if (body.contactType !== undefined) {
+    const e = ensureEnum(body.contactType, new Set(["lead", "customer"]), { field: "contactType", code: "INVALID_CONTACT_TYPE" });
+    if (e) return e;
+  }
+  if (body.dealKind !== undefined) {
+    const e = ensureEnum(body.dealKind, new Set(["one-time", "recurring"]), { field: "dealKind", code: "INVALID_DEAL_KIND" });
+    if (e) return e;
+  }
+  if (body.billingPeriod !== undefined && body.billingPeriod !== null && body.billingPeriod !== "") {
+    const e = ensureEnum(body.billingPeriod, new Set(["monthly", "quarterly", "half-yearly", "yearly"]), { field: "billingPeriod", code: "INVALID_BILLING_PERIOD" });
+    if (e) return e;
+    if (body.dealKind === "one-time") return { status: 400, error: "Billing period is only valid for recurring deals", code: "INVALID_BILLING_PERIOD" };
+  }
   if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
-    const e = ensureNumberInRange(body.amount, { min: 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    const e = ensureNumberInRange(body.amount, { min: tenant?.vertical === "generic" ? 0.01 : 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
     if (e) return e;
   }
   if (body.probability !== undefined && body.probability !== null && body.probability !== "") {
@@ -588,10 +619,32 @@ async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false, 
     if (e) return e;
   }
   if (body.stage !== undefined && body.stage !== null && body.stage !== "") {
-    const allowed = await getAllowedStagesForTenant(tenantId, body.dealType);
+    const allowed = await getAllowedStagesForTenant(tenantId, body.dealType, body.pipelineId);
     if (allowLegacyStages) for (const stage of LEGACY_DEAL_STAGES) allowed.add(stage);
     const e = ensureEnum(body.stage, allowed, { field: "stage", code: "INVALID_STAGE" });
     if (e) return e;
+  }
+  return null;
+}
+
+async function validateGenericDealDetails(body, { tenantId } = {}) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  if (tenant?.vertical !== "generic") return null;
+  if (body.pipelineId !== undefined && body.pipelineId !== null && body.pipelineId !== "") {
+    const pipelineId = Number(body.pipelineId);
+    if (!Number.isInteger(pipelineId) || pipelineId < 1) {
+      return { status: 400, error: "Invalid pipeline", code: "INVALID_PIPELINE" };
+    }
+    const pipeline = await prisma.pipeline.findFirst({ where: { id: pipelineId, tenantId }, select: { id: true } });
+    if (!pipeline) return { status: 400, error: "Selected pipeline was not found", code: "INVALID_PIPELINE" };
+  }
+  if (body.contactType && !body.contactId) return { status: 400, error: "A related contact is required", code: "CONTACT_REQUIRED" };
+  if (!body.contactId || !body.contactType) return null;
+  const contact = await prisma.contact.findFirst({ where: { id: parseInt(body.contactId), tenantId }, select: { status: true } });
+  if (!contact) return { status: 400, error: "Related contact was not found", code: "INVALID_CONTACT" };
+  const expectedStatus = body.contactType === "customer" ? "Customer" : "Lead";
+  if (String(contact.status || "").toLowerCase() !== expectedStatus.toLowerCase()) {
+    return { status: 400, error: `Select a ${expectedStatus} contact`, code: "CONTACT_TYPE_MISMATCH" };
   }
   return null;
 }
@@ -602,11 +655,13 @@ router.post("/", async (req, res) => {
     // #464: strip write-restricted fields BEFORE destructuring so a USER
     // who has canWrite=false on Deal.amount can't push a value through.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId, autoName } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, contactType, dealKind, billingPeriod, paymentInfo, notes, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId, autoName } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    const genericErr = await validateGenericDealDetails(req.body, { tenantId: req.user.tenantId });
+    if (genericErr) return res.status(genericErr.status).json(genericErr);
 
     const data = {
       title,
@@ -614,6 +669,11 @@ router.post("/", async (req, res) => {
       probability: parseInt(probability) || 50,
       stage: stage || "lead",
       dealType: dealType || null,
+      contactType: contactType || null,
+      dealKind: dealKind || null,
+      billingPeriod: billingPeriod || null,
+      paymentInfo: paymentInfo == null ? null : String(paymentInfo).slice(0, 10000),
+      notes: notes == null ? null : String(notes).slice(0, 20000),
       ownerId: req.user.userId,
       tenantId: req.user.tenantId,
     };
@@ -683,12 +743,13 @@ router.put("/:id", async (req, res) => {
 
     // #464: strip write-restricted fields per the caller's role.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, dealType, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
+    const { title, amount, probability, stage, dealType, contactId, contactType, dealKind, billingPeriod, paymentInfo, notes, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.
     const validationBody = {
       ...req.body,
       dealType: dealType === undefined ? (existing.dealType || (stage !== undefined ? await legacyDealTypeName(req.user.tenantId) : null)) : dealType,
+      pipelineId: pipelineId === undefined ? existing.pipelineId : pipelineId,
       ...(dealType !== undefined && stage === undefined ? { stage: existing.stage } : {}),
     };
     const inputErr = await validateDealInput(validationBody, {
@@ -699,6 +760,8 @@ router.put("/:id", async (req, res) => {
       allowLegacyStages: !existing.dealType && dealType === undefined,
     });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    const genericErr = await validateGenericDealDetails(validationBody, { tenantId: req.user.tenantId });
+    if (genericErr) return res.status(genericErr.status).json(genericErr);
 
     // #173: terminal-stage state machine. Once a deal is `won` or
     // `lost`, the stage is closed — re-opening or flipping to the
@@ -723,6 +786,11 @@ router.put("/:id", async (req, res) => {
     if (probability !== undefined) data.probability = parseInt(probability);
     if (stage !== undefined) data.stage = stage;
     if (dealType !== undefined) data.dealType = dealType ? String(dealType) : null;
+    if (contactType !== undefined) data.contactType = contactType ? String(contactType) : null;
+    if (dealKind !== undefined) data.dealKind = dealKind ? String(dealKind) : null;
+    if (billingPeriod !== undefined) data.billingPeriod = billingPeriod ? String(billingPeriod) : null;
+    if (paymentInfo !== undefined) data.paymentInfo = paymentInfo == null ? null : String(paymentInfo).slice(0, 10000);
+    if (notes !== undefined) data.notes = notes == null ? null : String(notes).slice(0, 20000);
     if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
     if (pipelineId !== undefined) data.pipelineId = pipelineId ? parseInt(pipelineId) : null;
     if (expectedClose !== undefined) data.expectedClose = expectedClose ? new Date(expectedClose) : null;

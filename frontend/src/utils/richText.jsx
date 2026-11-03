@@ -23,6 +23,7 @@ function plainTextHtml(value) {
 function safeUrl(value, { allowMailto = false } = {}) {
   const raw = String(value || '').trim();
   if (!raw) return null;
+  if (/^data:image\/(?:gif|jpe?g|png|webp|bmp);base64,[a-z0-9+/=\s]+$/i.test(raw)) return raw;
   try {
     const parsed = new URL(raw, window.location.origin);
     const allowed = ['http:', 'https:'];

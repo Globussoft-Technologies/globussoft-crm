@@ -54,10 +54,11 @@ body[data-vertical="generic"] .cp-slide-panel { width: 70vw; }
 .cp-note-form { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
 .cp-note-form textarea { border: 1px solid var(--border-color); border-radius: 8px; padding: 0.55rem; font-size: 0.82rem; resize: vertical; min-height: 64px; font-family: inherit; }
 .cp-note-composer { background: #fff; border-radius: 10px; width: min(640px, 100%); min-height: 470px; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+.cp-note-overlay .cp-note-composer { height: min(470px, calc(100dvh - 2rem)); min-height: 0; max-height: calc(100dvh - 2rem); box-sizing: border-box; }
 .cp-note-overlay { align-items: center; justify-content: center; padding: 1rem; }
 .cp-note-related { margin: 0.75rem 1rem 0; padding: 0.55rem 0.7rem; background: #f4f7fa; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); font-size: 0.8rem; }
 .cp-note-related strong { color: var(--primary-color, var(--accent-color)); }
-.cp-note-editor { flex: 1; min-height: 300px; margin: 0 1rem; padding: 0.75rem 0; outline: none; font-size: 0.9rem; line-height: 1.5; overflow-y: auto; }
+.cp-note-editor { flex: 1 1 auto; min-height: 0; margin: 0 1rem; padding: 0.75rem 0; outline: none; font-size: 0.9rem; line-height: 1.5; overflow-y: auto; overflow-x: hidden; }
 .cp-note-editor--generic { color: var(--text-primary); caret-color: var(--text-primary); cursor: text; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cp-note-editor:empty::before { content: attr(data-placeholder); color: var(--text-secondary); pointer-events: none; }
 .cp-note-toolbar { display: flex; align-items: center; gap: 0.15rem; padding: 0.45rem 1rem; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
@@ -427,7 +428,12 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-generic-note-preview { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .cp-note-extend { border: 0; background: transparent; color: var(--primary-color, var(--accent-color)); padding: 0.2rem 0; font-size: 0.72rem; font-weight: 600; cursor: pointer; }
 .cp-note-extend:hover { text-decoration: underline; }
-.cp-generic-note-full { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.cp-generic-note-overlay .cp-modal { width: min(640px, calc(100vw - 2rem)); min-height: 0; max-height: calc(100dvh - 2rem); }
+.cp-generic-note-overlay .cp-modal-head { flex: 0 0 auto; }
+.cp-generic-note-overlay .cp-modal-body { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.cp-generic-note-full { width: 100%; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.cp-generic-note-full > * { max-width: 100%; }
+.cp-generic-note-full pre { white-space: pre-wrap; }
 .cp-generic-note-full img { max-width: 100%; height: auto; }
 .cp-call-number { font-size: 1.3rem; font-weight: 700; text-align: center; padding: 0.5rem 0; }
 .cp-stage-select { width: auto; padding: 0.3rem 0.5rem; font-size: 0.75rem; }

@@ -3405,8 +3405,11 @@ const Leads = () => {
       const paginationQs = isGeneric
         ? `&page=${pageOverride ?? leadsPage + 1}&limit=${genericLeadsPageSize}`
         : "&limit=500";
+      // Keep Generic CRM rows visible after an inline CRM Status change.
+      // Lifecycle Stage (the pipeline status) remains a separate field.
+      const crmStatusQs = isGeneric ? "&includeCrmStatuses=true" : "";
       const data = await fetchApi(
-        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}`,
+        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}${crmStatusQs}`,
       );
       const rows = Array.isArray(data)
         ? data
@@ -7932,7 +7935,10 @@ const Leads = () => {
           lead,
           field: "status",
           label: "Lifecycle Stage",
-          value: configuredStage?.label || lead.status || "Lead",
+          // Generic CRM keeps lifecycle stage independent from CRM Status.
+          // Existing rows without an explicit lifecycle stage stay at the
+          // pipeline's initial Lead stage instead of mirroring lead.status.
+          value: configuredStage?.label || (isGeneric ? "Lead" : lead.status || "Lead"),
           type: "select",
           options: lifecycleOptions.map((option) => option.label),
           renderValue: (displayValue) => (

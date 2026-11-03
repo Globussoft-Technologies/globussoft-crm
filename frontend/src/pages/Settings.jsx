@@ -31,6 +31,7 @@ import {
   Globe2,
   Server,
   Copy,
+  Search,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -109,11 +110,25 @@ export default function Settings() {
   // Before the tenant request resolves, keep the generic settings surface
   // mounted. This also prevents generic-only controls (including Callified)
   // from disappearing during the initial render.
-  const isGenericVertical = !ctxTenant || ctxTenant.vertical === "generic";
+  const isGenericVertical = !ctxTenant || !ctxTenant.vertical || ctxTenant.vertical === "generic";
   // Settings tests and legacy callers can render before tenant context is
-  // available. Keep the stage editor available in that state while generic
-  // tenants continue to use the deal-type stage configuration.
-  const showLegacyPipelineStageEditor = !ctxTenant || !isGenericVertical;
+  // available. Restore the generic CRM pipeline-stage settings surface while
+  // keeping wellness/travel behavior unchanged.
+  const showLegacyPipelineStageEditor = !ctxTenant || isGenericVertical;
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const settingsGridRef = useRef(null);
+
+  // Generic CRM gets a local settings search without changing the shared
+  // Wellness/Travel settings surface or the global application search.
+  useEffect(() => {
+    const grid = settingsGridRef.current;
+    if (!grid) return;
+    const query = isGenericVertical ? settingsSearch.trim().toLowerCase() : "";
+    Array.from(grid.children).forEach((card) => {
+      const text = card.textContent?.toLowerCase() || "";
+      card.style.display = !query || text.includes(query) ? "" : "none";
+    });
+  }, [isGenericVertical, settingsSearch]);
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
@@ -1013,11 +1028,6 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    if (!ctxTenant || isGenericVertical) {
-      setStagesLoading(false);
-      if (!ctxTenant) fetchStages();
-      return undefined;
-    }
     fetchStages();
     return undefined;
   }, [isGenericVertical, ctxTenant]);
@@ -1165,6 +1175,55 @@ export default function Settings() {
           </Link>
         )} */}
       </header>
+      {isGenericVertical && (
+        <div
+          role="search"
+          aria-label="Search Generic CRM settings"
+          className="generic-settings-search"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            maxWidth: 520,
+            marginBottom: "1.25rem",
+            padding: "0 0.75rem",
+            border: "1px solid var(--border-color)",
+            borderRadius: 8,
+            background: "var(--surface-color)",
+          }}
+        >
+          <Search
+            size={17}
+            aria-hidden="true"
+            style={{
+              flex: "0 0 auto",
+              color: "var(--text-secondary)",
+              pointerEvents: "none",
+            }}
+          />
+          <input
+            type="search"
+            value={settingsSearch}
+            onChange={(event) => setSettingsSearch(event.target.value)}
+            placeholder="Search settings..."
+            aria-label="Search settings"
+            style={{
+              flex: "1 1 auto",
+              minWidth: 0,
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "0.7rem 0.15rem",
+              border: 0,
+              outline: "none",
+              background: "transparent",
+              color: "var(--text-primary)",
+              fontSize: "0.9rem",
+              appearance: "none",
+              WebkitAppearance: "none",
+            }}
+          />
+        </div>
+      )}
       {/* Cards flow through a CSS multi-column container so heights balance
           automatically across the two columns instead of pooling into two
           fixed lists (which left a tall empty gutter on the right whenever
@@ -1172,7 +1231,7 @@ export default function Settings() {
           right one). Each card carries `break-inside: avoid` + its own
           bottom margin via the `.settings-grid > .card` rule in index.css.
           Below ~720px the columns collapse to a single column. */}
-      <div className="settings-grid">
+      <div className="settings-grid" ref={settingsGridRef}>
           {isGenericVertical && <ProductTourSettings />}
           {isGenericVertical && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && <GoogleMapsSettingsCard />}
           {/* Organization Card */}
@@ -1819,8 +1878,7 @@ export default function Settings() {
             <WellnessRoleTypesCard notify={notify} />
           )}
 
-          {/* Pipeline Stages are configured dynamically per deal type in
-              Generic CRM. The legacy flat editor remains for other verticals. */}
+          {/* Generic CRM pipeline stages are managed here as before. */}
           {showLegacyPipelineStageEditor && <div
             className="card settings-pipeline-stages-card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}

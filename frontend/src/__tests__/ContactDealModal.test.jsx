@@ -54,7 +54,7 @@ function mockLists(overrides = {}) {
         ]),
       });
     }
-    if (url === '/api/pipeline_stages') return Promise.resolve(overrides.stages ?? STAGES);
+    if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(overrides.pipelineStages ?? overrides.stages ?? STAGES);
     if (url.startsWith('/api/pipelines')) return Promise.resolve(overrides.pipelines ?? []);
     if (url.startsWith('/api/staff')) return Promise.resolve(overrides.staff ?? []);
     if (url === '/api/deals' && method === 'POST') {
@@ -93,22 +93,68 @@ describe('DealModal — add deal drawer', () => {
     await user.type(name, 'Sales');
     await user.click(within(dialog).getByRole('button', { name: 'Save deal type' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Deal type configuration' })).toBeNull());
-    expect(screen.getByLabelText('Deal type').value).toBe('Sales');
+    await waitFor(() => expect(within(screen.getByLabelText('Deal stage')).getByRole('option', { name: 'Sales Qualified' })).toBeTruthy());
   });
-  it('prefills an internal title, hides generic-only fields, and loads dynamic stages', async () => {
+  it('shows Generic CRM contact and deal details and loads dynamic stages', async () => {
     mockLists();
     renderModal();
     expect(await screen.findByText('Add deal')).toBeTruthy();
-    expect(screen.queryByLabelText('Deal name')).toBeNull();
+    expect(screen.getByLabelText('Deal name')).toBeTruthy();
+    expect(screen.getByLabelText('Contact type')).toBeTruthy();
+    expect(screen.getByLabelText('Deal type')).toBeTruthy();
+    expect(screen.getByLabelText('Payment')).toBeTruthy();
+    expect(screen.getByLabelText('Notes')).toBeTruthy();
     expect(screen.queryByText('Related account')).toBeNull();
     expect(screen.queryByRole('button', { name: /Add products/ })).toBeNull();
-    expect(screen.queryByLabelText('Pipeline')).toBeNull();
+    expect(screen.getByLabelText('Pipeline')).toBeTruthy();
     expect(screen.getByText('Rakesh Rana')).toBeTruthy();
     const stage = await screen.findByLabelText('Deal stage');
     await waitFor(() => {
       expect(within(stage).getByRole('option', { name: 'Sales Qualified' })).toBeTruthy();
     });
     expect(stage.value).toBe('new');
+  });
+
+  it('selects the default pipeline and uses that pipeline\'s stages for a new deal', async () => {
+    mockLists({
+      pipelines: [{ id: 3, name: 'Enterprise', isDefault: true }],
+      pipelineStages: [{ id: 31, name: 'Qualification' }, { id: 32, name: 'Won' }],
+    });
+    const user = userEvent.setup();
+    renderModal();
+    const pipeline = await screen.findByLabelText('Pipeline');
+    await waitFor(() => expect(pipeline).toHaveValue('3'));
+    const stage = await screen.findByLabelText('Deal stage');
+    expect(within(stage).getByRole('option', { name: 'Qualification' })).toBeTruthy();
+    await user.selectOptions(stage, 'qualification');
+    await user.clear(screen.getByLabelText('Deal value'));
+    await user.type(screen.getByLabelText('Deal value'), '50000');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find((entry) => entry[0] === '/api/deals' && entry[1]?.method === 'POST');
+      expect(JSON.parse(call[1].body)).toEqual(expect.objectContaining({ pipelineId: 3, stage: 'qualification' }));
+    });
+  });
+
+  it('shows billing period only for recurring Generic deals and persists payment and notes', async () => {
+    mockLists();
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByText('Add deal');
+    await user.selectOptions(screen.getByLabelText('Deal type'), 'recurring');
+    expect(screen.getByLabelText('Billing period')).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText('Billing period'), 'monthly');
+    await user.type(screen.getByLabelText('Payment'), '20% advance');
+    await user.type(screen.getByLabelText('Notes'), 'Requested a site visit next week.');
+    await user.clear(screen.getByLabelText('Deal value'));
+    await user.type(screen.getByLabelText('Deal value'), '50000');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find((c) => c[0] === '/api/deals' && c[1]?.method === 'POST');
+      expect(JSON.parse(call[1].body)).toEqual(expect.objectContaining({ dealKind: 'recurring', billingPeriod: 'monthly', paymentInfo: '20% advance', notes: 'Requested a site visit next week.' }));
+    });
+    await user.selectOptions(screen.getByLabelText('Deal type'), 'one-time');
+    expect(screen.queryByLabelText('Billing period')).toBeNull();
   });
 
   it('creates the deal with title, value, stage and contact on Save', async () => {
@@ -141,7 +187,7 @@ describe('DealModal — add deal drawer', () => {
     await screen.findByText('Add deal');
     await user.clear(screen.getByLabelText('Deal value'));
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect(notifyObj.error).toHaveBeenCalledWith('Enter a deal value of 0 or more.');
+    expect(notifyObj.error).toHaveBeenCalledWith('Enter a deal value greater than zero.');
     expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/deals' && c[1]?.method === 'POST')).toBe(false);
   });
 
@@ -160,7 +206,7 @@ describe('DealModal — add deal drawer', () => {
     expect(screen.queryByLabelText('Probability %')).toBeNull();
     expect(screen.queryByLabelText('Expected close')).toBeNull();
     expect(screen.queryByRole('button', { name: /Show all fields|Hide extra fields/ })).toBeNull();
-    expect(screen.queryByLabelText('Pipeline')).toBeNull();
+    expect(screen.getByLabelText('Pipeline')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Customize fields/ })).toBeNull();
   });
 

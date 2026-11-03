@@ -83,7 +83,7 @@ const {
 
 // #651 — third-party credentials on WhatsAppConfig. GET masks; PUT requires
 // full fresh value; rotation stamps lastRotatedAt + emits audit row.
-const WA_SECRET_FIELDS = ["accessToken", "webhookVerifyToken"];
+const WA_SECRET_FIELDS = ["appSecret", "accessToken", "webhookVerifyToken"];
 
 const GENERIC_TEMPLATE_FALLBACK_MAPPING = Object.freeze({
   1: "contact.first_name",
@@ -2547,6 +2547,8 @@ router.post(
         phoneNumberId: req.body.phoneNumberId,
         businessAccountId: req.body.businessAccountId,
         businessId: req.body.businessId,
+        appId: req.body.appId,
+        appSecret: req.body.appSecret,
         accessToken: req.body.accessToken,
         webhookVerifyToken: req.body.webhookVerifyToken,
         subscribeWebhooks: req.body.subscribeWebhooks !== false,

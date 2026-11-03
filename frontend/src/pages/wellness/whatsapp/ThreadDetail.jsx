@@ -71,6 +71,7 @@ export default function ThreadDetail() {
     setNewBody,
     setNewError,
     setShowNewModal,
+    isGeneric,
   } = useWhatsAppThreads();
 
   // Scroll container ref — needed to (a) detect "user scrolled near the
@@ -613,7 +614,10 @@ export default function ThreadDetail() {
                       value={reply}
                       onChange={(e) => setReply(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        const shouldSend = isGeneric
+                          ? e.key === 'Enter' && !e.shiftKey
+                          : e.key === 'Enter' && (e.ctrlKey || e.metaKey);
+                        if (shouldSend && !e.nativeEvent.isComposing) {
                           e.preventDefault();
                           sendReply();
                         }
@@ -642,7 +646,7 @@ export default function ThreadDetail() {
                     <button
                       onClick={sendReply}
                       disabled={sending || !reply.trim()}
-                      title="Send (Ctrl+Enter)"
+                      title={isGeneric ? 'Send (Enter)' : 'Send (Ctrl+Enter)'}
                       style={{
                         width: 36, height: 36,
                         flexShrink: 0,

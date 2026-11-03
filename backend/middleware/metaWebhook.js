@@ -9,12 +9,12 @@
 // Pipeline (per incoming POST /api/whatsapp/webhook):
 //
 //   1. captureRawBody    — express.raw({ type: 'application/json' })
-//   2. verifySignature   — HMAC-SHA-256 against META_APP_SECRET;
-//                          dev fallback: skip-with-warning if secret unset
-//   3. parseBody         — JSON.parse the captured Buffer; 400 on bad JSON
-//   4. routeToTenant     — for each entry[].changes[] look up
+//   2. parseBody         — JSON.parse the captured Buffer; 400 on bad JSON
+//   3. routeToTenant     — for each entry[].changes[] look up
 //                          WhatsAppConfig by phone_number_id; attach
 //                          per-entry { tenantId, configId } to req.waContext
+//   4. verifySignature   — HMAC-SHA-256 against the tenant-stored App Secret;
+//                          platform env secret remains a legacy fallback
 //   5. ensureIdempotency — INSERT WebhookEvent (source, metaEventId UNIQUE);
 //                          on P2002 short-circuit with 200 + DUPLICATE marker
 //   6. respondImmediately — 200 to Meta; the downstream handler does work
@@ -22,8 +22,8 @@
 //                          5-second response deadline.
 //
 // SECURITY CONTRACT
-//   - In production (NODE_ENV=production), an unset META_APP_SECRET is FATAL.
-//     We refuse to accept any webhook delivery without a configured secret.
+//   - In production, a request with neither a tenant-stored App Secret nor a
+//     legacy platform secret is rejected.
 //   - In dev/test, an unset secret logs a single startup warning and skips
 //     signature verification so local ngrok-based development works without
 //     wiring up real Meta credentials.
@@ -41,6 +41,7 @@
 const crypto = require("crypto");
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { decryptCredential } = require("../lib/credentialMasking");
 
 // Env vars are read PER REQUEST (not at module load) so tests can vary them
 // per-case without `vi.resetModules()` plumbing, and so an operator can
@@ -56,19 +57,9 @@ function envIsProd()  { return process.env.NODE_ENV === "production"; }
 // in pm2 logs. Skipped under NODE_ENV=test to keep the vitest output clean.
 if (process.env.NODE_ENV !== "test") {
   if (!envSecret()) {
-    if (envIsProd()) {
-      console.error(
-        "[metaWebhook] FATAL CONFIGURATION: META_APP_SECRET is unset in production. " +
-        "Webhook signature verification will refuse every request. " +
-        "Set META_APP_SECRET in your environment and restart.",
-      );
-    } else {
-      console.warn(
-        "[metaWebhook] META_APP_SECRET unset — running in DEV mode without " +
-        "signature verification. This is acceptable for local/ngrok development " +
-        "but MUST be set before deploying to production.",
-      );
-    }
+    console.log(
+      "[metaWebhook] platform META_APP_SECRET is unset; tenant-stored Generic CRM App Secrets will be used.",
+    );
   }
 }
 
@@ -99,14 +90,43 @@ function _mwLog(tag, payload) {
 }
 
 function verifySignature(req, res, next) {
-  const secret = envSecret();
+  const routed = Array.isArray(req.waContext?.entries) ? req.waContext.entries : [];
+  const clearRoutedSecrets = () => {
+    for (const context of routed) {
+      if (context && Object.prototype.hasOwnProperty.call(context, "appSecret")) {
+        delete context.appSecret;
+      }
+    }
+  };
+  const candidateSecrets = new Set();
+  for (const context of routed) {
+    if (!context?.appSecret) continue;
+    try {
+      const plain = decryptCredential(context.appSecret);
+      if (plain) candidateSecrets.add(plain);
+    } catch (_e) {
+      // Treat an undecryptable tenant credential as missing.
+    }
+  }
+  // Legacy/embedded-signup configurations can continue using the platform
+  // secret. Generic manual setup stores its own secret on WhatsAppConfig.
+  if (candidateSecrets.size === 0 && envSecret()) candidateSecrets.add(envSecret());
+
+  if (candidateSecrets.size > 1) {
+    return res.status(403).json({
+      error: "Webhook payload spans configurations with different Meta App Secrets",
+      code: "MIXED_APP_SECRETS",
+    });
+  }
+
+  const secret = candidateSecrets.size === 1 ? [...candidateSecrets][0] : "";
   const isProd = envIsProd();
 
-  // Production with no secret = no webhooks accepted.
+  // Production with no tenant or legacy platform secret = no webhooks accepted.
   if (isProd && !secret) {
     _mwLog("← 503 META_APP_SECRET_MISSING (prod + no secret)", null);
     return res.status(503).json({
-      error: "Webhook signature verification not configured",
+      error: "Webhook App Secret is not configured for this WhatsApp account",
       code: "META_APP_SECRET_MISSING",
     });
   }
@@ -116,6 +136,7 @@ function verifySignature(req, res, next) {
     _mwLog("⚠ signature SKIPPED (dev mode, META_APP_SECRET unset)", null);
     req.waSignatureVerified = false;
     req.waSignatureReason = "dev_no_secret";
+    clearRoutedSecrets();
     return next();
   }
 
@@ -155,11 +176,11 @@ function verifySignature(req, res, next) {
   }
 
   if (!ok) {
-    _mwLog("← 403 SIGNATURE_INVALID (HMAC mismatch — META_APP_SECRET in .env does NOT match the App Secret in Meta dashboard)", {
+    _mwLog("← 403 SIGNATURE_INVALID (saved App Secret does not match the Meta dashboard)", {
       bodyBytes: req.body.length,
       providedFirst8: provided.slice(0, 8),
       expectedFirst8: expected.slice(0, 8),
-      hint: "Open developers.facebook.com → your app → App Settings → Basic → 'App Secret'. Copy it (click Show) into backend/.env as META_APP_SECRET=<that value>, then restart the backend.",
+      hint: "Open Generic CRM Settings → WhatsApp / Meta Configuration and save the matching Meta App Secret.",
     });
     return res.status(403).json({
       error: "X-Hub-Signature-256 mismatch",
@@ -168,6 +189,7 @@ function verifySignature(req, res, next) {
   }
   _mwLog("✓ signature verified", { bodyBytes: req.body.length });
   req.waSignatureVerified = true;
+  clearRoutedSecrets();
   next();
 }
 
@@ -217,7 +239,7 @@ async function routeToTenant(req, res, next) {
   if (phoneNumberIds.size > 0) {
     const configs = await prisma.whatsAppConfig.findMany({
       where: { phoneNumberId: { in: [...phoneNumberIds] } },
-      select: { id: true, tenantId: true, phoneNumberId: true, disconnectedAt: true, businessRestricted: true },
+      select: { id: true, tenantId: true, phoneNumberId: true, appSecret: true, disconnectedAt: true, businessRestricted: true },
     });
     for (const c of configs) {
       if (c.phoneNumberId) configsByPhone.set(c.phoneNumberId, c);
@@ -243,6 +265,7 @@ async function routeToTenant(req, res, next) {
       tenantId: cfg.tenantId,
       configId: cfg.id,
       phoneNumberId: cfg.phoneNumberId,
+      appSecret: cfg.appSecret,
       disconnected: !!cfg.disconnectedAt,
       restricted: !!cfg.businessRestricted,
     });
@@ -360,9 +383,9 @@ module.exports = {
   // Composed pipeline — what server.js / the webhook router mounts.
   webhookPipeline: [
     captureRawBody,
-    verifySignature,
     parseBody,
     routeToTenant,
+    verifySignature,
     ensureIdempotency,
     respondImmediately,
   ],

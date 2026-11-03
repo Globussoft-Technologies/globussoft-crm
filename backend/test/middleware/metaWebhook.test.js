@@ -84,6 +84,19 @@ describe('verifySignature', () => {
     expect(req.waSignatureVerified).toBe(true);
   });
 
+  test('prefers the tenant-stored App Secret when routing resolved a config', () => {
+    const sut = loadModule({ META_APP_SECRET: '', NODE_ENV: 'production' });
+    const rawBody = Buffer.from('{"tenant":7}', 'utf8');
+    const sig = 'sha256=' + hmac('tenant-app-secret', rawBody);
+    const { req, res } = fakeReqRes({ body: rawBody, headers: { 'x-hub-signature-256': sig } });
+    req.waContext = { entries: [{ tenantId: 7, appSecret: 'tenant-app-secret' }] };
+    const next = vi.fn();
+    sut.verifySignature(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.waSignatureVerified).toBe(true);
+    expect(req.waContext.entries[0]).not.toHaveProperty('appSecret');
+  });
+
   test('403 on signature mismatch (timing-safe path)', () => {
     const sut = loadModule({ META_APP_SECRET: 'test-secret-abc', NODE_ENV: 'production' });
     const rawBody = Buffer.from('{"hello":"world"}', 'utf8');
@@ -205,8 +218,8 @@ describe('routeToTenant', () => {
 
     expect(next).toHaveBeenCalledOnce();
     expect(req.waContext.entries).toEqual([
-      { tenantId: 2, configId: 11, phoneNumberId: 'pn_A', disconnected: false, restricted: false },
-      { tenantId: 3, configId: 12, phoneNumberId: 'pn_B', disconnected: false, restricted: false },
+      { tenantId: 2, configId: 11, phoneNumberId: 'pn_A', appSecret: undefined, disconnected: false, restricted: false },
+      { tenantId: 3, configId: 12, phoneNumberId: 'pn_B', appSecret: undefined, disconnected: false, restricted: false },
     ]);
   });
 

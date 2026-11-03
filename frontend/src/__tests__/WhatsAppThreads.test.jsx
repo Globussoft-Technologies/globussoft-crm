@@ -20,7 +20,7 @@
  *      renders messages from `detail.messages` in the right pane.
  *   5. Reply send — typing in the textarea + clicking Send POSTs
  *      /api/whatsapp/send with { to: <contactPhone>, body: <reply> }.
- *      Ctrl+Enter inside the textarea also triggers send.
+ *      Generic CRM sends on Enter and keeps Shift+Enter for a newline.
  *   6. Assign-to-me — POST /api/whatsapp/threads/:id/assign with
  *      `targetUserId` (NOT `userId` — stripDangerous deletes the latter
  *      per CLAUDE.md standing rules; the bug at #646 was that the page
@@ -320,6 +320,26 @@ describe('<WhatsAppThreads /> — current Meta inbox contract', () => {
     expect(screen.getByRole('button', { name: /New/i })).toBeInTheDocument();
   });
 
+  it('opens WhatsApp configuration from the Generic CRM inbox status bar', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'ADMIN' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Configure' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Configure WhatsApp' });
+    expect(await within(dialog).findByText('WhatsApp / Meta Configuration')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Configure' })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Close WhatsApp configuration' }));
+    expect(screen.queryByRole('dialog', { name: 'Configure WhatsApp' })).not.toBeInTheDocument();
+  });
+
   it('shows an opaque Generic CRM new-message modal with required-field markers', async () => {
     const user = userEvent.setup();
     render(
@@ -503,7 +523,7 @@ describe('<WhatsAppThreads /> — current Meta inbox contract', () => {
     await user.click(await screen.findByText('Rishu Goyal'));
     const textarea = await screen.findByPlaceholderText('Type a message…');
     await user.type(textarea, 'Canonical thread reply');
-    await user.click(screen.getByTitle('Send (Ctrl+Enter)'));
+    await user.click(screen.getByTitle('Send (Enter)'));
 
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/send', {
@@ -514,6 +534,37 @@ describe('<WhatsAppThreads /> — current Meta inbox contract', () => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/threads/99');
     });
     expect(await screen.findByText('Canonical thread reply')).toBeInTheDocument();
+  });
+
+  it('sends on Enter in Generic CRM and keeps Shift+Enter for a newline', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 99, tenantId: 1, role: 'USER' } }}>
+          <WhatsAppThreads transport="meta" showThreadList />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByText('Rishu Goyal'));
+    const textarea = await screen.findByPlaceholderText('Type a message…');
+
+    await user.type(textarea, 'First line{shift>}{enter}{/shift}Second line');
+    expect(textarea).toHaveValue('First line\nSecond line');
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/whatsapp/send',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    await user.type(textarea, '{enter}');
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/send', {
+        method: 'POST',
+        body: JSON.stringify({ to: '+919876543210', body: 'First line\nSecond line' }),
+        silent: true,
+      });
+    });
   });
 });
 

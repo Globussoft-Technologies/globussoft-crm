@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AuthContext } from "../appContexts";
 
 const fetchApiMock = vi.fn();
 vi.mock("../utils/api", () => ({ fetchApi: (...args) => fetchApiMock(...args) }));
@@ -59,6 +60,7 @@ function mockApi(path, overrides = {}) {
   if (path === "/api/workflows/email-templates") return Promise.resolve([{ id: 4, name: "Welcome email" }]);
   if (path === "/api/workflows/sequences") return Promise.resolve([{ id: 8, name: "Nurture", isActive: true }]);
   if (path === "/api/workflows/assignees") return Promise.resolve([{ id: 11, name: "Ada" }, { id: 12, name: "Grace" }]);
+  if (path === "/api/contacts/filter-values/webForm") return Promise.resolve({ values: [] });
   if (path === "/api/workflows/stats/actions") return Promise.resolve({});
   return Promise.resolve([existingWorkflow]);
 }
@@ -236,6 +238,46 @@ describe("Workflows page", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Condition 1 operator 1" }), "not_exists");
     expect(screen.queryByRole("textbox", { name: "Condition 1 value 1" })).not.toBeInTheDocument();
     expect(screen.getByText(/no value needed/i)).toBeInTheDocument();
+  });
+
+  it("shows every generic CRM web form in a dynamic condition-value dropdown", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/contacts/filter-values/webForm": {
+        values: [
+          { value: "Contact Us", label: "Contact Us", count: 4 },
+          { value: "Newsletter Signup", label: "Newsletter Signup", count: 0 },
+        ],
+      },
+    }));
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" }, user: null }}><Workflows /></AuthContext.Provider>);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/contacts/filter-values/webForm"));
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    await user.click(within(screen.getByRole("listbox", { name: "Condition 1 field 1" })).getByRole("option", { name: "webForm" }));
+
+    const valuePicker = screen.getByRole("combobox", { name: "Condition 1 value 1" });
+    expect(Array.from(valuePicker.options).map((option) => option.textContent)).toEqual([
+      "Select web form",
+      "Contact Us",
+      "Newsletter Signup",
+    ]);
+    await user.selectOptions(valuePicker, "Newsletter Signup");
+    expect(valuePicker).toHaveValue("Newsletter Signup");
+  });
+
+  it("does not load or render the web-form dropdown outside Generic CRM", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => mockApi(path));
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "wellness" }, user: null }}><Workflows /></AuthContext.Provider>);
+    await user.click(await screen.findByRole("button", { name: /create workflow/i }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    await user.click(within(screen.getByRole("listbox", { name: "Condition 1 field 1" })).getByRole("option", { name: "webForm" }));
+
+    expect(fetchApiMock).not.toHaveBeenCalledWith("/api/contacts/filter-values/webForm");
+    expect(screen.getByRole("textbox", { name: "Condition 1 value 1" })).toBeInTheDocument();
   });
 
   it("exposes deal stage-change fields so 'changed from X to Y' is buildable", async () => {

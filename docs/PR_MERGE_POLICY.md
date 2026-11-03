@@ -12,12 +12,17 @@ Do not describe this policy as active until the rule is verified in GitHub.
 ## What runs
 
 Every PR to `main` (including docs, scripts, and workflow changes) runs the same
-six gates as deployment: build plus bundle budgets, API tests, lint plus audit,
+six canonical gates: build plus bundle budgets, API tests, lint plus audit,
 backend units/integration tests, frontend units, and migration safety. API tests
 use their own MySQL service; no deployment secrets are inherited. PR validation
 calls `deploy.yml` with `validation_only: true`; that path **cannot deploy**.
 Migration safety compares against the PR base SHA, not the PR's last commit.
 The aggregate **PR validation** check must succeed.
+
+After merge, pushes to `main` rerun build, lint, and migration safety before
+deployment. API, backend-unit, and frontend-unit tests are skipped on that push
+because they remain mandatory before merge. Manual deployments still run all
+six gates unless the explicit emergency `skip_tests` input is selected.
 
 Two metadata-only statuses are published on the actual PR head:
 

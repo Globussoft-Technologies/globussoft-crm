@@ -185,6 +185,19 @@ describe('PR workflow wiring', () => {
     expect(pr.jobs['required-check'].if).toContain('always()');
     expect(pr.jobs['required-check'].steps[0].run).toContain('!= "success"');
   });
+  test('main pushes skip duplicate tests but retain static gates and deployment dependencies', () => {
+    const workflow = read('.github/workflows/deploy.yml');
+    for (const name of ['api_tests', 'unit_tests', 'frontend_unit_tests']) {
+      expect(workflow.jobs[name].if).toBe("${{ inputs.skip_tests != true && github.event_name != 'push' }}");
+      expect(workflow.jobs.deploy.needs).toContain(name);
+      expect(workflow.jobs.deploy.if).toContain(`needs.${name}.result == 'skipped'`);
+    }
+    for (const name of ['build', 'lint', 'migration_check']) {
+      expect(workflow.jobs[name].if).toBe('${{ inputs.skip_tests != true }}');
+      expect(workflow.jobs.deploy.needs).toContain(name);
+    }
+    expect(workflow.on.push.branches).toEqual(['main']);
+  });
   test('privileged policy only checks out trusted main; reviews merely wake it', () => {
     const workflow = read('.github/workflows/pr-merge-policy.yml');
     expect(workflow.on.pull_request_target.branches).toEqual(['main']);

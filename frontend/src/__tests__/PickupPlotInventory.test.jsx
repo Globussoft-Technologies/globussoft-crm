@@ -133,7 +133,7 @@ describe('<PickupPlotInventory />', () => {
       position: 'sticky', top: '0px', zIndex: '1',
     });
     expect(stickyHeader).toHaveStyle({ color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' });
-    expect(screen.getByRole('table')).toHaveStyle({ display: 'table', overflow: 'visible', width: '100%', tableLayout: 'fixed' });
+    expect(screen.getByRole('table')).toHaveStyle({ display: 'block', overflow: 'visible', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: '0px' });
 
     const resizeHandle = screen.getByRole('separator', { name: 'Resize Plot / Site column' });
     fireEvent.mouseDown(resizeHandle, { button: 0, clientX: 100 });

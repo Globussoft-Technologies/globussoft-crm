@@ -572,7 +572,7 @@ export default function PickupPlotInventory() {
           </div>}
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           {(!loadError || loadedRef.current) && <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'block', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={PLOT_INVENTORY_COLUMNS[index].label} style={{ width }} />)}
             </colgroup>

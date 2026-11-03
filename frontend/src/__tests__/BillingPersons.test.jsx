@@ -59,6 +59,7 @@ describe('<BillingPersons />', () => {
     expect(screen.getByTestId('billing-directory-table-scroll')).toHaveStyle({
       flex: '0 0 auto', maxHeight: 'calc(100vh - 260px)', overflowX: 'auto', overflowY: 'hidden', minHeight: '0',
     });
+    expect(screen.getByRole('table')).toHaveStyle({ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: '0px' });
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveStyle({
       position: 'static', color: 'var(--text-primary)',
       background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',

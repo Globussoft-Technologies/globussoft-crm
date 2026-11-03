@@ -165,7 +165,7 @@ export default function PickupPlotWorkAssignments() {
           style={{ flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%', overflow: 'auto', overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
-          <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ display: 'table', width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ display: 'block', width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>
               <col style={{ width: '22%' }} />
               <col style={{ width: '22%' }} />
@@ -175,7 +175,7 @@ export default function PickupPlotWorkAssignments() {
             </colgroup>
             <thead style={{ display: 'block', width: '100%' }}>
               <tr style={{ display: 'grid', gridTemplateColumns: '22% 22% 22% 22% 12%', width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>
-                {['Staff', 'Transport', 'Site Visits', 'Billing', 'Action'].map((label, index) => (
+                {['Staff', 'Transport', 'Site Visits', 'Billing', 'Action'].map((label) => (
                   <th key={label} scope="col" style={{ ...headerCellStyle, width: 'auto', position: 'sticky', top: 0, zIndex: 2 }}>{label}</th>
                 ))}
               </tr>

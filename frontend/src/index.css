@@ -501,6 +501,18 @@ body[data-vertical="generic"] .app-main > main.generic-page-content:has(.billing
   transition: none !important;
 }
 
+/* Generic Pickup Inventory owns the only table viewport on the page. Keep
+   the page shell from becoming a second vertical scroller and let the card
+   fill the available height while its table body handles the rows. */
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-inventory-page) {
+  overflow-y: hidden !important;
+}
+
+body[data-vertical="generic"] .pickup-inventory-page > .pickup-plot-table-body-scroll {
+  flex: 1 1 auto !important;
+  max-height: none !important;
+}
+
 body[data-vertical="generic"] .pickup-inventory-page,
 body[data-vertical="generic"] .pickup-plot-inventory-page,
 body[data-vertical="generic"] .pickup-person-directory-page,

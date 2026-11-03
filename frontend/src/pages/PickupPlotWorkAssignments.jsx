@@ -111,7 +111,7 @@ export default function PickupPlotWorkAssignments() {
 
   const assignedCount = staff.filter((person) => (person.workTypes || []).length > 0).length;
   const headerCellStyle = {
-    position: 'sticky', top: 0, zIndex: 2, padding: '13px 14px',
+    position: 'relative', padding: '13px 14px', boxSizing: 'border-box',
     borderBottom: '1px solid var(--border-color)', background: 'var(--popover-bg)',
     color: 'var(--text-secondary)', fontSize: '.76rem', textAlign: 'left',
     textTransform: 'uppercase', letterSpacing: '.04em',
@@ -162,10 +162,10 @@ export default function PickupPlotWorkAssignments() {
       <div
           className="card pickup-plot-table-scroll pickup-plot-table-body-scroll"
           data-testid="staff-work-assignment-table-scroll"
-          style={{ flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%', overflow: 'auto', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
+          style={{ flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%', overflowX: 'auto', overflowY: 'hidden', padding: 0, boxSizing: 'border-box', scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
-          <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Staff work assignments" style={{ display: 'block', width: '100%', minWidth: 1180, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>
               <col style={{ width: '22%' }} />
               <col style={{ width: '22%' }} />
@@ -173,25 +173,25 @@ export default function PickupPlotWorkAssignments() {
               <col style={{ width: '22%' }} />
               <col style={{ width: '12%' }} />
             </colgroup>
-            <thead>
-              <tr>
-                {['Staff', 'Transport', 'Site Visits', 'Billing', 'Action'].map((label) => (
-                  <th key={label} scope="col" style={headerCellStyle}>{label}</th>
+            <thead style={{ display: 'block', width: '100%' }}>
+              <tr style={{ display: 'grid', gridTemplateColumns: '22% 22% 22% 22% 12%', width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>
+                {['Staff', 'Transport', 'Site Visits', 'Billing', 'Action'].map((label, index) => (
+                  <th key={label} scope="col" style={{ ...headerCellStyle, width: 'auto' }}>{label}</th>
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(100vh - 304px)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
               {visibleStaff.map((person) => {
                 const selected = drafts[person.id] || [];
                 const changed = !sameTypes(selected, person.workTypes);
                 return (
-                  <tr key={person.id} aria-label={`Work assignment for ${person.name}`} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: 14, verticalAlign: 'middle', minWidth: 0 }}>
+                  <tr key={person.id} aria-label={`Work assignment for ${person.name}`} style={{ display: 'grid', gridTemplateColumns: '22% 22% 22% 22% 12%', width: '100%', borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: 14, width: 'auto', verticalAlign: 'middle', minWidth: 0 }}>
                       <strong style={{ display: 'block', overflowWrap: 'anywhere' }}>{person.name}</strong>
                       <span style={{ display: 'block', marginTop: 7, color: 'var(--text-secondary)', fontSize: '.78rem', overflowWrap: 'anywhere' }}>{person.email}</span>
                     </td>
                     {WORK_TYPES.map((work) => (
-                      <td key={work.key} style={{ padding: '10px 7px', verticalAlign: 'middle' }}>
+                      <td key={work.key} style={{ padding: '10px 7px', width: 'auto', verticalAlign: 'middle' }}>
                         <WorkTypeCheckbox
                           work={work}
                           person={person}
@@ -200,7 +200,7 @@ export default function PickupPlotWorkAssignments() {
                         />
                       </td>
                     ))}
-                    <td style={{ padding: 14, verticalAlign: 'middle', textAlign: 'right' }}>
+                    <td style={{ padding: 14, width: 'auto', verticalAlign: 'middle', textAlign: 'right' }}>
                       <button
                         type="button"
                         className={changed ? 'btn-primary' : 'btn-secondary'}
@@ -215,11 +215,11 @@ export default function PickupPlotWorkAssignments() {
                 );
               })}
               {loading && !loadedRef.current && (
-                <tr><td colSpan="5" style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading staff…</td></tr>
+                <tr style={{ display: 'grid', gridTemplateColumns: '22% 22% 22% 22% 12%', width: '100%' }}><td style={{ gridColumn: '1 / -1', padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading staff…</td></tr>
               )}
               {!loading && visibleStaff.length === 0 && (
-                <tr>
-                  <td colSpan="5" className="pickup-plot-empty-cell">
+                <tr style={{ display: 'grid', gridTemplateColumns: '22% 22% 22% 22% 12%', width: '100%' }}>
+                  <td className="pickup-plot-empty-cell" style={{ gridColumn: '1 / -1' }}>
                     <PickupPlotEmptyState
                       icon={UsersRound}
                       compact

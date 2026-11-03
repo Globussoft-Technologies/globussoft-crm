@@ -132,16 +132,16 @@ const PLOT_IMPORT_EXAMPLE = {
 const fieldStyle = { width: '100%', marginTop: 5, boxSizing: 'border-box' };
 const labelStyle = { display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' };
 const plotTableHeaderStyle = {
-  padding: '0.55rem 0.75rem', textAlign: 'left', fontSize: '0.78rem',
+  padding: '0.55rem 0.75rem', textAlign: 'left', fontSize: '0.78rem', boxSizing: 'border-box',
   color: 'var(--text-primary)',
   background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))',
   borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'normal', overflowWrap: 'anywhere',
-  position: 'sticky', top: 0, zIndex: 1,
+  position: 'relative',
 };
 const plotTableCellStyle = {
   padding: '0.8rem 0.75rem', textAlign: 'left', verticalAlign: 'middle',
   borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'normal',
-  overflowWrap: 'anywhere', textOverflow: 'clip',
+  overflowWrap: 'anywhere', textOverflow: 'clip', boxSizing: 'border-box',
 };
 const columnFilterLabelStyle = {
   display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, whiteSpace: 'nowrap',
@@ -314,6 +314,7 @@ export default function PickupPlotInventory() {
     PLOT_INVENTORY_COLUMNS,
     'plot-inventory-column-widths',
   );
+  const gridTemplateColumns = columnWidths.map((width) => `${((width / tableMinWidth) * 100).toFixed(4)}%`).join(' ');
   const plotTableViewportRef = useRef(null);
   const locale = tenant?.locale || 'en-US';
   const activePickupLocations = useMemo(
@@ -560,7 +561,7 @@ export default function PickupPlotInventory() {
           data-testid="plot-inventory-table"
           style={{
             flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
-            boxSizing: 'border-box', overflowX: 'auto', overflowY: 'auto', padding: 0,
+            boxSizing: 'border-box', overflowX: 'auto', overflowY: 'hidden', padding: 0,
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
@@ -571,40 +572,40 @@ export default function PickupPlotInventory() {
           </div>}
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           {(!loadError || loadedRef.current) && <div data-testid="plot-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'table', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table key="plot-inventory-layout-v2" className="stable-table pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'block', overflow: 'visible', width: '100%', height: 'auto', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={PLOT_INVENTORY_COLUMNS[index].label} style={{ width }} />)}
             </colgroup>
-            <thead><tr>
-              {PLOT_INVENTORY_COLUMNS.slice(0, 6).map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={plotTableHeaderStyle}>{column.label}</ResizableTableHeader>)}
-              <ResizableTableHeader label="Area" width={columnWidths[6]} minWidth={PLOT_INVENTORY_COLUMNS[6].minWidth} onResize={(width) => resizeColumn(6, width)} style={plotTableHeaderStyle}>
+            <thead style={{ display: 'block', width: '100%' }}><tr style={{ display: 'grid', gridTemplateColumns, width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>
+              {PLOT_INVENTORY_COLUMNS.slice(0, 6).map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} fluid onResize={(width) => resizeColumn(index, width)} style={plotTableHeaderStyle}>{column.label}</ResizableTableHeader>)}
+              <ResizableTableHeader label="Area" width={columnWidths[6]} minWidth={PLOT_INVENTORY_COLUMNS[6].minWidth} fluid onResize={(width) => resizeColumn(6, width)} style={plotTableHeaderStyle}>
                 <label style={columnFilterLabelStyle}>Area:
                   <ScrollableSelect ariaLabel="Area unit" value={areaUnit} onChange={setAreaUnit} options={AREA_UNIT_OPTIONS} maxVisibleRows={4} width={105} compact />
                 </label>
               </ResizableTableHeader>
-              <ResizableTableHeader label="Price" width={columnWidths[7]} minWidth={PLOT_INVENTORY_COLUMNS[7].minWidth} onResize={(width) => resizeColumn(7, width)} style={plotTableHeaderStyle}>
+              <ResizableTableHeader label="Price" width={columnWidths[7]} minWidth={PLOT_INVENTORY_COLUMNS[7].minWidth} fluid onResize={(width) => resizeColumn(7, width)} style={plotTableHeaderStyle}>
                 <label style={columnFilterLabelStyle}>Price:
                   <ScrollableSelect ariaLabel="Price unit" value={priceUnit} onChange={setPriceUnit} options={PRICE_UNIT_OPTIONS} maxVisibleRows={4} width={145} compact />
                 </label>
               </ResizableTableHeader>
-              <ResizableTableHeader label="Availability" width={columnWidths[8]} minWidth={PLOT_INVENTORY_COLUMNS[8].minWidth} onResize={(width) => resizeColumn(8, width)} style={plotTableHeaderStyle}>
+              <ResizableTableHeader label="Availability" width={columnWidths[8]} minWidth={PLOT_INVENTORY_COLUMNS[8].minWidth} fluid onResize={(width) => resizeColumn(8, width)} style={plotTableHeaderStyle}>
                 <label style={columnFilterLabelStyle}>Availability:
                   <ScrollableSelect ariaLabel="Filter by availability" value={availabilityFilter} onChange={setAvailabilityFilter} options={AVAILABILITY_FILTER_OPTIONS} maxVisibleRows={4} width={95} compact />
                 </label>
               </ResizableTableHeader>
               {PLOT_INVENTORY_COLUMNS.slice(9).map((column, offset) => {
                 const index = offset + 9;
-                return <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={plotTableHeaderStyle}>{column.label}</ResizableTableHeader>;
+                return <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} fluid onResize={(width) => resizeColumn(index, width)} style={plotTableHeaderStyle}>{column.label}</ResizableTableHeader>;
               })}
             </tr></thead>
-            <tbody>
+            <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(100vh - 304px)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
               {filteredPlots.map((plot, index) => (
-                <tr key={plot.id} style={{ opacity: plot.isActive ? 1 : 0.62 }}>
-                  <td style={plotTableCellStyle}>{index + 1}</td>
-                  <td style={plotTableCellStyle}><strong>{plot.name}</strong></td>
-                  <td style={plotTableCellStyle}>{plot.plotNumber || '—'}</td>
-                  <td style={plotTableCellStyle}>{plot.block || '—'}</td>
-                  <td style={plotTableCellStyle}>
+                <tr key={plot.id} style={{ display: 'grid', gridTemplateColumns, width: '100%', opacity: plot.isActive ? 1 : 0.62 }}>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{index + 1}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}><strong>{plot.name}</strong></td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{plot.plotNumber || '—'}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{plot.block || '—'}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>
                     <PlotAddress plot={plot} areaUnit={areaUnit} locale={locale} />
                     {Array.isArray(plot.boundary) && plot.boundary.length >= 3 && <button
                       type="button"
@@ -616,18 +617,18 @@ export default function PickupPlotInventory() {
                       <Eye size={13} /> Highlight area
                     </button>}
                   </td>
-                  <td style={plotTableCellStyle}><PlotPickupLocations plot={plot} /></td>
-                  <td style={plotTableCellStyle}>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}><PlotPickupLocations plot={plot} /></td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>
                     <span>{formatArea(storedArea(plot), areaUnit, locale) || '—'}</span>
                     {formatArea(plot.boundaryAreaSqFt, areaUnit, locale) && <small style={{ display: 'block', marginTop: 3, color: 'var(--text-secondary)' }}>Mapped: {formatArea(plot.boundaryAreaSqFt, areaUnit, locale)}</small>}
                   </td>
-                  <td style={plotTableCellStyle}>{formatPrice(plot)}</td>
-                  <td style={plotTableCellStyle}><StatusPill active={plot.availability === 'AVAILABLE'}>{plot.availability}</StatusPill></td>
-                  <td style={plotTableCellStyle}>{plot.roadWidth || '—'}</td>
-                  <td style={plotTableCellStyle}>{plot.facing ? plot.facing.replaceAll('_', ' ') : '—'}</td>
-                  <td style={plotTableCellStyle}>{plot.propertyType || '—'}</td>
-                  <td style={plotTableCellStyle}>{plot.isActive ? 'Active' : 'Inactive'}</td>
-                  <td className="pickup-plot-actions-cell" style={plotTableCellStyle}><div className="pickup-plot-row-actions">
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{formatPrice(plot)}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}><StatusPill active={plot.availability === 'AVAILABLE'}>{plot.availability}</StatusPill></td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{plot.roadWidth || '—'}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{plot.facing ? plot.facing.replaceAll('_', ' ') : '—'}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{plot.propertyType || '—'}</td>
+                  <td style={{ ...plotTableCellStyle, width: 'auto' }}>{plot.isActive ? 'Active' : 'Inactive'}</td>
+                  <td className="pickup-plot-actions-cell" style={{ ...plotTableCellStyle, width: 'auto' }}><div className="pickup-plot-row-actions">
                     <button type="button" className="btn-secondary pickup-plot-row-action" aria-label={`Edit ${plot.name}`} onClick={() => openPlot(plot)}><Edit2 size={14} /></button>
                     <button type="button" className="btn-secondary pickup-plot-row-action" aria-label={`${plot.isActive ? 'Deactivate' : 'Activate'} ${plot.name}`} onClick={() => toggleStatus(plot)}><Power size={14} /></button>
                     {canDeletePlot(plot) && <button
@@ -640,7 +641,22 @@ export default function PickupPlotInventory() {
                   </div></td>
                 </tr>
               ))}
-              {loading && !loadedRef.current && <tr><td colSpan="14" style={{ ...plotTableCellStyle, textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading inventory…</td></tr>}
+              {loading && !loadedRef.current && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}><td style={{ ...plotTableCellStyle, gridColumn: '1 / -1', textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading inventory…</td></tr>}
+              {!loading && filteredPlots.length === 0 && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}>
+                <td className="pickup-plot-empty-cell" style={{ gridColumn: '1 / -1' }}>
+                  <PickupPlotEmptyState
+                    icon={MapPin}
+                    testId="plot-inventory-empty-state"
+                    title={data.plots.length === 0 ? 'No plots or sites yet.' : 'No plots or sites match the selected filters.'}
+                    description={data.plots.length === 0
+                      ? 'Add your first plot or site to start tracking availability, pricing, addresses, and customer assignments.'
+                      : 'Try another search or reset the filters to see more plots and sites.'}
+                    actionLabel={data.plots.length === 0 ? 'Add first plot / site' : 'Clear filters'}
+                    actionVariant={data.plots.length === 0 ? 'primary' : 'secondary'}
+                    onAction={data.plots.length === 0 ? () => openPlot() : clearFilters}
+                  />
+                </td>
+              </tr>}
             </tbody>
           </table>
           </div>}

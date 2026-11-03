@@ -29,8 +29,9 @@ jobs:
       - name: Require successful validation
         env:
           RESULT: ${{ needs.full-validation.result }}
+          GATES: ${{ needs.full-validation.outputs.validation_summary }}
         run: |
           if [ "$RESULT" != "success" ]; then
-            echo "::error::All six CI gates must pass; result=$RESULT"
+            echo "::error::All six CI gates must pass; result=$RESULT; gates=$GATES"
             exit 1
           fi

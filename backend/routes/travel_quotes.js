@@ -778,6 +778,13 @@ async function attachQuoteBreakdownConnections(tenantId, subBrand, rawLines, bre
 router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    if (req.query.contactId !== undefined) {
+      const contactId = Number(req.query.contactId);
+      if (!Number.isInteger(contactId) || contactId <= 0) {
+        return res.status(400).json({ error: "contactId must be a positive integer", code: "INVALID_CONTACT_ID" });
+      }
+      where.contactId = contactId;
+    }
     if (req.query.subBrand) {
       assertValidSubBrand(String(req.query.subBrand));
       where.subBrand = String(req.query.subBrand);

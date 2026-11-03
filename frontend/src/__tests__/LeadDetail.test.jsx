@@ -24,10 +24,12 @@ const TRIP = {
   departDate: "2026-01-15T00:00:00.000Z",
   returnDate: "2026-01-19T00:00:00.000Z",
   status: "confirmed",
+  perStudentAmount: 5000,
+  totalTripValue: 160000,
   _count: { participants: 32 },
 };
 
-function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], activities = [] } = {}) {
+function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], itineraries = [], activities = [] } = {}) {
   return (url, options = {}) => {
     if (typeof url !== "string") return Promise.resolve({});
     if (url === "/api/contacts/77" && options.method === "PUT") {
@@ -36,6 +38,7 @@ function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], activit
     if (url === "/api/contacts/77") return Promise.resolve(contact);
     if (url.startsWith("/api/travel/trips?")) return Promise.resolve({ trips });
     if (url.startsWith("/api/travel/quotes?")) return Promise.resolve({ quotes });
+    if (url.startsWith("/api/travel/itineraries?")) return Promise.resolve({ itineraries });
     if (url.startsWith("/api/contacts/77/activities?")) return Promise.resolve({ data: activities });
     if (url === "/api/contacts/77/activities") return Promise.resolve({});
     return Promise.resolve({});
@@ -65,6 +68,7 @@ describe("LeadDetail", () => {
     expect(screen.getByText("principal@sharadaschool.in")).toBeTruthy();
     expect(screen.getByText("All trips")).toBeTruthy();
     expect(screen.getByText("goa-jan-2026")).toBeTruthy();
+    expect(screen.getAllByText("₹5,000").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("confirmed")).toBeTruthy();
   });
 
@@ -80,11 +84,46 @@ describe("LeadDetail", () => {
     })));
   });
 
+  it("shows the whole trip amount for a teacher contact", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      trips: [{ ...TRIP, teacherContactId: 77 }],
+    }));
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Sharada School Trust" });
+    expect(screen.getAllByText("₹160,000").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("shows the empty trip state when no trips are linked", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({ trips: [] }));
     renderPage();
     expect(await screen.findByText(/No active travel trip yet/i)).toBeTruthy();
     expect(screen.getByText(/No travel trips linked to this contact/i)).toBeTruthy();
+  });
+
+  it("includes non-TMC quote travel in the All trips table", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      quotes: [{ id: 12, subBrand: "rfu", totalAmount: 145000, currency: "INR", status: "Sent" }],
+    }));
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Sharada School Trust" });
+    expect(screen.getByText("Quote Q-12")).toBeTruthy();
+    expect(screen.getByText("RFU")).toBeTruthy();
+    expect(screen.getByText("₹145,000")).toBeTruthy();
+  });
+
+  it("includes contact-linked itineraries in the All trips table", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      itineraries: [{ id: 33, destination: "Dubai", subBrand: "travelstall", status: "sent", totalAmount: 90000, currency: "INR", startDate: "2026-12-01", endDate: "2026-12-05" }],
+    }));
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Sharada School Trust" });
+    expect(screen.getByText("Itinerary #33")).toBeTruthy();
+    expect(screen.getByText("Dubai")).toBeTruthy();
+    expect(screen.getByText("TRAVELSTALL")).toBeTruthy();
+    expect(screen.getByText("₹90,000")).toBeTruthy();
   });
 
   it("renders quotes and activities in their tabs", async () => {

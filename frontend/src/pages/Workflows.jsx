@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -30,6 +30,7 @@ import {
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import SearchableSelect from "../components/ui/SearchableSelect";
+import { AuthContext } from "../appContexts";
 
 const MODULES = [
   { value: "deal", label: "Deals", icon: Activity },
@@ -432,7 +433,7 @@ const FALLBACK_OPERATORS = [
 
 
 const FALLBACK_FIELD_OPTIONS = {
-  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt"],
+  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "webForm", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt"],
   // fromStage / toStage ride on every deal.stage_changed payload but were
   // absent here, which is why "stage changed from X to Y" could not be built.
   deal: ["dealId", "title", "amount", "currency", "stage", "probability", "fromStage", "toStage", "lostReason", "expectedClose", "contactId", "ownerId", "userId", "dealType", "pipelineId", "winLossReasonId", "createdAt"],
@@ -772,7 +773,7 @@ function Select({ value, onChange, children, "aria-label": ariaLabel, disabled =
   return <select aria-label={ariaLabel} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} className="workflow-select">{children}</select>;
 }
 
-function ConditionGroup({ group, index, module, updateGroup, removeGroup }) {
+function ConditionGroup({ group, index, module, updateGroup, removeGroup, webForms = [], isGenericCrm = false }) {
   const updateClause = (clauseIndex, patch) => {
     const clauses = group.clauses.map((clause, currentIndex) => currentIndex === clauseIndex ? { ...clause, ...patch } : clause);
     updateGroup(index, { clauses });
@@ -815,6 +816,11 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup }) {
               box for them invites a value the engine will ignore. */}
           {operatorArity(clause.op) === "none"
             ? <span className="workflow-operator-hint">no value needed</span>
+            : isGenericCrm && clause.entity === "contact" && clause.field === "webForm"
+              ? <Select aria-label={`Condition ${index + 1} value ${clauseIndex + 1}`} value={Array.isArray(clause.value) ? clause.value[0] || "" : clause.value} onChange={(value) => updateClause(clauseIndex, { value })}>
+                <option value="">Select web form</option>
+                {webForms.map((form) => <option key={form.value} value={form.value}>{form.label}</option>)}
+              </Select>
             : <input
               aria-label={`Condition ${index + 1} value ${clauseIndex + 1}`}
               value={Array.isArray(clause.value) ? clause.value.join(", ") : clause.value}
@@ -1097,6 +1103,8 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
 
 export default function Workflows({ webhookOnly = false, embedded = false }) {
   const notify = useNotify();
+  const auth = useContext(AuthContext);
+  const isGenericCrm = (auth?.tenant?.vertical || auth?.user?.vertical) === "generic";
   const [view, setView] = useState("all");
   const [templateCategory, setTemplateCategory] = useState("all");
   const [templateSearch, setTemplateSearch] = useState("");
@@ -1110,7 +1118,7 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
   // Email templates, sequences and assignable users for the action config
   // dropdowns. These used to be free-text ID boxes, so configuring an action
   // meant knowing a numeric primary key by heart.
-  const [pickers, setPickers] = useState({ emailTemplates: [], sequences: [], assignees: [] });
+  const [pickers, setPickers] = useState({ emailTemplates: [], sequences: [], assignees: [], webForms: [] });
   // Bumped once the server catalogue lands. `catalogue` is a module-level
   // object (see applyServerSchema), so mutating it does not itself re-render —
   // this counter is what tells React the trigger/action/operator/field lists
@@ -1128,7 +1136,10 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
       fetchApi("/api/workflows/email-templates").catch(() => []),
       fetchApi("/api/workflows/sequences").catch(() => []),
       fetchApi("/api/workflows/assignees").catch(() => []),
-    ]).then(([schema, leadColumns, emailTemplates, sequences, assignees]) => {
+      isGenericCrm
+        ? fetchApi("/api/contacts/filter-values/webForm").catch(() => ({ values: [] }))
+        : Promise.resolve({ values: [] }),
+    ]).then(([schema, leadColumns, emailTemplates, sequences, assignees, webFormResponse]) => {
       if (cancelled) return;
       const schemaApplied = applyServerSchema(schema);
       // `/api/table-column-prefs/leads` already enforces vertical eligibility
@@ -1148,10 +1159,11 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
         emailTemplates: asList(emailTemplates),
         sequences: asList(sequences),
         assignees: asList(assignees),
+        webForms: asList(webFormResponse?.values),
       });
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [isGenericCrm]);
 
   useEffect(() => {
     if (openMenu === null) return undefined;
@@ -1304,7 +1316,7 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
   const createWorkflow = () => setEditor(webhookOnly ? emptyWebhookRule() : emptyRule());
 
   if (editor) {
-    return <WorkflowEditor editor={editor} setEditor={setEditor} saving={saving} save={save} onTest={testEditor} onCancel={() => setEditor(null)} pickers={pickers} onRunNow={runNow} webhookOnly={webhookOnly} />;
+    return <WorkflowEditor editor={editor} setEditor={setEditor} saving={saving} save={save} onTest={testEditor} onCancel={() => setEditor(null)} pickers={pickers} onRunNow={runNow} webhookOnly={webhookOnly} isGenericCrm={isGenericCrm} />;
   }
 
   if (history) return <HistoryPanel workflow={history} onClose={() => setHistory(null)} />;
@@ -1360,7 +1372,7 @@ function TemplateGallery({ search, setSearch, category, templates, onUse, onCrea
   return <div className="workflow-template-main"><div className="workflow-heading"><div><h1>Start by selecting a workflow template</h1><p>Choose a ready-made workflow or create your own.</p></div></div><label className="workflow-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search for a template" /></label><h2>{TEMPLATE_CATEGORIES.find((item) => item.value === category)?.label || "All templates"}</h2><div className="workflow-template-grid">{templates.map((template, index) => <article className="workflow-template-card" key={`${template.name}-${index}`}><div className="workflow-template-icon"><Activity size={21} /></div><h3>{template.name}</h3><button className="workflow-dark-button" onClick={() => onUse(template)}>Use template</button></article>)}</div>{templates.length === 0 && <div className="workflow-empty">No templates match your search.</div>}<div className="workflow-create-footer">Could not find a template which works for you?<button className="workflow-dark-button" onClick={onCreate}>Create your own workflow</button></div></div>;
 }
 
-function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pickers, onRunNow, webhookOnly = false }) {
+function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pickers, onRunNow, webhookOnly = false, isGenericCrm = false }) {
   const update = (patch) => setEditor((current) => ({ ...current, ...patch }));
   const updateGroup = (index, patch) => update({ groups: editor.groups.map((group, currentIndex) => currentIndex === index ? { ...group, ...patch } : group) });
   const updateAction = (index, patch) => update({ actions: editor.actions.map((action, currentIndex) => currentIndex === index ? { ...action, ...patch } : action) });
@@ -1431,7 +1443,7 @@ function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pic
         </section>
         <section>
           <h2>What conditions should be met?</h2>
-          {editor.groups.map((group, index) => <ConditionGroup key={index} group={group} index={index} module={editor.module} updateGroup={updateGroup} removeGroup={(groupIndex) => update({ groups: editor.groups.filter((_, currentIndex) => currentIndex !== groupIndex) })} />)}
+          {editor.groups.map((group, index) => <ConditionGroup key={index} group={group} index={index} module={editor.module} updateGroup={updateGroup} removeGroup={(groupIndex) => update({ groups: editor.groups.filter((_, currentIndex) => currentIndex !== groupIndex) })} webForms={pickers.webForms} isGenericCrm={isGenericCrm} />)}
           <button className="workflow-add-group" onClick={() => update({ groups: [...editor.groups, defaultGroup(editor.module)] })}><Plus size={15} /> Add group</button>
         </section>
         <section>

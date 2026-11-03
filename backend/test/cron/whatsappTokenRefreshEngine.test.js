@@ -145,6 +145,31 @@ describe('processOne', () => {
     expect(r.action).toBe('skip_no_creds');
   });
 
+  test('uses tenant-stored App ID and App Secret when platform env credentials are absent', async () => {
+    delete process.env.META_APP_ID;
+    delete process.env.META_APP_SECRET;
+    prisma.whatsAppConfig.update.mockResolvedValue({});
+    provider.extendToken.mockResolvedValue({ ok: true, data: { access_token: 'NEW_TOK' } });
+    provider.debugToken.mockResolvedValue({ ok: true, data: { data: { expires_at: 0 } } });
+    const cfg = {
+      id: 12,
+      tenantId: 5,
+      appId: 'tenant-app-id',
+      appSecret: 'tenant-app-secret',
+      tokenExpiresAt: new Date(Date.now() + 3 * 24 * 3600 * 1000),
+      accessToken: 'old-token',
+    };
+
+    const r = await processOne(cfg);
+
+    expect(r.action).toBe('extended');
+    expect(provider.extendToken).toHaveBeenCalledWith({
+      token: 'old-token',
+      appId: 'tenant-app-id',
+      appSecret: 'tenant-app-secret',
+    });
+  });
+
   test('SEVEN_DAYS_MS is exactly 7 days', () => {
     expect(SEVEN_DAYS_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });

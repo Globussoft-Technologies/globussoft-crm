@@ -75,8 +75,13 @@ async function processOne(cfg) {
   }
 
   // <= 7 days — try to extend.
-  const appId = envAppId();
-  const appSecret = envAppSecret();
+  // Generic manual-connect tenants store their app credentials on the
+  // WhatsAppConfig row. Environment values remain a legacy fallback for the
+  // platform-level Embedded Signup flow.
+  const appId = cfg.appId || envAppId();
+  const appSecret = cfg.appSecret
+    ? decryptCredential(cfg.appSecret)
+    : envAppSecret();
   if (!appId || !appSecret) {
     return { id: cfg.id, action: "skip_no_creds" };
   }

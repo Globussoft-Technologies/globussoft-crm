@@ -58,10 +58,15 @@ describe('PR merge policy', () => {
   test('comment-only reviews do not revoke approval', () => {
     expect(evaluatePolicy({ ...fixture(), reviews: [approved, { ...approved, id: 2, state: 'COMMENTED' }] }).approval).toEqual([]);
   });
-  test('self-authored PRs have no self-approval exemption', () => {
+  test('akhil-authored PRs have an explicit review-only exception', () => {
     const data = fixture();
     data.pr.user.login = 'akhil-glb';
-    expect(evaluatePolicy(data).approval.join(' ')).toMatch(/self-approval/);
+    data.reviews = [];
+    expect(evaluatePolicy(data).approval).toEqual([]);
+    data.verification = { verified: false, reason: 'unsigned' };
+    data.comparison.merge_base_commit.sha = NEXT;
+    expect(evaluatePolicy(data).branch.join(' ')).toMatch(/GPG/);
+    expect(evaluatePolicy(data).branch.join(' ')).toMatch(/Rebase/);
   });
   test('draft PRs are blocked', () => {
     const data = fixture();
@@ -185,6 +190,19 @@ describe('PR workflow wiring', () => {
     expect(pr.jobs['required-check'].if).toContain('always()');
     expect(pr.jobs['required-check'].steps[0].run).toContain('!= "success"');
   });
+  test('main pushes skip duplicate tests but retain static gates and deployment dependencies', () => {
+    const workflow = read('.github/workflows/deploy.yml');
+    for (const name of ['api_tests', 'unit_tests', 'frontend_unit_tests']) {
+      expect(workflow.jobs[name].if).toBe("${{ inputs.skip_tests != true && github.event_name != 'push' }}");
+      expect(workflow.jobs.deploy.needs).toContain(name);
+      expect(workflow.jobs.deploy.if).toContain(`needs.${name}.result == 'skipped'`);
+    }
+    for (const name of ['build', 'lint', 'migration_check']) {
+      expect(workflow.jobs[name].if).toBe('${{ inputs.skip_tests != true }}');
+      expect(workflow.jobs.deploy.needs).toContain(name);
+    }
+    expect(workflow.on.push.branches).toEqual(['main']);
+  });
   test('privileged policy only checks out trusted main; reviews merely wake it', () => {
     const workflow = read('.github/workflows/pr-merge-policy.yml');
     expect(workflow.on.pull_request_target.branches).toEqual(['main']);
@@ -204,9 +222,9 @@ describe('PR workflow wiring', () => {
     expect(ruleset.bypass_actors).toEqual([]);
     expect(ruleset.conditions.ref_name).toEqual({ include: ['refs/heads/main'], exclude: [] });
     const prRule = ruleset.rules.find((rule) => rule.type === 'pull_request').parameters;
-    expect(prRule.required_approving_review_count).toBe(1);
+    expect(prRule.required_approving_review_count).toBe(0);
     expect(prRule.dismiss_stale_reviews_on_push).toBe(true);
-    expect(prRule.require_code_owner_review).toBe(true);
+    expect(prRule.require_code_owner_review).toBe(false);
     const checks = ruleset.rules.find((rule) => rule.type === 'required_status_checks').parameters;
     expect(checks.strict_required_status_checks_policy).toBe(true);
     expect(checks.required_status_checks).toEqual([

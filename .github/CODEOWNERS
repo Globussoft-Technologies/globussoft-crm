@@ -1,2 +1,3 @@
-# Enable "Require review from Code Owners" in the main branch rule.
+# Review routing only. Required approval is enforced by PR approval (akhil-glb),
+# with an explicit review-only exception for PRs authored by akhil-glb.
 * @akhil-glb

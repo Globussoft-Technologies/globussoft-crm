@@ -16,10 +16,7 @@ on:
       - "docs/**"
       - "backend/scripts/**"
       - ".gitignore"
-      # NOTE: e2e/** is intentionally NOT ignored anymore  changes to specs
-      # should trigger the api_tests job so we know the new spec passes
-      # before deploying. The deploy job itself doesn't depend on any e2e
-      # file at runtime; the api_tests job runs them.
+      # API and unit tests run in PR validation before merge, not on main pushes.
   workflow_dispatch:
     inputs:
       skip_frontend:
@@ -136,7 +133,7 @@ jobs:
   # the test list one-by-one in the Run step as each is verified
   # against a freshly-seeded CI database.
   api_tests:
-    if: ${{ inputs.skip_tests != true }}
+    if: ${{ inputs.skip_tests != true && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     name: API tests (${{ matrix.shard }}/4)
     timeout-minutes: 20
@@ -677,7 +674,7 @@ jobs:
   # integration suite runs once on shard 1 and remains deployment-gated.
   # Promoted to mandatory same as api_tests on the deploy gate below.
   unit_tests:
-    if: ${{ inputs.skip_tests != true }}
+    if: ${{ inputs.skip_tests != true && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     name: Backend unit tests (${{ matrix.shard }}/4)
     timeout-minutes: 10
@@ -743,7 +740,7 @@ jobs:
   # test under frontend/src/__tests__/. Mocks fetchApi + socket.io-client +
   # third-party SDKs only  never React itself.
   frontend_unit_tests:
-    if: ${{ inputs.skip_tests != true }}
+    if: ${{ inputs.skip_tests != true && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     name: Frontend unit tests (${{ matrix.shard }}/4)
     timeout-minutes: 15
@@ -850,17 +847,16 @@ jobs:
   deploy:
     needs:
       [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
-    # All six gates mandatory:
+    # PR validation requires all six gates. Main pushes rerun only build,
+    # lint and migration safety; API/backend/frontend tests intentionally skip.
     #   - build               (vite + node syntax)
     #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)
     #   - unit_tests          (backend vitest  lib + middleware + services + utils)
     #   - lint                (ESLint  semantic checks + project-specific req.user.id rule)
     #   - frontend_unit_tests (G-21  vitest + RTL over frontend/src/__tests__/)
     #   - migration_check     (G-23  dry-run prisma migrate diff vs HEAD~1)
-    # Any failure blocks deploy.
-    # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
-    # bypass for emergency hotfixes (still requires manual workflow_dispatch
-    #  a regular push can never bypass).
+    # Any failure blocks deploy. Static gates may skip only for an explicit
+    # manual emergency bypass; test skips are also expected on main pushes.
     if: ${{ always() && inputs.validation_only != true && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20

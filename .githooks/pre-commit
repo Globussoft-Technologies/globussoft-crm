@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+root=$(git rev-parse --show-toplevel)
+node "$root/.github/scripts/check-local-pr.cjs" pre-commit

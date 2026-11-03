@@ -520,6 +520,11 @@ export default function QuoteBuilder() {
   const [quoteId, setQuoteId] = useState(routeId ? Number(routeId) : null);
   const [status, setStatus] = useState("Draft");
   const [contactId, setContactId] = useState("");
+  useEffect(() => {
+    if (!isEdit && location.state?.contactId != null) {
+      setContactId(String(location.state.contactId));
+    }
+  }, [isEdit, location.state]);
   // Contact picker — mirrors the InvoicesAdmin pattern. Loads the tenant's
   // contacts once on mount so the header field can be a labelled <select>
   // instead of a raw numeric "Contact ID" input that lets an operator

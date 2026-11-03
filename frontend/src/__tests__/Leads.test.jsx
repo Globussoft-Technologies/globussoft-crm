@@ -1507,7 +1507,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('opens an in-place lead preview drawer without a prospect conversion action', async () => {
+  it('keeps prospect conversion available in the generic lead preview', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -1517,10 +1517,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(preview).toBeInTheDocument();
     expect(within(preview).getByText('Contact information')).toBeInTheDocument();
     expect(within(preview).getByText('Open full detail')).toBeInTheDocument();
-    expect(within(preview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
+    expect(within(preview).getByRole('button', { name: 'Convert to Prospect' })).toBeInTheDocument();
   });
 
-  it('hides the obsolete prospect conversion action from the Travel lead preview', async () => {
+  it('converts a lead from the Travel lead preview', async () => {
     renderLeads({
       ...authValue,
       tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
@@ -1530,7 +1530,15 @@ describe('Leads Freshsales-style list UI affordances', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
 
     const preview = screen.getByRole('dialog', { name: 'Lead preview' });
-    expect(within(preview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
+    fetchApiMock.mockClear();
+    fireEvent.click(within(preview).getByRole('button', { name: 'Convert to Prospect' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Prospect' }),
+      }));
+    });
   });
 
   it('keeps Name and Actions fixed and hides unchecked Callified columns', async () => {
@@ -3167,12 +3175,12 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true));
   });
 
-  it('hides prospect conversion from lead rows for every vertical', async () => {
+  it('keeps the prospect conversion row action and functionality for every vertical', async () => {
     const genericRender = renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    expect(screen.queryByTitle('Convert to Prospect')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Convert .* to Prospect/i })).not.toBeInTheDocument();
+    expect(screen.getAllByTitle('Convert to Prospect')).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'Convert Alice Smith to Prospect' })).toBeInTheDocument();
 
     genericRender.unmount();
     renderLeads({
@@ -3181,8 +3189,16 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    expect(screen.queryByTitle('Convert to Prospect')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Convert .* to Prospect/i })).not.toBeInTheDocument();
+    expect(screen.getAllByTitle('Convert to Prospect')).toHaveLength(3);
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Convert Alice Smith to Prospect' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/11', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Prospect' }),
+      }));
+    });
   });
 
   it('per-row assign dropdown PUTs /api/contacts/:id/assign with the selected staff id', async () => {

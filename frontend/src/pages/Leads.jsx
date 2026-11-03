@@ -10995,8 +10995,6 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                         onClick={() => {
-                          // Travel Leads: keep this row on the list for now.
-                          // navigate(leadDetailPath(lead));
                           if (!isTravel) navigate(leadDetailPath(lead));
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
@@ -11047,22 +11045,16 @@ const Leads = () => {
                                 renderValue={(name) => (
                                   <a
                                     href={
-                                      isTravel
-                                        ? "#lead-preview"
-                                        : leadDetailPath(lead)
+                                      isTravel ? "#lead-preview" : leadDetailPath(lead)
                                     }
                                     onClick={(e) => {
                                       e.preventDefault();
                                       e.stopPropagation();
-                                      // Travel Leads: keep the profile link inactive for now.
-                                      // navigate(leadDetailPath(lead));
                                       if (isTravel) setPreviewLead(lead);
                                       else navigate(leadDetailPath(lead));
                                     }}
                                     title={
-                                      isTravel
-                                        ? `Preview ${lead.name || "lead"}`
-                                        : `Open profile for ${lead.name || "lead"}`
+                                      isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
                                     }
                                     style={{
                                       minWidth: 0,
@@ -11302,8 +11294,6 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                         onClick={() => {
-                          // Travel Leads: keep this row on the list for now.
-                          // navigate(leadDetailPath(lead));
                           if (!isTravel) navigate(leadDetailPath(lead));
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
@@ -11346,9 +11336,7 @@ const Leads = () => {
                                   renderValue={(name) => (
                                     <a
                                       href={
-                                        isTravel
-                                          ? "#lead-preview"
-                                          : leadDetailPath(lead)
+                                        isTravel ? "#lead-preview" : leadDetailPath(lead)
                                       }
                                       onClick={(e) => {
                                         e.preventDefault();
@@ -11357,9 +11345,7 @@ const Leads = () => {
                                         else navigate(leadDetailPath(lead));
                                       }}
                                       title={
-                                        isTravel
-                                          ? `Preview ${lead.name || "lead"}`
-                                          : `Open profile for ${lead.name || "lead"}`
+                                        isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
                                       }
                                       style={{
                                         minWidth: 0,
@@ -12052,6 +12038,18 @@ const Leads = () => {
                             style={{ ...actionIconBtn, marginLeft: 6 }}
                           >
                             <Pencil size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleConvert(lead.id)}
+                            title="Convert to Prospect"
+                            aria-label={`Convert ${lead.name || "lead"} to Prospect`}
+                            style={{
+                              ...actionIconBtn,
+                              color: "var(--success-color)",
+                              marginLeft: 6,
+                            }}
+                          >
+                            <ArrowRightCircle size={15} />
                           </button>
                           <button
                             onClick={() => handleDelete(lead)}
@@ -13456,7 +13454,7 @@ const Leads = () => {
                     fontSize: "0.78rem",
                   }}
                 >
-                  Lead preview
+                  {isTravel ? "Contact preview" : "Lead preview"}
                 </div>
                 <h2 style={{ margin: "0.2rem 0 0", fontSize: "1.25rem" }}>
                   {previewLeadCurrent.name || "Unnamed lead"}
@@ -13497,9 +13495,9 @@ const Leads = () => {
                     fontSize: "0.72rem",
                   }}
                 >
-                  Score
+                  {isTravel ? "Status" : "Score"}
                 </div>
-                <strong>{previewLeadCurrent.aiScore ?? 0}/100</strong>
+                <strong>{isTravel ? (previewLeadCurrent.status || "Lead") : `${previewLeadCurrent.aiScore ?? 0}/100`}</strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
                 <div
@@ -13508,10 +13506,10 @@ const Leads = () => {
                     fontSize: "0.72rem",
                   }}
                 >
-                  Source
+                  {isTravel ? "Assigned" : "Source"}
                 </div>
                 <strong>
-                  {leadSourceLabel(previewLeadCurrent, isGeneric)}
+                  {isTravel ? (previewLeadCurrent.assignedTo?.name || previewLeadCurrent.assignedTo?.email || "Unassigned") : leadSourceLabel(previewLeadCurrent, isGeneric)}
                 </strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
@@ -13521,12 +13519,10 @@ const Leads = () => {
                     fontSize: "0.72rem",
                   }}
                 >
-                  Assigned
+                  {isTravel ? "Score" : "Assigned"}
                 </div>
                 <strong>
-                  {previewLeadCurrent.assignedTo?.name ||
-                    previewLeadCurrent.assignedTo?.email ||
-                    "Unassigned"}
+                  {isTravel ? `${previewLeadCurrent.aiScore ?? 0}/100` : (previewLeadCurrent.assignedTo?.name || previewLeadCurrent.assignedTo?.email || "Unassigned")}
                 </strong>
               </div>
             </div>
@@ -13589,7 +13585,7 @@ const Leads = () => {
                 marginTop: "1rem",
               }}
             >
-              {!isTravel && (
+              <>
                 <button
                   type="button"
                   className="btn-secondary"
@@ -13597,13 +13593,7 @@ const Leads = () => {
                 >
                   Open full detail
                 </button>
-              )}
-              {/* Travel Leads: the full-detail action is intentionally disabled for now.
-                  <button type="button" className="btn-secondary"
-                    onClick={() => navigate(leadDetailPath(previewLeadCurrent))}>
-                    Open full detail
-                  </button>
-              */}
+              </>
               <button
                 type="button"
                 className="btn-secondary"
@@ -13612,7 +13602,14 @@ const Leads = () => {
                   setPreviewLead(null);
                 }}
               >
-                Edit lead
+                {isTravel ? "Edit contact" : "Edit lead"}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => handleConvert(previewLeadCurrent.id)}
+              >
+                Convert to Prospect
               </button>
             </div>
 

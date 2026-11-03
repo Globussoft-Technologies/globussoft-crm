@@ -1309,11 +1309,11 @@ router.post("/meeting-forms/public/:publicKey/book", publicBookingLimiter, async
       if (crmContact) {
         crmContact = await tx.contact.update({
           where: { id: crmContact.id },
-          data: { name: values.contactName || crmContact.name, email: values.contactEmail || crmContact.email, phone: values.contactPhone || crmContact.phone, title: values.designation || crmContact.title, company: values.institution || crmContact.company, status: "Meeting Booked", subBrand: crmContact.subBrand || "tmc", lastTouchSource: "Talk to an Expert" },
+          data: { name: values.contactName || crmContact.name, email: values.contactEmail || crmContact.email, phone: values.contactPhone || crmContact.phone, title: values.designation || crmContact.title, company: values.institution || crmContact.company, status: "Prospect", subBrand: crmContact.subBrand || "tmc", lastTouchSource: "Talk to an Expert" },
         });
       } else {
         crmContact = await tx.contact.create({
-          data: { tenantId: form.tenantId, name: values.contactName, email: values.contactEmail, phone: values.contactPhone || null, title: values.designation || null, company: values.institution || null, status: "Meeting Booked", subBrand: "tmc", source: "Talk to an Expert", firstTouchSource: "Talk to an Expert", lastTouchSource: "Talk to an Expert" },
+          data: { tenantId: form.tenantId, name: values.contactName, email: values.contactEmail, phone: values.contactPhone || null, title: values.designation || null, company: values.institution || null, status: "Prospect", subBrand: "tmc", source: "Talk to an Expert", firstTouchSource: "Talk to an Expert", lastTouchSource: "Talk to an Expert" },
         });
         if (calendarEvent) await tx.calendarEvent.update({ where: { id: calendarEvent.calendarEventId }, data: { contactId: crmContact.id } });
       }

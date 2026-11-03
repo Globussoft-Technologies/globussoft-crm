@@ -84,6 +84,7 @@ function localDateKey(value = new Date()) {
 }
 
 const EMPTY_FORM = {
+  contactId: "",
   tripCode: "",
   destination: "",
   schoolName: "",
@@ -154,6 +155,14 @@ export default function Trips() {
   const fromReports = searchParams.get("from") === "reports";
   const tripsListPath = `${location.pathname}${location.search}`;
   const today = localDateKey();
+
+  useEffect(() => {
+    if (location.state?.contactId != null) {
+      setForm((current) => ({ ...current, contactId: String(location.state.contactId), schoolName: location.state.contactName || "" }));
+      setCreating(true);
+      window.history.replaceState({}, document.title, window.location.href);
+    }
+  }, [location.state]);
 
   const updateParams = useCallback(
     (patch, options = {}) => {
@@ -249,6 +258,7 @@ export default function Trips() {
         returnDate: form.returnDate,
         status: form.status,
         tripType: form.tripType,
+        ...(form.contactId ? { schoolContactId: Number(form.contactId) } : {}),
       };
       await fetchApi("/api/travel/trips", {
         method: "POST",

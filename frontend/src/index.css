@@ -377,6 +377,17 @@ body,
   overflow-x: hidden;
 }
 
+/* A tilted mouse wheel or diagonal touchpad gesture can reach the viewport
+   boundary and be interpreted by Chromium as browser Back/Forward navigation.
+   Generic CRM navigation is explicit through the sidebar, so keep horizontal
+   overscroll inside the current page. Scope this to the document roots because
+   overscroll-behavior on an inner app container does not control the browser's
+   viewport-level history gesture. */
+html[data-vertical="generic"],
+body[data-vertical="generic"] {
+  overscroll-behavior-x: none;
+}
+
 /* Keep the application frame and page roots from becoming additional
    horizontal scroll containers. Data tables provide their own nested scroll
    area when their columns cannot fit. */

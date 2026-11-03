@@ -1,6 +1,12 @@
 name: Deploy to demo server (crm.globusdemos.com)
 
 on:
+  workflow_call:
+    inputs:
+      validation_only:
+        description: Run all six gates without deployment
+        type: boolean
+        default: true
   push:
     branches: [main]
     paths-ignore:
@@ -51,8 +57,8 @@ on:
 # One deploy at a time  never cancel an in-flight deploy. A half-finished
 # deploy on prod is worse than the next push waiting in the queue.
 concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
+  group: ${{ inputs.validation_only && format('pr-validation-{0}', github.event.pull_request.number || github.ref) || 'deploy-prod' }}
+  cancel-in-progress: ${{ inputs.validation_only == true }}
 
 jobs:
   #  1. BUILD: backend syntax-check + frontend vite build 
@@ -811,12 +817,14 @@ jobs:
           set -euo pipefail
           npm ci --no-audit --no-fund
 
-      - name: Resolve baseline schema (HEAD~1) + run safety check
+      - name: Resolve baseline schema + run safety check
+        env:
+          BASELINE_REF: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
         run: |
           set -euo pipefail
           BASELINE_FILE="$(mktemp --suffix=.prisma)"
-          if git show HEAD~1:backend/prisma/schema.prisma > "$BASELINE_FILE" 2>/dev/null; then
-            echo "Baseline: HEAD~1 ($(git rev-parse --short HEAD~1))"
+          if git show "$BASELINE_REF:backend/prisma/schema.prisma" > "$BASELINE_FILE" 2>/dev/null; then
+            echo "Baseline: $BASELINE_REF"
             # --allow-unique / --allow-drop: bless the intentional schema
             # changes already on this branch  Patient.tags drop (superseded
             # by the PatientTag relation + tagsJson) and the
@@ -830,6 +838,10 @@ jobs:
               --allow-unique \
               --allow-drop
           else
+            if [ "${{ inputs.validation_only }}" = "true" ]; then
+              echo "::error::PR migration baseline is missing"
+              exit 1
+            fi
             echo "::warning::No HEAD~1 schema available (first commit?) - skipping diff"
           fi
           echo "::notice::Migration safety check passed"
@@ -849,7 +861,7 @@ jobs:
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
     #  a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
+    if: ${{ always() && inputs.validation_only != true && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

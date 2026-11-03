@@ -62,17 +62,33 @@
 }
 .pickup-customer-table,.pickup-detail-table,.pickup-payment-table { width:100%; border-collapse:collapse; }
 .pickup-customer-table { table-layout:fixed; }
-.pickup-customer-table th { position:sticky; top:0; z-index:2; padding:clamp(.5rem, .75vw, .7rem); text-align:left; font-size:clamp(.64rem, .58rem + .15vw, .72rem); color:var(--text-secondary); background:#f3f4f6; border-bottom:1px solid var(--border-color); }
+.pickup-customer-table th { position:sticky; top:0; z-index:2; padding:clamp(.7rem, .85vw, .85rem) clamp(.65rem, .75vw, .85rem); text-align:left; font-size:clamp(.8rem, .72rem + .16vw, .9rem) !important; line-height:1.3; font-weight:700; color:var(--text-primary); background:#f3f4f6; border-bottom:1px solid var(--border-color); }
 .pickup-customer-table th:nth-child(1) { width:46%; }
 .pickup-customer-table th:nth-child(2) { width:23%; }
 .pickup-customer-table th:nth-child(3) { width:31%; }
-.pickup-customer-table td { padding:clamp(.5rem, .8vw, .8rem) clamp(.3rem, .55vw, .7rem); border-bottom:1px solid var(--border-color); overflow-wrap:anywhere; font-size:clamp(.64rem, .58rem + .16vw, .82rem); color:var(--text-secondary); cursor:pointer; }
-.pickup-customer-table td:nth-child(2) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:clamp(.55rem, .5rem + .1vw, .68rem); }
+.pickup-customer-table td { padding:clamp(.7rem, .85vw, .85rem) clamp(.55rem, .65vw, .8rem); border-bottom:1px solid var(--border-color); overflow-wrap:anywhere; font-size:clamp(.78rem, .7rem + .16vw, .9rem); line-height:1.35; color:var(--text-secondary); cursor:pointer; }
+.pickup-customer-table td:nth-child(2) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:clamp(.74rem, .66rem + .14vw, .84rem); }
 .pickup-customer-table tr.is-selected td { background:color-mix(in srgb, var(--primary-color, var(--accent-color)) 9%, transparent); }
 .pickup-customer-table tr.is-selected td:first-child { box-shadow:inset 3px 0 0 var(--primary-color, var(--accent-color)); }
 .pickup-customer-table td button { display:block; width:100%; overflow:hidden; border:0; padding:0; color:var(--text-primary); background:transparent; text-align:left; text-overflow:ellipsis; white-space:nowrap; font:inherit; font-weight:800; cursor:pointer; }
 .pickup-customer-table td small { display:block; margin-top:4px; color:var(--text-secondary); }
-.pickup-customer-table td span,.pickup-customer-title>div>span { display:inline-flex; max-width:100%; border-radius:999px; padding:clamp(.08rem, .15vw, .18rem) clamp(.16rem, .26vw, .4rem); font-size:clamp(.48rem, .44rem + .1vw, .64rem); line-height:1.15; white-space:nowrap; font-weight:800; }
+.pickup-customer-table td span,.pickup-customer-title>div>span { display:inline-flex; max-width:100%; border-radius:999px; padding:clamp(.12rem, .16vw, .2rem) clamp(.28rem, .32vw, .45rem); font-size:clamp(.64rem, .58rem + .12vw, .74rem); line-height:1.2; white-space:nowrap; font-weight:800; }
+.pickup-customers-page .pickup-customer-table .pickup-plot-empty-copy h2 { font-size:1.1rem; }
+.pickup-customers-page .pickup-customer-table .pickup-plot-empty-copy p { font-size:.84rem; }
+
+/* The shared laptop typography layer intentionally compacts all table cells.
+   Customer Status is a narrow master list, so its labels and values need a
+   readable floor that wins that shared rule without affecting other tables. */
+body[data-vertical="generic"] .app-main > main.generic-page-content .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table th {
+  font-size: 0.85rem !important;
+  font-weight: 600;
+}
+body[data-vertical="generic"] .app-main > main.generic-page-content .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table td {
+  font-size: 0.84rem !important;
+}
+body[data-vertical="generic"] .app-main > main.generic-page-content .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table td:nth-child(2) {
+  font-size: 0.82rem !important;
+}
 .pickup-empty-cell { height:160px; text-align:center; }
 .pickup-customer-detail { width:100%; max-width:100%; min-width:0; padding:clamp(.7rem, 1.35vw, 1.15rem); }
 .pickup-detail-header { display:flex; align-items:flex-start; justify-content:space-between; gap:clamp(7px, 1vw, 14px); min-width:0; padding-bottom:clamp(.7rem, 1vw, 1rem); border-bottom:1px solid var(--border-color); }

@@ -1199,7 +1199,7 @@ export default function Inbox({
           </p>
         ) : (
           <div className={isGeneric ? "inbox-list-content" : undefined} style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <div className={`inbox-toolbar${isGeneric ? " inbox-toolbar--generic" : ""}`} style={{ position: "sticky", top: isGeneric ? 0 : "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: isGeneric ? 0 : "-1.25rem 0 0", padding: isGeneric ? "0 0 0.75rem" : "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
+             <div className={`inbox-toolbar${isGeneric ? " inbox-toolbar--generic" : ""}`} style={{ position: "sticky", top: isGeneric ? 0 : "-1.25rem", zIndex: 3, display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", margin: isGeneric ? 0 : "-1.25rem 0 0", padding: isGeneric ? "0 0 0.75rem" : "1.25rem 0 0.75rem", background: "var(--modal-bg, #ffffff)" }}>
               <>
                 <div className={`inbox-search${isGeneric ? " inbox-search--generic" : ""}`} style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: "0 1 320px", marginLeft: "auto", order: 2, padding: "0.55rem 0.75rem", border: "1px solid var(--border-color)", borderRadius: "8px", background: "var(--subtle-bg-2)" }}>
                   <Search size={18} color="var(--text-secondary)" />

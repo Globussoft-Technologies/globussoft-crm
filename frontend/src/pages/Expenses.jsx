@@ -905,6 +905,7 @@ export default function Expenses() {
             </p>
           ) : (
             <div
+              className="expenses-table-scroll"
               ref={tableScrollRef}
               onScroll={handleTableScroll}
               style={{
@@ -917,7 +918,7 @@ export default function Expenses() {
                 background: 'var(--surface-color)',
               }}
             >
-              <table style={{ width: '100%', minWidth: '1200px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
+              <table className="expenses-table" style={{ width: '100%', minWidth: '1540px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>
@@ -927,7 +928,7 @@ export default function Expenses() {
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Status</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>User</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Date</th>
-                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Actions</th>
+                    <th className="expenses-table__actions-header" style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Actions</th>
                   </tr>
                 </thead>
                   <colgroup>
@@ -938,7 +939,7 @@ export default function Expenses() {
                     <col style={{ width: '130px' }} /> {/* Status */}
                     <col style={{ width: '220px' }} /> {/* User */}
                     <col style={{ width: '150px' }} /> {/* Date */}
-                    <col style={{ width: '300px' }} /> {/* Actions */}
+                    <col style={{ width: '340px' }} /> {/* Actions */}
                   </colgroup>
                 <tbody>
                   {visibleExpenses.map(exp => {
@@ -974,8 +975,8 @@ export default function Expenses() {
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {formatDate(exp.expenseDate)}
                       </td>
-                      <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'nowrap' }}>
+                      <td className="expenses-table__actions-cell" style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
+                        <div className="expenses-table__actions" style={{ display: 'flex', gap: '0.35rem', flexWrap: 'nowrap' }}>
                           <button
                             type="button"
                             onClick={() => openExpenseDetails(exp)}
@@ -1088,6 +1089,24 @@ export default function Expenses() {
           border-color: var(--border-color);
         }
         .finance-page__table-card::before { display: none; }
+        /* Keep the action controls intact when a row has View plus three
+           status actions. The table still owns horizontal scrolling on
+           smaller viewports, but the last button is never clipped inside
+           the Expenses card. */
+        .expenses-page .expenses-table__actions-header,
+        .expenses-page .expenses-table__actions-cell {
+          min-width: 340px;
+        }
+        .expenses-page .expenses-table__actions-cell {
+          overflow: visible !important;
+        }
+        .expenses-page .expenses-table__actions {
+          width: max-content;
+          min-width: 100%;
+        }
+        .expenses-page .expenses-table__actions > button {
+          flex: 0 0 auto;
+        }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
            Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the
            desktop grid prevents form-field min-content from forcing the column

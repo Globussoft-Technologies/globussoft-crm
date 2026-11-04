@@ -263,6 +263,9 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(
       screen.getByText(/add these keys to the page url/i),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/add it once to your website header or footer/i),
+    ).toBeInTheDocument();
     expect(screen.getByText("utm_source")).toBeInTheDocument();
     expect(screen.getByText("utm_medium")).toBeInTheDocument();
     expect(screen.getByText("utm_campaign")).toBeInTheDocument();
@@ -318,6 +321,9 @@ describe("<Settings /> — page shell + representative card pin", () => {
       name: "Get cookie setup function",
     }));
     expect(screen.getByRole("dialog", { name: "Cookie setup function" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/add this function once to your website header or footer/i),
+    ).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Cookie setup function" }).value)
       .toContain("function saveGlobussoftTrackingCookies()");
 

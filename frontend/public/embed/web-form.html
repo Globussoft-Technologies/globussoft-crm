@@ -3397,49 +3397,7 @@
           if (scope !== "generic") return;
           var nameInput = root.querySelector('input[name="name"]');
           if (!nameInput) return;
-          var field = nameInput.closest(".field");
-          if (!field) return;
-          var error = document.createElement("span");
-          error.className = "field-error";
-          error.hidden = true;
-          error.textContent = "Only letters and spaces are allowed.";
-          nameInput.insertAdjacentElement("afterend", error);
-          function setInvalid(invalid) {
-            error.hidden = !invalid;
-            nameInput.setAttribute("aria-invalid", invalid ? "true" : "false");
-            nameInput.style.borderColor = invalid
-              ? "var(--gbs-error-color,#b91c1c)"
-              : "";
-          }
-          function hasInvalidCharacters(value) {
-            return /[^\p{L}\s]/u.test(String(value || ""));
-          }
-          nameInput.addEventListener("beforeinput", function (event) {
-            if (event.data && hasInvalidCharacters(event.data)) {
-              event.preventDefault();
-              setInvalid(true);
-            }
-          });
-          nameInput.addEventListener("paste", function (event) {
-            var pasted = event.clipboardData
-              ? event.clipboardData.getData("text")
-              : "";
-            if (hasInvalidCharacters(pasted)) {
-              event.preventDefault();
-              setInvalid(true);
-            }
-          });
-          nameInput.addEventListener("input", function () {
-            if (hasInvalidCharacters(nameInput.value)) {
-              nameInput.value = String(nameInput.value).replace(
-                /[^\p{L}\s]/gu,
-                "",
-              );
-              setInvalid(true);
-            } else {
-              setInvalid(false);
-            }
-          });
+          nameInput.setAttribute("autocomplete", "name");
         }
 
         function updateGenericWhatsappLayout() {
@@ -4192,32 +4150,162 @@
           var stepId = String(config.steps[stepIndex].id);
           var fields = Array.isArray(formData.fields) ? formData.fields : [];
           fields = orderGenericConditionalFields(fields);
-          var errors = {};
-          fields.forEach(function (field) {
+          return validateFields(
+            fields.filter(function (field) {
+              return String(field.stepId || config.steps[0].id) === stepId;
+            }),
+          );
+        }
+
+        function fieldValidationMessage(field, controls) {
+          var visibleControls = controls.filter(function (control) {
+            var wrapper = control.closest(".field");
+            return !control.disabled && (!wrapper || !wrapper.hidden);
+          });
+          if (!visibleControls.length) return "";
+
+          var label = String(field.label || "This field").trim();
+          var required = field.required === true;
+          var choiceControls = visibleControls.filter(function (control) {
+            return control.type === "checkbox" || control.type === "radio";
+          });
+          if (
+            required &&
+            choiceControls.length &&
+            !choiceControls.some(function (control) {
+              return control.checked;
+            })
+          )
+            return label + " is required.";
+
+          var fileControls = visibleControls.filter(function (control) {
+            return control.type === "file";
+          });
+          if (
+            required &&
+            fileControls.length &&
+            !fileControls.some(function (control) {
+              return control.files && control.files.length;
+            })
+          )
+            return label + " is required.";
+
+          var valueControl = visibleControls[0];
+          if (
+            required &&
+            !choiceControls.length &&
+            !fileControls.length &&
+            !String(valueControl.value || "").trim()
+          )
+            return label + " is required.";
+
+          if (
+            field.sourceKey === "name" &&
+            /[^\p{L}\s]/u.test(String(valueControl.value || ""))
+          )
+            return "Only letters and spaces are allowed.";
+
+          var value = String(valueControl.value || "").trim();
+          if (
+            value &&
+            (field.sourceKey === "email" || valueControl.type === "email") &&
+            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+          )
+            return "Enter a valid email address.";
+
+          if (value && field.sourceKey === "phone") {
+            var phoneLength = value.replace(/\D/g, "").length;
+            var minimumPhoneLength = Number(valueControl.minLength) || 7;
+            var maximumPhoneLength = Number(valueControl.maxLength) || 15;
             if (
-              String(field.stepId || config.steps[0].id) !== stepId ||
-              !field.required ||
+              phoneLength < minimumPhoneLength ||
+              phoneLength > maximumPhoneLength
+            ) {
+              if (minimumPhoneLength === maximumPhoneLength)
+                return "Phone number must be " + minimumPhoneLength + " digits.";
+              return (
+                "Phone number must be between " +
+                minimumPhoneLength +
+                " and " +
+                maximumPhoneLength +
+                " digits."
+              );
+            }
+          }
+
+          if (valueControl.validity && !valueControl.validity.valid) {
+            if (valueControl.validity.typeMismatch && valueControl.type === "email")
+              return "Enter a valid email address.";
+            if (valueControl.validity.typeMismatch && valueControl.type === "url")
+              return "Enter a valid URL.";
+            if (valueControl.validity.patternMismatch && field.sourceKey === "phone")
+              return "Enter a valid phone number using digits only.";
+            if (valueControl.validity.tooShort)
+              return label + " is too short.";
+            if (valueControl.validity.tooLong)
+              return label + " is too long.";
+            if (
+              valueControl.validity.badInput ||
+              valueControl.validity.rangeUnderflow ||
+              valueControl.validity.rangeOverflow ||
+              valueControl.validity.stepMismatch
+            )
+              return "Enter a valid value for " + label + ".";
+            return valueControl.validationMessage || "Enter a valid value.";
+          }
+          return "";
+        }
+
+        function validateFields(fields) {
+          var form = root.querySelector("#gbs-form");
+          var errors = {};
+          if (!form) return false;
+          (fields || []).forEach(function (field) {
+            if (
+              !field ||
               field.hidden ||
-              !isConditionalFieldVisible(field, fields)
+              !isConditionalFieldVisible(field, formData.fields || [])
             )
               return;
-            var node = document.querySelector(
-              '[name="' +
-                String(field.sourceKey || field.id).replace(/"/g, '\\"') +
-                '"]',
+            var fieldName = String(field.sourceKey || field.id || "");
+            var controls = Array.prototype.filter.call(
+              form.elements,
+              function (control) {
+                return control && control.name === fieldName;
+              },
             );
-            if (!node) return;
-            var value =
-              node.type === "checkbox"
-                ? node.checked
-                  ? "true"
-                  : ""
-                : node.value;
-            if (!String(value || "").trim())
-              errors[field.sourceKey || field.id] = "This field is required.";
+            if (!controls.length) return;
+            var message = fieldValidationMessage(field, controls);
+            if (message) errors[fieldName] = message;
           });
           showFieldErrors(errors);
           return Object.keys(errors).length === 0;
+        }
+
+        function validateFieldOnBlur(fieldName) {
+          if (scope !== "generic" || !fieldName) return;
+          var field = (formData.fields || []).find(function (candidate) {
+            return (
+              candidate &&
+              String(candidate.sourceKey || candidate.id || "") === fieldName
+            );
+          });
+          if (
+            !field ||
+            field.hidden ||
+            !isConditionalFieldVisible(field, formData.fields || [])
+          )
+            return;
+          var form = root.querySelector("#gbs-form");
+          if (!form) return;
+          var controls = Array.prototype.filter.call(
+            form.elements,
+            function (control) {
+              return control && control.name === fieldName;
+            },
+          );
+          if (!controls.length) return;
+          showFieldError(fieldName, fieldValidationMessage(field, controls));
         }
 
         function updateGenericSubmitState(fields) {
@@ -4535,7 +4623,7 @@
             (desc ? '<p class="desc">' + desc + "</p>" : "") +
             "</div>" +
             progress +
-            '<div id="msg"></div><form id="gbs-form"><div class="grid">' +
+            '<div id="msg"></div><form id="gbs-form" novalidate><div class="grid">' +
             fields
               .map(function (field, index) {
                 return conditionalFieldHtml(field, index, fields);
@@ -4776,6 +4864,21 @@
 
           var formEl = document.getElementById("gbs-form");
 
+          formEl.addEventListener("input", function (event) {
+            clearFieldError(event.target && event.target.name);
+          });
+          formEl.addEventListener("change", function (event) {
+            clearFieldError(event.target && event.target.name);
+          });
+          formEl.addEventListener("focusout", function (event) {
+            var fieldName = String((event.target && event.target.name) || "");
+            var nextFieldName = String(
+              (event.relatedTarget && event.relatedTarget.name) || "",
+            );
+            if (!fieldName || nextFieldName === fieldName) return;
+            validateFieldOnBlur(fieldName);
+          });
+
           if (multiStepConfig().enabled) {
             document
               .getElementById("step-next")
@@ -4829,9 +4932,20 @@
         }
 
         function showFieldErrors(errors) {
-          document.querySelectorAll(".field-error").forEach(function (el) {
-            el.remove();
-          });
+          document
+            .querySelectorAll('.field-error[data-submit-validation="true"]')
+            .forEach(function (el) {
+              if (el.parentElement)
+                el.parentElement
+                  .querySelectorAll(
+                    "input[aria-invalid],select[aria-invalid],textarea[aria-invalid]",
+                  )
+                  .forEach(function (control) {
+                    control.removeAttribute("aria-invalid");
+                  });
+              el.remove();
+            });
+          var firstInvalid = null;
           Object.keys(errors || {}).forEach(function (key) {
             var nodes = document.querySelectorAll(
               '[name="' + String(key).replace(/"/g, '\\"') + '"]',
@@ -4839,11 +4953,67 @@
             if (!nodes.length) return;
             var field = nodes[0].closest(".field");
             if (!field) return;
+            nodes.forEach(function (node) {
+              node.setAttribute("aria-invalid", "true");
+            });
             var message = document.createElement("span");
             message.className = "field-error";
+            message.dataset.submitValidation = "true";
+            message.setAttribute("role", "alert");
             message.textContent = String(errors[key] || "Invalid value");
             field.appendChild(message);
+            if (!firstInvalid) firstInvalid = nodes[0];
           });
+          if (firstInvalid && typeof firstInvalid.focus === "function") {
+            firstInvalid.focus({ preventScroll: true });
+            if (typeof firstInvalid.scrollIntoView === "function")
+              firstInvalid.scrollIntoView({
+                block: "nearest",
+                behavior: "smooth",
+              });
+          }
+          scheduleSize();
+        }
+
+        function showFieldError(fieldName, errorText) {
+          clearFieldError(fieldName);
+          if (!errorText) {
+            scheduleSize();
+            return;
+          }
+          var nodes = document.querySelectorAll(
+            '[name="' + String(fieldName).replace(/"/g, '\\"') + '"]',
+          );
+          if (!nodes.length) return;
+          var field = nodes[0].closest(".field");
+          if (!field) return;
+          nodes.forEach(function (node) {
+            node.setAttribute("aria-invalid", "true");
+          });
+          var message = document.createElement("span");
+          message.className = "field-error";
+          message.dataset.submitValidation = "true";
+          message.setAttribute("role", "alert");
+          message.textContent = String(errorText);
+          field.appendChild(message);
+          scheduleSize();
+        }
+
+        function clearFieldError(fieldName) {
+          if (!fieldName) return;
+          var nodes = document.querySelectorAll(
+            '[name="' + String(fieldName).replace(/"/g, '\\"') + '"]',
+          );
+          nodes.forEach(function (node) {
+            node.removeAttribute("aria-invalid");
+          });
+          var field = nodes.length && nodes[0].closest(".field");
+          if (!field) return;
+          field
+            .querySelectorAll('.field-error[data-submit-validation="true"]')
+            .forEach(function (el) {
+              el.remove();
+            });
         }
 
         async function submitForm(event) {
@@ -4863,6 +5033,8 @@
                 return;
               }
             }
+          } else if (!validateFields(formData.fields || [])) {
+            return;
           }
           if (
             advanced &&

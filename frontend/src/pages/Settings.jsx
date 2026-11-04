@@ -3922,7 +3922,7 @@ function GenericWebFormAutomaticTrackingCard() {
           Get cookie setup function
         </button>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5, margin: "0.6rem 0" }}>
-          Copy the ready-to-use function and paste it once before the closing <code>&lt;/body&gt;</code> tag on your website.
+          Copy the ready-to-use function and add it once to your website header or footer.
         </p>
       </div>
       <div
@@ -3979,7 +3979,7 @@ function GenericWebFormAutomaticTrackingCard() {
                   Cookie setup function
                 </h3>
                 <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>
-                  Paste this function before the closing <code>&lt;/body&gt;</code> tag on your website. It keeps the first tracking value for 90 days.
+                  Add this function once to your website header or footer. It keeps the first tracking value for 90 days.
                 </p>
               </div>
               <button type="button" className="btn-secondary" onClick={closeSetupModal} aria-label="Close cookie setup modal" style={{ minWidth: "42px", minHeight: "42px", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>

@@ -655,6 +655,60 @@ describe('public web form embed footer', () => {
     expect(html).toContain('button.disabled = false;');
     expect(html).toContain('updateGenericSubmitState(fields);');
     expect(html).toMatch(/if\s*\(!flag\s*&&\s*advanced\)\s*updateGenericSubmitState\(formData\.fields\s*\|\|\s*\[\]\);/);
+    expect(html).toContain('<form id="gbs-form" novalidate>');
+    expect(html).toContain('function validateFields(fields)');
+    expect(html).toContain('function fieldValidationMessage(field, controls)');
+    expect(html).toContain('return label + " is required.";');
+    expect(html).toContain('return "Enter a valid email address.";');
+    expect(html).toContain('return "Only letters and spaces are allowed.";');
+    expect(html).toContain('nameInput.setAttribute("autocomplete", "name");');
+    expect(html).not.toContain('function hasInvalidCharacters(value)');
+    expect(html).toContain('data-submit-validation="true"');
+    expect(html).toContain('formEl.addEventListener("focusout"');
+    expect(html).toContain('validateFieldOnBlur(fieldName);');
+    expect(html).toMatch(/else if \(!validateFields\(formData\.fields \|\| \[\]\)\)/);
+  });
+
+  test('validates required choice groups and typed values with inline messages', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const start = html.indexOf('function fieldValidationMessage(');
+    const end = html.indexOf('function validateFields(', start);
+    const context = {};
+    runInNewContext(html.slice(start, end), context);
+    const visible = { hidden: false };
+
+    expect(context.fieldValidationMessage(
+      { label: 'Preferred contact', required: true },
+      [
+        { type: 'radio', checked: false, disabled: false, closest: () => visible },
+        { type: 'radio', checked: false, disabled: false, closest: () => visible },
+      ],
+    )).toBe('Preferred contact is required.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Email', fieldType: 'email', required: true },
+      [{ type: 'email', value: 'not-an-email', disabled: false, closest: () => visible, validity: { valid: false, typeMismatch: true } }],
+    )).toBe('Enter a valid email address.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Name', sourceKey: 'name', fieldType: 'text', required: true },
+      [{ type: 'text', value: 'Rajesh123', disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('Only letters and spaces are allowed.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Email', sourceKey: 'email', fieldType: 'email', required: false },
+      [{ type: 'email', value: 'not-an-email', disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('Enter a valid email address.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Phone', sourceKey: 'phone', fieldType: 'phone', required: false },
+      [{ type: 'tel', value: '4556', minLength: 10, maxLength: 10, disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('Phone number must be 10 digits.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Phone', sourceKey: 'phone', fieldType: 'phone', required: false },
+      [{ type: 'tel', value: '', minLength: 10, maxLength: 10, disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('');
   });
 
   test('does not cap long forms in an internal scroll container', () => {

@@ -220,6 +220,47 @@ const CONTACT_FIELDS = new Set([
   "treatmentOfInterest",
 ]);
 
+/**
+ * Build the event payload consumed by Generic CRM contact workflows.
+ *
+ * Public form submissions used to emit only `{ contactId, userId }`. That was
+ * enough for an unconditional workflow, but every condition on a submitted
+ * field (including the form name) evaluated against `undefined`. It also meant
+ * a webhook tested successfully from the builder while the real submission
+ * sent none of the selected lead fields.
+ *
+ * Keep this allow-listed to Contact/form fields: a Prisma Contact row contains
+ * internal fields that must never be copied wholesale to an outbound webhook.
+ */
+function genericWebFormWorkflowPayload({ contact, form, submission, payload, customFieldValues }) {
+  const contactFields = {};
+  for (const field of CONTACT_FIELDS) {
+    if (field === "tags") {
+      if (!contact?.tagsJson) continue;
+      try {
+        const tags = JSON.parse(contact.tagsJson);
+        if (Array.isArray(tags)) contactFields.tags = tags;
+      } catch (_error) {
+        contactFields.tags = String(contact.tagsJson).split(",").map((tag) => tag.trim()).filter(Boolean);
+      }
+      continue;
+    }
+    if (contact?.[field] !== undefined) contactFields[field] = contact[field];
+  }
+
+  return {
+    ...contactFields,
+    ...(payload || {}),
+    ...(customFieldValues || {}),
+    contactId: contact.id,
+    webForm: form.name,
+    webFormId: form.id,
+    submissionId: submission.id,
+    userId: null,
+    tenantId: form.tenantId,
+  };
+}
+
 // Add-field picker fallback customs ("custom" rows) mapped to the Contact
 // column holding the same data. Keeps form submissions from being silently
 // dropped when no matching Lead-Field definition exists.
@@ -1144,6 +1185,21 @@ async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
 
     slug = `${seed}-${Date.now().toString(36)}-${i}`;
   }
+}
+
+async function findDuplicateFormName(tenantId, scope, name, excludeId = null) {
+  const normalizedName = textOr(name);
+  if (!normalizedName) return null;
+
+  return prisma.webForm.findFirst({
+    where: {
+      tenantId,
+      scope,
+      name: normalizedName,
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    },
+    select: { id: true },
+  });
 }
 
 function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = []) {
@@ -2165,20 +2221,26 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       },
     });
 
-    // Generic campaigns enrol through the shared contact.created event. A
-    // public form creates the same Contact record as the Leads page, so emit
-    // it once only for a genuinely new Generic contact; re-submissions keep
-    // their existing contact and must never start another campaign run.
-    if (createdNewContact && formScope === "generic") {
+    // Generic CRM workflows must run from the real form submission, not only
+    // from the builder's Test button. New leads emit contact.created; a repeat
+    // submission for an existing lead emits contact.updated. Campaigns remain
+    // creation-only because their listener subscribes to contact.created.
+    if (formScope === "generic") {
       try {
         await require("../lib/eventBus").emitEvent(
-          "contact.created",
-          { contactId: contact.id, userId: null },
+          createdNewContact ? "contact.created" : "contact.updated",
+          genericWebFormWorkflowPayload({
+            contact,
+            form,
+            submission,
+            payload,
+            customFieldValues,
+          }),
           form.tenantId,
           req.io,
         );
       } catch (eventError) {
-        console.error("[web_forms] Generic contact.created event failed:", eventError.message);
+        console.error("[web_forms] Generic contact workflow event failed:", eventError.message);
       }
     }
 
@@ -2418,6 +2480,18 @@ router.post("/", verifyToken, async (req, res) => {
         .json({ error: "name is required", code: "NAME_REQUIRED" });
     }
 
+    const duplicateName = await findDuplicateFormName(
+      req.user.tenantId,
+      scope,
+      name,
+    );
+    if (duplicateName) {
+      return res.status(409).json({
+        error: "A web form with this name already exists",
+        code: "FORM_NAME_EXISTS",
+      });
+    }
+
     const slug = await ensureUniqueSlug(body.slug || name, scope);
     const folderId = body.folderId == null ? null : Number(body.folderId);
     if ((scope !== "generic" || (req.user?.vertical && req.user.vertical !== "generic")) && folderId !== null) return res.status(400).json({ error: "Folders are only available for Generic CRM", code: "INVALID_FOLDER_SCOPE" });
@@ -2646,6 +2720,19 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     if (body.name !== undefined) {
       const name = String(body.name == null ? "" : body.name).trim();
+
+      const duplicateName = await findDuplicateFormName(
+        req.user.tenantId,
+        scope,
+        name,
+        existing.id,
+      );
+      if (duplicateName) {
+        return res.status(409).json({
+          error: "A web form with this name already exists",
+          code: "FORM_NAME_EXISTS",
+        });
+      }
 
       data.name = name;
     }

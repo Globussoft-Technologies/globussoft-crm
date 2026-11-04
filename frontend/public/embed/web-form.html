@@ -1130,7 +1130,7 @@
         }
 
         .wrap,
-        #app,
+        .gbs-web-form-root,
         .panel,
         form,
         .grid,
@@ -1514,7 +1514,7 @@
 
   <body>
     <div class="wrap">
-      <div id="app"></div>
+      <div class="gbs-web-form-root"></div>
     </div>
 
     <script src="/embed/web-form-custom-css.js"></script>
@@ -1544,7 +1544,21 @@
           "",
         );
 
-        var root = document.getElementById("app");
+        var root = document.querySelector(".gbs-web-form-root");
+
+        function webFormRootId(reference) {
+          var safeReference = String(reference == null ? "" : reference)
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+          return "formid-" + (safeReference || "preview");
+        }
+
+        function setWebFormRootId(reference) {
+          root.id = webFormRootId(reference);
+        }
+
+        setWebFormRootId(slug);
 
         var formData = null;
 
@@ -4091,7 +4105,8 @@
           var successClass =
             kind === "success" && scope === "generic" ? "generic-success" : "";
 
-          root.className = successClass;
+          root.className =
+            "gbs-web-form-root" + (successClass ? " " + successClass : "");
 
           root.innerHTML =
             '<div class="panel"><div class="' +
@@ -4340,6 +4355,12 @@
           }
           recaptchaWidgetId = null;
           formData = data || {};
+          root.className = "gbs-web-form-root";
+          setWebFormRootId(
+            formData.id != null && String(formData.id) !== ""
+              ? formData.id
+              : slug,
+          );
 
           document.documentElement.classList.toggle(
             "generic-scope",
@@ -4395,7 +4416,12 @@
             customCss.id = "gbs-custom-form-css";
             document.head.appendChild(customCss);
           }
-          customCss.textContent = sanitizeCustomCss(style.customCss);
+          // Keep legacy custom CSS that targeted the old shared #app root
+          // working after the root became form-specific.
+          customCss.textContent = sanitizeCustomCss(style.customCss).replace(
+            /#app\b/g,
+            ".gbs-web-form-root",
+          );
 
           var fields = Array.isArray(formData.fields) ? formData.fields : [];
           fields = orderGenericConditionalFields(fields);

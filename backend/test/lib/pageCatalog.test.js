@@ -79,12 +79,8 @@ describe('generic billing workspace page', () => {
 });
 
 describe('Generic CRM Workflows page', () => {
-  it('is catalogued only for Generic CRM with its read permission', () => {
-    expect(getCatalogForVertical('generic').find((page) => page.path === '/workflows')).toMatchObject({
-      label: 'Workflows',
-      vertical: 'generic',
-      requiredPermissions: [{ module: 'workflows', action: 'read' }],
-    });
+  it('is hidden from every page catalog without removing its implementation', () => {
+    expect(getCatalogForVertical('generic').some((page) => page.path === '/workflows')).toBe(false);
     expect(getCatalogForVertical('wellness').some((page) => page.path === '/workflows')).toBe(false);
     expect(getCatalogForVertical('travel').some((page) => page.path === '/workflows')).toBe(false);
   });

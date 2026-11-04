@@ -101,6 +101,8 @@ prisma.user.findFirst = vi.fn();
 
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
+const eventBus = requireCJS('../../lib/eventBus');
+const emitEventMock = vi.spyOn(eventBus, 'emitEvent');
 const { buildEmbedCode } = webFormsRouter;
 const { normalizeFields, isConditionalFieldVisible } = webFormsRouter;
 prisma.webFormSubmission.count = vi.fn();
@@ -189,6 +191,8 @@ beforeEach(() => {
   s3Service.isOciUrl.mockReturnValue(true);
   s3Service.isLocalUrl.mockReset();
   s3Service.isLocalUrl.mockReturnValue(false);
+  emitEventMock.mockReset();
+  emitEventMock.mockResolvedValue(undefined);
 
 });
 
@@ -599,6 +603,25 @@ describe('POST /api/forms', () => {
 
   });
 
+  test('rejects a duplicate form name within the same tenant and scope', async () => {
+    prisma.webForm.findFirst.mockResolvedValueOnce({ id: 9 });
+
+    const res = await request(makeApp()).post('/api/forms').send({
+      name: '  Contact Us  ',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: 'A web form with this name already exists',
+      code: 'FORM_NAME_EXISTS',
+    });
+    expect(prisma.webForm.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID, scope: 'generic', name: 'Contact Us' },
+      select: { id: true },
+    });
+    expect(prisma.webForm.create).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('POST /api/forms/logo-upload', () => {
@@ -661,6 +684,37 @@ describe('POST /api/forms/logo-upload', () => {
 
 
 describe('PUT /api/forms/:id', () => {
+
+  test('rejects renaming a form to another form name', async () => {
+    prisma.webForm.findFirst
+      .mockResolvedValueOnce({
+        id: 1,
+        tenantId: TENANT_ID,
+        name: 'Old name',
+        slug: 'old-name',
+        fieldsJson: '[]',
+        styleJson: '{}',
+        settingsJson: '{}',
+      })
+      .mockResolvedValueOnce({ id: 2 });
+
+    const res = await request(makeApp()).put('/api/forms/1').send({
+      name: 'Existing form',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('FORM_NAME_EXISTS');
+    expect(prisma.webForm.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        tenantId: TENANT_ID,
+        scope: 'generic',
+        name: 'Existing form',
+        id: { not: 1 },
+      },
+      select: { id: true },
+    });
+    expect(prisma.webForm.update).not.toHaveBeenCalled();
+  });
 
   test('persists metadata, fields, styles, and settings together', async () => {
     const updatedFields = [
@@ -1088,6 +1142,91 @@ describe('GET /api/forms/public/:slug', () => {
 
 
 describe('POST /api/forms/public/:slug/submit', () => {
+
+  function mockWorkflowForm() {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 82,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'generic',
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-source', sourceKind: 'contact', sourceKey: 'source', fieldType: 'text', label: 'Source', required: false, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+  }
+
+  test('emits submitted Generic lead data so conditions and webhook fields use the real submission', async () => {
+    mockWorkflowForm();
+    prisma.contact.create.mockResolvedValue({
+      id: 2001,
+      tenantId: TENANT_ID,
+      name: 'Submitted Lead',
+      email: 'submitted@example.com',
+      source: 'Website campaign',
+      status: 'Lead',
+    });
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Submitted Lead')
+      .field('email', 'submitted@example.com')
+      .field('source', 'Website campaign');
+
+    expect(response.status).toBe(201);
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'contact.created',
+      expect.objectContaining({
+        contactId: 2001,
+        submissionId: 1001,
+        webForm: 'Contact Us',
+        webFormId: 82,
+        name: 'Submitted Lead',
+        email: 'submitted@example.com',
+        source: 'Website campaign',
+        status: 'Lead',
+        tenantId: TENANT_ID,
+      }),
+      TENANT_ID,
+      undefined,
+    );
+  });
+
+  test('emits contact.updated when an existing Generic lead submits the form again', async () => {
+    mockWorkflowForm();
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 2002,
+      tenantId: TENANT_ID,
+      name: 'Existing Lead',
+      email: 'existing@example.com',
+      source: 'Old source',
+      status: 'Lead',
+    });
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Existing Lead')
+      .field('email', 'existing@example.com')
+      .field('source', 'Fresh submission');
+
+    expect(response.status).toBe(201);
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'contact.updated',
+      expect.objectContaining({
+        contactId: 2002,
+        submissionId: 1001,
+        webForm: 'Contact Us',
+        source: 'Fresh submission',
+      }),
+      TENANT_ID,
+      undefined,
+    );
+  });
 
   function mockCaptchaForm({ withFile = false, scope = 'generic' } = {}) {
     prisma.webForm.findFirst.mockResolvedValue({

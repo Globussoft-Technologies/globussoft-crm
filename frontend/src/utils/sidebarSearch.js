@@ -197,7 +197,8 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/whatsapp', label: 'WhatsApp', description: 'Manage tenant-scoped WhatsApp conversations', requiredPermission: { module: 'whatsapp', action: 'read' } },
   { path: '/lead-reports', label: 'Lead Reports', description: 'Review lead productivity, quality, sources, and follow-ups', managerOnly: true },
   { path: '/field-config', label: 'Field Config', description: 'Configure Generic CRM lead fields, groups, and table columns', adminOnly: true },
-  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
+  // Generic CRM: standalone Workflows page intentionally hidden from search.
+  // { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
 ];
 
 // Permission mapping for legacy generic search entries that historically only

@@ -139,10 +139,8 @@ describe('filterSidebarPages', () => {
       expect.objectContaining({ id: 'adsgpt', actionTarget: '[data-tour-feature="adsgpt"]' }),
       expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
     ]));
-    expect(manager).toContainEqual(expect.objectContaining({ path: '/workflows' }));
-    expect(genericRoleGuardProps('/workflows')).toEqual({
-      requiredPermission: { module: 'workflows', action: 'read' },
-    });
+    expect(manager).not.toContainEqual(expect.objectContaining({ path: '/workflows' }));
+    expect(genericRoleGuardProps('/workflows')).toEqual({});
   });
 
   it('keeps Field Config in Generic admin search only and respects tenant page visibility', () => {

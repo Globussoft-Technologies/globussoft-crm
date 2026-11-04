@@ -433,7 +433,7 @@ const FALLBACK_OPERATORS = [
 
 
 const FALLBACK_FIELD_OPTIONS = {
-  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "webForm", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt"],
+  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "webForm", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content"],
   // fromStage / toStage ride on every deal.stage_changed payload but were
   // absent here, which is why "stage changed from X to Y" could not be built.
   deal: ["dealId", "title", "amount", "currency", "stage", "probability", "fromStage", "toStage", "lostReason", "expectedClose", "contactId", "ownerId", "userId", "dealType", "pipelineId", "winLossReasonId", "createdAt"],
@@ -441,7 +441,7 @@ const FALLBACK_FIELD_OPTIONS = {
   ticket: ["ticketId", "subject", "description", "status", "priority", "contactId", "assigneeId", "slaResponseDue", "slaResolveDue", "firstResponseAt", "resolvedAt", "breached", "breachedAt", "createdAt", "updatedAt"],
   invoice: ["invoiceId", "invoiceNum", "status", "amount", "dueDate", "daysOverdue", "contactId", "dealId", "issuedDate", "paidAt", "isRecurring", "recurFrequency", "nextRecurDate", "parentInvoiceId", "currency", "amountPaid", "balance"],
   payment: ["paymentId", "invoiceId", "contactId", "amount", "currency", "status", "method", "description", "gateway", "gatewayId", "plotPaymentReference", "paidAt", "metadata", "createdAt"],
-  lead: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt"],
+  lead: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content"],
   approval: ["approvalId", "entity", "entityId", "status", "reason", "requesterId", "approverId", "comment", "requestedAt", "approvedAt"],
 };
 
@@ -607,12 +607,31 @@ const scheduleEntityValues = () => Object.keys(catalogue.scheduleDateFields);
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const isScheduleTrigger = (triggerType) => String(triggerType || "").startsWith("schedule.");
 
+const DEFAULT_LEAD_WEBHOOK_FIELDS = new Set([
+  "name",
+  "email",
+  "phone",
+  "source",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_id",
+  "utm_term",
+  "utm_content",
+]);
+
+const defaultWebhookSelectedFields = (module) => {
+  const availableFields = catalogue.fields[module] || [];
+  if (module !== "contact" && module !== "lead") return availableFields;
+  return availableFields.filter((field) => DEFAULT_LEAD_WEBHOOK_FIELDS.has(field));
+};
+
 const defaultWebhookConfig = (module) => ({
   url: "",
   method: "POST",
   encoding: "json",
   bodyMode: "simple",
-  selectedFields: catalogue.fields[module] || [],
+  selectedFields: defaultWebhookSelectedFields(module),
   headers: [],
   bodyTemplate: JSON.stringify({
     lead_id: "{{contactId}}",
@@ -678,6 +697,39 @@ function workflowOrder(workflow) {
   } catch (_error) {
     return Number.POSITIVE_INFINITY;
   }
+}
+
+function workflowTypeLabel(workflow, isGenericCrm) {
+  if (!isGenericCrm) return workflow.triggerType?.split(".")[0] || "CRM";
+
+  let entity = "";
+  try {
+    const condition = typeof workflow.condition === "string" ? JSON.parse(workflow.condition) : workflow.condition;
+    const groups = Array.isArray(condition) ? [{ clauses: condition }] : condition?.groups;
+    entity = groups?.flatMap((group) => group?.clauses || []).find((clause) => clause?.entity)?.entity || "";
+  } catch (_error) { /* fall back to the configured workflow module */ }
+
+  if (!entity) {
+    try {
+      const target = typeof workflow.targetState === "string" ? JSON.parse(workflow.targetState) : workflow.targetState;
+      entity = target?.module || "";
+    } catch (_error) { /* fall back to the trigger below */ }
+  }
+  entity ||= workflow.triggerType?.split(".")[0] || "crm";
+
+  return ({
+    // Generic CRM leads are persisted in the Contact model, but the product
+    // surface consistently calls them Leads (module buttons, triggers, and
+    // workflow conditions). Keep that internal storage name out of the list.
+    contact: "Leads",
+    lead: "Leads",
+    deal: "Deals",
+    task: "Tasks",
+    ticket: "Tickets",
+    invoice: "Invoices",
+    payment: "Payments",
+    approval: "Approvals",
+  })[entity] || `${entity.charAt(0).toUpperCase()}${entity.slice(1)}`;
 }
 
 function emptyRule(template) {
@@ -836,11 +888,20 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup, webFor
   );
 }
 
-function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClose }) {
+function formatWebhookDiagnostic(value, fallback = "(empty)") {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "string") {
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClose, isGenericCrm = false }) {
   const notify = useNotify();
   const [draft, setDraft] = useState({ ...defaultWebhookConfig(module), ...initialConfig });
   const [fieldQuery, setFieldQuery] = useState("");
   const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
   useEffect(() => {
     const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", closeOnEscape);
@@ -856,16 +917,48 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
         method: "POST",
         body: JSON.stringify({ config: draft, event: `${module}.updated`, workflowId }),
       });
-      notify.success(`Webhook responded with HTTP ${response.result?.status || 200}`);
-    } catch (_error) { /* fetchApi already toasted */ }
+      if (isGenericCrm) setTestResult({ success: true, ...response.result });
+      else notify.success(`Webhook responded with HTTP ${response.result?.status || 200}`);
+    } catch (error) {
+      if (isGenericCrm && error.data?.result) {
+        setTestResult({ success: false, error: error.data.error || error.message, ...error.data.result });
+      }
+      // fetchApi already displays the canonical error toast.
+    }
     finally { setTesting(false); }
   };
   const availableFields = catalogue.fields[module] || [];
   const fieldLabel = (field) => catalogue.fieldLabels[module]?.[field] || field;
-  const visibleFields = availableFields.filter((field) => (
-    fieldLabel(field).toLowerCase().includes(fieldQuery.trim().toLowerCase())
-    || field.toLowerCase().includes(fieldQuery.trim().toLowerCase())
-  ));
+  const selectedFields = new Set(draft.selectedFields || []);
+  const visibleFields = availableFields
+    .filter((field) => (
+      fieldLabel(field).toLowerCase().includes(fieldQuery.trim().toLowerCase())
+      || field.toLowerCase().includes(fieldQuery.trim().toLowerCase())
+    ))
+    .sort((left, right) => Number(selectedFields.has(right)) - Number(selectedFields.has(left)));
+  if (testResult) return <div className="workflow-webhook-overlay" onMouseDown={onClose}>
+    <div className="workflow-webhook-panel workflow-webhook-test-panel" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Test webhook result">
+      <div className="workflow-webhook-head"><h2>TEST WEBHOOK</h2><button type="button" className="workflow-icon-button" onClick={onClose} aria-label="Close test webhook result"><X size={18} /></button></div>
+      <div className="workflow-webhook-test-body">
+        <div className={`workflow-webhook-test-status ${testResult.success ? "is-success" : "is-error"}`} role="status">
+          {testResult.success ? `Received success response (HTTP ${testResult.status || 200})` : `Webhook test failed${testResult.status ? ` (HTTP ${testResult.status})` : ""}`}
+        </div>
+        <section><h3>Request Sent</h3><pre aria-label="Webhook request sent">{formatWebhookDiagnostic(testResult.request || {
+          url: draft.url,
+          method: draft.method,
+          headers: Object.fromEntries((draft.headers || []).filter((header) => header.key).map((header) => [header.key, header.secret ? "[redacted]" : header.value])),
+        })}</pre></section>
+        <section><h3>Response Received</h3><pre aria-label="Webhook response received">{formatWebhookDiagnostic({
+          status: testResult.status,
+          statusText: testResult.statusText,
+          headers: testResult.responseHeaders || {},
+          body: testResult.response || testResult.error || "",
+          attempts: testResult.attempts,
+        })}</pre></section>
+      </div>
+      <div className="workflow-webhook-footer"><button type="button" className="workflow-secondary" onClick={() => setTestResult(null)}><ArrowLeft size={15} /> Back to webhook settings</button></div>
+    </div>
+  </div>;
   return <div className="workflow-webhook-overlay" onMouseDown={onClose}>
     <div className="workflow-webhook-panel" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Webhook settings">
       <div className="workflow-webhook-head"><h2>WEBHOOK SETTINGS</h2><button type="button" className="workflow-icon-button" onClick={onClose} aria-label="Close webhook settings"><X size={18} /></button></div>
@@ -988,7 +1081,7 @@ function ScheduleBuilder({ schedule, module, onChange }) {
   );
 }
 
-function ActionCard({ action, index, module, workflowId, updateAction, removeAction, pickers, webhookOnly = false }) {
+function ActionCard({ action, index, module, workflowId, updateAction, removeAction, pickers, webhookOnly = false, isGenericCrm = false }) {
   const [showWebhookSettings, setShowWebhookSettings] = useState(false);
   const selected = catalogue.actions.find((item) => item.value === action.type) || catalogue.actions[0];
   const ActionIcon = selected.icon;
@@ -1096,7 +1189,7 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
         <ActionIcon size={18} className="workflow-action-icon" />
         <button type="button" className="workflow-icon-button" onClick={() => removeAction(index)} aria-label={`Remove action ${index + 1}`}><Trash2 size={15} /></button>
       </div>
-      {showWebhookSettings && <WebhookSettingsModal initialConfig={config} module={module} workflowId={workflowId} onSave={(nextConfig) => updateAction(index, { config: nextConfig })} onClose={() => setShowWebhookSettings(false)} />}
+      {showWebhookSettings && <WebhookSettingsModal initialConfig={config} module={module} workflowId={workflowId} isGenericCrm={isGenericCrm} onSave={(nextConfig) => updateAction(index, { config: nextConfig })} onClose={() => setShowWebhookSettings(false)} />}
     </div>
   );
 }
@@ -1212,6 +1305,15 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
 
   const save = async (activate, options = {}) => {
     if (!editor.name.trim()) { notify.error("Workflow name is required"); return null; }
+    const normalizedWorkflowName = editor.name.trim().toLowerCase();
+    const duplicateName = workflows.some((workflow) => (
+      String(workflow.id) !== String(editor.id)
+      && String(workflow.name || "").trim().toLowerCase() === normalizedWorkflowName
+    ));
+    if (duplicateName) {
+      notify.error("A workflow with this name already exists");
+      return null;
+    }
     setSaving(true);
     const conditionGroups = editor.groups.map((group) => ({
       ...group,
@@ -1323,20 +1425,20 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
 
   if (embedded) {
     return (
-      <div className="workflow-page workflow-embedded-page">
+      <div className={`workflow-page workflow-embedded-page ${isGenericCrm ? "workflow-page--generic" : ""}`}>
         <div className="workflow-topbar">
           <div className="workflow-breadcrumb"><b>Webhook workflows</b></div>
           <button className="workflow-primary" onClick={createWorkflow}><Plus size={17} /> Create webhook workflow</button>
         </div>
         <main className="workflow-main">
-          <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view="embedded" onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} />
+          <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view="embedded" onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} isGenericCrm={isGenericCrm} />
         </main>
       </div>
     );
   }
 
   return (
-    <div className="workflow-page">
+    <div className={`workflow-page ${isGenericCrm ? "workflow-page--generic" : ""}`}>
       <div className="workflow-topbar"><div className="workflow-breadcrumb"><b>Workflows</b></div><button className="workflow-primary" onClick={createWorkflow}><Plus size={17} /> Create workflow</button></div>
       <div className="workflow-layout">
         <aside className="workflow-sidebar">
@@ -1346,14 +1448,14 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
           <div className="workflow-help"><b>What are workflows?</b><p>Automate repetitive CRM work when records change.</p></div>
         </aside>
         <main className="workflow-main">
-          {view === "templates" ? <TemplateGallery search={templateSearch} setSearch={setTemplateSearch} category={templateCategory} templates={filteredTemplates} onUse={(template) => setEditor(emptyRule(template))} onCreate={createWorkflow} /> : <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view={view} onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} />}
+          {view === "templates" ? <TemplateGallery search={templateSearch} setSearch={setTemplateSearch} category={templateCategory} templates={filteredTemplates} onUse={(template) => setEditor(emptyRule(template))} onCreate={createWorkflow} /> : <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view={view} onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} isGenericCrm={isGenericCrm} />}
         </main>
       </div>
     </div>
   );
 }
 
-function WorkflowList({ workflows, actionStats, loading, onEdit, onToggle, onDelete, onTest, onHistory, openMenu, setOpenMenu, view, onCreate, onReorder, onRunNow }) {
+function WorkflowList({ workflows, actionStats, loading, onEdit, onToggle, onDelete, onTest, onHistory, openMenu, setOpenMenu, view, onCreate, onReorder, onRunNow, isGenericCrm = false }) {
   const [dragIndex, setDragIndex] = useState(null);
   const canReorder = view === "all";
   const drop = (toIndex) => {
@@ -1364,7 +1466,7 @@ function WorkflowList({ workflows, actionStats, loading, onEdit, onToggle, onDel
   return <>
     <div className="workflow-usage"><Activity size={16} /> <b>{workflows.filter((workflow) => workflow.isActive).length}</b> active workflows.</div>
     <div className="workflow-heading"><div><h1>{view === "active" ? "Active workflows" : view === "inactive" ? "Inactive workflows" : "All workflows"}</h1><p>{view === "inactive" ? "Use the toggle to enable a workflow." : "All your workflows are executed in the order below. Feel free to reorder them."}</p></div></div>
-    {loading ? <div className="workflow-empty">Loading workflows...</div> : workflows.length === 0 ? <div className="workflow-empty"><Activity size={42} /><h3>No workflows found</h3><button className="workflow-primary" onClick={onCreate}>Create workflow</button></div> : <div className="workflow-list"><div className="workflow-list-header"><span>ORDER OF EXECUTION</span><span>NAME</span><span>TYPE</span><span>ACTIONS EXECUTED</span></div>{workflows.map((workflow, index) => <div className={`workflow-list-row ${dragIndex === index ? "is-dragging" : ""}`} key={workflow.id} draggable={canReorder} onDragStart={() => canReorder && setDragIndex(index)} onDragOver={(event) => canReorder && event.preventDefault()} onDrop={() => canReorder && drop(index)} onDragEnd={() => setDragIndex(null)}><div className="workflow-order"><GripVertical size={16} /><b>{index + 1}</b><button type="button" className={`workflow-toggle ${workflow.isActive ? "on" : ""}`} onClick={() => onToggle(workflow)} aria-label={`${workflow.isActive ? "Disable" : "Enable"} ${workflow.name}`}><span /></button></div><div className="workflow-name"><button onClick={() => onEdit(workflow)}>{workflow.name}</button><p>{workflow.autoDisabledAt ? "Paused automatically after repeated failures" : workflow.isActive ? (workflow.nextScheduledAt ? `Next run ${formatDateTime(workflow.nextScheduledAt)}` : "Runs when its trigger conditions are met") : "Inactive workflow"}</p><small>Last updated {formatDate(workflow.updatedAt || workflow.createdAt, "\u2014")} \u00b7 Last run {formatDateTime(workflow.lastRunAt, "never")}</small>{workflow.lastError && <small className="workflow-row-error"><AlertTriangle size={12} /> {workflow.lastError}</small>}</div><div className="workflow-type">{workflow.triggerType?.split(".")[0] || "CRM"}</div><div className="workflow-actions-summary"><b>{actionStats[String(workflow.id)] || 0} successful actions</b><span>in the last 7 days.</span><button onClick={() => onHistory(workflow)}>View history <ArrowLeft size={13} /></button></div><div className="workflow-menu-wrap"><button className="workflow-icon-button" onClick={() => setOpenMenu(openMenu === workflow.id ? null : workflow.id)} aria-label={`Actions for ${workflow.name}`}><MoreVertical size={18} /></button>{openMenu === workflow.id && <div className={`workflow-menu ${index >= workflows.length - 2 ? "menu-up" : ""}`}><button onClick={() => onEdit(workflow)}><Pencil size={14} /> Edit</button><button onClick={() => onTest(workflow)}><Play size={14} /> Test workflow</button><button onClick={() => onEdit({ ...workflow, id: null, name: `${workflow.name} copy` })}><Copy size={14} /> Clone</button><button onClick={() => onRunNow(workflow)}><RefreshCw size={14} /> Apply to existing records</button><button onClick={() => onDelete(workflow)}><Trash2 size={14} /> Delete</button></div>}</div></div>)}</div>}
+    {loading ? <div className="workflow-empty">Loading workflows...</div> : workflows.length === 0 ? <div className="workflow-empty"><Activity size={42} /><h3>No workflows found</h3><button className="workflow-primary" onClick={onCreate}>Create workflow</button></div> : <div className="workflow-list"><div className="workflow-list-header"><span>ORDER OF EXECUTION</span><span>NAME</span><span>TYPE</span><span>ACTIONS EXECUTED</span></div>{workflows.map((workflow, index) => <div className={`workflow-list-row ${dragIndex === index ? "is-dragging" : ""}`} key={workflow.id} draggable={canReorder} onDragStart={() => canReorder && setDragIndex(index)} onDragOver={(event) => canReorder && event.preventDefault()} onDrop={() => canReorder && drop(index)} onDragEnd={() => setDragIndex(null)}><div className="workflow-order"><GripVertical size={16} /><b>{index + 1}</b><button type="button" className={`workflow-toggle ${workflow.isActive ? "on" : ""}`} onClick={() => onToggle(workflow)} aria-label={`${workflow.isActive ? "Disable" : "Enable"} ${workflow.name}`}><span /></button></div><div className="workflow-name"><button onClick={() => onEdit(workflow)}>{workflow.name}</button><p>{workflow.autoDisabledAt ? "Paused automatically after repeated failures" : workflow.isActive ? (workflow.nextScheduledAt ? `Next run ${formatDateTime(workflow.nextScheduledAt)}` : "Runs when its trigger conditions are met") : "Inactive workflow"}</p><small>Last updated {formatDate(workflow.updatedAt || workflow.createdAt, "\u2014")} \u00b7 Last run {formatDateTime(workflow.lastRunAt, "never")}</small>{workflow.lastError && <small className="workflow-row-error"><AlertTriangle size={12} /> {workflow.lastError}</small>}</div><div className="workflow-type">{workflowTypeLabel(workflow, isGenericCrm)}</div><div className="workflow-actions-summary"><b>{actionStats[String(workflow.id)] || 0} successful actions</b><span>in the last 7 days.</span><button onClick={() => onHistory(workflow)}>View history <ArrowLeft size={13} /></button></div><div className="workflow-menu-wrap"><button className="workflow-icon-button" onClick={() => setOpenMenu(openMenu === workflow.id ? null : workflow.id)} aria-label={`Actions for ${workflow.name}`}><MoreVertical size={18} /></button>{openMenu === workflow.id && <div className={`workflow-menu ${index >= workflows.length - 2 ? "menu-up" : ""}`}><button onClick={() => onEdit(workflow)}><Pencil size={14} /> Edit</button><button onClick={() => onTest(workflow)}><Play size={14} /> Test workflow</button><button onClick={() => onEdit({ ...workflow, id: null, name: `${workflow.name} copy` })}><Copy size={14} /> Clone</button><button onClick={() => onRunNow(workflow)}><RefreshCw size={14} /> Apply to existing records</button><button onClick={() => onDelete(workflow)}><Trash2 size={14} /> Delete</button></div>}</div></div>)}</div>}
   </>;
 }
 
@@ -1399,17 +1501,17 @@ function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pic
   });
   const scheduled = isScheduleTrigger(editor.triggerType);
   return (
-    <div className="workflow-page workflow-editor-page">
+    <div className={`workflow-page workflow-editor-page ${isGenericCrm ? "workflow-page--generic" : ""}`}>
       <div className="workflow-editor-topbar">
         <button className="workflow-back" onClick={onCancel}><ArrowLeft size={16} /> {webhookOnly ? "Webhook workflows" : "Workflows"}</button>
         <div>
           <button className="workflow-secondary" onClick={onCancel}>Cancel</button>
           <button className="workflow-secondary" onClick={() => save(false)} disabled={saving}>Save as draft</button>
-          <button className="workflow-secondary" onClick={onTest} disabled={saving}><Play size={14} /> Test workflow</button>
+          {!webhookOnly && <button className="workflow-secondary" onClick={onTest} disabled={saving}><Play size={14} /> Test workflow</button>}
           {/* Freshsales lets an author backfill a workflow over records that
               already exist; without it a rule only ever affects records touched
               after it was created. Defaults to a dry run. */}
-          {editor.id && <button className="workflow-secondary" onClick={() => onRunNow(editor)} disabled={saving}><RefreshCw size={14} /> Apply to existing records</button>}
+          {editor.id && !webhookOnly && <button className="workflow-secondary" onClick={() => onRunNow(editor)} disabled={saving}><RefreshCw size={14} /> Apply to existing records</button>}
           <button className="workflow-primary" onClick={() => save(true)} disabled={saving}><Check size={16} /> {saving ? "Saving..." : "Enable"}</button>
         </div>
       </div>
@@ -1448,7 +1550,7 @@ function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pic
         </section>
         <section>
           <h2>What actions should be executed?</h2>
-          {editor.actions.map((action, index) => <ActionCard key={index} action={action} index={index} module={editor.module} workflowId={editor.id} pickers={pickers} webhookOnly={webhookOnly} updateAction={updateAction} removeAction={(actionIndex) => update({ actions: editor.actions.filter((_, currentIndex) => currentIndex !== actionIndex) })} />)}
+          {editor.actions.map((action, index) => <ActionCard key={index} action={action} index={index} module={editor.module} workflowId={editor.id} pickers={pickers} webhookOnly={webhookOnly} isGenericCrm={isGenericCrm} updateAction={updateAction} removeAction={(actionIndex) => update({ actions: editor.actions.filter((_, currentIndex) => currentIndex !== actionIndex) })} />)}
           <button className="workflow-link-button" onClick={() => update({ actions: [...editor.actions, webhookOnly ? { type: "send_webhook", config: defaultWebhookConfig(editor.module) } : { type: "send_notification", config: {} }] })}><Plus size={15} /> Add action</button>
         </section>
       </div>

@@ -66,6 +66,25 @@ function mockApi(path, overrides = {}) {
 }
 
 describe("Workflows page", () => {
+  it("hides Test workflow and Apply to existing records in the webhook-only editor", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/workflows": [{
+        ...existingWorkflow,
+        actionType: "send_webhook",
+        targetState: JSON.stringify({
+          module: "contact",
+          actions: [{ type: "send_webhook", config: { url: "https://hooks.example.com/leads" } }],
+        }),
+      }],
+    }));
+    render(<Workflows webhookOnly embedded />);
+    await user.click(await screen.findByRole("button", { name: "Welcome new leads" }));
+
+    expect(screen.queryByRole("button", { name: /^test workflow$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /apply to existing records/i })).not.toBeInTheDocument();
+  });
+
   it("reserves space between the webhook field-search icon and its text", () => {
     const css = readFileSync(join(process.cwd(), "src/styles/generic-global-scaling.css"), "utf8");
     expect(css).toMatch(/\.workflow-webhook-field-search\s*>\s*input\[type="search"\]\s*\{[^}]*padding-left:\s*36px\s*!important/s);
@@ -77,6 +96,21 @@ describe("Workflows page", () => {
     expect(screen.getByRole("button", { name: "Welcome new leads" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /disable welcome new leads/i })).toBeInTheDocument();
     expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows");
+  });
+
+  it("shows Contact-backed records as Leads in the Generic CRM workflow type", async () => {
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/workflows": [{
+        ...existingWorkflow,
+        condition: JSON.stringify({ groups: [{ match: "all", clauses: [{ entity: "contact", field: "status", op: "eq", value: "Lead" }] }] }),
+      }],
+    }));
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" }, user: null }}><Workflows /></AuthContext.Provider>);
+
+    expect(await screen.findByText("Leads")).toBeInTheDocument();
+    expect(screen.queryByText("Contacts")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /disable welcome new leads/i }).closest(".workflow-page--generic")).toBeInTheDocument();
   });
 
   it("opens the Freshsales-style builder with modules, conditions, and actions", async () => {
@@ -130,6 +164,21 @@ describe("Workflows page", () => {
     expect(notify.success).toHaveBeenCalledWith("Workflow saved as draft");
   });
 
+  it("blocks a duplicate workflow name before sending a create request", async () => {
+    const user = userEvent.setup();
+    render(<Workflows />);
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    const name = screen.getByRole("textbox", { name: "Workflow name" });
+    await user.clear(name);
+    await user.type(name, "  WELCOME NEW LEADS  ");
+    await user.click(screen.getByRole("button", { name: /save as draft/i }));
+
+    expect(notify.error).toHaveBeenCalledWith("A workflow with this name already exists");
+    expect(fetchApiMock.mock.calls.some(([path, options]) => (
+      path === "/api/workflows" && options?.method === "POST"
+    ))).toBe(false);
+  });
+
   it("calls the existing tenant-scoped toggle endpoint", async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((path) => mockApi(path, {
@@ -142,7 +191,7 @@ describe("Workflows page", () => {
 
   it("configures and tests a webhook action", async () => {
     const user = userEvent.setup();
-    render(<Workflows />);
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" } }}><Workflows /></AuthContext.Provider>);
     await user.click(screen.getByRole("button", { name: /create workflow/i }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
     const editWebhookButton = screen.getByRole("button", { name: /edit webhook settings/i });
@@ -151,14 +200,20 @@ describe("Workflows page", () => {
     await user.click(editWebhookButton);
 
     expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
-    const webhookFields = [
-      "contactId", "name", "email", "phone", "company", "title", "status", "source", "tags",
-      "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus",
-      "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk",
-      "metaIsQualified", "changedFields", "createdAt",
+    const defaultWebhookFields = [
+      "name", "email", "phone", "source", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content",
     ];
-    webhookFields.forEach((field) => expect(screen.getByRole("checkbox", { name: field })).toBeChecked());
-    await user.click(screen.getByRole("checkbox", { name: "company" }));
+    defaultWebhookFields.forEach((field) => expect(screen.getByRole("checkbox", { name: field })).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: "company" })).not.toBeChecked();
+    const fieldPicker = screen.getByLabelText("Webhook fields");
+    const initiallyOrderedFields = within(fieldPicker).getAllByRole("checkbox");
+    defaultWebhookFields.forEach((field, index) => expect(initiallyOrderedFields[index]).toHaveAccessibleName(field));
+    await user.click(screen.getByRole("checkbox", { name: "email" }));
+    const reorderedFields = within(fieldPicker).getAllByRole("checkbox");
+    const firstUncheckedIndex = reorderedFields.findIndex((checkbox) => !checkbox.checked);
+    expect(firstUncheckedIndex).toBe(defaultWebhookFields.length - 1);
+    expect(reorderedFields.slice(0, firstUncheckedIndex).every((checkbox) => checkbox.checked)).toBe(true);
+    expect(reorderedFields.slice(firstUncheckedIndex).every((checkbox) => !checkbox.checked)).toBe(true);
     const fieldSearch = screen.getByRole("searchbox", { name: "Search webhook fields" });
     await user.type(fieldSearch, "status");
     expect(screen.getByRole("checkbox", { name: "status" })).toBeInTheDocument();
@@ -171,17 +226,48 @@ describe("Workflows page", () => {
     await user.type(screen.getByRole("textbox", { name: "Webhook header 1 name" }), "X-Webhook-Secret");
     await user.type(screen.getByLabelText("Webhook header 1 value"), "secret-value");
     fetchApiMock.mockImplementation((path) => mockApi(path, {
-      "/api/workflows/test-webhook": { success: true, result: { status: 202 } },
+      "/api/workflows/test-webhook": { success: true, result: {
+        status: 202,
+        statusText: "Accepted",
+        request: { url: "https://hooks.example.com/meta-feedback", method: "POST", headers: { "X-Webhook-Secret": "[redacted]" }, body: "{\"contactId\":0}" },
+        responseHeaders: { "content-type": "application/json" },
+        response: "{\"received\":true}",
+        attempts: 1,
+      } },
     }));
     await user.click(screen.getByRole("button", { name: /test this webhook/i }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows/test-webhook", expect.objectContaining({ method: "POST" })));
     const testWebhookCall = fetchApiMock.mock.calls.find(([path]) => path === "/api/workflows/test-webhook");
-    expect(JSON.parse(testWebhookCall[1].body).config.selectedFields).toEqual(expect.not.arrayContaining(["company"]));
-    expect(notify.success).toHaveBeenCalledWith("Webhook responded with HTTP 202");
+    expect(JSON.parse(testWebhookCall[1].body).config.selectedFields).toEqual(expect.not.arrayContaining(["email", "company"]));
+    expect(screen.getByRole("dialog", { name: "Test webhook result" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Received success response (HTTP 202)");
+    expect(screen.getByLabelText("Webhook request sent")).toHaveTextContent("https://hooks.example.com/meta-feedback");
+    expect(screen.getByLabelText("Webhook request sent")).toHaveTextContent("[redacted]");
+    expect(screen.getByLabelText("Webhook response received")).toHaveTextContent("received");
+    expect(notify.success).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /back to webhook settings/i }));
+    expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save settings/i }));
     expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Action 1 webhook URL" })).toHaveValue("https://hooks.example.com/meta-feedback");
+  });
+
+  it("keeps the existing compact webhook-test notification outside Generic CRM", async () => {
+    const user = userEvent.setup();
+    render(<Workflows />);
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    await user.type(screen.getByRole("textbox", { name: "Webhook callback URL" }), "https://hooks.example.com/test");
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/workflows/test-webhook": { success: true, result: { status: 204 } },
+    }));
+
+    await user.click(screen.getByRole("button", { name: /test this webhook/i }));
+
+    await waitFor(() => expect(notify.success).toHaveBeenCalledWith("Webhook responded with HTTP 204"));
+    expect(screen.queryByRole("dialog", { name: "Test webhook result" })).not.toBeInTheDocument();
   });
 
   // ── Parity-wave coverage ─────────────────────────────────────────────

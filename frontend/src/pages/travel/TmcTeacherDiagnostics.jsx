@@ -507,27 +507,6 @@ export default function TmcTeacherDiagnostics({
     }
   };
 
-  const openReport = async (report) => {
-    setSubmitError("");
-    try {
-      const result = await portalApi(
-        `/teacher/diagnostics/${report.id}`,
-        token,
-      );
-      const detail = reportFromResult(result.diagnostic);
-      setLatest(detail);
-      const prior = detail?.chosenInterests?.interests || [];
-      setSelectedNames(new Set(prior.map((interest) => interest.name)));
-      setInterestsSubmittedAt(detail?.chosenInterests?.submittedAt || null);
-      setInterestsError("");
-      setTaking(false);
-    } catch (err) {
-      if ([401, 403, 404].includes(err.status)) onSessionExpired(err.message);
-      else
-        setSubmitError(err.message || "Failed to load the diagnostic report.");
-    }
-  };
-
   const toggleRecommendation = (name) => {
     setSelectedNames((current) => {
       const next = new Set(current);
@@ -735,13 +714,6 @@ export default function TmcTeacherDiagnostics({
                     </div>
                   </div>
                   <div style={styles.inlineActions}>
-                    <button
-                      type="button"
-                      onClick={() => openReport(report)}
-                      style={styles.textButton}
-                    >
-                      View trips
-                    </button>
                     {report.reportPdfUrl && (
                       <a
                         href={report.reportPdfUrl}

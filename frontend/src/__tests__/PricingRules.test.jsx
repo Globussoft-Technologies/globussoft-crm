@@ -613,9 +613,11 @@ describe('<PricingRules /> — Markup Rules toggle-active', () => {
     fetchApiMock.mockClear();
     installFetchMock();
     // Toggle button has aria-label "Toggle active for rule 501".
-    fireEvent.click(
-      screen.getByRole('button', { name: /Toggle active for rule 501/i }),
-    );
+    const activeToggle = screen.getByRole('button', {
+      name: /Toggle active for rule 501/i,
+    });
+    expect(activeToggle).toHaveClass('cost-master-active-toggle');
+    fireEvent.click(activeToggle);
     await waitFor(() => {
       const patch = fetchApiMock.mock.calls.find(([u, o]) =>
         u === '/api/travel/markup-rules/501' && o?.method === 'PATCH',

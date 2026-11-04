@@ -222,6 +222,30 @@ router.get(
         const sid = parseInt(req.query.schoolContactId, 10);
         if (Number.isFinite(sid)) where.schoolContactId = sid;
       }
+      // Contact-centric travel profile alias. TMC trips historically called
+      // this relation schoolContactId; keep both query names compatible.
+      if (req.query.contactId) {
+        const cid = parseInt(req.query.contactId, 10);
+        if (Number.isFinite(cid)) {
+          const linkedContact = await prisma.contact.findFirst({
+            where: { id: cid, tenantId: req.travelTenant.id },
+            select: { email: true },
+          });
+          const email = String(linkedContact?.email || "").trim().toLowerCase();
+          // Registration contacts are parents, not the school contact. They
+          // are linked through TmcParentTrip.parentContactId; retain the
+          // legacy schoolContactId path for school/operator contacts.
+          where.OR = [
+            { schoolContactId: cid },
+            { teacherContactId: cid },
+            { parentPortalLinks: { some: { parentContactId: cid } } },
+            ...(email ? [
+              { participants: { some: { parentEmail: email } } },
+              { pendingRegistrations: { some: { parentEmail: email } } },
+            ] : []),
+          ];
+        }
+      }
       if (search) {
         where.OR = [
           { tripCode: { contains: search } },
@@ -299,6 +323,13 @@ router.get(
         return {
           ...trip,
           perStudentAmount,
+          // Teacher/school contacts need the whole group value. Keep the
+          // existing per-student field for the trips register, and expose an
+          // additive total derived from the payment plan and participant
+          // count for contact-centric profiles.
+          totalTripValue: perStudentAmount > 0 && trip._count?.participants
+            ? perStudentAmount * Number(trip._count.participants)
+            : (trip.pricePerStudent != null ? Number(trip.pricePerStudent) : null),
           schoolName: schoolNameById.get(Number(trip.schoolContactId)) || null,
         };
       });

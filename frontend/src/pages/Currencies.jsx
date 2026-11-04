@@ -4,6 +4,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatCurrency } from '../utils/currency';
 import TopScrollSync from '../components/TopScrollSync';
+import ScrollableSelect from '../components/ScrollableSelect';
 import { AuthContext } from '../appContexts';
 
 export default function Currencies() {
@@ -484,16 +485,20 @@ export default function Currencies() {
                       onChange={(event) => setRateSearch(event.target.value)}
                     />
                   </div>
-                  <select
-                    className="input-field currency-rates-select"
-                    aria-label="Rate reference currency"
+                  <ScrollableSelect
+                    className="currency-rates-select"
+                    ariaLabel="Rate reference currency"
                     value={rateBaseCode || catalog.baseCode}
-                    onChange={(event) => setRateBaseCode(event.target.value)}
-                  >
-                    {catalog.currencies.map((currency) => (
-                      <option key={currency.code} value={currency.code}>{currency.code} — {currency.name}</option>
-                    ))}
-                  </select>
+                    onChange={setRateBaseCode}
+                    width="100%"
+                    maxVisibleRows={7}
+                    searchable
+                    searchPlaceholder="Search currencies…"
+                    options={catalog.currencies.map((currency) => ({
+                      value: currency.code,
+                      label: `${currency.code} — ${currency.name}`,
+                    }))}
+                  />
                 </div>
               </div>
             )}

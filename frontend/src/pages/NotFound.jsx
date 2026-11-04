@@ -13,8 +13,8 @@ import { AuthContext } from '../App';
  *  - Heading + the URL the user hit (so they know what failed).
  *  - Suggests a corrected URL when the path matches a known wrong-prefix
  *    map (e.g. /loyalty -> /wellness/loyalty for wellness tenants).
- *  - Quick links: Dashboard (or /wellness for wellness tenants),
- *    Login (when logged out), and Help (Knowledge Base).
+ *  - Quick links: the tenant's dashboard, Login (when logged out), and
+ *    Help (Knowledge Base).
  */
 
 // Known wrong-prefix → corrected path map. Keep small + intentional;
@@ -36,8 +36,11 @@ export default function NotFound() {
   const { token, tenant } = useContext(AuthContext);
   const path = location.pathname;
   const isWellness = tenant?.vertical === 'wellness';
-  const homePath = isWellness ? '/wellness' : '/dashboard';
-  const homeLabel = isWellness ? 'Go to Wellness Dashboard' : 'Go to Dashboard';
+  const isTravel = tenant?.vertical === 'travel';
+  const homePath = isWellness ? '/wellness' : isTravel ? '/travel' : '/dashboard';
+  const homeLabel = isWellness
+    ? 'Go to Wellness Dashboard'
+    : 'Go to Dashboard';
 
   // Suggest a corrected path when the user hit a known wrong-prefix URL.
   // Only surface wellness suggestions to wellness tenants — the generic

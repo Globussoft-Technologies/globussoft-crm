@@ -400,6 +400,65 @@ button.field-config-drag:disabled {
   margin: 0 auto 1rem;
 }
 
+.lead-fields-page .card::before {
+  display: none;
+}
+
+.lead-fields-page .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+.lead-fields-page .btn-primary:hover::after {
+  display: none;
+}
+
+.lead-fields-page .btn-primary:hover {
+  transform: none;
+  box-shadow: 0 4px 15px var(--accent-glow);
+}
+
+.lead-fields-page .btn-secondary:hover {
+  background: var(--surface-color);
+  border-color: var(--border-color);
+  transform: none;
+  box-shadow: none;
+}
+
+.lead-field-type-select {
+  width: 100%;
+  cursor: pointer;
+}
+
+.lead-field-type-menu {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #767676;
+  background: #fff;
+  color: #111;
+}
+
+.lead-field-type-option {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 14px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  color: #111;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lead-field-type-option:hover,
+.lead-field-type-option[data-active="true"] {
+  background: #4058cf;
+  color: #fff;
+}
+
 .field-config-create {
   position: fixed;
   z-index: 1200;

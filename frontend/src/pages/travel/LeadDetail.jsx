@@ -1,445 +1,76 @@
-// Travel CRM — Unified lead detail (contact-centric) page.
-//
-// Mounts at /travel/leads/:contactId. The Leads.jsx list routes the
-// Title column to /deals/:id (the generic CRM deal page that knows
-// nothing about sub-brand). This page is the travel-specific drilldown
-// for a single Contact — it aggregates every travel artifact attached
-// to that contact in one screen:
-//
-//   1. Header — contact identity (name / email / phone / company)
-//      + cross-links to /contacts/:id (generic) and /travel/rfu/customers/:id
-//      (only when at least one RFU diagnostic OR itinerary exists for the
-//      contact — keeps the action cluster relevant per sub-brand context).
-//   2. Diagnostics summary — most recent only, with classification +
-//      recommended tier + a link to drill into the full diagnostic.
-//      "+N more" link to /travel/diagnostics when total > 1.
-//   3. Itineraries — read-only table; each row → /travel/itineraries/:id.
-//   4. TMC trips — only rendered when ≥1 trip exists, since the section
-//      is irrelevant for non-school contacts. Each row → /travel/trips/:id.
-//
-// Each fetch is in its own try/catch so partial data still renders.
-// Page-level "Loading…" is only on the initial contact fetch; sub-
-// sections lazy-load.
-//
-// Style constants (primaryBtn, secondaryBtn, iconBtn, th, td, etc.) are
-// copied verbatim from ItineraryDetail.jsx so the look-and-feel stays
-// consistent across the Travel surface.
-
-import { useEffect, useState, useContext } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
-import {
-  UserCircle, Mail, Phone, Building, Tag, MapPin, Briefcase,
-  ExternalLink, MessageSquareText,
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, ChevronDown, Edit3, Plus } from "lucide-react";
 import { fetchApi } from "../../utils/api";
-import { useNotify } from "../../utils/notify";
-import { AuthContext } from "../../App";
-import TopScrollSync from "../../components/TopScrollSync";
-import TravelContactProfilePanel from "./TravelContactProfilePanel";
+import EditContactModal from "../../components/EditContactModal";
 
-const STATUS_COLORS = {
-  draft: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
-  sent: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
-  revised: { bg: "rgba(200,154,78,0.16)", color: "#9A6F2E" },
-  accepted: { bg: "rgba(38,88,85,0.16)", color: "#265855" },
-  rejected: { bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
-  advance_paid: { bg: "rgba(200,154,78,0.22)", color: "#7A5419" },
-  fully_paid: { bg: "rgba(38,88,85,0.22)", color: "#1F4644" },
-  confirmed: { bg: "rgba(38,88,85,0.16)", color: "#265855" },
-  "in-trip": { bg: "rgba(200,154,78,0.22)", color: "#7A5419" },
-  completed: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
-  cancelled: { bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
-};
-
-const TIER_COLORS = {
-  entry: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
-  primary: { bg: "rgba(18,38,71,0.14)", color: "#122647" },
-  premium: { bg: "rgba(200,154,78,0.22)", color: "#7A5419" },
-};
-
-function fmtDate(d) {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString();
-}
-
-function fmtMoney(amt, currency = "INR") {
-  if (amt == null || amt === "") return "—";
-  const n = Number(amt);
-  if (!Number.isFinite(n)) return "—";
-  if (currency === "INR" && n >= 100000) {
-    return `₹${(n / 100000).toFixed(2)}L`;
-  }
-  return `${currency === "INR" ? "₹" : currency + " "}${n.toLocaleString()}`;
-}
-
-function TierBadge({ tier }) {
-  if (!tier) return <span style={{ color: "var(--text-secondary)" }}>—</span>;
-  const tc = TIER_COLORS[tier] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
-  return (
-    <span style={{
-      background: tc.bg, color: tc.color,
-      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-      textTransform: "uppercase", letterSpacing: 0.5,
-    }}>
-      {tier}
-    </span>
-  );
-}
-
-function StatusBadge({ status }) {
-  if (!status) return <span style={{ color: "var(--text-secondary)" }}>—</span>;
-  const sc = STATUS_COLORS[status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
-  return (
-    <span style={{
-      background: sc.bg, color: sc.color,
-      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-      textTransform: "uppercase", letterSpacing: 0.5,
-    }}>
-      {status}
-    </span>
-  );
-}
-
-function SubBrandBadge({ subBrand }) {
-  if (!subBrand) return <span style={{ color: "var(--text-secondary)" }}>—</span>;
-  return (
-    <span style={{
-      background: "var(--subtle-bg-3, var(--subtle-bg))", color: "var(--primary-color, var(--accent-color))",
-      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-      textTransform: "uppercase", letterSpacing: 0.5,
-    }}>
-      {subBrand}
-    </span>
-  );
-}
+const STAGES = ["Lead", "Prospect", "Customer"];
+const TERMINAL_STAGES = ["Churned", "Junk"];
+const RUPEE = "\u20B9";
+const ARROW = "\u2192";
+const formatDate = (value) => value ? new Date(value).toLocaleDateString() : "";
+const formatMoney = (value, currency = "INR") => value == null || value === "" ? "" : (currency === "INR" ? RUPEE : currency + " ") + Number(value).toLocaleString();
+const formatStatus = (value) => value ? String(value).replaceAll("_", " ") : "";
 
 export default function LeadDetail() {
-  const { contactId } = useParams();
-  const notify = useNotify();
-  const navigate = useNavigate();
-  useContext(AuthContext); // surface AuthContext to keep parity with sibling pages
-                            // (no role-gated affordance on this page yet — read-only view).
-
-  const [contact, setContact] = useState(null);
-  const [contactLoading, setContactLoading] = useState(true);
-  const [contactError, setContactError] = useState(null);
-
-  const [diagnostics, setDiagnostics] = useState(null);
-  const [diagTotal, setDiagTotal] = useState(0);
-  const [diagError, setDiagError] = useState(null);
-
-  const [itineraries, setItineraries] = useState(null);
-  const [itinError, setItinError] = useState(null);
-
-  const [trips, setTrips] = useState(null);
-  const [tripsError, setTripsError] = useState(null);
-
-  // ─── Contact (page-level required fetch) ────────────────────────────
-  useEffect(() => {
-    setContactLoading(true);
-    setContactError(null);
-    fetchApi(`/api/contacts/${contactId}`)
-      .then((res) => setContact(res || null))
-      .catch((e) => {
-        setContactError(e?.body?.error || "Failed to load contact");
-        notify.error(e?.body?.error || "Failed to load contact");
-        setContact(null);
-      })
-      .finally(() => setContactLoading(false));
-  }, [contactId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ─── Diagnostics (most-recent first, limit 5 — only top one rendered) ─
-  useEffect(() => {
-    setDiagError(null);
-    fetchApi(`/api/travel/diagnostics?contactId=${contactId}&limit=5`)
-      .then((res) => {
-        setDiagnostics(Array.isArray(res?.diagnostics) ? res.diagnostics : []);
-        setDiagTotal(Number(res?.total) || 0);
-      })
-      .catch((e) => {
-        setDiagError(e?.body?.error || "Diagnostics unavailable");
-        setDiagnostics([]);
-      });
-  }, [contactId]);
-
-  // ─── Itineraries ─────────────────────────────────────────────────────
-  useEffect(() => {
-    setItinError(null);
-    fetchApi(`/api/travel/itineraries?contactId=${contactId}&limit=20`)
-      .then((res) => {
-        setItineraries(Array.isArray(res?.itineraries) ? res.itineraries : []);
-      })
-      .catch((e) => {
-        setItinError(e?.body?.error || "Itineraries unavailable");
-        setItineraries([]);
-      });
-  }, [contactId]);
-
-  // ─── TMC trips (schoolContactId, not contactId — see route doc) ─────
-  useEffect(() => {
-    setTripsError(null);
-    fetchApi(`/api/travel/trips?schoolContactId=${contactId}&limit=20`)
-      .then((res) => {
-        setTrips(Array.isArray(res?.trips) ? res.trips : []);
-      })
-      .catch((e) => {
-        // Trips endpoint 403s for users without TMC sub-brand access —
-        // treat that as "no trips visible" rather than a hard error, since
-        // a sales-CRM user can legitimately have a non-TMC contact.
-        setTripsError(e?.body?.error || "Trips unavailable");
-        setTrips([]);
-      });
-  }, [contactId]);
-
-  if (contactLoading) {
-    return <div style={{ padding: 24 }}>Loading&hellip;</div>;
-  }
-  if (contactError || !contact) {
-    return (
-      <div style={{ padding: 24 }}>
-        <p style={{ color: "var(--danger-color, #A8323F)" }}>
-          {contactError || "Contact not found."}
-        </p>
-        <Link to="/leads" style={dealLink}>← Back to leads</Link>
-      </div>
-    );
-  }
-
-  // Derive sub-brand presence to decide whether to show the RFU profile link.
-  const hasRfu =
-    (diagnostics || []).some((d) => d.subBrand === "rfu") ||
-    (itineraries || []).some((it) => it.subBrand === "rfu");
-  const latestDiag = diagnostics && diagnostics.length > 0 ? diagnostics[0] : null;
-  const tripsToShow = trips || [];
-
-  return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      {/* ─── Section 1: Header ────────────────────────────────────── */}
-      <header style={{ marginBottom: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
-          <div>
-            <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
-              <UserCircle size={28} aria-hidden /> {contact.name || `Contact #${contact.id}`}
-            </h1>
-            <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 6, flexWrap: "wrap", color: "var(--text-secondary)", fontSize: 13 }}>
-              {contact.email && (
-                <span style={metaSpan}><Mail size={14} aria-hidden /> {contact.email}</span>
-              )}
-              {contact.phone && (
-                <span style={metaSpan}><Phone size={14} aria-hidden /> {contact.phone}</span>
-              )}
-              {contact.company && (
-                <span style={metaSpan}><Building size={14} aria-hidden /> {contact.company}</span>
-              )}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Link to={`/contacts/${contact.id}`} style={{ ...secondaryBtn, textDecoration: "none" }}>
-              <ExternalLink size={14} /> Open in CRM Contacts
-            </Link>
-            {hasRfu && (
-              <Link to={`/travel/rfu/customers/${contact.id}`} style={{ ...secondaryBtn, textDecoration: "none" }}>
-                <ExternalLink size={14} /> Open RFU profile
-              </Link>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* ─── Section: AI conversation history (from "Sync Lead") ──── */}
-      {contact.description && (
-        <section style={sectionStyle}>
-          <div style={sectionHeader}>
-            <h2 style={sectionTitle}><MessageSquareText size={16} aria-hidden /> Chat Summary</h2>
-          </div>
-          <div style={cardWrap}>
-            <pre style={{
-              margin: 0, padding: 16, whiteSpace: "pre-wrap", wordBreak: "break-word",
-              fontFamily: "inherit", fontSize: 13, lineHeight: 1.6, color: "var(--text-primary)",
-              maxHeight: 480, overflowY: "auto",
-            }}>
-              {contact.description}
-            </pre>
-          </div>
-        </section>
-      )}
-
-      <TravelContactProfilePanel contactId={contactId} />
-
-      {/* ─── Section 2: Diagnostics summary ──────────────────────── */}
-      <section style={sectionStyle}>
-        <div style={sectionHeader}>
-          <h2 style={sectionTitle}><Tag size={16} aria-hidden /> Latest diagnostic</h2>
-          {diagTotal > 1 && (
-            <Link to={`/travel/diagnostics?contactId=${contactId}`} style={{ ...dealLink, fontSize: 12 }}>
-              +{diagTotal - 1} more →
-            </Link>
-          )}
-        </div>
-        <div style={cardWrap}>
-          {diagError ? (
-            <div style={emptyError}>Diagnostics unavailable: {diagError}</div>
-          ) : !latestDiag ? (
-            <div style={empty}>No diagnostic on file yet.</div>
-          ) : (
-            <div style={{ padding: 16, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
-              <SubBrandBadge subBrand={latestDiag.subBrand} />
-              {latestDiag.classificationLabel && (
-                <span style={{ fontWeight: 600, fontSize: 14 }}>
-                  {latestDiag.classificationLabel}
-                </span>
-              )}
-              <TierBadge tier={latestDiag.recommendedTier} />
-              {Number.isFinite(Number(latestDiag.score)) && (
-                <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-                  Score: <strong style={{ color: "var(--text-primary)" }}>{latestDiag.score}</strong>
-                </span>
-              )}
-              <span style={{ color: "var(--text-secondary)", fontSize: 12, marginLeft: "auto" }}>
-                Submitted {fmtDate(latestDiag.createdAt)}
-              </span>
-              <Link to={`/travel/diagnostics/${latestDiag.id}`} style={{ ...dealLink, fontSize: 13 }}>
-                View diagnostic →
-              </Link>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* ─── Section 3: Itineraries table ─────────────────────────── */}
-      <section style={sectionStyle}>
-        <div style={sectionHeader}>
-          <h2 style={sectionTitle}><MapPin size={16} aria-hidden /> Itineraries</h2>
-          <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-            {(itineraries || []).length} {(itineraries || []).length === 1 ? "itinerary" : "itineraries"}
-          </span>
-        </div>
-        <div style={{ ...cardWrap, overflow: "visible" }}>
-          {itinError ? (
-            <div style={emptyError}>Itineraries unavailable: {itinError}</div>
-          ) : !itineraries || itineraries.length === 0 ? (
-            <div style={empty}>No itineraries linked to this contact yet.</div>
-          ) : (
-            <TopScrollSync>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={th}>Destination</th>
-                  <th style={th}>Sub-brand</th>
-                  <th style={th}>Status</th>
-                  <th style={th}>Dates</th>
-                  <th style={thRight}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {itineraries.map((it) => (
-                  <tr
-                    key={it.id}
-                    style={{ ...trStyle, cursor: "pointer" }}
-                    onClick={() => navigate(`/travel/itineraries/${it.id}`)}
-                    role="link"
-                    aria-label={`Open itinerary ${it.destination || it.id}`}
-                  >
-                    <td style={td}><strong>{it.destination || `Itinerary #${it.id}`}</strong></td>
-                    <td style={td}><SubBrandBadge subBrand={it.subBrand} /></td>
-                    <td style={td}><StatusBadge status={it.status} /></td>
-                    <td style={td}>{fmtDate(it.startDate)} → {fmtDate(it.endDate)}</td>
-                    <td style={tdRight}>{fmtMoney(it.totalAmount, it.currency)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </TopScrollSync>
-          )}
-        </div>
-      </section>
-
-      {/* ─── Section 4: TMC trips (only render if ≥1 trip exists) ── */}
-      {tripsToShow.length > 0 && (
-        <section style={sectionStyle}>
-          <div style={sectionHeader}>
-            <h2 style={sectionTitle}><Briefcase size={16} aria-hidden /> TMC Trips</h2>
-            <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-              {tripsToShow.length} {tripsToShow.length === 1 ? "trip" : "trips"}
-            </span>
-          </div>
-          <div style={{ ...cardWrap, overflow: "visible" }}>
-            <TopScrollSync>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={th}>Trip code</th>
-                  <th style={th}>Destination</th>
-                  <th style={th}>Status</th>
-                  <th style={th}>Dates</th>
-                  <th style={thRight}>Pax</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tripsToShow.map((t) => (
-                  <tr
-                    key={t.id}
-                    style={{ ...trStyle, cursor: "pointer" }}
-                    onClick={() => navigate(`/travel/trips/${t.id}`)}
-                    role="link"
-                    aria-label={`Open trip ${t.tripCode || t.id}`}
-                  >
-                    <td style={td}><strong>{t.tripCode || `Trip #${t.id}`}</strong></td>
-                    <td style={td}>{t.destination || "—"}</td>
-                    <td style={td}><StatusBadge status={t.status} /></td>
-                    <td style={td}>{fmtDate(t.departDate)} → {fmtDate(t.returnDate)}</td>
-                    <td style={tdRight}>{t?._count?.participants ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </TopScrollSync>
-          </div>
-        </section>
-      )}
-      {/* Suppress the unused-error lint when trips section is hidden — */}
-      {/* still expose the error inline if it's a real problem AND the */}
-      {/* user has any RFU/TMC evidence elsewhere so we don't pollute */}
-      {/* generic contact views with a "trips unavailable" line. */}
-      {tripsToShow.length === 0 && tripsError && hasRfu && (
-        <div style={{ ...empty, marginTop: 12 }}>Trips unavailable: {tripsError}</div>
-      )}
-    </div>
-  );
+  const { contactId } = useParams(); const location = useLocation(); const navigate = useNavigate();
+  const [contact, setContact] = useState(null); const [contactError, setContactError] = useState(""); const [trips, setTrips] = useState([]); const [quotes, setQuotes] = useState([]); const [itineraries, setItineraries] = useState([]); const [activities, setActivities] = useState([]); const [tab, setTab] = useState("Trips"); const [editing, setEditing] = useState(false); const [note, setNote] = useState("");
+  const backTo = location.state?.backTo || "/leads"; const backLabel = location.state?.backLabel || "Back to Leads";
+  useEffect(() => { let mounted = true; setContact(null); setContactError(""); Promise.all([fetchApi("/api/contacts/" + contactId), fetchApi("/api/travel/trips?contactId=" + contactId + "&limit=100&includeQuoteTrips=true").catch(() => ({ trips: [] })), fetchApi("/api/travel/quotes?contactId=" + contactId + "&limit=100").catch(() => ({ quotes: [] })), fetchApi("/api/travel/itineraries?contactId=" + contactId + "&limit=100").catch(() => ({ itineraries: [] })), fetchApi("/api/contacts/" + contactId + "/activities?limit=100").catch(() => ({ data: [] }))]).then(([contactData, tripData, quoteData, itineraryData, activityData]) => { if (!mounted) return; setContact(contactData); setTrips(Array.isArray(tripData?.trips) ? tripData.trips : []); setQuotes(Array.isArray(quoteData?.quotes) ? quoteData.quotes : []); setItineraries(Array.isArray(itineraryData?.itineraries) ? itineraryData.itineraries : []); setActivities(Array.isArray(activityData?.data) ? activityData.data : []); }).catch((error) => { if (!mounted) return; setContactError(error?.body?.error || "Unable to load this lead."); }); return () => { mounted = false; }; }, [contactId]);
+  // Teachers manage the whole group, while student/parent contacts see their
+  // individual amount. The API marks teacher-linked trips with teacherContactId.
+  const allTrips = useMemo(() => trips.map((trip) => {
+    const isTeacher = Number(trip.teacherContactId) === Number(contactId);
+    return { ...trip, idLabel: trip.tripCode || trip.id, startDate: trip.departDate, endDate: trip.returnDate, value: isTeacher ? (trip.totalTripValue ?? trip.perStudentAmount ?? trip.pricePerStudent) : (trip.perStudentAmount ?? trip.pricePerStudent ?? trip.totalTripValue), type: "TMC" };
+  }), [trips, contactId]);
+  const otherTrips = useMemo(() => quotes.map((quote) => ({
+    id: `quote-${quote.id}`,
+    idLabel: `Quote Q-${quote.id}`,
+    destination: quote.destination || quote.title || (quote.subBrand ? `${String(quote.subBrand).toUpperCase()} travel` : "Travel quote"),
+    startDate: quote.tripDate,
+    endDate: null,
+    value: quote.totalAmount,
+    currency: quote.currency,
+    status: quote.status,
+    type: quote.subBrand ? String(quote.subBrand).toUpperCase() : "Travel",
+    isOtherTrip: true,
+  })).concat(itineraries.map((itinerary) => ({
+    id: `itinerary-${itinerary.id}`,
+    idLabel: `Itinerary #${itinerary.id}`,
+    destination: itinerary.destination || "Itinerary",
+    startDate: itinerary.startDate,
+    endDate: itinerary.endDate,
+    value: itinerary.totalAmount,
+    currency: itinerary.currency,
+    status: itinerary.status,
+    type: itinerary.subBrand ? String(itinerary.subBrand).toUpperCase() : "Itinerary",
+    isOtherTrip: true,
+  }))), [quotes, itineraries]);
+  const displayTrips = useMemo(() => [...allTrips, ...otherTrips], [allTrips, otherTrips]);
+  const totalValue = allTrips.reduce((sum, trip) => sum + (Number(trip.value) || 0), 0); const activeTrip = allTrips.find((trip) => !["completed", "cancelled"].includes(String(trip.status).toLowerCase())) || allTrips[0];
+  const moveStage = async (stage) => { if (!contact || contact.status === stage) return; const updated = await fetchApi("/api/contacts/" + contact.id, { method: "PUT", body: JSON.stringify({ status: stage }) }); setContact((current) => ({ ...current, ...updated, status: updated?.status || stage })); };
+  const addNote = async () => { if (!note.trim()) return; await fetchApi("/api/contacts/" + contact.id + "/activities", { method: "POST", body: JSON.stringify({ type: "Note", description: note.trim() }) }); setNote(""); };
+  if (contactError) return <div className="travel-lead-detail-page"><div className="travel-lead-error" role="alert"><strong>{contactError}</strong><Link to={backTo}>Back to Leads</Link></div></div>;
+  if (!contact) return <div className="travel-lead-detail-loading" role="status">Loading lead…</div>;
+  const initials = String(contact.name || "?").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(); const stageIndex = STAGES.findIndex((stage) => stage.toLowerCase() === String(contact.status || "Lead").toLowerCase());
+  const summary = [["Total trips", allTrips.length], ["Lifetime value", formatMoney(totalValue)], ["Upcoming", allTrips.filter((trip) => trip.startDate && new Date(trip.startDate) >= new Date()).length], ["Open quotes", quotes.length]];
+  return <div className="travel-lead-detail-page">
+    <Link className="travel-lead-back" to={backTo}><ArrowLeft size={14} /> {backLabel}</Link>
+    <header className="travel-lead-header"><div className="travel-lead-identity"><div className="travel-lead-avatar">{initials}</div><div><h1>{contact.name || "Contact"}</h1><div className="travel-lead-subtitle">{contact.company || ""} · {contact.email || ""}</div></div><span className="travel-lead-badge">{contact.status || "Lead"}</span></div><div className="travel-lead-actions"><button className="travel-lead-button" type="button" onClick={() => setEditing(true)}><Edit3 size={14} /> Edit contact</button><button className="travel-lead-button" type="button" onClick={() => navigate("/travel/quotes/builder", { state: { contactId: contact.id } })}>Create quote</button><button className="travel-lead-button travel-lead-button-primary" type="button" onClick={() => navigate("/travel/trips", { state: { contactId: contact.id } })}><Plus size={15} /> New trip</button></div></header>
+    <section className="travel-lead-card travel-lead-lifecycle-card"><div className="travel-lead-section-heading"><strong>Lifecycle stage</strong><span>Click a stage to move this travel lead</span></div><div className="travel-lead-lifecycle">{STAGES.map((stage, index) => <button type="button" key={stage} onClick={() => moveStage(stage)} className={`travel-lead-lifecycle-button${index === stageIndex ? " is-active" : ""}`}><span>Step {index + 1}</span><strong>{stage}</strong></button>)}<div className="travel-lead-lifecycle-terminals">{TERMINAL_STAGES.map((stage) => <button className="travel-lead-lifecycle-button" type="button" key={stage} onClick={() => moveStage(stage)}>{stage}</button>)}</div></div></section>
+    <div className="travel-lead-content"><aside className="travel-lead-sidebar"><section className="travel-lead-card travel-lead-info-card"><h2>Contact information</h2>{[["Email", contact.email], ["Phone", contact.phone], ["Company", contact.company], ["Source", contact.source], ["Lead score", contact.aiScore != null ? contact.aiScore + "/100" : ""], ["Created", formatDate(contact.createdAt)]].map(([name, value]) => <div className="travel-lead-info-row" key={name}><span>{name}</span><strong>{value || "—"}</strong></div>)}<label className="travel-lead-assignee">Assigned to<select defaultValue={contact.assignedTo?.id || contact.assignedToId || ""}><option value="">Unassigned</option><option value={contact.assignedTo?.id || contact.assignedToId || "current"}>{contact.assignedTo?.name || "Current owner"}</option></select><ChevronDown size={15} /></label></section><section className="travel-lead-card travel-lead-summary-card"><h2>Trip summary</h2><div className="travel-lead-summary-grid">{summary.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></section></aside>
+      <main className="travel-lead-main"><nav className="travel-lead-tabs">{["Trips", "Quotes", "Activity", "Notes"].map((name) => <button className={tab === name ? "is-active" : ""} type="button" key={name} onClick={() => setTab(name)}>{name}</button>)}</nav>
+        {tab === "Trips" && <><TripHero trip={activeTrip} onViewItinerary={() => navigate(activeTrip?.itineraryId ? "/travel/itineraries/" + activeTrip.itineraryId : "/travel/itineraries")} /><section className="travel-lead-trips"><h2>All trips</h2><div className="travel-lead-table-wrap"><table><thead><tr>{["Trip", "Destination", "Dates", "Type", "Value", "Status"].map((name) => <th key={name}>{name}</th>)}</tr></thead><tbody>{displayTrips.length ? displayTrips.map((trip) => <tr key={trip.id}><td><strong>{trip.idLabel}</strong></td><td>{trip.destination || ""}</td><td>{formatDate(trip.startDate)} {trip.endDate ? `${ARROW} ${formatDate(trip.endDate)}` : ""}</td><td>{trip.type}</td><td>{formatMoney(trip.value, trip.currency)}</td><td>{formatStatus(trip.status)}</td></tr>) : <tr><td colSpan="6">No travel trips linked to this contact.</td></tr>}</tbody></table></div></section></>}
+        {tab === "Quotes" && quotes.map((quote) => <div className="travel-lead-empty-row" key={quote.id}>Quote Q-{quote.id} — {formatMoney(quote.totalAmount, quote.currency)} — {formatStatus(quote.status)}</div>)}
+        {tab === "Activity" && activities.map((activity) => <div className="travel-lead-empty-row" key={activity.id}>{activity.type}: {activity.description || ""}</div>)}
+        {tab === "Notes" && <div className="travel-lead-notes"><textarea value={note} onChange={(event) => setNote(event.target.value)} /><button className="travel-lead-button travel-lead-button-primary" type="button" onClick={addNote}>Add note</button></div>}
+      </main></div>
+    {editing && <EditContactModal contact={contact} customFieldDefs={[]} onClose={() => setEditing(false)} onSaved={(updated) => { setContact((current) => ({ ...current, ...updated })); setEditing(false); }} />}
+  </div>;
 }
 
-// ─── Style constants (copied verbatim from ItineraryDetail.jsx) ──────
-const sectionStyle = { marginBottom: 24 };
-const sectionHeader = {
-  display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8,
-};
-const sectionTitle = {
-  margin: 0, fontSize: 16, display: "inline-flex", alignItems: "center", gap: 6,
-};
-const cardWrap = {
-  background: "var(--surface-color)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflow: "hidden",
-};
-const metaSpan = { display: "inline-flex", alignItems: "center", gap: 4 };
-const empty = { padding: 24, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
-const emptyError = { padding: 24, textAlign: "center", color: "var(--danger-color, #A8323F)", fontSize: 13 };
-const th = {
-  textAlign: "left", padding: "10px 12px", fontSize: 12,
-  textTransform: "uppercase", letterSpacing: 0.5,
-  color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
-};
-const thRight = { ...th, textAlign: "right" };
-const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
-const tdRight = { ...td, textAlign: "right" };
-const trStyle = { borderTop: "1px solid var(--border-light)" };
-const secondaryBtn = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  border: "1px solid var(--border-color)", cursor: "pointer",
-};
-const dealLink = {
-  color: "var(--primary-color, var(--accent-color))", textDecoration: "none", fontWeight: 600,
-  display: "inline-flex", alignItems: "center", gap: 4,
-};
+function TripHero({ trip, onViewItinerary }) {
+  if (!trip) return <div className="travel-lead-card travel-lead-empty-row">No active travel trip yet. Create a quote or trip to start the journey.</div>;
+  const current = String(trip.status || "").toLowerCase(); const progress = current === "completed" ? 4 : ["confirmed", "booked"].includes(current) ? 1 : 0; const steps = ["Quote accepted", "Booked", "Docs & visa", "Travelling", "Completed"];
+  return <section className="travel-lead-card travel-lead-trip-hero"><button className="travel-lead-button travel-lead-itinerary-button" type="button" onClick={onViewItinerary}>View itinerary</button><div className="travel-lead-trip-label">ACTIVE TRIP · {trip.idLabel}</div><h2>{trip.destination || "Travel trip"}</h2><div className="travel-lead-trip-meta">{formatDate(trip.startDate)} {ARROW} {formatDate(trip.endDate)} · {trip.type}</div><div className="travel-lead-trip-progress">{steps.map((step, index) => <div key={step}><div className={index <= progress ? "is-complete" : ""} /><small>{step}</small></div>)}</div><div className="travel-lead-trip-details"><span>Documents<strong>{trip.documentsConfigured ? "Configured" : "None configured"}</strong></span><span>Payment<strong>{trip.paymentPlan ? "Plan configured" : "Not configured"}</strong></span></div></section>;
+}

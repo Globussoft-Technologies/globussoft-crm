@@ -4,7 +4,7 @@ import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
 import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, ArrowLeft } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import ColumnPicker from '../components/ColumnPicker';
@@ -161,7 +161,7 @@ function validateCsvRow(row) {
   return issues;
 }
 
-function ContactPreviewDrawer({ contact, loading, onClose, onEdit }) {
+function ContactPreviewDrawer({ contact, loading, onClose, onEdit, onConvert, onOpenFullDetail }) {
   if (!contact) return null;
 
   const valueOrNotSet = (value) => value || 'Not set';
@@ -171,7 +171,7 @@ function ContactPreviewDrawer({ contact, loading, onClose, onEdit }) {
     ['Phone', contact?.phone],
     ['Category', contact?.company],
     ['Title', contact?.title],
-    ['Status', contact?.status],
+    ['Status', contact?.status || 'Lead'],
     ['Assigned', assignedTo],
     ['Created', contact?.createdAt ? formatDate(contact.createdAt) : null],
   ];
@@ -204,7 +204,7 @@ function ContactPreviewDrawer({ contact, loading, onClose, onEdit }) {
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem', marginTop: '1rem' }}>
               {[
-                ['Status', contact.status],
+                ['Status', contact.status || 'Lead'],
                 ['Assigned', assignedTo],
                 ['Score', `${contact.aiScore ?? 0}/100`],
               ].map(([label, value]) => (
@@ -215,7 +215,11 @@ function ContactPreviewDrawer({ contact, loading, onClose, onEdit }) {
               ))}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+              <button type="button" className="btn-secondary" onClick={onOpenFullDetail}>Open full detail</button>
               <button type="button" className="btn-secondary" onClick={onEdit}>Edit contact</button>
+              {String(contact.status || 'Lead') === 'Lead' && (
+                <button type="button" className="btn-secondary" onClick={onConvert}>Convert to Prospect</button>
+              )}
             </div>
             <section style={{ marginTop: '1.25rem' }}>
               <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Contact information</h3>
@@ -235,6 +239,7 @@ function ContactPreviewDrawer({ contact, loading, onClose, onEdit }) {
 
 const Contacts = () => {
   const notify = useNotify();
+  const navigate = useNavigate();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   // Server-driven pagination (?limit=&offset=&page=) — `contacts` holds ONLY
@@ -355,6 +360,21 @@ const Contacts = () => {
       // Keep the list row data visible if the detail request fails.
     } finally {
       if (previewRequestId.current === requestId) setPreviewLoading(false);
+    }
+  };
+
+  const convertPreviewToProspect = async () => {
+    if (!previewContact || previewContact.status === 'Prospect') return;
+    try {
+      const updated = await fetchApi(`/api/contacts/${previewContact.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Prospect' }),
+      });
+      setPreviewContact((current) => ({ ...current, ...updated, status: 'Prospect' }));
+      setContacts((rows) => rows.map((row) => row.id === previewContact.id ? { ...row, ...updated, status: 'Prospect' } : row));
+      notify.success('Contact moved to Prospect');
+    } catch (error) {
+      notify.error(error?.body?.error || 'Could not update contact status');
     }
   };
 
@@ -2326,6 +2346,16 @@ const Contacts = () => {
         onEdit={() => {
           setEditingContact(previewContact);
           closeContactPreview();
+        }}
+        onConvert={convertPreviewToProspect}
+        onOpenFullDetail={() => {
+          const path = isTravel ? `/travel/leads/${previewContact?.id}` : `/contacts/${previewContact?.id}`;
+          navigate(path, {
+            state: {
+              backTo: isTravel ? "/contacts" : "/contacts",
+              backLabel: "Back to Contacts",
+            },
+          });
         }}
       />
     </div>

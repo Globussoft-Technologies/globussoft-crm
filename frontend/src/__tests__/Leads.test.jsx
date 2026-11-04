@@ -1507,15 +1507,38 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('opens an in-place lead preview drawer from the list actions', async () => {
+  it('keeps prospect conversion available in the generic lead preview', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
 
-    expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
-    expect(screen.getByText('Contact information')).toBeInTheDocument();
-    expect(screen.getByText('Open full detail')).toBeInTheDocument();
+    const preview = screen.getByRole('dialog', { name: 'Lead preview' });
+    expect(preview).toBeInTheDocument();
+    expect(within(preview).getByText('Contact information')).toBeInTheDocument();
+    expect(within(preview).getByText('Open full detail')).toBeInTheDocument();
+    expect(within(preview).getByRole('button', { name: 'Convert to Prospect' })).toBeInTheDocument();
+  });
+
+  it('converts a lead from the Travel lead preview', async () => {
+    renderLeads({
+      ...authValue,
+      tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
+    });
+
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
+
+    const preview = screen.getByRole('dialog', { name: 'Lead preview' });
+    fetchApiMock.mockClear();
+    fireEvent.click(within(preview).getByRole('button', { name: 'Convert to Prospect' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Prospect' }),
+      }));
+    });
   });
 
   it('keeps Name and Actions fixed and hides unchecked Callified columns', async () => {
@@ -3152,24 +3175,29 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true));
   });
 
-  it('Convert button PUTs /api/contacts/:id with status="Prospect" (#283)', async () => {
-    renderLeads(ADMIN_AUTH);
+  it('keeps the prospect conversion row action and functionality for every vertical', async () => {
+    const genericRender = renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    fetchApiMock.mockClear();
 
-    // Multiple Convert buttons (one per row). Click the first one.
-    const convertButtons = screen.getAllByRole('button', { name: /Convert/i });
-    expect(convertButtons.length).toBe(3);
-    fireEvent.click(convertButtons[0]);
+    expect(screen.getAllByTitle('Convert to Prospect')).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'Convert Alice Smith to Prospect' })).toBeInTheDocument();
+
+    genericRender.unmount();
+    renderLeads({
+      ...ADMIN_AUTH,
+      tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
+    });
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    expect(screen.getAllByTitle('Convert to Prospect')).toHaveLength(3);
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Convert Alice Smith to Prospect' }));
 
     await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => typeof url === 'string' && url.startsWith('/api/contacts/') && opts?.method === 'PUT' && !url.includes('/assign'),
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      // Per #283  Convert advances ONE step (Lead ?? ? Prospect), not jumps to Customer
-      expect(body.status).toBe('Prospect');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/11', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Prospect' }),
+      }));
     });
   });
 
@@ -4527,13 +4555,14 @@ describe('Leads Web Form column (generic CRM only)', () => {
     });
   });
 
-  it('shows a Lead Fields button on generic that opens an in-place modal', async () => {
+  it('keeps the existing in-place Lead Fields modal for Generic CRM', async () => {
     renderLeads(genericAuth);
     await screen.findByText('Form Lead');
 
     const btn = screen.getByRole('button', { name: /Lead Fields/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
+
     const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
     expect(dialog).toBeInTheDocument();
     expect(dialog).toHaveStyle({ overflowX: 'hidden', minWidth: '0px' });
@@ -4541,64 +4570,14 @@ describe('Leads Web Form column (generic CRM only)', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it('opens the same in-place Lead Fields modal for travel admins', async () => {
+  it('opens the tenant-scoped field manager from Travel CRM Lead Fields', async () => {
     renderLeads(travelAuth);
     await screen.findByText('Form Lead');
 
     fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
-    expect(await screen.findByRole('dialog', { name: /Add Lead Field/i })).toBeInTheDocument();
-  });
 
-  it('creates a tenant-scoped field from the in-place modal', async () => {
-    const createdField = {
-      id: 91,
-      fieldKey: 'referral_source',
-      label: 'Referral Source',
-      fieldType: 'dropdown',
-      options: ['Google', 'Referral'],
-      isRequired: true,
-      displayOrder: 0,
-    };
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/lead-custom-fields' && opts?.method === 'POST') {
-        return Promise.resolve(createdField);
-      }
-      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
-        return Promise.resolve(webFormRows);
-      }
-      return Promise.resolve([]);
-    });
-
-    renderLeads(travelAuth);
-    await screen.findByText('Form Lead');
-    fireEvent.click(screen.getByRole('button', { name: /Lead Fields/i }));
-
-    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
-    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Referral Source'), {
-      target: { value: 'Referral Source' },
-    });
-    fireEvent.change(within(dialog).getByRole('combobox'), {
-      target: { value: 'dropdown' },
-    });
-    fireEvent.change(within(dialog).getByPlaceholderText('Google, Referral, Event'), {
-      target: { value: 'Google, Referral' },
-    });
-    fireEvent.click(within(dialog).getByRole('checkbox'));
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
-
-    await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/lead-custom-fields' && opts?.method === 'POST',
-      );
-      expect(postCall).toBeDefined();
-      expect(JSON.parse(postCall[1].body)).toEqual({
-        label: 'Referral Source',
-        fieldType: 'dropdown',
-        isRequired: true,
-        options: ['Google', 'Referral'],
-      });
-      expect(screen.queryByRole('dialog', { name: /Add Lead Field/i })).toBeNull();
-    });
+    expect(navigateMock).toHaveBeenCalledWith('/settings/lead-fields');
+    expect(screen.queryByRole('dialog', { name: /Add Lead Field/i })).not.toBeInTheDocument();
   });
 
   it('hides the Lead Fields button on non-generic verticals (wellness)', async () => {

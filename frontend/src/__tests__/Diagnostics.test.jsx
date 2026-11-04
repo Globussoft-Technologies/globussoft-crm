@@ -842,7 +842,7 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
     expect(within(row).getByText('noname@x.com')).toBeInTheDocument();
   });
 
-  it('contact column links to /contacts/<contactId> when contactId is present', async () => {
+  it('contact column links to the travel lead detail page when contactId is present', async () => {
     installFetchMock({
       list: {
         diagnostics: [
@@ -856,8 +856,8 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
       },
     });
     renderPage();
-    const link = await screen.findByRole('link', { name: /Open contact #5003/i });
-    expect(link.getAttribute('href')).toBe('/contacts/5003');
+    const link = await screen.findByRole('link', { name: /Open travel lead #5003/i });
+    expect(link.getAttribute('href')).toBe('/travel/leads/5003');
     expect(within(link).getByText('Ravi Kumar')).toBeInTheDocument();
     expect(within(link).getByText('ravi@x.com')).toBeInTheDocument();
   });

@@ -29,7 +29,7 @@ const TRIP = {
   _count: { participants: 32 },
 };
 
-function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], itineraries = [], activities = [] } = {}) {
+function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], itineraries = [], activities = [], tripInstalments = null, participants = [] } = {}) {
   return (url, options = {}) => {
     if (typeof url !== "string") return Promise.resolve({});
     if (url === "/api/contacts/77" && options.method === "PUT") {
@@ -37,6 +37,8 @@ function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], itinera
     }
     if (url === "/api/contacts/77") return Promise.resolve(contact);
     if (url.startsWith("/api/travel/trips?")) return Promise.resolve({ trips });
+    if (url === `/api/travel/trips/${TRIP.id}/instalments`) return Promise.resolve(tripInstalments || {});
+    if (url === `/api/travel/trips/${TRIP.id}/participants`) return Promise.resolve({ participants });
     if (url.startsWith("/api/travel/quotes?")) return Promise.resolve({ quotes });
     if (url.startsWith("/api/travel/itineraries?")) return Promise.resolve({ itineraries });
     if (url.startsWith("/api/contacts/77/activities?")) return Promise.resolve({ data: activities });
@@ -52,6 +54,7 @@ function renderPage() {
         <Route path="/travel/leads/:contactId" element={<LeadDetail />} />
         <Route path="/travel/quotes/builder" element={<div>Quote builder</div>} />
         <Route path="/travel/trips" element={<div>Trips page</div>} />
+        <Route path="/travel/trips/:id" element={<div>Trip detail page</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -68,8 +71,21 @@ describe("LeadDetail", () => {
     expect(screen.getByText("principal@sharadaschool.in")).toBeTruthy();
     expect(screen.getByText("All trips")).toBeTruthy();
     expect(screen.getByText("goa-jan-2026")).toBeTruthy();
-    expect(screen.getAllByText("₹5,000").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("₹5,000").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("confirmed")).toBeTruthy();
+  });
+
+  it("shows the recorded paid amount in the All trips table", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      tripInstalments: { instalments: [{ participantId: 901, paidAmount: 3000 }, { participantId: 901, paidAmount: 1250 }] },
+      participants: [{ id: 901, parentEmail: CONTACT.email }],
+    }));
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Sharada School Trust" });
+    expect(screen.getByRole("columnheader", { name: "Paid amount" })).toBeTruthy();
+    expect(screen.getAllByText("₹4,250").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryAllByText("₹5,000").length).toBeGreaterThanOrEqual(1);
   });
 
   it("moves the contact through the lifecycle stages", async () => {
@@ -84,6 +100,16 @@ describe("LeadDetail", () => {
     })));
   });
 
+  it("opens the active trip detail page from the trip hero", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Sharada School Trust" });
+    fireEvent.click(screen.getByRole("button", { name: "View trip" }));
+
+    expect(await screen.findByText("Trip detail page")).toBeTruthy();
+  });
+
   it("shows the whole trip amount for a teacher contact", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({
       trips: [{ ...TRIP, teacherContactId: 77 }],
@@ -91,7 +117,7 @@ describe("LeadDetail", () => {
     renderPage();
 
     await screen.findByRole("heading", { name: "Sharada School Trust" });
-    expect(screen.getAllByText("₹160,000").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("₹160,000").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows the empty trip state when no trips are linked", async () => {
@@ -110,12 +136,12 @@ describe("LeadDetail", () => {
     await screen.findByRole("heading", { name: "Sharada School Trust" });
     expect(screen.getByText("Quote Q-12")).toBeTruthy();
     expect(screen.getByText("RFU")).toBeTruthy();
-    expect(screen.getByText("₹145,000")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Paid amount" })).toBeTruthy();
   });
 
   it("includes contact-linked itineraries in the All trips table", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({
-      itineraries: [{ id: 33, destination: "Dubai", subBrand: "travelstall", status: "sent", totalAmount: 90000, currency: "INR", startDate: "2026-12-01", endDate: "2026-12-05" }],
+      itineraries: [{ id: 33, destination: "Dubai", subBrand: "travelstall", status: "sent", totalAmount: 90000, advancePaidAmount: 12500, currency: "INR", startDate: "2026-12-01", endDate: "2026-12-05" }],
     }));
     renderPage();
 
@@ -123,7 +149,7 @@ describe("LeadDetail", () => {
     expect(screen.getByText("Itinerary #33")).toBeTruthy();
     expect(screen.getByText("Dubai")).toBeTruthy();
     expect(screen.getByText("TRAVELSTALL")).toBeTruthy();
-    expect(screen.getByText("₹90,000")).toBeTruthy();
+    expect(screen.getByText("₹12,500")).toBeTruthy();
   });
 
   it("renders quotes and activities in their tabs", async () => {

@@ -26,6 +26,7 @@ import {
   FileDigit,
   Database,
   Network,
+  GitBranch,
   Target,
   CheckSquare,
   UserPlus,

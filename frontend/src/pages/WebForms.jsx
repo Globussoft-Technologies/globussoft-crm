@@ -32,7 +32,7 @@ import {
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
-import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, textOrBlank } from "../utils/webForms";
+import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, textOrBlank } from "../utils/webForms";
 import "./WebFormsLeadFieldAction.css";
 const CONTACT_FIELD_OPTIONS = [
   { value: "name", label: "Name", fieldType: "text", placeholder: "Enter name" },
@@ -10097,7 +10097,13 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
 
-    const name = `Untitled form - ${date}, ${time}`;
+    const baseName = `Untitled form - ${date}, ${time}`;
+    let name = baseName;
+    let suffix = 2;
+    while (hasDuplicateWebFormName(forms, name)) {
+      name = `${baseName} (${suffix})`;
+      suffix += 1;
+    }
 
 
 
@@ -10375,6 +10381,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
     if (!selectedForm?.id) return;
+
+    if (hasDuplicateWebFormName(forms, selectedForm.name, selectedForm.id)) {
+      notify.error("A web form with this name already exists");
+      return;
+    }
 
 
 

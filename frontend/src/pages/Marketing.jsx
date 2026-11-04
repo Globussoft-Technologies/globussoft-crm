@@ -57,6 +57,7 @@ import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../compone
 import { AuthContext } from '../appContexts';
 import GenericCampaignWizard from '../components/GenericCampaignWizard';
 import GenericCampaignTemplates from '../components/GenericCampaignTemplates';
+import GenericWebhookManager from '../components/GenericWebhookManager';
 import GenericWhatsAppTriggerMappings from '../components/GenericWhatsAppTriggerMappings';
 import GenericChannelTriggerMappings from '../components/GenericChannelTriggerMappings';
 import TwilioSettingsCard from '../components/TwilioSettingsCard';
@@ -290,8 +291,11 @@ export default function Marketing() {
   const pageTitle = isGeneric ? 'Marketing Sequences' : 'Marketing';
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = new URLSearchParams(window.location.search).get('tab');
-    return ['templates', 'campaigns', 'sms', 'whatsapp', 'push', 'forms'].includes(requestedTab) ? requestedTab : 'campaigns';
+    return ['templates', 'webhooks', 'campaigns', 'sms', 'whatsapp', 'push', 'forms'].includes(requestedTab) ? requestedTab : 'campaigns';
   }); // 'campaigns', 'templates', 'sms', 'push', 'forms'
+  const templateChannelForView = useRef(
+    activeTab === 'campaigns' ? 'EMAIL' : (activeTab === 'sms' ? 'SMS' : (activeTab === 'whatsapp' ? 'WHATSAPP' : '')),
+  );
 
   // ───── Forms State ─────
   const [formName, setFormName] = useState('My Contact Form');
@@ -968,11 +972,17 @@ ${fields.map(f => {
   });
 
   const selectMarketingTab = tab => leaveSequenceBuilder(() => {
+    const opensGenericSequenceBuilder = isGeneric
+      && ['campaigns', 'sms', 'whatsapp'].includes(tab)
+      && tab !== activeTab;
+    if (tab === 'templates') {
+      templateChannelForView.current = activeTab === 'whatsapp' ? 'WHATSAPP' : (activeTab === 'sms' ? 'SMS' : 'EMAIL');
+    }
     clearDraftSelection();
     setSelectingDrafts(false);
     setCampaignPage(1);
     setActiveTab(tab);
-    setSequenceBuilderOpen(false);
+    setSequenceBuilderOpen(opensGenericSequenceBuilder);
     setEditingSequenceId(null);
   });
 
@@ -988,9 +998,9 @@ ${fields.map(f => {
   }
 
   return (
-    <div className="marketing-page" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className={`marketing-page${isGeneric ? ' marketing-page--generic' : ''}`} style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       {isGeneric && <SequenceUnsavedChangesGuard active={sequenceBuilderOpen && sequenceBuilderDirty} notify={notify} onDiscard={() => setSequenceBuilderDirty(false)} />}
-      <header style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+      <header className="marketing-page__header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>{pageTitle}</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Manage outbound campaigns and inbound lead capture forms.</p>
@@ -1036,6 +1046,15 @@ ${fields.map(f => {
                 {isGeneric && tab.genericLabel ? tab.genericLabel : tab.label}
               </button>
             ))}
+            {isGeneric && (
+              <button
+                type="button"
+                onClick={() => selectMarketingTab('webhooks')}
+                style={tabButtonStyle(activeTab === 'webhooks', 'var(--primary-color, var(--accent-color))')}
+              >
+                Webhooks
+              </button>
+            )}
           </div>
           {/* Right-edge fade scroll cue — purely decorative, pointer-events:none */}
           <div
@@ -1240,7 +1259,8 @@ ${fields.map(f => {
       )}
 
       {/* ─── Campaign Editor Modal (#495) ─── */}
-      {activeTab === 'templates' && isGeneric && <GenericCampaignTemplates />}
+      {activeTab === 'templates' && isGeneric && <GenericCampaignTemplates initialChannel={templateChannelForView.current} />}
+      {activeTab === 'webhooks' && isGeneric && <GenericWebhookManager />}
       {isGeneric && channelConfigOpen && (
         <div style={channelConfigBackdropStyle} onClick={() => setChannelConfigOpen(null)}>
           <div

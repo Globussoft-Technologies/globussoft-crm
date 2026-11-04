@@ -117,7 +117,8 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/dashboard', label: 'Dashboard', description: 'Enterprise overview', requiredPermission: { module: 'dashboards', action: 'read' } },
   { path: '/inbox', label: 'Inbox', description: 'Unified inbox', requiredPermission: { module: 'communications', action: 'read' } },
   { path: '/contacts', label: 'Contacts', description: 'Contact directory', requiredPermission: { module: 'contacts', action: 'read' } },
-  { path: '/pipeline', label: 'Deals', description: 'Manage deals by deal type and stage', searchPath: false, requiredPermission: { module: 'pipeline', action: 'read' } },
+  { path: '/pipeline', label: 'Deals and Pipelines', description: 'Manage deals by deal type and stage', searchPath: false, requiredPermission: { module: 'pipeline', action: 'read' } },
+  { path: '/pipelines', label: 'Pipelines', description: 'Configure sales pipelines and stages', managerOnly: true, requiredPermission: { module: 'pipeline', action: 'write' } },
   { path: '/leads', label: 'Leads', description: 'Inbound + open leads', requiredPermission: { module: 'leads', action: 'read' } },
   { path: '/converted-leads', label: 'Converted Leads', description: 'Leads that converted to customers', requiredPermission: { module: 'leads', action: 'read' }, sidebarHidden: true },
   { path: '/clients', label: 'Clients', description: 'Company and organization directory', requiredPermission: { module: 'contacts', action: 'read' }, sidebarHidden: true },
@@ -195,7 +196,9 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { id: 'callified', label: 'Callified', description: 'Open the connected Callified calling workspace', managerOnly: true, actionTarget: '[data-tour-feature="callified"]' },
   { path: '/whatsapp', label: 'WhatsApp', description: 'Manage tenant-scoped WhatsApp conversations', requiredPermission: { module: 'whatsapp', action: 'read' } },
   { path: '/lead-reports', label: 'Lead Reports', description: 'Review lead productivity, quality, sources, and follow-ups', managerOnly: true },
-  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
+  { path: '/field-config', label: 'Field Config', description: 'Configure Generic CRM lead fields, groups, and table columns', adminOnly: true },
+  // Generic CRM: standalone Workflows page intentionally hidden from search.
+  // { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
 ];
 
 // Permission mapping for legacy generic search entries that historically only

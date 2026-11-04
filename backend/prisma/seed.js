@@ -225,7 +225,7 @@ async function main() {
   // STEP 4: PIPELINE STAGES — Custom enterprise stages
   // ══════════════════════════════════════════════════════════════
   const stagesData = [
-    { name: 'New Lead', color: '#3b82f6', position: 0 },
+    { name: 'New Deal', color: '#3b82f6', position: 0 },
     { name: 'Contacted', color: '#f59e0b', position: 1 },
     { name: 'Proposal Sent', color: '#a855f7', position: 2 },
     { name: 'Negotiation', color: '#ec4899', position: 3 },

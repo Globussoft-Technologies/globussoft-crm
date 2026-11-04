@@ -339,8 +339,9 @@ async function hydrateGenericPlotInvoiceRows(invoices, tenantId, { detailed = fa
     return invoices;
   }
 
-  const invoiceIds = invoices.map((invoice) => invoice.id).filter(Boolean);
-  if (invoiceIds.length === 0) return invoices;
+  try {
+    const invoiceIds = invoices.map((invoice) => invoice.id).filter(Boolean);
+    if (invoiceIds.length === 0) return invoices;
 
   const items = await prisma.plotInvoiceItem.findMany({
     where: {
@@ -409,7 +410,7 @@ async function hydrateGenericPlotInvoiceRows(invoices, tenantId, { detailed = fa
   const bookingById = new Map(bookings.map((booking) => [booking.id, booking]));
   const itemByInvoiceId = new Map(items.map((item) => [item.invoiceId, item]));
 
-  return invoices.map((invoice) => {
+    return invoices.map((invoice) => {
     const item = itemByInvoiceId.get(invoice.id);
     if (!item) return invoice;
     const booking = bookingById.get(item.plotBookingId);
@@ -442,7 +443,16 @@ async function hydrateGenericPlotInvoiceRows(invoices, tenantId, { detailed = fa
         purchaseDate: booking?.reservedAt || booking?.createdAt || invoice.issuedDate || null,
       } : basePlotDetails,
     };
-  });
+    });
+  } catch (error) {
+    // Plot invoicing is an optional Generic CRM extension. Older local/demo
+    // databases may not have its tables yet; standard invoices must still
+    // load without the optional plot enrichment.
+    if (/plotinvoiceitem|plotsite|plotbooking|does not exist|unknown table/i.test(String(error?.message || error))) {
+      return invoices;
+    }
+    throw error;
+  }
 }
 
 // A wellness visit stores the final amount charged separately from the active

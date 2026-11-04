@@ -28,7 +28,7 @@ const BILLING_TABLE_COLUMNS = [
   { label: 'Status', width: 120, minWidth: 90 },
   { label: 'Actions', width: 120, minWidth: 100 },
 ];
-const billingHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' };
+const billingHeaderStyle = { position: 'relative', padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', boxSizing: 'border-box' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';
@@ -82,6 +82,7 @@ export default function BillingPersons() {
     BILLING_TABLE_COLUMNS,
     'pickup-plot-billing-directory-column-widths',
   );
+  const gridTemplateColumns = columnWidths.map((width) => `${((width / tableMinWidth) * 100).toFixed(4)}%`).join(' ');
 
   const load = useCallback(async () => {
     const initialLoad = !loadedRef.current;
@@ -212,28 +213,28 @@ export default function BillingPersons() {
           data-testid="billing-directory-table-scroll"
           style={{
             flex: '0 0 auto', minHeight: 0, maxHeight: 'calc(100vh - 260px)', width: '100%', maxWidth: '100%',
-            overflowX: 'auto', overflowY: 'auto', padding: 0, boxSizing: 'border-box',
+            overflowX: 'auto', overflowY: 'hidden', padding: 0, boxSizing: 'border-box',
             scrollbarGutter: 'stable', overscrollBehavior: 'contain',
           }}
         >
           <div data-testid="billing-persons-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label="Billing persons" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label="Billing persons" style={{ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>{columnWidths.map((width, index) => <col key={BILLING_TABLE_COLUMNS[index].label} style={{ width }} />)}</colgroup>
-            <thead><tr>{BILLING_TABLE_COLUMNS.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={billingHeaderStyle}>{column.label}</ResizableTableHeader>)}</tr></thead>
-            <tbody>
-              {visibleRows.map((row, index) => <tr key={row.id} style={{ borderBottom: '1px solid var(--border-color)', opacity: row.isActive ? 1 : .68 }}>
-                <td style={{ padding: '.55rem .65rem' }}>{index + 1}</td>
-                <td style={{ padding: '.55rem .65rem', fontWeight: 800, overflowWrap: 'anywhere' }}>{row.user?.name || row.name}</td>
-                <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Phone size={14} /> {row.user?.phone || row.phone}</span></td>
-                <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{row.user?.email || row.email || 'Not linked'}</td>
-                <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={row.plots} /></td>
-                <td style={{ padding: '.55rem .65rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
-                <td style={{ padding: '.55rem .65rem' }}><span style={{ display: 'inline-flex', padding: '.2rem .45rem', borderRadius: 6, fontSize: '.7rem', fontWeight: 800, color: row.isActive ? '#047857' : '#64748b', background: row.isActive ? 'rgba(16,185,129,.14)' : 'rgba(100,116,139,.14)' }}>{row.isActive ? 'Active' : 'Inactive'}</span></td>
-                <td style={{ padding: '.55rem .65rem' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button type="button" className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button type="button" className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggle(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
+            <thead style={{ display: 'block', width: '100%' }}><tr style={{ display: 'grid', gridTemplateColumns, width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>{BILLING_TABLE_COLUMNS.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} fluid onResize={(width) => resizeColumn(index, width)} style={{ ...billingHeaderStyle, position: 'static' }}>{column.label}</ResizableTableHeader>)}</tr></thead>
+            <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(100vh - 304px)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
+              {visibleRows.map((row, index) => <tr key={row.id} style={{ display: 'grid', gridTemplateColumns, width: '100%', borderBottom: '1px solid var(--border-color)', opacity: row.isActive ? 1 : .68 }}>
+                <td style={{ padding: '.55rem .65rem', width: 'auto' }}>{index + 1}</td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto', fontWeight: 800, overflowWrap: 'anywhere' }}>{row.user?.name || row.name}</td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Phone size={14} /> {row.user?.phone || row.phone}</span></td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}>{row.user?.email || row.email || 'Not linked'}</td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={row.plots} /></td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto' }}><span style={{ display: 'inline-flex', padding: '.2rem .45rem', borderRadius: 6, fontSize: '.7rem', fontWeight: 800, color: row.isActive ? '#047857' : '#64748b', background: row.isActive ? 'rgba(16,185,129,.14)' : 'rgba(100,116,139,.14)' }}>{row.isActive ? 'Active' : 'Inactive'}</span></td>
+                <td style={{ padding: '.55rem .65rem', width: 'auto' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button type="button" className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button type="button" className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggle(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
               </tr>)}
-              {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading billing persons…</td></tr>}
-              {!loading && visibleRows.length === 0 && <tr>
-                <td colSpan="8" className="pickup-plot-empty-cell">
+              {loading && !loadedRef.current && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}><td style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading billing persons…</td></tr>}
+              {!loading && visibleRows.length === 0 && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}>
+                <td className="pickup-plot-empty-cell" style={{ gridColumn: '1 / -1' }}>
                   <PickupPlotEmptyState
                     icon={Receipt}
                     testId="billing-directory-empty-state"

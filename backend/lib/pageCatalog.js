@@ -419,11 +419,18 @@ const PAGE_CATALOG = [
   },
   {
     path: '/pipeline',
-    label: 'Deals',
+    label: 'Deals and Pipelines',
     description: 'Manage deals by deal type and stage',
     category: 'Sales',
     searchPath: false,
     requiredPermissions: [{ module: 'pipeline', action: 'read' }],
+  },
+  {
+    path: '/pipelines',
+    label: 'Pipelines',
+    description: 'Configure sales pipelines and stages',
+    category: 'Sales',
+    requiredPermissions: [{ module: 'pipeline', action: 'write' }],
   },
 
   //  Finance 
@@ -1261,14 +1268,16 @@ const PAGE_CATALOG = [
   },
 
   //  Automation 
-  {
-    path: '/workflows',
-    label: 'Workflows',
-    description: 'Workflow automation builder',
-    category: 'Automation',
-    vertical: 'generic',
-    requiredPermissions: [{ module: 'workflows', action: 'read' }],
-  },
+  // Generic CRM: standalone Workflows page intentionally hidden from page
+  // discovery. The route, API, and embedded webhook workflows remain intact.
+  // {
+  //   path: '/workflows',
+  //   label: 'Workflows',
+  //   description: 'Workflow automation builder',
+  //   category: 'Automation',
+  //   vertical: 'generic',
+  //   requiredPermissions: [{ module: 'workflows', action: 'read' }],
+  // },
 
   //  Admin & Developer (missing routes) 
   {
@@ -1487,6 +1496,17 @@ const PAGE_CATALOG = [
     category: 'Reports',
     vertical: 'generic',
     requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
+    // Generic CRM-only field-definition and table-field configuration.
+    // Keep this in the page catalog so Super Admin page visibility, the
+    // role-page picker, and the omnibar all describe the same page.
+    path: '/field-config',
+    label: 'Field Config',
+    description: 'Configure Generic CRM lead fields, groups, and table columns',
+    category: 'Leads',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'settings', action: 'manage' }],
   },
   {
     path: '/booking-pages',

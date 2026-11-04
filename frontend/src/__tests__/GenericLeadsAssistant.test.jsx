@@ -17,28 +17,70 @@ describe("GenericLeadsAssistant", () => {
     expect(screen.queryByTestId("generic-leads-assistant-fab")).not.toBeInTheDocument();
   });
 
-  it("answers greetings immediately without showing CRM loading or calling the API", () => {
+  it("answers greetings immediately without showing the thinking indicator or calling the API", () => {
     render(<GenericLeadsAssistant isGeneric />);
     fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
     fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: "hi" } });
     fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
 
     expect(screen.getByText("Hi! How can I help you with your leads today?")).toBeInTheDocument();
-    expect(screen.queryByText("Checking CRM data…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
     expect(fetchApi).not.toHaveBeenCalled();
+  });
+
+  it.each(["hii", "hiii", "Hiiii", "helo", "heyy"])("treats a typoed greeting like a normal greeting: %s", (prompt) => {
+    render(<GenericLeadsAssistant isGeneric />);
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
+    fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: prompt } });
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
+
+    expect(screen.getByText("Hi! How can I help you with your leads today?")).toBeInTheDocument();
+    expect(fetchApi).not.toHaveBeenCalled();
+  });
+
+  it.each(["What's up?", "How do you do?"])("answers casual conversation naturally: %s", (prompt) => {
+    render(<GenericLeadsAssistant isGeneric />);
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
+    fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: prompt } });
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
+
+    expect(screen.getByText("I'm doing well and ready to help. What would you like to work on with your leads?")).toBeInTheDocument();
+    expect(fetchApi).not.toHaveBeenCalled();
+  });
+
+  it("handles a negative conversational reply without showing the fallback", () => {
+    render(<GenericLeadsAssistant isGeneric />);
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
+    fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: "no help needed" } });
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
+
+    expect(screen.getByText("No problem. I'll be here if you need help with your leads.")).toBeInTheDocument();
+    expect(screen.queryByText(/I couldn't understand that request/)).not.toBeInTheDocument();
+    expect(fetchApi).not.toHaveBeenCalled();
+  });
+
+  it("sends a general message to the AI instead of showing the same fallback", async () => {
+    fetchApi.mockResolvedValueOnce({ reply: "I can help with that." });
+    render(<GenericLeadsAssistant isGeneric />);
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
+    fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: "asdfgh qwerty" } });
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
+
+    await waitFor(() => expect(screen.getByText("I can help with that.")).toBeInTheDocument());
+    expect(fetchApi).toHaveBeenCalledWith("/api/leads-assistant/message", expect.objectContaining({ method: "POST" }));
   });
 
   it.each([
     ["How are you?", "I'm doing well, thank you! How can I help you with your leads, deals, or pipelines today?"],
     ["Who are you?", "I'm your Leads assistant. I can help you find leads, answer questions about records, filter the Leads view, and prepare reports."],
-  ])("answers normal conversation locally without CRM loading: %s", (prompt, reply) => {
+  ])("answers normal conversation locally without thinking/loading: %s", (prompt, reply) => {
     render(<GenericLeadsAssistant isGeneric />);
     fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
     fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: prompt } });
     fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
 
     expect(screen.getByText(reply)).toBeInTheDocument();
-    expect(screen.queryByText("Checking CRM dataâ€¦")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
     expect(fetchApi).not.toHaveBeenCalled();
   });
 
@@ -73,6 +115,17 @@ describe("GenericLeadsAssistant", () => {
 
     await waitFor(() => expect(screen.getByText(/Email: asha@example.com/)).toBeInTheDocument());
     expect(screen.queryByText("Matching leads report")).not.toBeInTheDocument();
+  });
+
+  it("renders assistant markdown emphasis as real bold text", async () => {
+    fetchApi.mockResolvedValueOnce({ reply: "Here are **Find leads:** Search by name, email, or phone." });
+    render(<GenericLeadsAssistant isGeneric />);
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-fab"));
+    fireEvent.change(screen.getByTestId("generic-leads-assistant-input"), { target: { value: "find leads" } });
+    fireEvent.click(screen.getByTestId("generic-leads-assistant-send"));
+
+    await waitFor(() => expect(screen.getByText("Find leads:")).toHaveProperty("tagName", "STRONG"));
+    expect(screen.queryByText(/\*\*Find leads:\*\*/)).not.toBeInTheDocument();
   });
 
   it("opens, sends the current lead context, and applies CRM filters automatically", async () => {

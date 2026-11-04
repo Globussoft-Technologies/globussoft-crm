@@ -408,7 +408,7 @@ test.describe('Audit coverage — Contact', () => {
     expect(afterRows.length).toBe(beforeRows.length);
   });
 
-  test('400-validation POST /api/contacts (missing email) does NOT create an audit row', async ({ request }) => {
+  test('400-validation POST /api/contacts (malformed email) does NOT create an audit row', async ({ request }) => {
     const { token } = await getGenericAdmin(request);
     // Snapshot count before
     const before = await get(request, token, `/api/audit?entity=Contact&action=CREATE`);
@@ -416,12 +416,13 @@ test.describe('Audit coverage — Contact', () => {
     const beforeBaseline = beforeBody.length;
 
     const bad = await post(request, token, '/api/contacts', {
-      // Missing email — route returns 400.
+      // Missing email can be valid in Generic CRM. A malformed non-empty
+      // address must fail regardless of the tenant's required-field settings.
       name: `${RUN_TAG} bad-validation`,
+      email: 'not-an-email',
     });
-    // Route returns 400 OR 422 OR 500 depending on where the validator
-    // catches it; the audit-row-not-emitted contract holds regardless.
-    expect(bad.status()).toBeGreaterThanOrEqual(400);
+    expect(bad.status()).toBe(400);
+    expect(await bad.json()).toMatchObject({ code: 'INVALID_EMAIL' });
 
     // Audit-row count for Contact CREATE in our tenant should not have
     // grown by this 400 attempt. Other parallel tests in this file may

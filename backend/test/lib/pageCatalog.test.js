@@ -79,14 +79,23 @@ describe('generic billing workspace page', () => {
 });
 
 describe('Generic CRM Workflows page', () => {
-  it('is catalogued only for Generic CRM with its read permission', () => {
-    expect(getCatalogForVertical('generic').find((page) => page.path === '/workflows')).toMatchObject({
-      label: 'Workflows',
-      vertical: 'generic',
-      requiredPermissions: [{ module: 'workflows', action: 'read' }],
-    });
+  it('is hidden from every page catalog without removing its implementation', () => {
+    expect(getCatalogForVertical('generic').some((page) => page.path === '/workflows')).toBe(false);
     expect(getCatalogForVertical('wellness').some((page) => page.path === '/workflows')).toBe(false);
     expect(getCatalogForVertical('travel').some((page) => page.path === '/workflows')).toBe(false);
+  });
+});
+
+describe('Generic CRM Field Config page', () => {
+  it('is catalogued only for Generic CRM and uses the settings-manage permission', () => {
+    expect(getCatalogForVertical('generic').find((page) => page.path === '/field-config')).toMatchObject({
+      label: 'Field Config',
+      category: 'Leads',
+      vertical: 'generic',
+      requiredPermissions: [{ module: 'settings', action: 'manage' }],
+    });
+    expect(getCatalogForVertical('wellness').some((page) => page.path === '/field-config')).toBe(false);
+    expect(getCatalogForVertical('travel').some((page) => page.path === '/field-config')).toBe(false);
   });
 });
 

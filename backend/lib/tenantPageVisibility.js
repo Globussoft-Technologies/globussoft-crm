@@ -68,6 +68,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
 
   { path: '/leads', label: 'All Leads', category: 'Leads' },
   { path: '/lead-reports', label: 'Lead Reports', category: 'Leads' },
+  { path: '/field-config', label: 'Field Config', category: 'Leads' },
 
   { path: '/inbox', label: 'Inbox', category: 'Communication' },
   { path: '/whatsapp', label: 'WhatsApp', category: 'Communication' },
@@ -75,7 +76,8 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/live-chat', label: 'Live Chat', category: 'Communication' },
 
   { path: '/tasks', label: 'Task Queue', category: 'Work Management' },
-  { path: '/workflows', label: 'Workflows', category: 'Work Management' },
+  // Standalone Generic CRM Workflows page intentionally hidden.
+  // { path: '/workflows', label: 'Workflows', category: 'Work Management' },
 
   { path: '/tickets', label: 'Tickets', category: 'Customer Support' },
   { path: '/sla', label: 'SLA Policies', category: 'Customer Support' },

@@ -238,7 +238,7 @@ function normalizeWhatsAppAiDraft(value, fields, { includePickupPlotLink = false
   return { body, variableMapping: mapping };
 }
 
-export default function GenericCampaignTemplates({ embeddedCreateChannel = '', onEmbeddedClose, onEmbeddedCreated } = {}) {
+export default function GenericCampaignTemplates({ embeddedCreateChannel = '', initialChannel = '', onEmbeddedClose, onEmbeddedCreated } = {}) {
   const notify = useNotify();
   const { tenant, user } = useContext(AuthContext);
   const tenantId = tenant?.id || user?.tenantId;
@@ -247,6 +247,7 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', o
   const [templatePage, setTemplatePage] = useState(1);
   const [templateChannel, setTemplateChannel] = useState(() => {
     const requestedChannel = new URLSearchParams(window.location.search).get('templateChannel');
+    if (TEMPLATE_FILTERS.some(channel => channel.value === initialChannel)) return initialChannel;
     return TEMPLATE_FILTERS.some(channel => channel.value === requestedChannel) ? requestedChannel : 'EMAIL';
   });
   const [templatePagination, setTemplatePagination] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1 });

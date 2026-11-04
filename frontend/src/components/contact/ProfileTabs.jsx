@@ -17,7 +17,22 @@ import { isRichTextMarkup, richTextToPlainText, RichText } from '../../utils/ric
 import RichTextNotePreview from './RichTextNotePreview';
 
 const DEFAULT_GENERIC_DEAL_STAGES = ['New Lead', 'Contracted', 'Negotiation', 'Won', 'Lost'];
+const WHATSAPP_STATUS_REFRESH_MS = 10_000;
 const dealStageId = (name) => String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+const normalizeWhatsappMessage = (message, contactName) => ({
+  id: `whatsapp-${message.id}`,
+  channel: 'whatsapp',
+  direction: message.direction || 'OUTBOUND',
+  body: message.body,
+  personName: message.contactName || message.contact?.name || message.name || contactName,
+  participant: message.direction === 'INBOUND' ? (message.from || message.sender) : (message.to || message.recipient),
+  status: message.status,
+  errorMessage: message.errorMessage,
+  createdAt: message.createdAt || message.sentAt || message.timestamp,
+});
+
+const newestFirst = (a, b) => new Date(b.createdAt) - new Date(a.createdAt);
 
 export function DetailsTab({ contact, staff, refresh }) {
   const notify = useNotify();
@@ -133,24 +148,36 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
         errorMessage: m.errorMessage,
         createdAt: m.createdAt || m.sentAt || m.timestamp,
       })),
-      ...whatsapp.map((m) => ({
-        id: `whatsapp-${m.id}`,
-        channel: 'whatsapp',
-        direction: m.direction || 'OUTBOUND',
-        body: m.body,
-        personName: m.contactName || m.contact?.name || m.name || contact.name,
-        participant: m.direction === 'INBOUND' ? (m.from || m.sender) : (m.to || m.recipient),
-        status: m.status,
-        errorMessage: m.errorMessage,
-        createdAt: m.createdAt || m.sentAt || m.timestamp,
-      })),
+      ...whatsapp.map((message) => normalizeWhatsappMessage(message, contact.name)),
       ...emailItems,
-    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    ].sort(newestFirst);
     setItems(norm);
     setLoading(false);
   }, [contact.email, contact.name, contactId, showWhatsapp]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!showWhatsapp) return undefined;
+
+    let active = true;
+    const refreshWhatsappStatuses = async () => {
+      const messages = await fetchWhatsappMessages(contactId);
+      if (!active || messages.length === 0) return;
+      const refreshed = messages.map((message) => normalizeWhatsappMessage(message, contact.name));
+      setItems((current) => {
+        const merged = new Map(current.map((item) => [item.id, item]));
+        refreshed.forEach((item) => merged.set(item.id, item));
+        return [...merged.values()].sort(newestFirst);
+      });
+    };
+
+    const intervalId = window.setInterval(refreshWhatsappStatuses, WHATSAPP_STATUS_REFRESH_MS);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [contact.name, contactId, showWhatsapp]);
 
   const visible = filter === 'all' ? items : items.filter((i) => i.channel === filter);
   const groups = useMemo(() => {

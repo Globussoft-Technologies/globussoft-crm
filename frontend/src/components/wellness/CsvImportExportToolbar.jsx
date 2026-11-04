@@ -93,6 +93,20 @@ const normalizeFieldType = (fieldType) => (
   IMPORT_FIELD_TYPE_OPTIONS.some((option) => option.value === fieldType) ? fieldType : "text"
 );
 
+// Keep this in sync with backend/routes/lead_custom_fields.js. Generic lead
+// imports create a custom field for an unmapped spreadsheet header, so a
+// header such as "12006225923" must be rejected before that API call rather
+// than surfacing the backend's less actionable INVALID_FIELD_KEY response.
+const canDeriveLeadFieldKey = (label) => {
+  const key = String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 50);
+  return /^[a-z][a-z0-9_]{0,49}$/.test(key);
+};
+
 const normalizeMappingIdentity = (value) => String(value || "")
   .trim()
   .toLowerCase()
@@ -717,6 +731,20 @@ function ImportModal({
 
   const doImport = async () => {
     if (!file) return;
+
+    if (genericLeadWizard) {
+      const invalidHeaders = previewHeaders.filter((header) => {
+        if (mappingSelections[header] || findMappingField(header)) return false;
+        return !canDeriveLeadFieldKey(header);
+      });
+      if (invalidHeaders.length) {
+        const message = `Invalid or missing column headers: ${invalidHeaders.slice(0, 5).join(", ")}. The first row must contain column names (for example: name, email, phone). Download the Excel template and copy your data below its header row.`;
+        setPreviewError(message);
+        notify.error(message);
+        return;
+      }
+    }
+
     setSubmitting(true);
     if (genericLeadWizard) setWizardStep(4);
     setResult(null);

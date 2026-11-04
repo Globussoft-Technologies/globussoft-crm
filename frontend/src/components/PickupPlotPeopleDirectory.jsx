@@ -82,7 +82,7 @@ const PEOPLE_TABLE_COLUMNS = {
     { label: 'Actions', width: 120, minWidth: 100 },
   ],
 };
-const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' };
+const directoryHeaderStyle = { position: 'sticky', top: 0, zIndex: 1, padding: '.55rem .65rem', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', textAlign: 'left', fontSize: '.74rem', color: 'var(--text-primary)', overflowWrap: 'anywhere', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', boxSizing: 'border-box' };
 
 function plotOptionLabel(plot) {
   return [plot.name, plot.address].filter(Boolean).join(' · ') || 'Unnamed plot';
@@ -352,6 +352,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
     columns,
     `pickup-plot-${type}-directory-column-widths`,
   );
+  const gridTemplateColumns = columnWidths.map((width) => `${((width / tableMinWidth) * 100).toFixed(4)}%`).join(' ');
 
   const nameError = touchedFields.name ? validatePersonName(form.name) : null;
   const phoneError = touchedFields.phone ? validatePhoneNumber(form.phone) : null;
@@ -636,34 +637,34 @@ export default function PickupPlotPeopleDirectory({ type }) {
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           <div data-testid={`${type}-directory-table-width`} style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label={config.title} style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" aria-label={config.title} style={{ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>{columnWidths.map((width, index) => <col key={columns[index].label} style={{ width }} />)}</colgroup>
-            <thead><tr>
-              {columns.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} onResize={(width) => resizeColumn(index, width)} style={directoryHeaderStyle}>{column.label}</ResizableTableHeader>)}
+            <thead style={{ display: 'block', width: '100%' }}><tr style={{ display: 'grid', gridTemplateColumns, width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>
+              {columns.map((column, index) => <ResizableTableHeader key={column.label} label={column.label} width={columnWidths[index]} minWidth={column.minWidth} fluid onResize={(width) => resizeColumn(index, width)} style={directoryHeaderStyle}>{column.label}</ResizableTableHeader>)}
             </tr></thead>
-            <tbody>
+            <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(100vh - 304px)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
               {filteredRows.map((row, index) => (
-                <tr key={row.id} style={{ borderBottom: '1px solid var(--border-color)', opacity: row.isActive ? 1 : 0.68 }}>
-                  <td style={{ padding: '.55rem .65rem' }}>{index + 1}</td>
-                  <td style={{ padding: '.55rem .65rem', fontWeight: 800, overflowWrap: 'anywhere' }}>{row.name}</td>
-                  <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Phone size={14} /> {row.phone}</span></td>
+                <tr key={row.id} style={{ display: 'grid', gridTemplateColumns, width: '100%', borderBottom: '1px solid var(--border-color)', opacity: row.isActive ? 1 : 0.68 }}>
+                  <td style={{ padding: '.55rem .65rem', width: 'auto' }}>{index + 1}</td>
+                  <td style={{ padding: '.55rem .65rem', width: 'auto', fontWeight: 800, overflowWrap: 'anywhere' }}>{row.name}</td>
+                  <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Phone size={14} /> {row.phone}</span></td>
                   {type === 'transport' ? <>
-                    <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{[row.vehicleType, row.vehicleNumber].filter(Boolean).join(' · ') || 'Not specified'}</td>
-                    <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={row.plots} /></td>
-                    <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PickupLocationsCell locations={row.pickupLocations} contextLabel={row.name} /></td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}>{[row.vehicleType, row.vehicleNumber].filter(Boolean).join(' · ') || 'Not specified'}</td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={row.plots} /></td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><PickupLocationsCell locations={row.pickupLocations} contextLabel={row.name} /></td>
                   </> : <>
-                    <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}>{row.agency || 'Independent'}</td>
-                    <td style={{ padding: '.55rem .65rem', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={(row.plots || []).length ? row.plots : row.plotSite ? [row.plotSite] : []} /></td>
-                    <td style={{ padding: '.55rem .65rem' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? '10% (default)' : `${Number(row.commissionPercent)}%`}</td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}>{row.agency || 'Independent'}</td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={(row.plots || []).length ? row.plots : row.plotSite ? [row.plotSite] : []} /></td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? '10% (default)' : `${Number(row.commissionPercent)}%`}</td>
                   </>}
-                  <td style={{ padding: '.55rem .65rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
-                  <td style={{ padding: '.55rem .65rem' }}><StatusPill active={row.isActive} /></td>
-                  <td style={{ padding: '.55rem .65rem' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggleStatus(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
+                  <td style={{ padding: '.55rem .65rem', width: 'auto', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
+                  <td style={{ padding: '.55rem .65rem', width: 'auto' }}><StatusPill active={row.isActive} /></td>
+                  <td style={{ padding: '.55rem .65rem', width: 'auto' }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}><button className="btn-secondary" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => open(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Edit2 size={14} /></button><button className="btn-secondary" aria-label={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} title={`${row.isActive ? 'Deactivate' : 'Activate'} ${row.name}`} onClick={() => toggleStatus(row)} style={{ padding: '.55rem', minWidth: 38, justifyContent: 'center' }}><Power size={14} /></button></div></td>
                 </tr>
               ))}
-              {loading && !loadedRef.current && <tr><td colSpan="9" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading {config.title.toLowerCase()}…</td></tr>}
-              {!loading && filteredRows.length === 0 && <tr>
-                <td colSpan="9" className="pickup-plot-empty-cell">
+              {loading && !loadedRef.current && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}><td style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading {config.title.toLowerCase()}…</td></tr>}
+              {!loading && filteredRows.length === 0 && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}>
+                <td className="pickup-plot-empty-cell" style={{ gridColumn: '1 / -1' }}>
                   <PickupPlotEmptyState
                     icon={Icon}
                     testId={`${type}-directory-empty-state`}

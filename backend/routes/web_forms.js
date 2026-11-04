@@ -220,6 +220,47 @@ const CONTACT_FIELDS = new Set([
   "treatmentOfInterest",
 ]);
 
+/**
+ * Build the event payload consumed by Generic CRM contact workflows.
+ *
+ * Public form submissions used to emit only `{ contactId, userId }`. That was
+ * enough for an unconditional workflow, but every condition on a submitted
+ * field (including the form name) evaluated against `undefined`. It also meant
+ * a webhook tested successfully from the builder while the real submission
+ * sent none of the selected lead fields.
+ *
+ * Keep this allow-listed to Contact/form fields: a Prisma Contact row contains
+ * internal fields that must never be copied wholesale to an outbound webhook.
+ */
+function genericWebFormWorkflowPayload({ contact, form, submission, payload, customFieldValues }) {
+  const contactFields = {};
+  for (const field of CONTACT_FIELDS) {
+    if (field === "tags") {
+      if (!contact?.tagsJson) continue;
+      try {
+        const tags = JSON.parse(contact.tagsJson);
+        if (Array.isArray(tags)) contactFields.tags = tags;
+      } catch (_error) {
+        contactFields.tags = String(contact.tagsJson).split(",").map((tag) => tag.trim()).filter(Boolean);
+      }
+      continue;
+    }
+    if (contact?.[field] !== undefined) contactFields[field] = contact[field];
+  }
+
+  return {
+    ...contactFields,
+    ...(payload || {}),
+    ...(customFieldValues || {}),
+    contactId: contact.id,
+    webForm: form.name,
+    webFormId: form.id,
+    submissionId: submission.id,
+    userId: null,
+    tenantId: form.tenantId,
+  };
+}
+
 // Add-field picker fallback customs ("custom" rows) mapped to the Contact
 // column holding the same data. Keeps form submissions from being silently
 // dropped when no matching Lead-Field definition exists.
@@ -1096,7 +1137,7 @@ function buildEmbedHostScript(enableAttribution) {
     return '<script>(function(frame){if(!frame)return;var lastDevice="";function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>';
   }
   const keys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
-  return `<script>(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=query?query.get(key):"";value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>`;
+  return `<script>(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=storedAttribution(key)||(query?query.get(key):"");value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>`;
 }
 
 function buildEmbedCode(form, origin) {
@@ -1144,6 +1185,21 @@ async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
 
     slug = `${seed}-${Date.now().toString(36)}-${i}`;
   }
+}
+
+async function findDuplicateFormName(tenantId, scope, name, excludeId = null) {
+  const normalizedName = textOr(name);
+  if (!normalizedName) return null;
+
+  return prisma.webForm.findFirst({
+    where: {
+      tenantId,
+      scope,
+      name: normalizedName,
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    },
+    select: { id: true },
+  });
 }
 
 function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = []) {
@@ -2165,20 +2221,26 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       },
     });
 
-    // Generic campaigns enrol through the shared contact.created event. A
-    // public form creates the same Contact record as the Leads page, so emit
-    // it once only for a genuinely new Generic contact; re-submissions keep
-    // their existing contact and must never start another campaign run.
-    if (createdNewContact && formScope === "generic") {
+    // Generic CRM workflows must run from the real form submission, not only
+    // from the builder's Test button. New leads emit contact.created; a repeat
+    // submission for an existing lead emits contact.updated. Campaigns remain
+    // creation-only because their listener subscribes to contact.created.
+    if (formScope === "generic") {
       try {
         await require("../lib/eventBus").emitEvent(
-          "contact.created",
-          { contactId: contact.id, userId: null },
+          createdNewContact ? "contact.created" : "contact.updated",
+          genericWebFormWorkflowPayload({
+            contact,
+            form,
+            submission,
+            payload,
+            customFieldValues,
+          }),
           form.tenantId,
           req.io,
         );
       } catch (eventError) {
-        console.error("[web_forms] Generic contact.created event failed:", eventError.message);
+        console.error("[web_forms] Generic contact workflow event failed:", eventError.message);
       }
     }
 
@@ -2418,6 +2480,18 @@ router.post("/", verifyToken, async (req, res) => {
         .json({ error: "name is required", code: "NAME_REQUIRED" });
     }
 
+    const duplicateName = await findDuplicateFormName(
+      req.user.tenantId,
+      scope,
+      name,
+    );
+    if (duplicateName) {
+      return res.status(409).json({
+        error: "A web form with this name already exists",
+        code: "FORM_NAME_EXISTS",
+      });
+    }
+
     const slug = await ensureUniqueSlug(body.slug || name, scope);
     const folderId = body.folderId == null ? null : Number(body.folderId);
     if ((scope !== "generic" || (req.user?.vertical && req.user.vertical !== "generic")) && folderId !== null) return res.status(400).json({ error: "Folders are only available for Generic CRM", code: "INVALID_FOLDER_SCOPE" });
@@ -2646,6 +2720,19 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     if (body.name !== undefined) {
       const name = String(body.name == null ? "" : body.name).trim();
+
+      const duplicateName = await findDuplicateFormName(
+        req.user.tenantId,
+        scope,
+        name,
+        existing.id,
+      );
+      if (duplicateName) {
+        return res.status(409).json({
+          error: "A web form with this name already exists",
+          code: "FORM_NAME_EXISTS",
+        });
+      }
 
       data.name = name;
     }

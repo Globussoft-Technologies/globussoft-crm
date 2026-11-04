@@ -33,6 +33,8 @@
 
 'use strict';
 
+const { Prisma } = require('@prisma/client');
+
 // ── Modules ───────────────────────────────────────────────────────────
 // A "module" is the record type a workflow runs for. It scopes the trigger
 // list, the condition field list, and which actions are offered.
@@ -54,9 +56,9 @@ const MODULES = [
 //             workflowScheduler cron from the rule's own scheduleConfig).
 const TRIGGER_TYPES = [
   // ── Contacts / leads ────────────────────────────────────────────────
-  { value: 'contact.created', module: 'contact', kind: 'event', emitted: true, label: 'When a contact is created', description: 'Fires when a new contact is added' },
-  { value: 'contact.updated', module: 'contact', kind: 'event', emitted: true, label: 'When a contact is updated', description: 'Fires when an existing contact is modified' },
-  { value: 'contact.created_or_updated', module: 'contact', kind: 'event', emitted: true, label: 'When a contact is created or updated', description: 'Fires on both contact.created and contact.updated' },
+  { value: 'contact.created', module: 'contact', kind: 'event', emitted: true, label: 'When a lead is created', description: 'Fires when a new lead is added' },
+  { value: 'contact.updated', module: 'contact', kind: 'event', emitted: true, label: 'When a lead is updated', description: 'Fires when an existing lead is modified' },
+  { value: 'contact.created_or_updated', module: 'contact', kind: 'event', emitted: true, label: 'When a lead is created or updated', description: 'Fires on both contact.created and contact.updated' },
   { value: 'lead.converted', module: 'lead', kind: 'event', emitted: true, label: 'When a lead is converted', description: 'Fires when a contact’s status flips from Lead to Customer' },
 
   // Generic CRM pickup/plot lifecycle events. These are emitted only for
@@ -345,6 +347,116 @@ const FIELD_OPTIONS = {
   ],
 };
 
+// Generic workflow fields are generated from Prisma's current data model.
+// Adding a scalar column to one of these models therefore updates the builder
+// after `prisma generate` + backend restart; there is no second hand-written
+// list to remember. Relations are intentionally excluded because a condition
+// compares scalar values, not nested Prisma objects.
+const GENERIC_WORKFLOW_MODELS = {
+  contact: 'Contact',
+  deal: 'Deal',
+  task: 'Task',
+  ticket: 'Ticket',
+  invoice: 'Invoice',
+  payment: 'Payment',
+  approval: 'ApprovalRequest',
+};
+
+const GENERIC_FIELD_ALIASES = {
+  contact: { id: 'contactId', tagsJson: 'tags' },
+  deal: { id: 'dealId' },
+  task: { id: 'taskId' },
+  ticket: { id: 'ticketId' },
+  invoice: { id: 'invoiceId' },
+  payment: { id: 'paymentId' },
+  approval: { id: 'approvalId', requestedBy: 'requesterId', approvedBy: 'approverId' },
+};
+
+// System, secret, soft-delete, and other-vertical storage must never become a
+// workflow operand merely because it is a scalar Prisma column.
+const GENERIC_FIELD_EXCLUSIONS = {
+  '*': new Set(['tenantId', 'deletedAt']),
+  contact: new Set([
+    'portalPasswordHash', 'externalPayloadJson', 'idempotencyKey',
+    'portalRole', 'avatarUrl', 'preferredLocationId', 'preferredPractitionerId',
+    'commissionProfileId', 'kycStatus', 'kycInitiatedAt', 'kycVerifiedAt',
+    'aadhaarLast4', 'kycTokenId',
+  ]),
+  deal: new Set(['subBrand', 'diagnosticId']),
+  invoice: new Set([
+    'legalEntityCode', 'subBrand', 'patientId', 'customerName', 'customerPhone',
+    'customerEmail', 'customerAddress', 'visitId',
+  ]),
+};
+
+// Event payload values which are not stored columns remain additive to the
+// generated model catalogue.
+const GENERIC_EVENT_FIELDS = {
+  contact: [
+    ['changedFields', 'Changed fields', 'string'],
+    ['metaLeadgenId', 'Meta leadgen ID', 'string'],
+    ['metaSignal', 'Meta signal', 'string'],
+    ['metaIsJunk', 'Meta: is junk', 'boolean'],
+    ['metaIsQualified', 'Meta: is qualified', 'boolean'],
+  ],
+  deal: [
+    ['fromStage', 'Previous stage', 'string'],
+    ['toStage', 'New stage', 'string'],
+    ['userId', 'Acting user ID', 'number'],
+  ],
+  ticket: [['contactId', 'Contact ID', 'number']],
+  invoice: [['daysOverdue', 'Days overdue', 'number']],
+  payment: [['method', 'Method', 'string']],
+};
+
+function workflowFieldType(prismaType) {
+  if (['Int', 'BigInt', 'Float', 'Decimal'].includes(prismaType)) return 'number';
+  if (prismaType === 'Boolean') return 'boolean';
+  if (prismaType === 'DateTime') return 'date';
+  return 'string';
+}
+
+function workflowFieldLabel(value) {
+  return String(value)
+    .replace(/Id$/, ' ID')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, (character) => character.toUpperCase());
+}
+
+function generatedGenericFieldOptions() {
+  const models = new Map(Prisma.dmmf.datamodel.models.map((model) => [model.name, model]));
+  const result = {};
+  for (const [module, modelName] of Object.entries(GENERIC_WORKFLOW_MODELS)) {
+    const model = models.get(modelName);
+    const aliases = GENERIC_FIELD_ALIASES[module] || {};
+    const excluded = GENERIC_FIELD_EXCLUSIONS[module] || new Set();
+    const fields = (model?.fields || [])
+      .filter((field) => ['scalar', 'enum'].includes(field.kind))
+      .filter((field) => !GENERIC_FIELD_EXCLUSIONS['*'].has(field.name) && !excluded.has(field.name))
+      .map((field) => {
+        const value = aliases[field.name] || field.name;
+        return { value, label: workflowFieldLabel(value), type: workflowFieldType(field.type) };
+      });
+    const seen = new Set(fields.map((field) => field.value));
+    for (const [value, label, type] of GENERIC_EVENT_FIELDS[module] || []) {
+      if (!seen.has(value)) fields.push({ value, label, type });
+    }
+    result[module] = fields;
+  }
+  result.lead = result.contact.map((field) => (
+    field.value === 'contactId' ? { ...field, label: 'Lead ID' } : field
+  ));
+  return result;
+}
+
+const GENERIC_FIELD_OPTIONS = generatedGenericFieldOptions();
+
+function fieldsForVertical(vertical) {
+  return String(vertical || '').toLowerCase() === 'generic'
+    ? generatedGenericFieldOptions()
+    : FIELD_OPTIONS;
+}
+
 const TRIGGER_VALUES = TRIGGER_TYPES.map((t) => t.value);
 const ACTION_VALUES = ACTION_TYPES.map((a) => a.value);
 const SCHEDULED_TRIGGERS = new Set(
@@ -380,11 +492,13 @@ module.exports = {
   NO_VALUE_OPS,
   WORKFLOW_ENTITIES,
   FIELD_OPTIONS,
+  GENERIC_FIELD_OPTIONS,
   TRIGGER_VALUES,
   ACTION_VALUES,
   SCHEDULED_TRIGGERS,
   publicTriggers,
   actionsForModule,
   triggersForModule,
+  fieldsForVertical,
   isScheduledTrigger,
 };

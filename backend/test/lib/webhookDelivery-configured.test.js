@@ -19,6 +19,7 @@ describe("configured workflow webhook delivery", () => {
       ok: true,
       status: 202,
       statusText: "Accepted",
+      headers: new Headers({ "content-type": "application/json", "set-cookie": "session=secret", "x-request-id": "req-42" }),
       text: vi.fn().mockResolvedValue("queued"),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -29,8 +30,11 @@ describe("configured workflow webhook delivery", () => {
       encoding: "json",
       bodyMode: "advanced",
       bodyTemplate: JSON.stringify({ lead_id: "{{contactId}}", classification: "{{status}}", tags: "{{tags}}" }),
-      headers: [{ key: "X-Webhook-Secret", value: "test-secret", secret: true }],
-    }, "contact.updated", { contactId: 42, status: "Junk", tags: ["JUNK"] }, 7, "signing-secret");
+      headers: [
+        { key: "X-Webhook-Secret", value: "test-secret", secret: true },
+        { key: "Authorization", value: "Bearer hidden", secret: false },
+      ],
+    }, "contact.updated", { contactId: 42, status: "Junk", tags: ["JUNK"] }, 7, "signing-secret", { includeDiagnostics: true });
 
     expect(result.status).toBe(202);
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -40,6 +44,17 @@ describe("configured workflow webhook delivery", () => {
     expect(request.headers["X-Webhook-Secret"]).toBe("test-secret");
     expect(request.headers["X-Globussoft-Signature"]).toMatch(/^t=\d+,v1=[a-f0-9]{64}$/);
     expect(JSON.parse(request.body)).toEqual({ lead_id: 42, classification: "Junk", tags: ["JUNK"] });
+    expect(result.request).toMatchObject({
+      url: "https://hooks.example.com/meta-feedback",
+      method: "PATCH",
+      headers: {
+        "X-Webhook-Secret": "[redacted]",
+        Authorization: "[redacted]",
+        "X-Globussoft-Signature": "[redacted]",
+      },
+    });
+    expect(result.responseHeaders).toMatchObject({ "content-type": "application/json", "x-request-id": "req-42" });
+    expect(result.responseHeaders["set-cookie"]).toBe("[redacted]");
   });
 
   it("builds a simple payload from only selected contact fields", () => {

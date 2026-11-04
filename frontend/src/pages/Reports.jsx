@@ -783,7 +783,7 @@ export default function Reports() {
           <div className="reports-page__table-shell card"
             style={{
               maxHeight: '400px',
-              overflowY: 'auto',
+              overflowY: 'hidden',
               overflowX: 'auto',
               position: 'relative',
               isolation: 'isolate',
@@ -794,9 +794,9 @@ export default function Reports() {
             ) : detailData.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No records found for the selected period.</div>
             ) : (
-              <table className="stable-table reports-page__detail-table" style={{ width: '100%', minWidth: '760px', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', textAlign: 'left', fontSize: '0.85rem', backgroundColor: 'var(--modal-bg, #fff)' }}>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 20, display: 'table-header-group', backgroundColor: 'var(--modal-bg, #fff)', opacity: 1 }}>
-                  <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
+              <table className="stable-table reports-page__detail-table-fixed" style={{ display: 'block', width: '100%', minWidth: '760px', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', textAlign: 'left', fontSize: '0.85rem', backgroundColor: 'var(--surface-color, #fff)' }}>
+                <thead style={{ display: 'table', width: '100%', tableLayout: 'fixed', backgroundColor: 'var(--modal-bg, #fff)', opacity: 1 }}>
+                  <tr style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
                       <th
                         style={{
@@ -1215,9 +1215,9 @@ export default function Reports() {
                     </>}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(400px - 3.5rem)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
                   {detailData.map((row, i) => (
-                    <tr key={row.id || i} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
+                    <tr key={row.id || i} style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                       {detailType === 'deals' && <>
                         <td style={tdStyle}>{row.title}</td>
                         <td style={{ ...numericTdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatDetailDealAmount(row)}</td>

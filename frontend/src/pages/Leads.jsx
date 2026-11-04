@@ -184,6 +184,8 @@ const FIELD_LIMITS = {
   gst: 15,
 };
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const GENERIC_LEADS_PAGE_SIZE_OPTIONS = [10, 15, 25, 50, 100];
+const MAX_LEADS_PAGE_SIZE = 500;
 const GENERIC_LEADS_PAGE_SIZE = 10;
 const LEAD_CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
@@ -216,6 +218,39 @@ const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
 const LEADS_FILTERS_STORAGE_PREFIX = "globuscrm.leads.filters.v1";
+const CREATE_LEAD_FIELDS_STORAGE_PREFIX =
+  "globuscrm.leads.createFields.v3";
+const GENERIC_FIELD_CONFIG_SETTING_KEY = "generic.fieldConfig";
+const DEFAULT_CREATE_LEAD_VISIBLE_FIELDS = [
+  "name",
+  "email",
+  "company",
+  "title",
+  "phone",
+  "source",
+];
+const loadCreateLeadFieldPrefs = (storageKey) => {
+  if (typeof window === "undefined") return { visible: null, required: null };
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+    if (Array.isArray(saved)) {
+      return {
+        visible: saved.filter((key) => typeof key === "string"),
+        required: null,
+      };
+    }
+    return {
+      visible: Array.isArray(saved?.visible)
+        ? saved.visible.filter((key) => typeof key === "string")
+        : null,
+      required: Array.isArray(saved?.required)
+        ? saved.required.filter((key) => typeof key === "string")
+        : null,
+    };
+  } catch (_err) {
+    return { visible: null, required: null };
+  }
+};
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
 const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
@@ -1862,6 +1897,272 @@ function BuiltInInlineCellEditor({
   );
 }
 
+function CreateLeadFieldsPicker({
+  fields,
+  visibleKeys,
+  requiredKeys,
+  onClose,
+  onSave,
+}) {
+  const [query, setQuery] = useState("");
+  const [draftVisible, setDraftVisible] = useState(() => new Set(visibleKeys));
+  const [draftRequired, setDraftRequired] = useState(
+    () => new Set(requiredKeys),
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredFields = fields.filter(
+    (field) =>
+      !normalizedQuery || field.label.toLowerCase().includes(normalizedQuery),
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const toggleField = (field) => {
+    if (field.lockedVisible) return;
+    setDraftVisible((current) => {
+      const next = new Set(current);
+      if (next.has(field.key)) next.delete(field.key);
+      else next.add(field.key);
+      return next;
+    });
+  };
+
+  const toggleRequired = (field) => {
+    if (field.lockedRequired || !draftVisible.has(field.key)) return;
+    setDraftRequired((current) => {
+      const next = new Set(current);
+      if (next.has(field.key)) next.delete(field.key);
+      else next.add(field.key);
+      return next;
+    });
+  };
+
+  return createPortal(
+    <div
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1250,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+        background: "rgba(15, 23, 42, 0.48)",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Customize Create Lead fields"
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: "min(440px, calc(100vw - 2rem))",
+          maxHeight: "min(680px, calc(100vh - 2rem))",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          borderRadius: 14,
+          background: "var(--modal-bg, var(--bg-color, #fff))",
+          color: "var(--text-primary)",
+          boxShadow: "0 24px 64px rgba(15, 23, 42, 0.28)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+            padding: "1rem 1.1rem",
+            borderBottom: "1px solid var(--border-color)",
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0, fontSize: "1rem" }}>Customize fields</h3>
+            <p
+              style={{
+                margin: "0.25rem 0 0",
+                color: "var(--text-secondary)",
+                fontSize: "0.78rem",
+              }}
+            >
+              Choose the fields shown when you create a lead.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close field customization"
+            onClick={onClose}
+            style={{
+              display: "inline-flex",
+              border: 0,
+              padding: 4,
+              background: "transparent",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+            }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div style={{ position: "relative", margin: "0.85rem 1.1rem 0" }}>
+          <Search
+            size={15}
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: "0.7rem",
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--text-secondary)",
+            }}
+          />
+          <input
+            className="input-field"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search fields"
+            aria-label="Search Create Lead fields"
+            autoFocus
+            style={{ width: "100%", paddingLeft: "2.1rem" }}
+          />
+        </div>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "0.75rem 1.1rem 1rem",
+          }}
+        >
+          {filteredFields.map((field) => {
+            const checked = field.lockedVisible || draftVisible.has(field.key);
+            const required =
+              field.lockedRequired || draftRequired.has(field.key);
+            return (
+              <div
+                key={field.key}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.65rem",
+                  padding: "0.55rem 0.25rem",
+                }}
+              >
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.65rem",
+                    flex: 1,
+                    minWidth: 0,
+                    cursor: field.lockedVisible ? "default" : "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={field.lockedVisible}
+                    aria-label={field.label}
+                    onChange={() => toggleField(field)}
+                  />
+                  <span style={{ minWidth: 0 }}>{field.label}</span>
+                </label>
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    color: "var(--text-secondary)",
+                    fontSize: "0.72rem",
+                    cursor:
+                      field.lockedRequired || !checked ? "default" : "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={required}
+                    disabled={field.lockedRequired || !checked}
+                    aria-label={`Require ${field.label}`}
+                    onChange={() => toggleRequired(field)}
+                  />
+                  Required
+                </label>
+              </div>
+            );
+          })}
+          {filteredFields.length === 0 && (
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+              No matching fields.
+            </p>
+          )}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "0.5rem",
+            padding: "0.8rem 1.1rem",
+            borderTop: "1px solid var(--border-color)",
+          }}
+        >
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() =>
+              setDraftVisible(new Set(fields.map((field) => field.key)))
+            }
+          >
+            Show all
+          </button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() =>
+                onSave({
+                  visible: fields
+                    .filter(
+                      (field) =>
+                        field.lockedVisible || draftVisible.has(field.key),
+                    )
+                    .map((field) => field.key),
+                  required: fields
+                    .filter(
+                      (field) =>
+                        (field.lockedVisible || draftVisible.has(field.key)) &&
+                        (field.lockedRequired || draftRequired.has(field.key)),
+                    )
+                    .map((field) => field.key),
+                })
+              }
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function LeadFieldCreateModal({ onClose, onCreated, notify }) {
   const [label, setLabel] = useState("");
   const [fieldType, setFieldType] = useState("text");
@@ -2371,6 +2672,9 @@ const Leads = () => {
   const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(
     GENERIC_LEADS_PAGE_SIZE,
   );
+  const [customLeadsPageSizeOpen, setCustomLeadsPageSizeOpen] = useState(false);
+  const [customLeadsPageSizeDraft, setCustomLeadsPageSizeDraft] = useState("");
+  const [customLeadsPageSizeError, setCustomLeadsPageSizeError] = useState("");
   const [leadPagination, setLeadPagination] = useState({
     total: 0,
     totalPages: 1,
@@ -2489,7 +2793,16 @@ const Leads = () => {
   // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
+  const [createLeadFieldsPickerOpen, setCreateLeadFieldsPickerOpen] =
+    useState(false);
   const [leadFieldModalOpen, setLeadFieldModalOpen] = useState(false);
+  const createLeadFieldsStorageKey = `${CREATE_LEAD_FIELDS_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const [savedCreateLeadFieldPrefs, setSavedCreateLeadFieldPrefs] =
+    useState(() =>
+      isGeneric
+        ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
+        : { visible: null, required: null },
+    );
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
   const [nameStartsWith, setNameStartsWith] = useState("");
@@ -2498,6 +2811,14 @@ const Leads = () => {
     isTravel ? activeSubBrand || "" : "",
   );
   const [stageFilter, setStageFilter] = useState("");
+
+  useEffect(() => {
+    setSavedCreateLeadFieldPrefs(
+      isGeneric
+        ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
+        : { visible: null, required: null },
+    );
+  }, [createLeadFieldsStorageKey, isGeneric]);
 
   useEffect(() => {
     if (drillParams.get("create") !== "1") return;
@@ -2626,6 +2947,82 @@ const Leads = () => {
   // Generic and Travel tenant-scoped Lead custom fields (Settings > Lead
   // Fields). Wellness uses its separate patient field surfaces.
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
+  const [tenantFieldConfig, setTenantFieldConfig] = useState(null);
+  useEffect(() => {
+    if (!isGeneric) return;
+    let active = true;
+    fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_FIELD_CONFIG_SETTING_KEY)}`, { silent: true })
+      .then((response) => {
+        if (!active || !response?.value) return;
+        const parsed = JSON.parse(response.value);
+        if (parsed && typeof parsed === "object") setTenantFieldConfig(parsed);
+      })
+      .catch(() => { if (active) setTenantFieldConfig(null); });
+    return () => { active = false; };
+  }, [isGeneric]);
+  const createLeadFieldCatalog = useMemo(
+    () => [
+      { key: "name", configId: "name", label: "Full Name", required: true, lockedVisible: true, lockedRequired: true },
+      { key: "email", configId: "email", label: "Email Address", required: true, lockedVisible: true, lockedRequired: (tenantFieldConfig?.fieldOverrides?.email?.required ?? tenantFieldConfig?.fieldOverrides?.email?.isRequired) === true },
+      { key: "company", configId: "company", label: "Company", required: false, lockedVisible: false, lockedRequired: false },
+      { key: "title", configId: "title", label: "Job Title", required: false, lockedVisible: false, lockedRequired: false },
+      { key: "phone", configId: "phone", label: "Phone", required: false, lockedVisible: false, lockedRequired: false },
+      { key: "source", configId: "source", label: "Lead Source", required: false, lockedVisible: false, lockedRequired: false },
+      ...customFieldDefs.map((field) => ({
+        key: `custom:${field.fieldKey}`,
+        configId: `custom:${field.id}`,
+        label: field.label,
+        required: Boolean(field.isRequired),
+        lockedVisible: false,
+        lockedRequired: false,
+      })),
+    ],
+    [customFieldDefs, tenantFieldConfig],
+  );
+  const createLeadVisibleFieldKeys = useMemo(() => {
+    const overrides = tenantFieldConfig?.fieldOverrides || {};
+    const saved = Array.isArray(savedCreateLeadFieldPrefs.visible)
+      ? new Set(savedCreateLeadFieldPrefs.visible)
+      : new Set(createLeadFieldCatalog
+          .filter((field) => overrides[field.configId]?.quickAdd ?? DEFAULT_CREATE_LEAD_VISIBLE_FIELDS.includes(field.key))
+          .map((field) => field.key));
+    return createLeadFieldCatalog
+      .filter((field) => field.lockedVisible || saved.has(field.key))
+      .map((field) => field.key);
+  }, [createLeadFieldCatalog, savedCreateLeadFieldPrefs.visible, tenantFieldConfig]);
+  const createLeadVisibleFieldSet = useMemo(
+    () => new Set(createLeadVisibleFieldKeys),
+    [createLeadVisibleFieldKeys],
+  );
+  const createLeadRequiredFieldKeys = useMemo(() => {
+    const overrides = tenantFieldConfig?.fieldOverrides || {};
+    const hasTenantRequiredConfig = Object.values(overrides).some((value) => value && (Object.prototype.hasOwnProperty.call(value, "required") || Object.prototype.hasOwnProperty.call(value, "isRequired")));
+    const saved = Array.isArray(savedCreateLeadFieldPrefs.required)
+      ? new Set(savedCreateLeadFieldPrefs.required)
+      : hasTenantRequiredConfig
+        ? new Set(createLeadFieldCatalog.filter((field) => overrides[field.configId]?.required ?? overrides[field.configId]?.isRequired ?? field.required).map((field) => field.key))
+      : new Set(
+          createLeadFieldCatalog
+            .filter((field) => field.required)
+            .map((field) => field.key),
+        );
+    return createLeadFieldCatalog
+      .filter(
+        (field) =>
+          createLeadVisibleFieldSet.has(field.key) &&
+          (field.lockedRequired || saved.has(field.key)),
+      )
+      .map((field) => field.key);
+  }, [
+    createLeadFieldCatalog,
+    createLeadVisibleFieldSet,
+    savedCreateLeadFieldPrefs.required,
+    tenantFieldConfig,
+  ]);
+  const createLeadRequiredFieldSet = useMemo(
+    () => new Set(createLeadRequiredFieldKeys),
+    [createLeadRequiredFieldKeys],
+  );
   // Generic + Travel "Customize table" column-visibility picker
   // (personal per-user preference  see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column" so the table never
@@ -2929,16 +3326,31 @@ const Leads = () => {
     });
   }, []);
   useLayoutEffect(() => {
-    if (!travelCountryOpen) return;
     const modal = createLeadModalRef.current;
     const input = travelPhoneInputRef.current?.getInput();
-    const selector = input?.closest(".iti")?.querySelector(".iti__country-selector");
+    if (!input) return;
+    if (!travelCountryOpen) {
+      input.style.setProperty("padding-left", "116px", "important");
+      return;
+    }
+    const iti = input?.closest(".iti");
+    const countryButton = iti?.querySelector(".iti__selected-country");
+    const selectorId = countryButton?.getAttribute("aria-controls");
+    const selector = (selectorId && document.getElementById(selectorId))
+      || iti?.querySelector(".iti__country-selector");
     const phoneField = input?.closest(".create-lead-travel-phone");
     if (!modal || !selector || !phoneField) return;
+    const searchInput = selector.querySelector(".iti__search-input");
+    const previousPhonePadding = input.style.getPropertyValue("padding-left");
+    const previousPhonePaddingPriority = input.style.getPropertyPriority("padding-left");
+    const previousSearchPadding = searchInput?.style.getPropertyValue("padding-left") ?? "";
+    const previousSearchPaddingPriority = searchInput?.style.getPropertyPriority("padding-left") ?? "";
 
     // The library positions its menu absolutely. Reserve its measured height
     // in the form so the source field and actions follow directly beneath it.
     const reserveMenuSpace = () => {
+      input.style.setProperty("padding-left", "116px", "important");
+      searchInput?.style.setProperty("padding-left", "44px", "important");
       const menuHeight = selector.getBoundingClientRect().height;
       // The form already has a 14px row gap; subtract it so this reservation
       // leaves only a small visual gap after the menu.
@@ -2950,6 +3362,10 @@ const Leads = () => {
 
     return () => {
       window.cancelAnimationFrame(frame);
+      input.style.setProperty("padding-left", previousPhonePadding, previousPhonePaddingPriority);
+      if (searchInput) {
+        searchInput.style.setProperty("padding-left", previousSearchPadding, previousSearchPaddingPriority);
+      }
       phoneField.style.marginBottom = "";
     };
   }, [travelCountryOpen]);
@@ -3008,8 +3424,11 @@ const Leads = () => {
       const paginationQs = isGeneric
         ? `&page=${pageOverride ?? leadsPage + 1}&limit=${genericLeadsPageSize}`
         : "&limit=500";
+      // Keep Generic CRM rows visible after an inline CRM Status change.
+      // Lifecycle Stage (the pipeline status) remains a separate field.
+      const crmStatusQs = isGeneric ? "&includeCrmStatuses=true" : "";
       const data = await fetchApi(
-        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}`,
+        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}${crmStatusQs}`,
       );
       const rows = Array.isArray(data)
         ? data
@@ -4354,14 +4773,18 @@ const Leads = () => {
   useEffect(() => {
     if (!creating) return undefined;
     const onKey = (e) => {
-      if (e.key === "Escape") {
+      if (
+        e.key === "Escape" &&
+        !createLeadFieldsPickerOpen &&
+        !leadFieldModalOpen
+      ) {
         setCreating(false);
         setLeadDuplicate(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [creating]);
+  }, [createLeadFieldsPickerOpen, creating, leadFieldModalOpen]);
   useEffect(() => {
     if (!creating || !isGeneric || genericPhoneCountryDetectionRunRef.current)
       return undefined;
@@ -4402,10 +4825,51 @@ const Leads = () => {
   };
   const closeCreate = () => {
     setCreating(false);
+    setCreateLeadFieldsPickerOpen(false);
     setTravelCountryOpen(false);
     setLeadDuplicate(null);
     genericPhoneCountryDetectionRunRef.current = false;
     setCreateFieldErrors({ name: "", phone: "" });
+  };
+
+  const saveCreateLeadFieldPrefs = ({ visible, required }) => {
+    if (!isGeneric) return;
+    const allowedKeys = new Set(createLeadFieldCatalog.map((field) => field.key));
+    const lockedVisibleKeys = createLeadFieldCatalog
+      .filter((field) => field.lockedVisible)
+      .map((field) => field.key);
+    const normalizedVisible = [
+      ...new Set([
+        ...lockedVisibleKeys,
+        ...visible.filter((key) => allowedKeys.has(key)),
+      ]),
+    ];
+    const visibleSet = new Set(normalizedVisible);
+    const lockedRequiredKeys = createLeadFieldCatalog
+      .filter((field) => field.lockedRequired)
+      .map((field) => field.key);
+    const normalizedRequired = [
+      ...new Set([
+        ...lockedRequiredKeys,
+        ...required.filter(
+          (key) => allowedKeys.has(key) && visibleSet.has(key),
+        ),
+      ]),
+    ];
+    const normalized = {
+      visible: normalizedVisible,
+      required: normalizedRequired,
+    };
+    setSavedCreateLeadFieldPrefs(normalized);
+    try {
+      window.localStorage.setItem(
+        createLeadFieldsStorageKey,
+        JSON.stringify(normalized),
+      );
+    } catch (_err) {
+      notify.error("Could not save Create Lead field preferences.");
+    }
+    setCreateLeadFieldsPickerOpen(false);
   };
 
   const createSeparateProductLead = async () => {
@@ -4531,7 +4995,10 @@ const Leads = () => {
     //    #600: under wellness, email is OPTIONAL (Patient intake mirrors this);
     //    phone becomes the required identifier instead.
     const email = String(newLead.email || "").trim();
-    if (isWellness) {
+    if (
+      isWellness ||
+      (isGeneric && !createLeadRequiredFieldSet.has("email"))
+    ) {
       if (email && !EMAIL_RE.test(email)) {
         notify.error("Please enter a valid email address");
         return;
@@ -4539,6 +5006,32 @@ const Leads = () => {
     } else if (!email || !EMAIL_RE.test(email)) {
       notify.error("Please enter a valid email address");
       return;
+    }
+
+    if (isGeneric) {
+      const requiredField = createLeadFieldCatalog.find((field) => {
+        if (
+          !createLeadRequiredFieldSet.has(field.key) ||
+          field.key === "name" ||
+          field.key === "email"
+        ) {
+          return false;
+        }
+        const value = field.key.startsWith("custom:")
+          ? newLead.customFields?.[field.key.slice("custom:".length)]
+          : newLead[field.key];
+        return (
+          value === undefined ||
+          value === null ||
+          value === false ||
+          (typeof value === "string" && !value.trim()) ||
+          (Array.isArray(value) && value.length === 0)
+        );
+      });
+      if (requiredField) {
+        notify.error(`${requiredField.label} is required`);
+        return;
+      }
     }
 
     // Keep established Wellness/Travel behavior intact. Only Generic CRM uses
@@ -6656,6 +7149,19 @@ const Leads = () => {
       ? leadPagination.totalPages
       : Math.ceil(sortedLeads.length / leadsPageSize),
   );
+  const leadsPageSizeOptions = isGeneric
+    ? GENERIC_LEADS_PAGE_SIZE_OPTIONS
+    : LEADS_PAGE_SIZE_OPTIONS;
+  const currentLeadsPageSize = isGeneric
+    ? genericLeadsPageSize
+    : leadsPageSize;
+  const hasCustomLeadsPageSize = !leadsPageSizeOptions.includes(
+    currentLeadsPageSize,
+  );
+  const pageSizeSelectValue =
+    customLeadsPageSizeOpen || hasCustomLeadsPageSize
+      ? "custom"
+      : String(currentLeadsPageSize);
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
   const pageStart =
     sortedLeads.length === 0
@@ -6802,6 +7308,29 @@ const Leads = () => {
     setPageInput(String(clampedPage));
   };
 
+  const applyCustomLeadsPageSize = (event) => {
+    event.preventDefault();
+    const nextPageSize = Number(customLeadsPageSizeDraft);
+    if (
+      !Number.isInteger(nextPageSize) ||
+      nextPageSize < 1 ||
+      nextPageSize > MAX_LEADS_PAGE_SIZE
+    ) {
+      setCustomLeadsPageSizeError(
+        `Enter a whole number between 1 and ${MAX_LEADS_PAGE_SIZE}.`,
+      );
+      return;
+    }
+    if (isGeneric) {
+      setGenericLeadsPageSize(nextPageSize);
+    } else {
+      setLeadsPageSize(nextPageSize);
+    }
+    setLeadsPage(0);
+    setCustomLeadsPageSizeError("");
+    setCustomLeadsPageSizeOpen(false);
+  };
+
   useEffect(() => {
     setPageInput(String(currentLeadsPage + 1));
   }, [currentLeadsPage]);
@@ -6810,16 +7339,30 @@ const Leads = () => {
   // between the Create and Edit forms; each caller passes its own
   // `values`/`onChange` so this stays a pure render helper with no state
   // of its own.
-  const renderCustomFieldInputs = (values, onChange) => {
+  const renderCustomFieldInputs = (
+    values,
+    onChange,
+    visibleFieldKeys = null,
+    requiredFieldKeys = null,
+  ) => {
     if (!supportsLeadCustomFields || customFieldDefs.length === 0) return null;
-    return customFieldDefs.map((f) => {
+    return customFieldDefs
+      .filter(
+        (field) =>
+          !visibleFieldKeys || visibleFieldKeys.has(`custom:${field.fieldKey}`),
+      )
+      .map((f) => {
       const value = values?.[f.fieldKey] ?? "";
       const handle = (v) => onChange(f.fieldKey, v);
       const label = f.label;
-      const placeholder = f.isRequired
+      const isRequired = requiredFieldKeys
+        ? requiredFieldKeys.has(`custom:${f.fieldKey}`)
+        : f.isRequired;
+      const inputId = `lead-custom-field-${f.id}`;
+      const placeholder = isRequired
         ? `${f.placeholder || label} *`
         : (f.placeholder || `${label} (optional)`);
-      const fieldLabel = <>{label}{f.isRequired && <span aria-hidden="true" className="required-mark" style={{ color: "var(--danger-color, #ef4444)", marginLeft: "0.2rem" }}>*</span>}</>;
+      const fieldLabel = <>{label}{isRequired && <span aria-hidden="true" className="required-mark" style={{ color: "var(--danger-color, #ef4444)", marginLeft: "0.2rem" }}>*</span>}</>;
       const titleAttr = f.tooltip ? { title: f.tooltip } : {};
 
       if (f.fieldType === "checkbox") {
@@ -6832,7 +7375,7 @@ const Leads = () => {
             <input
               type="checkbox"
               checked={Boolean(value)}
-              required={f.isRequired}
+              required={isRequired}
               onChange={(e) => handle(e.target.checked)}
             />
             {fieldLabel}
@@ -6842,21 +7385,23 @@ const Leads = () => {
 
       if (f.fieldType === "dropdown" || f.fieldType === "radio") {
         return (
-          <select
-            key={f.id}
-            className="input-field"
-            required={f.isRequired}
-            value={value}
-            onChange={(e) => handle(e.target.value)}
-            {...titleAttr}
-          >
-            <option value="">{placeholder}</option>
-            {(f.options || []).map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
+          <div key={f.id} {...titleAttr}>
+            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
+            <select
+              id={inputId}
+              className="input-field"
+              required={isRequired}
+              value={value}
+              onChange={(e) => handle(e.target.value)}
+            >
+              <option value="">{placeholder}</option>
+              {(f.options || []).map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
         );
       }
 
@@ -6888,7 +7433,7 @@ const Leads = () => {
                   <input
                     type="checkbox"
                     checked={selected.includes(opt)}
-                    required={f.isRequired && selected.length === 0}
+                    required={isRequired && selected.length === 0}
                     onChange={(e) => {
                       const next = e.target.checked
                         ? [...selected, opt]
@@ -6906,18 +7451,20 @@ const Leads = () => {
 
       if (f.fieldType === "textarea") {
         return (
-          <textarea
-            key={f.id}
-            className="input-field"
-            required={f.isRequired}
-            value={value}
-            placeholder={placeholder}
-            maxLength={2000}
-            rows={3}
-            onChange={(e) => handle(e.target.value)}
-            {...titleAttr}
-            style={{ padding: "0.45rem", fontSize: "0.85rem" }}
-          />
+          <div key={f.id} {...titleAttr}>
+            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
+            <textarea
+              id={inputId}
+              className="input-field"
+              required={isRequired}
+              value={value}
+              placeholder={placeholder}
+              maxLength={2000}
+              rows={3}
+              onChange={(e) => handle(e.target.value)}
+              style={{ padding: "0.45rem", fontSize: "0.85rem" }}
+            />
+          </div>
         );
       }
 
@@ -6930,19 +7477,21 @@ const Leads = () => {
               ? "url"
               : "text";
       return (
-        <input
-          key={f.id}
-          type={inputType}
-          className="input-field"
-          required={f.isRequired}
-          value={value}
-          placeholder={placeholder}
-          onChange={(e) => handle(e.target.value)}
-          {...titleAttr}
-          style={{ padding: "0.45rem", fontSize: "0.85rem" }}
-        />
+        <div key={f.id} {...titleAttr}>
+          <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
+          <input
+            id={inputId}
+            type={inputType}
+            className="input-field"
+            required={isRequired}
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => handle(e.target.value)}
+            style={{ padding: "0.45rem", fontSize: "0.85rem" }}
+          />
+        </div>
       );
-    });
+      });
   };
 
   const activeSearchTerm = searchTerm.trim();
@@ -7412,7 +7961,10 @@ const Leads = () => {
           lead,
           field: "status",
           label: "Lifecycle Stage",
-          value: configuredStage?.label || lead.status || "Lead",
+          // Generic CRM keeps lifecycle stage independent from CRM Status.
+          // Existing rows without an explicit lifecycle stage stay at the
+          // pipeline's initial Lead stage instead of mirroring lead.status.
+          value: configuredStage?.label || (isGeneric ? "Lead" : lead.status || "Lead"),
           type: "select",
           options: lifecycleOptions.map((option) => option.label),
           renderValue: (displayValue) => (
@@ -7925,8 +8477,8 @@ const Leads = () => {
             </div>
           </div>
         </div>
-        {/* Generic + Travel: Lead Fields opens in-place so admins can add a
-            tenant-scoped field without leaving the Leads table. */}
+        {/* Travel uses the full tenant-scoped custom-field manager. Generic
+            keeps its existing quick-add modal on the Leads page. */}
         {supportsLeadCustomFields && (
           <div
             className="leads-page-header__actions"
@@ -7945,7 +8497,11 @@ const Leads = () => {
                   notify.error("Lead field management requires admin access.");
                   return;
                 }
-                setLeadFieldModalOpen(true);
+                if (isTravel) {
+                  navigate("/settings/lead-fields");
+                } else {
+                  setLeadFieldModalOpen(true);
+                }
               }}
               title="Manage lead custom fields"
               style={{
@@ -8260,7 +8816,7 @@ const Leads = () => {
                               padding: "0 0.25rem",
                             }}
                           >
-                            <span>On</span>
+                            <span className="auto-campaign-rule-on-heading">On</span>
                             <span>Lead column</span>
                             <span>Value</span>
                             <span>Campaign</span>
@@ -8318,6 +8874,7 @@ const Leads = () => {
                                 }}
                               >
                                 <input
+                                  className="auto-campaign-rule-checkbox"
                                   type="checkbox"
                                   checked={!!rule.enabled}
                                   disabled={autoCampaignRulesSaving || !isAdmin}
@@ -10438,8 +10995,6 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                         onClick={() => {
-                          // Travel Leads: keep this row on the list for now.
-                          // navigate(leadDetailPath(lead));
                           if (!isTravel) navigate(leadDetailPath(lead));
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
@@ -10490,22 +11045,16 @@ const Leads = () => {
                                 renderValue={(name) => (
                                   <a
                                     href={
-                                      isTravel
-                                        ? "#lead-preview"
-                                        : leadDetailPath(lead)
+                                      isTravel ? "#lead-preview" : leadDetailPath(lead)
                                     }
                                     onClick={(e) => {
                                       e.preventDefault();
                                       e.stopPropagation();
-                                      // Travel Leads: keep the profile link inactive for now.
-                                      // navigate(leadDetailPath(lead));
                                       if (isTravel) setPreviewLead(lead);
                                       else navigate(leadDetailPath(lead));
                                     }}
                                     title={
-                                      isTravel
-                                        ? `Preview ${lead.name || "lead"}`
-                                        : `Open profile for ${lead.name || "lead"}`
+                                      isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
                                     }
                                     style={{
                                       minWidth: 0,
@@ -10745,8 +11294,6 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                         onClick={() => {
-                          // Travel Leads: keep this row on the list for now.
-                          // navigate(leadDetailPath(lead));
                           if (!isTravel) navigate(leadDetailPath(lead));
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
@@ -10789,9 +11336,7 @@ const Leads = () => {
                                   renderValue={(name) => (
                                     <a
                                       href={
-                                        isTravel
-                                          ? "#lead-preview"
-                                          : leadDetailPath(lead)
+                                        isTravel ? "#lead-preview" : leadDetailPath(lead)
                                       }
                                       onClick={(e) => {
                                         e.preventDefault();
@@ -10800,9 +11345,7 @@ const Leads = () => {
                                         else navigate(leadDetailPath(lead));
                                       }}
                                       title={
-                                        isTravel
-                                          ? `Preview ${lead.name || "lead"}`
-                                          : `Open profile for ${lead.name || "lead"}`
+                                        isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
                                       }
                                       style={{
                                         minWidth: 0,
@@ -12642,7 +13185,12 @@ const Leads = () => {
             >
               <div
                 className="leads-pagination-page-size"
-                style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  flexWrap: "wrap",
+                }}
               >
                 <label
                   htmlFor="leads-page-size"
@@ -12655,13 +13203,26 @@ const Leads = () => {
                 </label>
                 <select
                   id="leads-page-size"
-                  value={isGeneric ? genericLeadsPageSize : leadsPageSize}
+                  value={pageSizeSelectValue}
                   onChange={(e) => {
-                    if (isGeneric) {
-                      setGenericLeadsPageSize(Number(e.target.value));
-                    } else {
-                      setLeadsPageSize(Number(e.target.value));
+                    if (e.target.value === "custom") {
+                      setCustomLeadsPageSizeDraft(
+                        hasCustomLeadsPageSize
+                          ? String(currentLeadsPageSize)
+                          : "",
+                      );
+                      setCustomLeadsPageSizeError("");
+                      setCustomLeadsPageSizeOpen(true);
+                      return;
                     }
+                    const nextPageSize = Number(e.target.value);
+                    if (isGeneric) {
+                      setGenericLeadsPageSize(nextPageSize);
+                    } else {
+                      setLeadsPageSize(nextPageSize);
+                    }
+                    setCustomLeadsPageSizeOpen(false);
+                    setCustomLeadsPageSizeError("");
                     setLeadsPage(0);
                   }}
                   className="input-field"
@@ -12673,15 +13234,97 @@ const Leads = () => {
                   }}
                   aria-label="Rows per page"
                 >
-                  {(isGeneric
-                    ? [10, 15, 25, 50, 100]
-                    : LEADS_PAGE_SIZE_OPTIONS
-                  ).map((size) => (
+                  {leadsPageSizeOptions.map((size) => (
                     <option key={size} value={size}>
                       {size}
                     </option>
                   ))}
+                  <option value="custom">
+                    {hasCustomLeadsPageSize
+                      ? `Custom (${currentLeadsPageSize})`
+                      : "Custom"}
+                  </option>
                 </select>
+                {customLeadsPageSizeOpen && (
+                  <form
+                    onSubmit={applyCustomLeadsPageSize}
+                    aria-label="Set custom rows per page"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.35rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <label
+                      htmlFor="leads-custom-page-size"
+                      style={{
+                        color: "var(--text-secondary)",
+                        fontSize: "0.8125rem",
+                      }}
+                    >
+                      Custom
+                    </label>
+                    <input
+                      id="leads-custom-page-size"
+                      type="number"
+                      min="1"
+                      max={MAX_LEADS_PAGE_SIZE}
+                      step="1"
+                      inputMode="numeric"
+                      value={customLeadsPageSizeDraft}
+                      onChange={(e) => {
+                        setCustomLeadsPageSizeDraft(e.target.value);
+                        setCustomLeadsPageSizeError("");
+                      }}
+                      placeholder="Rows"
+                      aria-label="Custom rows per page"
+                      style={{
+                        width: "4.5rem",
+                        padding: "0.35rem 0.4rem",
+                        textAlign: "center",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 6,
+                        background: "var(--input-bg)",
+                        color: "var(--text-primary)",
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      className="btn-secondary"
+                      style={{ padding: "0.35rem 0.55rem" }}
+                    >
+                      Apply
+                    </button>
+                    {customLeadsPageSizeError && (
+                      <span
+                        role="alert"
+                        style={{
+                          flexBasis: "100%",
+                          color: "var(--danger-color, #dc2626)",
+                          fontSize: "0.75rem",
+                        }}
+                      >
+                        {customLeadsPageSizeError}
+                      </span>
+                    )}
+                  </form>
+                )}
+                {hasCustomLeadsPageSize && !customLeadsPageSizeOpen && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    aria-label="Change custom rows per page"
+                    onClick={() => {
+                      setCustomLeadsPageSizeDraft(String(currentLeadsPageSize));
+                      setCustomLeadsPageSizeError("");
+                      setCustomLeadsPageSizeOpen(true);
+                    }}
+                    style={{ padding: "0.35rem 0.55rem" }}
+                  >
+                    Change
+                  </button>
+                )}
               </div>
               <div
                 className="leads-pagination-navigation"
@@ -12811,7 +13454,7 @@ const Leads = () => {
                     fontSize: "0.78rem",
                   }}
                 >
-                  Lead preview
+                  {isTravel ? "Contact preview" : "Lead preview"}
                 </div>
                 <h2 style={{ margin: "0.2rem 0 0", fontSize: "1.25rem" }}>
                   {previewLeadCurrent.name || "Unnamed lead"}
@@ -12852,9 +13495,9 @@ const Leads = () => {
                     fontSize: "0.72rem",
                   }}
                 >
-                  Score
+                  {isTravel ? "Status" : "Score"}
                 </div>
-                <strong>{previewLeadCurrent.aiScore ?? 0}/100</strong>
+                <strong>{isTravel ? (previewLeadCurrent.status || "Lead") : `${previewLeadCurrent.aiScore ?? 0}/100`}</strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
                 <div
@@ -12863,10 +13506,10 @@ const Leads = () => {
                     fontSize: "0.72rem",
                   }}
                 >
-                  Source
+                  {isTravel ? "Assigned" : "Source"}
                 </div>
                 <strong>
-                  {leadSourceLabel(previewLeadCurrent, isGeneric)}
+                  {isTravel ? (previewLeadCurrent.assignedTo?.name || previewLeadCurrent.assignedTo?.email || "Unassigned") : leadSourceLabel(previewLeadCurrent, isGeneric)}
                 </strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
@@ -12876,12 +13519,10 @@ const Leads = () => {
                     fontSize: "0.72rem",
                   }}
                 >
-                  Assigned
+                  {isTravel ? "Score" : "Assigned"}
                 </div>
                 <strong>
-                  {previewLeadCurrent.assignedTo?.name ||
-                    previewLeadCurrent.assignedTo?.email ||
-                    "Unassigned"}
+                  {isTravel ? `${previewLeadCurrent.aiScore ?? 0}/100` : (previewLeadCurrent.assignedTo?.name || previewLeadCurrent.assignedTo?.email || "Unassigned")}
                 </strong>
               </div>
             </div>
@@ -12944,7 +13585,7 @@ const Leads = () => {
                 marginTop: "1rem",
               }}
             >
-              {!isTravel && (
+              <>
                 <button
                   type="button"
                   className="btn-secondary"
@@ -12952,13 +13593,7 @@ const Leads = () => {
                 >
                   Open full detail
                 </button>
-              )}
-              {/* Travel Leads: the full-detail action is intentionally disabled for now.
-                  <button type="button" className="btn-secondary"
-                    onClick={() => navigate(leadDetailPath(previewLeadCurrent))}>
-                    Open full detail
-                  </button>
-              */}
+              </>
               <button
                 type="button"
                 className="btn-secondary"
@@ -12967,7 +13602,7 @@ const Leads = () => {
                   setPreviewLead(null);
                 }}
               >
-                Edit lead
+                {isTravel ? "Edit contact" : "Edit lead"}
               </button>
               <button
                 type="button"
@@ -13116,27 +13751,59 @@ const Leads = () => {
               <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
                 Create Lead
               </h3>
-              <button
-                type="button"
-                onClick={closeCreate}
-                aria-label="Close"
+              <div
                 style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                  padding: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
                 }}
               >
-                <X size={18} />
-              </button>
+                {isGeneric && (
+                  <button
+                    type="button"
+                    className="btn-secondary create-lead-customize-fields"
+                    onClick={() => setCreateLeadFieldsPickerOpen(true)}
+                    aria-label="Customize Create Lead fields"
+                    title="Choose which fields appear in this form"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.35rem",
+                      padding: "0.35rem 0.55rem",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    <SlidersHorizontal size={14} /> Customize fields
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeCreate}
+                  aria-label="Close"
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    padding: 4,
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
             {/* #557: noValidate so the JS handler in handleCreateLead runs the
                   client-side validation (length caps, control-char rejection,
                   HTML strip, email shape). Native HTML5 validation would block
                   submit without giving us a chance to surface the targeted toasts. */}
             <form
-              className={isGeneric ? "create-lead-form--generic" : isTravel ? "create-lead-form--travel" : undefined}
+              className={
+                isGeneric
+                  ? `create-lead-form--generic${createLeadVisibleFieldKeys.length > 6 ? " create-lead-form--scrollable" : ""}`
+                  : isTravel
+                    ? "create-lead-form--travel"
+                    : undefined
+              }
               onSubmit={handleCreateLead}
               noValidate
               style={{
@@ -13178,20 +13845,20 @@ const Leads = () => {
                 )}
               </div>
               <div>
-                <label htmlFor="create-lead-email" style={createLeadFieldLabelStyle}>Email Address{!isWellness && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
+                <label htmlFor="create-lead-email" style={createLeadFieldLabelStyle}>Email Address{((isGeneric && createLeadRequiredFieldSet.has("email")) || (!isGeneric && !isWellness)) && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                 <input
                   id="create-lead-email"
                   type="email"
-                  placeholder={isWellness ? "Email Address (optional)" : "Email Address"}
-                  required={!isWellness}
+                  placeholder={(isWellness || (isGeneric && !createLeadRequiredFieldSet.has("email"))) ? "Email Address (optional)" : "Email Address"}
+                  required={!isWellness && (!isGeneric || createLeadRequiredFieldSet.has("email"))}
                   maxLength={191}
                   className="input-field"
                   value={newLead.email}
                   onChange={(e) => handleChange("email", e.target.value)}
                 />
               </div>
-              <div>
-                <label htmlFor="create-lead-company" style={createLeadFieldLabelStyle}>{isTravel ? "Category" : "Company"}</label>
+              {(!isGeneric || createLeadVisibleFieldSet.has("company")) && <div>
+                <label htmlFor="create-lead-company" style={createLeadFieldLabelStyle}>{isTravel ? "Category" : "Company"}{isGeneric && createLeadRequiredFieldSet.has("company") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                 <input
                   id="create-lead-company"
                   type="text"
@@ -13201,19 +13868,22 @@ const Leads = () => {
                       : "Company"
                   }
                   maxLength={191}
+                  required={isGeneric && createLeadRequiredFieldSet.has("company")}
                   className="input-field"
                   value={newLead.company}
                   onChange={(e) => handleChange("company", e.target.value)}
                 />
-              </div>
-              {!isTravel && (
+              </div>}
+              {!isTravel &&
+                (!isGeneric || createLeadVisibleFieldSet.has("title")) && (
                 <div>
-                  <label htmlFor="create-lead-title" style={createLeadFieldLabelStyle}>Job Title</label>
+                  <label htmlFor="create-lead-title" style={createLeadFieldLabelStyle}>Job Title{isGeneric && createLeadRequiredFieldSet.has("title") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                   <input
                     id="create-lead-title"
                     type="text"
                     placeholder="Job Title"
                     maxLength={200}
+                    required={isGeneric && createLeadRequiredFieldSet.has("title")}
                     className="input-field"
                     value={newLead.title}
                     onChange={(e) => handleChange("title", e.target.value)}
@@ -13221,7 +13891,7 @@ const Leads = () => {
                 </div>
               )}
               {/* Phone field — required for wellness, optional for generic and travel. */}
-              <div>
+              {(!isGeneric || createLeadVisibleFieldSet.has("phone")) && <div>
                 {isTravel ? (
                   <div className="create-lead-travel-phone">
                     <IntlTelInput
@@ -13251,7 +13921,7 @@ const Leads = () => {
                   </div>
                 ) : (
                   <>
-                    <label htmlFor="create-lead-phone" style={createLeadFieldLabelStyle}>Phone{isWellness && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
+                    <label htmlFor="create-lead-phone" style={createLeadFieldLabelStyle}>Phone{(isWellness || (isGeneric && createLeadRequiredFieldSet.has("phone"))) && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                     <div style={{ display: "flex", gap: "0.5rem" }}>
                   {isGeneric ? (
                     <SearchableSelect
@@ -13291,10 +13961,10 @@ const Leads = () => {
                       isWellness
                         ? "Phone (10-digit mobile, e.g. 9876543210)"
                         : isGeneric
-                          ? `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits, optional)`
+                          ? `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits${createLeadRequiredFieldSet.has("phone") ? "" : ", optional"})`
                           : "Phone (optional)"
                     }
-                    required={isWellness}
+                    required={isWellness || (isGeneric && createLeadRequiredFieldSet.has("phone"))}
                     inputMode={isGeneric ? "numeric" : undefined}
                     pattern={isGeneric ? "[0-9]*" : undefined}
                     minLength={
@@ -13334,13 +14004,14 @@ const Leads = () => {
                     {createFieldErrors.phone}
                   </div>
                 )}
-              </div>
-              <div>
-                <label htmlFor="create-lead-source" style={createLeadFieldLabelStyle}>Lead Source</label>
+              </div>}
+              {(!isGeneric || createLeadVisibleFieldSet.has("source")) && <div>
+                <label htmlFor="create-lead-source" style={createLeadFieldLabelStyle}>Lead Source{isGeneric && createLeadRequiredFieldSet.has("source") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
                 <select
                   id="create-lead-source"
                   className="input-field"
                   name="source"
+                  required={isGeneric && createLeadRequiredFieldSet.has("source")}
                   value={newLead.source}
                   onChange={(e) => handleChange("source", e.target.value)}
                 >
@@ -13362,7 +14033,7 @@ const Leads = () => {
                           </option>
                         ))}
                 </select>
-              </div>
+              </div>}
 
               {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the
@@ -13446,11 +14117,12 @@ const Leads = () => {
                 </>
               )}
 
-              {!isGeneric &&
-                renderCustomFieldInputs(
-                  newLead.customFields,
-                  handleCustomFieldChangeNew,
-                )}
+              {renderCustomFieldInputs(
+                newLead.customFields,
+                handleCustomFieldChangeNew,
+                isGeneric ? createLeadVisibleFieldSet : null,
+                isGeneric ? createLeadRequiredFieldSet : null,
+              )}
 
               <div
                 className={isGeneric ? "create-lead-form__actions" : undefined}
@@ -13689,6 +14361,16 @@ const Leads = () => {
           }
           onClose={() => setCallifiedCallLead(null)}
           onCalled={fetchLeads}
+        />
+      )}
+
+      {isGeneric && creating && createLeadFieldsPickerOpen && (
+        <CreateLeadFieldsPicker
+          fields={createLeadFieldCatalog}
+          visibleKeys={createLeadVisibleFieldKeys}
+          requiredKeys={createLeadRequiredFieldKeys}
+          onClose={() => setCreateLeadFieldsPickerOpen(false)}
+          onSave={saveCreateLeadFieldPrefs}
         />
       )}
 

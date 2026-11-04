@@ -252,6 +252,35 @@ describe("generic leads assistant tools", () => {
     expect(output.toolsUsed).toEqual([]);
   });
 
+  test("answers a typoed greeting without contacting the AI provider", async () => {
+    const output = await assistant.handleChatMessage({
+      tenantId: 1,
+      userId: 7,
+      role: "USER",
+      message: "hii",
+      fetchImpl: () => { throw new Error("provider should not be called for typoed greetings"); },
+    });
+    expect(output.reply).toBe("Hi! How can I help you with your leads today?");
+    expect(output.toolsUsed).toEqual([]);
+  });
+
+  test.each([
+    ["Hiiii", "Hi! How can I help you with your leads today?"],
+    ["no help needed", "No problem. I'll be here if you need help with your leads."],
+    ["What's up?", "I'm doing well and ready to help. What would you like to work on with your leads?"],
+    ["How do you do?", "I'm doing well and ready to help. What would you like to work on with your leads?"],
+  ])("handles conversational input locally: %s", async (message, reply) => {
+    const output = await assistant.handleChatMessage({
+      tenantId: 1,
+      userId: 7,
+      role: "USER",
+      message,
+      fetchImpl: () => { throw new Error("provider should not be called for casual conversation"); },
+    });
+    expect(output.reply).toBe(reply);
+    expect(output.toolsUsed).toEqual([]);
+  });
+
   test.each([
     ["how are you?", "I'm doing well, thank you! How can I help you with your leads, deals, or pipelines today?"],
     ["who are you?", "I'm your Leads assistant. I can help you find leads, answer questions about records, filter the Leads view, and prepare reports."],
@@ -272,6 +301,8 @@ describe("generic leads assistant tools", () => {
     expect(assistant.isResetFilterRequest("clear the filters")).toBe(true);
     expect(assistant.isResetFilterRequest("show all leads")).toBe(true);
     expect(assistant.isResetFilterRequest("filter leads with company details")).toBe(false);
+    expect(assistant.isResetFilterRequest("show all leed")).toBe(true);
+    expect(assistant.inferLeadFilterArgs("show leads with compny details", {})).toEqual({ hasCompany: true });
   });
 
   test("searches only visible leads for a USER and returns a filter spec", async () => {

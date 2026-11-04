@@ -99,10 +99,10 @@ function ContactCell({ contact, contactId, returnTo }) {
   if (contactId) {
     return (
       <Link
-        to={`/contacts/${contactId}`}
+        to={`/travel/leads/${contactId}`}
         state={{ backTo: returnTo, backLabel: "Back to diagnostics" }}
         style={contactLinkStyle}
-        aria-label={`Open contact #${contactId}`}
+        aria-label={`Open travel lead #${contactId}`}
       >
         {content}
       </Link>

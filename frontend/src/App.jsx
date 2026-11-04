@@ -114,6 +114,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 // ADMIN-only via RoleGuard at the route declaration below.
 const LeadCapture = lazy(() => import("./pages/settings/LeadCapture"));
 const LeadFields = lazy(() => import("./pages/settings/LeadFields"));
+const FieldConfig = lazy(() => import("./pages/settings/FieldConfig"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
@@ -2950,6 +2951,19 @@ export default function App() {
                         }
                       />
                       <Route
+                        path="field-config"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Field Config requires admin access."
+                          >
+                            <GenericOnly>
+                              <FieldConfig />
+                            </GenericOnly>
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
                         path="notification-settings"
                         element={<UserSettings />}
                       />
@@ -2981,7 +2995,12 @@ export default function App() {
                         path="pipelines"
                         element={
                           <GenericOnly>
-                            <Pipelines />
+                            <RoleGuard
+                              requiredPermission={{ module: "pipeline", action: "write" }}
+                              feature="Pipelines"
+                            >
+                              <Pipelines />
+                            </RoleGuard>
                           </GenericOnly>
                         }
                       />

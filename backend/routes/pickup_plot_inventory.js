@@ -201,7 +201,14 @@ function importBoolean(value, fallback = true) {
 }
 
 function importKey(...values) {
-  return values.map((value) => String(value || "").trim().toLowerCase()).join("\u0000");
+  return values.map((value) => String(value ?? "")
+    // Spreadsheet cells can contain non-breaking, repeated, or zero-width
+    // whitespace that looks identical to a user but breaks an exact lookup.
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase()).join("\u0000");
 }
 
 function importRows(body) {

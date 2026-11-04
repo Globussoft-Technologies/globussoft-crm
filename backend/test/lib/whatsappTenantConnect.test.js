@@ -77,7 +77,10 @@ const GOOD_INPUT = {
   userId: 3,
   phoneNumberId: 'PNID_777',
   businessAccountId: 'WABA_777',
+  appId: 'APP_777',
+  appSecret: 'tenant-seven-app-secret',
   accessToken: 'EAAG-tenant-7-system-user-token',
+  webhookVerifyToken: 'tenant-seven-verify-token',
 };
 
 /** Graph responses for a fully valid credential set. */
@@ -96,6 +99,10 @@ function stubHappyGraph() {
     data: { data: [{ id: 'PNID_777', display_phone_number: '+91 98765 43210' }] },
   });
   providerMock.subscribeApp.mockResolvedValue({ ok: true, data: { success: true } });
+  providerMock.debugToken.mockResolvedValue({
+    ok: true,
+    data: { data: { is_valid: true, app_id: 'APP_777', expires_at: 0, scopes: [] } },
+  });
 }
 
 beforeEach(() => {
@@ -187,7 +194,10 @@ describe('validateAndConnect — required fields', () => {
   test.each([
     ['phoneNumberId'],
     ['businessAccountId'],
+    ['appId'],
+    ['appSecret'],
     ['accessToken'],
+    ['webhookVerifyToken'],
   ])('missing %s → MISSING_FIELDS listing that field', async (field) => {
     stubHappyGraph();
     const input = { ...GOOD_INPUT, [field]: '' };
@@ -378,7 +388,11 @@ describe('disconnect', () => {
 describe('getConnectionState', () => {
   test('returns masked config plus the callback URL we generate', async () => {
     const prevBase = process.env.WEBHOOK_BASE_URL;
+    const prevPlatformVerifyToken = process.env.META_VERIFY_TOKEN;
     process.env.WEBHOOK_BASE_URL = 'https://crm.example.com/';
+    // A legacy platform token may still exist at runtime, but the Generic CRM
+    // status contract must only describe its tenant-owned configuration.
+    process.env.META_VERIFY_TOKEN = 'legacy-platform-token';
     prismaMock.whatsAppConfig.findUnique.mockResolvedValue({
       id: 5,
       tenantId: 7,
@@ -399,6 +413,7 @@ describe('getConnectionState', () => {
       // Trailing slash on the env value must not double up.
       expect(state.ours.callbackUrl).toBe('https://crm.example.com/api/whatsapp/webhook');
       expect(state.ours.callbackUrlConfigured).toBe(true);
+      expect(state.ours.verifyTokenSource).toBe('unset');
       // Operators paste the FULL callback URL as WEBHOOK_BASE_URL just as often
       // as they paste the bare origin (Meta's own UI shows the full URL). Both
       // must yield the same single-path result — appending blindly produced
@@ -413,6 +428,24 @@ describe('getConnectionState', () => {
     } finally {
       if (prevBase === undefined) delete process.env.WEBHOOK_BASE_URL;
       else process.env.WEBHOOK_BASE_URL = prevBase;
+      if (prevPlatformVerifyToken === undefined) delete process.env.META_VERIFY_TOKEN;
+      else process.env.META_VERIFY_TOKEN = prevPlatformVerifyToken;
     }
+  });
+
+  test('reports the Generic CRM tenant token when it is configured', async () => {
+    prismaMock.whatsAppConfig.findUnique.mockResolvedValue({
+      id: 6,
+      tenantId: 7,
+      provider: META_CLOUD_PROVIDER,
+      webhookVerifyToken: encryptCredential('tenant-owned-token'),
+      isActive: false,
+      settings: null,
+    });
+
+    const state = await getConnectionState({ tenantId: 7 });
+
+    expect(state.ours.verifyTokenSource).toBe('tenant');
+    expect(JSON.stringify(state)).not.toContain('tenant-owned-token');
   });
 });

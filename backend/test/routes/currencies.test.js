@@ -75,6 +75,7 @@ prisma.deal = prisma.deal || {};
 prisma.deal.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.tenant.update = vi.fn();
 // verifyToken does a revokedToken lookup; stub it cleanly so JWTs don't
 // hit a real DB.
 prisma.revokedToken = prisma.revokedToken || {};
@@ -145,6 +146,7 @@ beforeEach(() => {
   prisma.currency.delete.mockReset();
   prisma.deal.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ defaultCurrency: 'USD' });
+  prisma.tenant.update.mockReset().mockResolvedValue({ defaultCurrency: 'INR' });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.$transaction.mockClear();
 });
@@ -236,6 +238,26 @@ describe('GET /api/currencies/catalog', () => {
       select: { code: true },
     });
     expect(globalThis.fetch.mock.calls[1][0]).toContain('base=CAD');
+  });
+
+  test('includes the tenant base currency with an exchange rate of one', async () => {
+    prisma.currency.findMany.mockResolvedValue([{ code: 'USD' }]);
+    vi.stubGlobal('fetch', vi.fn(async (url) => ({
+      ok: true,
+      json: async () => url.includes('/v2/currencies')
+        ? [{ iso_code: 'USD', name: 'US Dollar', symbol: '$' }, { iso_code: 'CAD', name: 'Canadian Dollar', symbol: 'C$' }]
+        : { date: '2026-10-19', rates: { CAD: 1.4 } },
+    })));
+
+    const res = await request(makeApp())
+      .get('/api/currencies/catalog')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.currencies).toEqual([
+      { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', exchangeRate: 1.4 },
+      { code: 'USD', name: 'US Dollar', symbol: '$', exchangeRate: 1 },
+    ]);
   });
 
   test('returns 502 when the rate provider is unavailable', async () => {
@@ -394,6 +416,7 @@ describe('POST /api/currencies', () => {
     expect(res.body.code).toBe('JPY'); // uppercased
     expect(res.body.exchangeRate).toBe(1.0); // defaulted
     expect(res.body.isBase).toBe(false);
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
     expect(res.body.tenantId).toBe(1); // from req.user, NOT body
     expect(prisma.$transaction).toHaveBeenCalled();
     // No demotion fired since isBase was falsy.
@@ -435,6 +458,9 @@ describe('POST /api/currencies', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.exchangeRate).toBe(1);
+    expect(prisma.tenant.update).toHaveBeenCalledWith({
+      where: { id: 1 }, data: { defaultCurrency: 'JPY' },
+    });
     expect(prisma.currency.update.mock.calls.map(([arg]) => arg)).toEqual([
       { where: { id: 1 }, data: { exchangeRate: 1 / 150 } },
       { where: { id: 2 }, data: { exchangeRate: 0.86 / 150 } },
@@ -490,7 +516,8 @@ describe('POST /api/currencies', () => {
 // ─── POST /api/currencies/seed — DEFAULTS initialization ─────────────
 
 describe('POST /api/currencies/seed', () => {
-  test('seeds the DEFAULTS list when the tenant has zero currencies', async () => {
+  test.each(['USD', 'INR', 'EUR'])('seeds defaults without changing the tenant reporting currency (%s)', async (baseCode) => {
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: baseCode });
     prisma.currency.count.mockResolvedValue(0);
     prisma.currency.create.mockImplementation(async ({ data }) => ({ id: Math.floor(Math.random() * 10000), ...data }));
 
@@ -507,19 +534,24 @@ describe('POST /api/currencies/seed', () => {
     for (const call of prisma.currency.create.mock.calls) {
       expect(call[0].data.tenantId).toBe(1);
     }
+    expect(res.body.find((currency) => currency.isBase)).toMatchObject({ code: baseCode, exchangeRate: 1 });
+    const baseRate = { USD: 1, INR: 94.96, EUR: 0.8887 }[baseCode];
+    expect(res.body.find((currency) => currency.code === 'USD').exchangeRate).toBeCloseTo(1 / baseRate);
+    expect(prisma.tenant.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { defaultCurrency: baseCode },
+    });
   });
 
-  test('initializes INR as base for an INR tenant', async () => {
+  test('does not replace a reporting currency absent from the starter set', async () => {
     prisma.currency.count.mockResolvedValue(0);
-    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
-    prisma.currency.create.mockImplementation(async ({ data }) => ({ id: 1, ...data }));
-
-    const res = await request(makeApp())
-      .post('/api/currencies/seed')
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'JPY' });
+    const res = await request(makeApp()).post('/api/currencies/seed')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-
-    expect(res.status).toBe(201);
-    expect(res.body.find((currency) => currency.isBase)).toMatchObject({ code: 'INR', exchangeRate: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('REPORTING_CURRENCY_NOT_IN_STARTER_SET');
+    expect(prisma.currency.create).not.toHaveBeenCalled();
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 
   test('400 when any currency already exists for the tenant', async () => {
@@ -662,7 +694,7 @@ describe('DELETE /api/currencies/:id', () => {
 // ─── POST /api/currencies/:id/set-base — atomic switch ───────────────
 
 describe('POST /api/currencies/:id/set-base', () => {
-  test('atomically demotes all priors, sets new base, forces exchangeRate=1.0', async () => {
+  test('atomically demotes all priors, sets new base and reporting currency, forces exchangeRate=1.0', async () => {
     prisma.currency.findFirst.mockResolvedValue({ id: 7, tenantId: 1, code: 'INR', isBase: false, exchangeRate: 83.0 });
     prisma.currency.update.mockImplementation(async ({ where, data }) => ({ id: where.id, code: 'INR', tenantId: 1, ...data }));
 
@@ -684,6 +716,10 @@ describe('POST /api/currencies/:id/set-base', () => {
     expect(prisma.currency.update).toHaveBeenCalledWith({
       where: { id: 7 },
       data: { isBase: true, exchangeRate: 1.0 },
+    });
+    expect(prisma.tenant.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { defaultCurrency: 'INR' },
     });
   });
 

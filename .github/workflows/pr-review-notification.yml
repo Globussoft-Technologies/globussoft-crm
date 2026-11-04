@@ -1,0 +1,16 @@
+name: PR review notification
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+# No checkout, artifacts, secrets, or write token. The completion event only
+# wakes the trusted policy workflow; it is never proof of an approval.
+permissions: {}
+
+jobs:
+  notification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo 'A review changed; the trusted merge policy will re-read GitHub.'

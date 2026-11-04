@@ -66,6 +66,7 @@ export default function PickupInventory() {
     PICKUP_INVENTORY_COLUMNS,
     'pickup-inventory-column-widths',
   );
+  const gridTemplateColumns = columnWidths.map((width) => `${((width / tableMinWidth) * 100).toFixed(4)}%`).join(' ');
 
   const load = useCallback(async () => {
     const initialLoad = !loadedRef.current;
@@ -290,33 +291,34 @@ export default function PickupInventory() {
         >
           {refreshing && <div className="pickup-module-refresh-status" role="status">Refreshing data…</div>}
           {(!error || loadedRef.current) && <div data-testid="pickup-inventory-table-width" style={{ width: tableMinWidth, minWidth: '100%' }}>
-          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+          <table className="pickup-plot-leads-table pickup-plot-resizable-table pickup-plot-no-row-hover" style={{ display: 'block', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
             <colgroup>{columnWidths.map((width, index) => <col key={PICKUP_INVENTORY_COLUMNS[index].label} style={{ width }} />)}</colgroup>
-            <thead><tr>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
+            <thead style={{ display: 'block', width: '100%' }}><tr style={{ display: 'grid', gridTemplateColumns, width: '100%', paddingRight: 8, boxSizing: 'border-box' }}>{PICKUP_INVENTORY_COLUMNS.map((column, index) => (
               <ResizableTableHeader
                 key={column.label}
                 label={column.label}
                 width={columnWidths[index]}
                 minWidth={column.minWidth}
+                fluid
                 onResize={(width) => resizeColumn(index, width)}
                 style={headerStyle}
               >
                 {column.label}
               </ResizableTableHeader>
             ))}</tr></thead>
-            <tbody>
+            <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(100vh - 304px)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
               {filteredLocations.map((location, index) => {
                 const assignedCount = Number(location.assignedCount ?? location.plotCount ?? 0);
-                return <tr key={location.id}>
-                  <td style={cellStyle}>{index + 1}</td>
-                  <td style={cellStyle}>
+                return <tr key={location.id} style={{ display: 'grid', gridTemplateColumns, width: '100%' }}>
+                  <td style={{ ...cellStyle, width: 'auto' }}>{index + 1}</td>
+                  <td style={{ ...cellStyle, width: 'auto' }}>
                     <strong>{location.name}</strong>
                     <span className={`pickup-inventory-status-badge ${location.isActive === false ? 'is-inactive' : 'is-active'}`}>
                       <span aria-hidden="true" />
                       {location.isActive === false ? 'Inactive' : 'Active'}
                     </span>
                   </td>
-                  <td style={{ ...cellStyle, minWidth: 280 }}>
+                  <td style={{ ...cellStyle, width: 'auto', minWidth: 0 }}>
                     <a
                       href={mapsUrl(location)}
                       onClick={(event) => { void openPreciseGoogleMap(event, location); }}
@@ -330,16 +332,16 @@ export default function PickupInventory() {
                       <span style={{ overflowWrap: 'anywhere' }}>{location.address}</span>
                     </a>
                   </td>
-                  <td style={cellStyle}><strong>{assignedCount} plot{assignedCount === 1 ? '' : 's'}</strong></td>
-                  <td style={cellStyle}>
+                  <td style={{ ...cellStyle, width: 'auto' }}><strong>{assignedCount} plot{assignedCount === 1 ? '' : 's'}</strong></td>
+                  <td style={{ ...cellStyle, width: 'auto' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <input className="input-field" aria-label={`Maximum assignments for ${location.name}`} type="number" min="1" step="1" placeholder="No limit" value={limits[location.id] ?? ''} onChange={(event) => setLimits((current) => ({ ...current, [location.id]: event.target.value }))} style={{ width: 105 }} />
                       <button type="button" className="btn-secondary" aria-label={`Save maximum assignments for ${location.name}`} disabled={savingId === location.id} onClick={() => saveLimit(location)}><Save size={14} /></button>
                     </div>
                   </td>
-                  <td style={cellStyle}>{formatDate(location.createdAt)}</td>
-                  <td style={cellStyle}>{formatDate(location.updatedAt)}</td>
-                  <td className="pickup-inventory-actions-cell" style={cellStyle}>
+                  <td style={{ ...cellStyle, width: 'auto' }}>{formatDate(location.createdAt)}</td>
+                  <td style={{ ...cellStyle, width: 'auto' }}>{formatDate(location.updatedAt)}</td>
+                  <td className="pickup-inventory-actions-cell" style={{ ...cellStyle, width: 'auto' }}>
                     <div className="pickup-inventory-actions">
                       <button
                         type="button"
@@ -366,9 +368,9 @@ export default function PickupInventory() {
                   </td>
                 </tr>;
               })}
-              {loading && !loadedRef.current && <tr><td colSpan="8" style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</td></tr>}
-              {!loading && filteredLocations.length === 0 && <tr>
-                <td colSpan="8" className="pickup-inventory-empty-cell">
+              {loading && !loadedRef.current && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}><td style={{ gridColumn: '1 / -1', padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading pickup inventory…</td></tr>}
+              {!loading && filteredLocations.length === 0 && <tr style={{ display: 'grid', gridTemplateColumns, width: '100%' }}>
+                <td className="pickup-inventory-empty-cell" style={{ gridColumn: '1 / -1' }}>
                   <div className="pickup-inventory-empty-state" data-testid="pickup-inventory-empty-state">
                     <div className="pickup-inventory-empty-icon" aria-hidden="true"><MapPin size={25} /></div>
                     <div className="pickup-inventory-empty-copy">
@@ -392,7 +394,7 @@ export default function PickupInventory() {
 
       {addingLocation && (
         <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>
-          <form role="dialog" aria-modal="true" aria-labelledby="add-pickup-location-title" className="card" onSubmit={saveNewLocation} style={{ width: 'min(560px, 100%)', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
+          <form role="dialog" aria-modal="true" aria-labelledby="add-pickup-location-title" className="card pickup-inventory-location-modal" onSubmit={saveNewLocation} style={{ width: 'min(560px, 100%)', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <h2 id="add-pickup-location-title" style={{ margin: 0, fontSize: '1.2rem' }}>Add pickup location</h2>
               <button type="button" className="btn-secondary" aria-label="Close add pickup location" onClick={() => setAddingLocation(false)} style={{ padding: '.4rem' }}><X size={17} /></button>
@@ -429,7 +431,7 @@ export default function PickupInventory() {
 
       {editingLocation && (
         <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.48)', display: 'grid', placeItems: 'center', padding: 16 }}>
-          <form role="dialog" aria-modal="true" aria-labelledby="edit-pickup-location-title" className="card" onSubmit={saveEditedLocation} style={{ width: 'min(560px, 100%)', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
+          <form role="dialog" aria-modal="true" aria-labelledby="edit-pickup-location-title" className="card pickup-inventory-location-modal" onSubmit={saveEditedLocation} style={{ width: 'min(560px, 100%)', padding: '1.25rem', opacity: 1, background: 'var(--popover-bg, #fff)', backdropFilter: 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <div>
                 <h2 id="edit-pickup-location-title" style={{ margin: 0, fontSize: '1.2rem' }}>Edit pickup location</h2>
@@ -467,5 +469,5 @@ export default function PickupInventory() {
   );
 }
 
-const headerStyle = { position: 'sticky', top: 0, zIndex: 2, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', fontSize: '0.78rem' };
-const cellStyle = { padding: '0.85rem', verticalAlign: 'middle', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', overflowWrap: 'anywhere' };
+const headerStyle = { position: 'sticky', top: 0, zIndex: 1, padding: '0.8rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', boxShadow: '0 1px 0 var(--border-color)', boxSizing: 'border-box', fontSize: '0.78rem' };
+const cellStyle = { padding: '0.85rem', verticalAlign: 'middle', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', overflowWrap: 'anywhere', boxSizing: 'border-box' };

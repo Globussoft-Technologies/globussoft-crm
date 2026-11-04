@@ -1,6 +1,16 @@
 name: Deploy to demo server (crm.globusdemos.com)
 
 on:
+  workflow_call:
+    inputs:
+      validation_only:
+        description: Run all six gates without deployment
+        type: boolean
+        default: true
+    outputs:
+      validation_summary:
+        description: Result of each validation gate
+        value: ${{ jobs.validation_summary.outputs.summary }}
   push:
     branches: [main]
     paths-ignore:
@@ -10,10 +20,7 @@ on:
       - "docs/**"
       - "backend/scripts/**"
       - ".gitignore"
-      # NOTE: e2e/** is intentionally NOT ignored anymore  changes to specs
-      # should trigger the api_tests job so we know the new spec passes
-      # before deploying. The deploy job itself doesn't depend on any e2e
-      # file at runtime; the api_tests job runs them.
+      # API and unit tests run in PR validation before merge, not on main pushes.
   workflow_dispatch:
     inputs:
       skip_frontend:
@@ -51,8 +58,8 @@ on:
 # One deploy at a time  never cancel an in-flight deploy. A half-finished
 # deploy on prod is worse than the next push waiting in the queue.
 concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
+  group: ${{ inputs.validation_only && format('pr-validation-{0}', github.event.pull_request.number || github.ref) || 'deploy-prod' }}
+  cancel-in-progress: ${{ inputs.validation_only == true }}
 
 jobs:
   #  1. BUILD: backend syntax-check + frontend vite build 
@@ -130,7 +137,7 @@ jobs:
   # the test list one-by-one in the Run step as each is verified
   # against a freshly-seeded CI database.
   api_tests:
-    if: ${{ inputs.skip_tests != true }}
+    if: ${{ inputs.skip_tests != true && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     name: API tests (${{ matrix.shard }}/4)
     timeout-minutes: 20
@@ -671,7 +678,7 @@ jobs:
   # integration suite runs once on shard 1 and remains deployment-gated.
   # Promoted to mandatory same as api_tests on the deploy gate below.
   unit_tests:
-    if: ${{ inputs.skip_tests != true }}
+    if: ${{ inputs.skip_tests != true && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     name: Backend unit tests (${{ matrix.shard }}/4)
     timeout-minutes: 10
@@ -737,7 +744,7 @@ jobs:
   # test under frontend/src/__tests__/. Mocks fetchApi + socket.io-client +
   # third-party SDKs only  never React itself.
   frontend_unit_tests:
-    if: ${{ inputs.skip_tests != true }}
+    if: ${{ inputs.skip_tests != true && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     name: Frontend unit tests (${{ matrix.shard }}/4)
     timeout-minutes: 15
@@ -811,12 +818,14 @@ jobs:
           set -euo pipefail
           npm ci --no-audit --no-fund
 
-      - name: Resolve baseline schema (HEAD~1) + run safety check
+      - name: Resolve baseline schema + run safety check
+        env:
+          BASELINE_REF: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
         run: |
           set -euo pipefail
           BASELINE_FILE="$(mktemp --suffix=.prisma)"
-          if git show HEAD~1:backend/prisma/schema.prisma > "$BASELINE_FILE" 2>/dev/null; then
-            echo "Baseline: HEAD~1 ($(git rev-parse --short HEAD~1))"
+          if git show "$BASELINE_REF:backend/prisma/schema.prisma" > "$BASELINE_FILE" 2>/dev/null; then
+            echo "Baseline: $BASELINE_REF"
             # --allow-unique / --allow-drop: bless the intentional schema
             # changes already on this branch  Patient.tags drop (superseded
             # by the PatientTag relation + tagsJson) and the
@@ -830,26 +839,55 @@ jobs:
               --allow-unique \
               --allow-drop
           else
+            if [ "${{ inputs.validation_only }}" = "true" ]; then
+              echo "::error::PR migration baseline is missing"
+              exit 1
+            fi
             echo "::warning::No HEAD~1 schema available (first commit?) - skipping diff"
           fi
           echo "::notice::Migration safety check passed"
+
+  # Keep the reusable workflow's aggregate failure useful to callers. GitHub
+  # exposes only the called workflow result by default, so without this job a
+  # PR sees "full-validation: failure" but not the gate that failed.
+  validation_summary:
+    if: ${{ always() }}
+    needs: [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      summary: ${{ steps.summary.outputs.summary }}
+    steps:
+      - name: Summarize validation gates
+        id: summary
+        env:
+          BUILD: ${{ needs.build.result }}
+          API_TESTS: ${{ needs.api_tests.result }}
+          UNIT_TESTS: ${{ needs.unit_tests.result }}
+          LINT: ${{ needs.lint.result }}
+          FRONTEND_UNIT_TESTS: ${{ needs.frontend_unit_tests.result }}
+          MIGRATION_CHECK: ${{ needs.migration_check.result }}
+        run: |
+          set -euo pipefail
+          summary="build=${BUILD} api_tests=${API_TESTS} unit_tests=${UNIT_TESTS} lint=${LINT} frontend_unit_tests=${FRONTEND_UNIT_TESTS} migration_check=${MIGRATION_CHECK}"
+          echo "Validation gates: ${summary}"
+          echo "summary=${summary}" >> "$GITHUB_OUTPUT"
 
   #  7. DEPLOY: only runs if every upstream gate passes. 
   deploy:
     needs:
       [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
-    # All six gates mandatory:
+    # PR validation requires all six gates. Main pushes rerun only build,
+    # lint and migration safety; API/backend/frontend tests intentionally skip.
     #   - build               (vite + node syntax)
     #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)
     #   - unit_tests          (backend vitest  lib + middleware + services + utils)
     #   - lint                (ESLint  semantic checks + project-specific req.user.id rule)
     #   - frontend_unit_tests (G-21  vitest + RTL over frontend/src/__tests__/)
     #   - migration_check     (G-23  dry-run prisma migrate diff vs HEAD~1)
-    # Any failure blocks deploy.
-    # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
-    # bypass for emergency hotfixes (still requires manual workflow_dispatch
-    #  a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
+    # Any failure blocks deploy. Static gates may skip only for an explicit
+    # manual emergency bypass; test skips are also expected on main pushes.
+    if: ${{ always() && inputs.validation_only != true && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

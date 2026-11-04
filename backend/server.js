@@ -191,7 +191,8 @@ app.use(
   }),
 );
 // ─── WhatsApp webhook (P1 — must mount BEFORE express.json) ──────────────
-// Meta signs the raw request body with HMAC-SHA-256 using META_APP_SECRET.
+// Meta signs the raw request body with HMAC-SHA-256 using the tenant's saved
+// App Secret (with the platform environment secret as a legacy fallback).
 // Any JSON re-serialization would change the byte stream and break the
 // signature check. We therefore mount the webhook router here — earlier
 // than the global JSON body parser — with its own express.raw() so the

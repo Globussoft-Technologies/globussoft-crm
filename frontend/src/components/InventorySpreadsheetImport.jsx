@@ -63,11 +63,16 @@ export default function InventorySpreadsheetImport({
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
 
+  const resetFileInput = () => {
+    if (inputRef.current) inputRef.current.value = '';
+  };
+
   const close = () => {
     if (importing) return;
     setOpen(false);
     setFile(null);
     setError('');
+    resetFileInput();
   };
 
   const downloadTemplate = async (format) => {
@@ -143,6 +148,7 @@ export default function InventorySpreadsheetImport({
                 className="input-field"
                 type="file"
                 accept={ACCEPTED_FILES}
+                onClick={(event) => { event.currentTarget.value = ''; }}
                 onChange={(event) => { setFile(event.target.files?.[0] || null); setError(''); }}
               />
             </label>

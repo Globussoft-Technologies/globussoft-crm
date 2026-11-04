@@ -24,6 +24,7 @@ waWebClient.sendBestEffort = vi.fn().mockResolvedValue({ sent: true, status: 'SE
 prisma.travelDiagnostic = {
   ...(prisma.travelDiagnostic || {}),
   findFirst: vi.fn(),
+  update: vi.fn(),
 };
 prisma.contact = {
   ...(prisma.contact || {}),
@@ -77,6 +78,7 @@ beforeEach(() => {
     tenantId: 1,
     subBrand: 'tmc',
     contactId: 100,
+    reportSlugToken: '0123456789abcdef',
   });
   prisma.contact.findFirst.mockResolvedValue({
     id: 100,
@@ -104,12 +106,21 @@ describe('POST /api/travel/diagnostics/:id/share', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.diagnosticId).toBe(42);
-    expect(res.body.reportSlug).toMatch(/^42-/);
+    expect(res.body.reportSlug).toBe('42-0123456789abcdef');
     expect(res.body.shareUrl).toBe(`${frontendBase}/p/tmc/report/${res.body.reportSlug}`);
     expect(res.body.channel).toBe('email+whatsapp');
     expect(res.body.email).toBe('SENT');
     expect(res.body.whatsapp).toBe('SENT');
     expect(emailSender.sendEmail).toHaveBeenCalledTimes(1);
+    const emailArgs = emailSender.sendEmail.mock.calls[0][0];
+    expect(emailArgs.text).toContain('Your travel readiness report from Travel Stall is ready. It covers:');
+    expect(emailArgs.text).toContain("- Your ambition and your students' readiness profile");
+    expect(emailArgs.text).toContain('- What becomes possible and the planning runway');
+    expect(emailArgs.text).toContain('- The cost of waiting and how the programme benefits your institution');
+    expect(emailArgs.text).toContain('- How the decision is de-risked and how TMC works');
+    expect(emailArgs.text).toContain('View my readiness report: https://crm.globusdemos.com/p/tmc/report/42-0123456789abcdef');
+    expect(emailArgs.html).toContain('View my readiness report');
+    expect(emailArgs.html).toContain('The Travel Stall Team');
     expect(waWebClient.sendBestEffort).toHaveBeenCalledTimes(1);
     expect(audit.writeAudit).toHaveBeenCalledWith(
       'TravelDiagnostic',
@@ -122,6 +133,7 @@ describe('POST /api/travel/diagnostics/:id/share', () => {
         channel: 'email+whatsapp',
       }),
     );
+    expect(prisma.travelDiagnostic.update).not.toHaveBeenCalled();
   });
 
   test('manual share returns the public link without sending', async () => {

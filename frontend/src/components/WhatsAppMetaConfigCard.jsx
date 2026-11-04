@@ -79,6 +79,21 @@ const META_FIELDS = [
     placeholder: "Optional",
   },
   {
+    key: "appId",
+    label: "Meta App ID",
+    required: true,
+    hint: "Meta for Developers → My Apps → your app → Settings → Basic → App ID.",
+    placeholder: "123456789012345",
+  },
+  {
+    key: "appSecret",
+    label: "Meta App Secret",
+    required: true,
+    secret: true,
+    hint: "Meta for Developers → your app → Settings → Basic → App Secret. It is encrypted and never displayed again.",
+    placeholder: "Paste the full App Secret",
+  },
+  {
     key: "accessToken",
     label: "Access token (System User token)",
     required: true,
@@ -204,6 +219,8 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
     phoneNumberId: "",
     businessAccountId: "",
     businessId: "",
+    appId: "",
+    appSecret: "",
     accessToken: "",
     webhookVerifyToken: "",
   });
@@ -220,6 +237,8 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
         phoneNumberId: res?.config?.phoneNumberId || "",
         businessAccountId: res?.config?.businessAccountId || "",
         businessId: res?.meta?.metaBusinessId || "",
+        appId: res?.config?.appId || "",
+        appSecret: res?.config?.appSecret?.last4 || "",
         // Secrets come back as {configured, last4}. Seed the input with the
         // masked sentinel so an untouched save means "keep current value".
         accessToken: res?.config?.accessToken?.last4 || "",
@@ -252,6 +271,8 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
           phoneNumberId: form.phoneNumberId.trim(),
           businessAccountId: form.businessAccountId.trim(),
           businessId: form.businessId.trim() || null,
+          appId: form.appId.trim(),
+          appSecret: form.appSecret,
           accessToken: form.accessToken,
           webhookVerifyToken: form.webhookVerifyToken,
         }),
@@ -403,6 +424,7 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
                 <input
                   id={`wa-${f.key}`}
                   type={f.secret ? "password" : "text"}
+                  required={f.required}
                   value={form[f.key]}
                   placeholder={f.placeholder}
                   autoComplete={f.secret ? "new-password" : "off"}
@@ -417,16 +439,17 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
             <p style={groupHeadingStyle}>You choose this — enter the same value in Meta</p>
             <div style={{ marginBottom: "0.75rem" }}>
               <label htmlFor="wa-verify-token" style={labelStyle}>
-                Webhook verify token
+                Webhook verify token<span style={{ color: "var(--danger-color)" }}> *</span>
               </label>
               <input
                 id="wa-verify-token"
                 type="password"
+                required
                 value={form.webhookVerifyToken}
                 placeholder="Any random string you invent"
                 autoComplete="new-password"
                 onChange={(e) => setForm((p) => ({ ...p, webhookVerifyToken: e.target.value }))}
-                style={inputStyle(false)}
+                style={inputStyle(errorFields.includes("webhookVerifyToken"))}
               />
               <p style={hintStyle}>
                 Pick any random string. Paste the identical value into Meta → WhatsApp → Configuration →

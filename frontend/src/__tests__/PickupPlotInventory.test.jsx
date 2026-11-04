@@ -88,6 +88,17 @@ describe('<PickupPlotInventory />', () => {
     expect(screen.queryByText('Total active plots/sites')).not.toBeInTheDocument();
   });
 
+  it('keeps the empty state in the visible viewport instead of the wide table body', async () => {
+    fetchApiMock.mockResolvedValueOnce({ ...inventory, plots: [] });
+    renderPage();
+
+    const emptyState = await screen.findByTestId('plot-inventory-empty-state');
+
+    expect(emptyState.closest('table')).toBeNull();
+    expect(emptyState.parentElement).toHaveClass('pickup-plot-empty-viewport');
+    expect(screen.getByRole('columnheader', { name: 'Plot / Site' })).toBeInTheDocument();
+  });
+
   it('shows linked plots and sites inventory data', async () => {
     renderPage();
     expect(await screen.findByText('Plot A-9')).toBeInTheDocument();
@@ -122,7 +133,7 @@ describe('<PickupPlotInventory />', () => {
       position: 'sticky', top: '0px', zIndex: '1',
     });
     expect(stickyHeader).toHaveStyle({ color: 'var(--text-primary)', background: 'var(--popover-bg, var(--modal-bg, var(--surface-color)))' });
-    expect(screen.getByRole('table')).toHaveStyle({ display: 'table', overflow: 'visible', width: '100%', tableLayout: 'fixed' });
+    expect(screen.getByRole('table')).toHaveStyle({ display: 'block', overflow: 'visible', width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: '0px' });
 
     const resizeHandle = screen.getByRole('separator', { name: 'Resize Plot / Site column' });
     fireEvent.mouseDown(resizeHandle, { button: 0, clientX: 100 });

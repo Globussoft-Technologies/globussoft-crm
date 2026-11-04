@@ -4,7 +4,7 @@ import { useNotify } from '../utils/notify';
 import { AuthContext } from '../appContexts';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
-import { Receipt, Plus, Eye, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
+import { Receipt, Plus, Eye, Trash2, CheckCircle2, XCircle, IndianRupee, Filter } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 import SearchableSelect from '../components/ui/SearchableSelect';
 
@@ -192,6 +192,7 @@ export default function Expenses() {
   const { user, tenant } = useContext(AuthContext) || {};
   const tenantVertical = tenant?.vertical || user?.tenant?.vertical || null;
   const isTravel = tenantVertical === 'travel';
+  const isGeneric = !isTravel && tenantVertical !== 'wellness';
   const [expenses, setExpenses] = useState([]);
   const [expenseStats, setExpenseStats] = useState({
     total: null,
@@ -217,6 +218,24 @@ export default function Expenses() {
   const [hasMore, setHasMore] = useState(true);
   const [tableError, setTableError] = useState(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const [availableCurrencies, setAvailableCurrencies] = useState([]);
+  const [currencyFilter, setCurrencyFilter] = useState('ALL');
+  const [currencyFilterOpen, setCurrencyFilterOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let cancelled = false;
+    fetchApi('/api/currencies?fields=summary', { silent: true })
+      .then((rows) => {
+        if (!cancelled) setAvailableCurrencies(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableCurrencies([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isGeneric]);
 
   useEffect(() => {
     if (!isTravel) {
@@ -476,19 +495,66 @@ export default function Expenses() {
     ? tmcTrips.find((trip) => Number(trip.id) === Number(selectedExpenseMeta.tmcTripId))
     : null;
 
-  const computedPending = expenses
-    .filter(e => e.status === 'Pending')
-    .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-  const totalPending = expenseStats.pendingAmount ?? computedPending;
-  const totalApproved = expenses
-    .filter(e => e.status === 'Approved')
-    .reduce((sum, e) => sum + e.amount, 0);
-  const totalReimbursed = expenses
-    .filter(e => e.status === 'Reimbursed')
-    .reduce((sum, e) => sum + e.amount, 0);
+  const currencyRateByCode = useMemo(
+    () => new Map(availableCurrencies.map((currency) => [
+      String(currency.code || '').toUpperCase(),
+      Number(currency.exchangeRate),
+    ])),
+    [availableCurrencies],
+  );
+  const defaultExpenseCurrency = tenant?.defaultCurrency || user?.tenant?.defaultCurrency || 'INR';
+  const formatExpenseAmount = useCallback((amount, sourceCurrency) => {
+    const source = String(sourceCurrency || defaultExpenseCurrency).toUpperCase();
+    const target = currencyFilter === 'ALL' ? source : currencyFilter.toUpperCase();
+    if (!isGeneric || target === source) return formatMoney(amount, { currency: source });
+    const sourceRate = currencyRateByCode.get(source);
+    const targetRate = currencyRateByCode.get(target);
+    if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
+      return formatMoney(amount, { currency: source });
+    }
+    return formatMoney((Number(amount || 0) / sourceRate) * targetRate, { currency: target });
+  }, [currencyFilter, currencyRateByCode, defaultExpenseCurrency, isGeneric]);
+  const totalExpenseAmount = useCallback((status) => {
+    const rows = expenses.filter((expense) => expense.status === status);
+    if (currencyFilter === 'ALL') {
+      const totals = new Map();
+      rows.forEach((expense) => {
+        const currency = String(expense.currency || defaultExpenseCurrency).toUpperCase();
+        totals.set(currency, (totals.get(currency) || 0) + Number(expense.amount || 0));
+      });
+      return totals.size
+        ? [...totals].map(([currency, amount]) => formatMoney(amount, { currency })).join(' · ')
+        : formatMoney(0, { currency: defaultExpenseCurrency });
+    }
+    const targetRate = currencyRateByCode.get(currencyFilter.toUpperCase());
+    const total = rows.reduce((sum, expense) => {
+      const source = String(expense.currency || defaultExpenseCurrency).toUpperCase();
+      const amount = Number(expense.amount || 0);
+      if (source === currencyFilter.toUpperCase()) return sum + amount;
+      const sourceRate = currencyRateByCode.get(source);
+      if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return sum;
+      return sum + (amount / sourceRate) * targetRate;
+    }, 0);
+    const hasMissingRate = rows.some((expense) => {
+      const source = String(expense.currency || defaultExpenseCurrency).toUpperCase();
+      return source !== currencyFilter.toUpperCase()
+        && (!Number.isFinite(currencyRateByCode.get(source)) || currencyRateByCode.get(source) <= 0
+          || !Number.isFinite(targetRate) || targetRate <= 0);
+    });
+    return hasMissingRate
+      ? 'Unavailable (missing exchange rate)'
+      : formatMoney(total, { currency: currencyFilter });
+  }, [currencyFilter, currencyRateByCode, defaultExpenseCurrency, expenses]);
+  const totalPending = totalExpenseAmount('Pending');
+  const totalApproved = totalExpenseAmount('Approved');
+  const totalReimbursed = totalExpenseAmount('Reimbursed');
+  const expenseCurrencyOptions = useMemo(() => [...new Set([
+    defaultExpenseCurrency,
+    ...availableCurrencies.map((row) => row.code),
+  ])], [availableCurrencies, defaultExpenseCurrency]);
 
   return (
-    <div className="expenses-page finance-page" style={{ padding: '2rem', minHeight: '100%', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="expenses-page finance-page" style={{ padding: '2rem', height: '100%', maxHeight: '100%', minHeight: 0, boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header className="finance-page__header" style={{ marginBottom: '2rem' }}>
         <div>
         <h1 className="finance-page__title" style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -505,7 +571,7 @@ export default function Expenses() {
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           {isTravel ? <button
               type="button"
-              aria-label={`Show pending expenses (${formatMoney(totalPending)})`}
+              aria-label={`Show pending expenses (${totalPending})`}
               aria-pressed={statusFilter === 'Pending'}
               onClick={() => setStatusFilter(statusFilter === 'Pending' ? 'all' : 'Pending')}
               style={{
@@ -514,14 +580,14 @@ export default function Expenses() {
                 display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
                 outline: statusFilter === 'Pending' ? '2px solid #f59e0b' : 'none', outlineOffset: '2px',
               }}
-            ><IndianRupee size={12} /> Pending: {formatMoney(totalPending)}</button> : <span style={{
+            ><IndianRupee size={12} /> Pending: {totalPending}</button> : <span style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
-          }}><IndianRupee size={12} /> Pending: {formatMoney(totalPending)}</span>}
+          }}><IndianRupee size={12} /> Pending: {totalPending}</span>}
           {isTravel ? <button
               type="button"
-              aria-label={`Show approved expenses (${formatMoney(totalApproved)})`}
+              aria-label={`Show approved expenses (${totalApproved})`}
               aria-pressed={statusFilter === 'Approved'}
               onClick={() => setStatusFilter(statusFilter === 'Approved' ? 'all' : 'Approved')}
               style={{
@@ -530,14 +596,14 @@ export default function Expenses() {
                 display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
                 outline: statusFilter === 'Approved' ? '2px solid #10b981' : 'none', outlineOffset: '2px',
               }}
-            ><CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}</button> : <span style={{
+            ><CheckCircle2 size={12} /> Approved: {totalApproved}</button> : <span style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
-          }}><CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}</span>}
+          }}><CheckCircle2 size={12} /> Approved: {totalApproved}</span>}
           {isTravel ? <button
               type="button"
-              aria-label={`Show paid-back expenses (${formatMoney(totalReimbursed)})`}
+              aria-label={`Show paid-back expenses (${totalReimbursed})`}
               aria-pressed={statusFilter === 'Reimbursed'}
               onClick={() => setStatusFilter(statusFilter === 'Reimbursed' ? 'all' : 'Reimbursed')}
               style={{
@@ -546,11 +612,11 @@ export default function Expenses() {
                 display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
                 outline: statusFilter === 'Reimbursed' ? '2px solid #3b82f6' : 'none', outlineOffset: '2px',
               }}
-            ><IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}</button> : <span style={{
+            ><IndianRupee size={12} /> Reimbursed: {totalReimbursed}</button> : <span style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
             background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
             display: 'flex', alignItems: 'center', gap: '0.4rem',
-          }}><IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}</span>}
+          }}><IndianRupee size={12} /> Reimbursed: {totalReimbursed}</span>}
           {isTravel ? <button
               type="button"
               aria-label={`Show all expenses (${expenseStats.total ?? expenses.length})`}
@@ -825,7 +891,7 @@ export default function Expenses() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 0.7fr) minmax(0, 1.3fr)', gap: '0.75rem 1rem', fontSize: '0.9rem' }}>
               <strong>Title</strong><span>{selectedExpense.title || '—'}</span>
-              <strong>Amount</strong><span style={{ color: '#10b981', fontWeight: 600 }}>{formatMoney(selectedExpense.amount)}</span>
+              <strong>Amount</strong><span style={{ color: '#10b981', fontWeight: 600 }}>{formatExpenseAmount(selectedExpense.amount, selectedExpense.currency)}</span>
               <strong>Payment Mode</strong><span style={{ overflowWrap: 'anywhere' }}>{paymentModeLabel(selectedExpense.notes)}</span>
               <strong>Category</strong><span><CategoryBadge category={selectedExpense.category} /></span>
               <strong>Status</strong><span><StatusBadge status={selectedExpense.status} /></span>
@@ -857,7 +923,7 @@ export default function Expenses() {
       )}
 
       {/* Expenses Table */}
-        <div className="card finance-page__table-card" style={{ padding: '2rem' }}>
+        <div className="card finance-page__table-card" style={{ padding: '2rem', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div className="finance-page__section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Receipt size={20} color="var(--accent-color)" />
@@ -905,29 +971,66 @@ export default function Expenses() {
             </p>
           ) : (
             <div
+              className="expenses-table-scroll"
               ref={tableScrollRef}
               onScroll={handleTableScroll}
               style={{
                 overflow: 'auto',
                 overflowX: 'auto',
-                minHeight: 'calc(100vh - 380px)',
-                maxHeight: 'calc(100vh - 380px)',
+                scrollbarGutter: 'stable',
+                minHeight: 0,
+                maxHeight: 'none',
+                flex: 1,
                 border: '1px solid var(--border-color)',
                 borderRadius: 8,
                 background: 'var(--surface-color)',
               }}
             >
-              <table style={{ width: '100%', minWidth: '1200px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
+              <table className="expenses-table" style={{ width: '100%', minWidth: '1540px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>
-                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Amount</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>
+                      {isGeneric ? (
+                        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span>Amount</span>
+                          <button
+                            type="button"
+                            aria-label="Filter expenses by currency"
+                            title="Filter by currency"
+                            onClick={() => setCurrencyFilterOpen((open) => !open)}
+                            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, padding: 0, border: '1px solid transparent', borderRadius: 4, background: currencyFilter !== 'ALL' ? 'var(--subtle-bg-4)' : 'transparent', color: currencyFilter !== 'ALL' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)', cursor: 'pointer' }}
+                          >
+                            <Filter size={14} aria-hidden="true" />
+                          </button>
+                          {currencyFilterOpen && (
+                            <div style={{ position: 'absolute', top: 'calc(100% + 0.35rem)', left: 0, zIndex: 20, padding: '0.5rem', minWidth: 140, background: 'var(--modal-bg, #fff)', border: '1px solid var(--border-color)', borderRadius: 6, boxShadow: '0 8px 20px rgba(0,0,0,0.15)' }}>
+                              <select
+                                value={currencyFilter}
+                                onChange={(event) => {
+                                  setCurrencyFilter(event.target.value);
+                                  setCurrencyFilterOpen(false);
+                                }}
+                                aria-label="Filter expenses by currency"
+                                autoFocus
+                                style={{ width: '100%', padding: '0.35rem', border: '1px solid var(--border-color)', borderRadius: 4, background: 'var(--card-bg)', color: 'var(--text-primary)', fontSize: '0.75rem' }}
+                              >
+                                <option value="ALL">Original currency</option>
+                                {expenseCurrencyOptions.map((currency) => (
+                                  <option key={currency} value={currency}>{currency}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </span>
+                      ) : 'Amount'}
+                    </th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Payment Mode</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Category</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Status</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>User</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Date</th>
-                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Actions</th>
+                    <th className="expenses-table__actions-header" style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Actions</th>
                   </tr>
                 </thead>
                   <colgroup>
@@ -938,7 +1041,7 @@ export default function Expenses() {
                     <col style={{ width: '130px' }} /> {/* Status */}
                     <col style={{ width: '220px' }} /> {/* User */}
                     <col style={{ width: '150px' }} /> {/* Date */}
-                    <col style={{ width: '300px' }} /> {/* Actions */}
+                    <col style={{ width: '340px' }} /> {/* Actions */}
                   </colgroup>
                 <tbody>
                   {visibleExpenses.map(exp => {
@@ -949,7 +1052,7 @@ export default function Expenses() {
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{exp.title}</td>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '600', color: '#10b981' }}>
-                        {formatMoney(exp.amount)}
+                        {formatExpenseAmount(exp.amount, exp.currency)}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', overflow: 'hidden' }}>
                         <button
@@ -974,8 +1077,8 @@ export default function Expenses() {
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {formatDate(exp.expenseDate)}
                       </td>
-                      <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'nowrap' }}>
+                      <td className="expenses-table__actions-cell" style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
+                        <div className="expenses-table__actions" style={{ display: 'flex', gap: '0.35rem', flexWrap: 'nowrap' }}>
                           <button
                             type="button"
                             onClick={() => openExpenseDetails(exp)}
@@ -1088,6 +1191,24 @@ export default function Expenses() {
           border-color: var(--border-color);
         }
         .finance-page__table-card::before { display: none; }
+        /* Keep the action controls intact when a row has View plus three
+           status actions. The table still owns horizontal scrolling on
+           smaller viewports, but the last button is never clipped inside
+           the Expenses card. */
+        .expenses-page .expenses-table__actions-header,
+        .expenses-page .expenses-table__actions-cell {
+          min-width: 340px;
+        }
+        .expenses-page .expenses-table__actions-cell {
+          overflow: visible !important;
+        }
+        .expenses-page .expenses-table__actions {
+          width: max-content;
+          min-width: 100%;
+        }
+        .expenses-page .expenses-table__actions > button {
+          flex: 0 0 auto;
+        }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
            Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the
            desktop grid prevents form-field min-content from forcing the column

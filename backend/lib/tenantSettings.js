@@ -160,6 +160,7 @@ const KEYS = {
   TRAVEL_RECAPTCHA_SECRET_KEY:           "travel.webForm.recaptcha.secretKey",
   GENERIC_CONTACT_LIFECYCLE_STAGES:      "generic.contactLifecycleStages",
   GENERIC_DEAL_TYPES:                    "generic.dealTypes",
+  GENERIC_FIELD_CONFIG:                  "generic.fieldConfig",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -176,8 +177,16 @@ const DEFAULTS = {
     { id: "won-churned", title: "Won / Churned", options: [{ id: "won", label: "Won", status: "Customer", negative: false }, { id: "churned", label: "Churned", status: "Churned", negative: true }] },
   ]),
   [KEYS.GENERIC_DEAL_TYPES]: JSON.stringify([
-    { id: "new-business", name: "New Business", description: "", isDefault: true, stages: [{ id: "new-lead", name: "New Lead", color: "#3b82f6" }, { id: "contracted", name: "Contracted", color: "#0891b2" }, { id: "negotiation", name: "Negotiation", color: "#7c3aed" }, { id: "won", name: "Won", color: "#10b981" }, { id: "lost", name: "Lost", color: "#ef4444" }] },
+    { id: "new-business", name: "New Business", description: "", isDefault: true, stages: [{ id: "new-deal", name: "New Deal", color: "#3b82f6" }, { id: "contracted", name: "Contracted", color: "#0891b2" }, { id: "negotiation", name: "Negotiation", color: "#7c3aed" }, { id: "won", name: "Won", color: "#10b981" }, { id: "lost", name: "Lost", color: "#ef4444" }] },
   ]),
+  [KEYS.GENERIC_FIELD_CONFIG]: JSON.stringify({
+    fieldOverrides: {},
+    groupOrder: ["Basic Information", "Telephone Numbers", "Lead Details", "Callified Details", "Web Form & Attribution", "UTM Tracker", "Attribution Tracking", "Table Controls", "Custom Fields"],
+    groupNames: {},
+    customGroups: [],
+    customFieldGroups: {},
+    fieldOrder: {},
+  }),
   [KEYS.GENERIC_RECAPTCHA_SITE_KEY]: process.env.RECAPTCHA_SITE_KEY || "",
   [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: process.env.RECAPTCHA_SECRET_KEY || "",
   [KEYS.TRAVEL_RECAPTCHA_SITE_KEY]: process.env.TRAVEL_RECAPTCHA_SITE_KEY || "",

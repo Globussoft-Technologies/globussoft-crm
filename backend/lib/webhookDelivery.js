@@ -95,7 +95,7 @@ function configuredHeaders(config) {
   return headers;
 }
 
-async function deliverConfiguredWebhook(config, event, payload, tenantId, secret) {
+async function deliverConfiguredWebhook(config, event, payload, tenantId, secret, options = {}) {
   const url = resolveConfiguredWebhookUrl(config?.url);
   const method = String(config?.method || "POST").toUpperCase();
   if (!CONFIGURED_METHODS.has(method)) throw new Error("Webhook method must be POST, PUT, or PATCH");
@@ -124,13 +124,42 @@ async function deliverConfiguredWebhook(config, event, payload, tenantId, secret
     headers["X-Globussoft-Signature"] = `t=${timestamp},v1=${signature}`;
   }
 
+  // The generic CRM's interactive test screen can show exactly what was sent
+  // without making a second request. Secret headers are deliberately redacted:
+  // the operator can verify their presence, while saved credentials and the
+  // server-generated HMAC never make a round trip back to the browser.
+  const diagnosticRequest = options.includeDiagnostics ? {
+    url,
+    method,
+    headers: Object.fromEntries(Object.entries(headers).map(([key, value]) => {
+      const configuredHeader = (Array.isArray(config?.headers) ? config.headers : [])
+        .find((entry) => String(entry?.key || "").toLowerCase() === key.toLowerCase());
+      const sensitiveName = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-globussoft-signature)$/i.test(key);
+      return [key, configuredHeader?.secret || sensitiveName ? "[redacted]" : value];
+    })),
+    body,
+  } : null;
+
   const maxAttempts = 3;
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const response = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(10000) });
       const responseText = (await response.text()).slice(0, 2000);
-      const result = { ok: response.ok, status: response.status, statusText: response.statusText, response: responseText, attempts: attempt };
+      const responseHeaders = options.includeDiagnostics && response.headers?.entries
+        ? Object.fromEntries(Array.from(response.headers.entries()).map(([key, value]) => [
+          key,
+          /^(set-cookie|www-authenticate|proxy-authenticate)$/i.test(key) ? "[redacted]" : value,
+        ]))
+        : undefined;
+      const result = {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        response: responseText,
+        attempts: attempt,
+        ...(options.includeDiagnostics ? { request: diagnosticRequest, responseHeaders } : {}),
+      };
       if (response.ok) return result;
       const error = new Error(`Webhook returned HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`);
       error.webhookResult = result;

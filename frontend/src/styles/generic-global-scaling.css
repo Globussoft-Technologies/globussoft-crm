@@ -45,7 +45,9 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
     --generic-ui-icon: clamp(0.68rem, calc(0.48rem + 0.42cqw), 1.125rem);
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
     :is(table, .data-table, [role="table"]):not(.estimates-ledger-table) {
     width: 100% !important;
     max-width: 100%;
@@ -53,25 +55,30 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
     table-layout: fixed;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    :is(table, .data-table, [role="table"]) :is(th, td, [role="cell"], [role="columnheader"]) {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    :is(table, .data-table, [role="table"])
+    :is(th, td, [role="cell"], [role="columnheader"]) {
     min-width: 0 !important;
     max-width: 100%;
-    padding: clamp(0.2rem, 0.35cqw, 0.65rem)
-      clamp(0.16rem, 0.28cqw, 0.5rem) !important;
+    padding: clamp(0.2rem, 0.35cqw, 0.65rem) clamp(0.16rem, 0.28cqw, 0.5rem) !important;
     font-size: var(--generic-ui-cell) !important;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    :is(table, .data-table, [role="table"]) :is(th, td) > :is(span, div, p, a) {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    :is(table, .data-table, [role="table"])
+    :is(th, td)
+    > :is(span, div, p, a) {
     min-width: 0;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
 }
 
 /* Dimensional density follows the same viewport curve as the type scale.
@@ -81,12 +88,16 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
   gap: var(--generic-ui-page-gap);
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(.card, .glass) {
   padding: var(--generic-ui-card-padding) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(button, input, select, [role="button"], [role="tab"]) {
   min-height: var(--generic-ui-control-height);
   padding-block: var(--generic-ui-control-y) !important;
@@ -94,12 +105,23 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   white-space: nowrap;
 }
 
+/* The generic density rule above intentionally normalizes input padding, but
+   this search has a leading icon and needs a reserved text gutter. */
 body[data-vertical="generic"] .app-main > main.generic-page-content
+  .workflow-webhook-field-search > input[type="search"] {
+  padding-left: 36px !important;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(.card, .glass, [role="dialog"]) {
   gap: var(--generic-ui-card-gap);
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(svg.lucide, button > svg, a > svg, [role="button"] > svg) {
   width: var(--generic-ui-icon) !important;
   height: var(--generic-ui-icon) !important;
@@ -109,7 +131,10 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* Inbox rows have three competing columns (avatar, message content, date /
    unread state). Give the content column an explicit flexible track so the
    fluid scale cannot make sender, subject, preview, and date overlap. */
-body[data-vertical="generic"] .app-main > main.generic-page-content .inbox-email-row {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-email-row {
   display: grid !important;
   grid-template-columns: clamp(1.75rem, 2.8vw, 2.5rem) minmax(0, 1fr) auto;
   gap: var(--generic-ui-card-gap) !important;
@@ -120,33 +145,51 @@ body[data-vertical="generic"] .app-main > main.generic-page-content .inbox-email
   flex-wrap: nowrap !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .inbox-email-row > div:nth-child(2),
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-email-row
+  > div:nth-child(2),
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__meta,
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__address {
   min-width: 0;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .inbox-email-row > div:nth-child(2) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-email-row
+  > div:nth-child(2) {
   height: auto !important;
   align-self: stretch;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__meta {
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--generic-ui-card-gap) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__address,
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__subject,
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__preview {
   min-width: 0;
   overflow: hidden;
@@ -155,13 +198,17 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   overflow-wrap: normal !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__date {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-email-row__avatar {
   width: clamp(1.75rem, 2.8vw, 2.5rem) !important;
   height: clamp(1.75rem, 2.8vw, 2.5rem) !important;
@@ -170,7 +217,9 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* Ticket tables keep every column inside the available card width. The
    Actions column gets a real share of the shrinking table instead of being
    clipped by the card's overflow boundary. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .tickets-table-scroll {
   width: 100%;
   max-width: 100%;
@@ -178,31 +227,80 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   overflow-y: auto;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table {
   width: 100% !important;
   min-width: 0 !important;
   table-layout: fixed;
   font-size: var(--generic-ui-cell) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(1) { width: 6% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(2) { width: 28% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(3) { width: 14% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(4) { width: 11% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(5) { width: 14% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(6) { width: 13% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table col:nth-child(7) { width: 14% !important; }
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(1) {
+  width: 6% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(2) {
+  width: 28% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(3) {
+  width: 14% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(4) {
+  width: 11% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(5) {
+  width: 14% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(6) {
+  width: 13% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(7) {
+  width: 14% !important;
+}
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table :is(th, td) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  :is(th, td) {
   padding: clamp(0.25rem, calc(0.12rem + 0.38vw), 0.65rem)
     clamp(0.2rem, calc(0.1rem + 0.28vw), 0.5rem) !important;
   white-space: nowrap;
@@ -210,15 +308,24 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   text-overflow: ellipsis;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table td:nth-child(3) select,
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .tickets-page .tickets-table td:nth-child(7) button {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  td:nth-child(3)
+  select,
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  td:nth-child(7)
+  button {
   max-width: 100%;
   min-width: 0;
   font-size: var(--generic-ui-small) !important;
-  padding: clamp(0.18rem, 0.25vw, 0.35rem)
-    clamp(0.25rem, 0.4vw, 0.55rem) !important;
+  padding: clamp(0.18rem, 0.25vw, 0.35rem) clamp(0.25rem, 0.4vw, 0.55rem) !important;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -227,12 +334,16 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* Revenue Goals is designed to fit its six/seven columns in the card. Remove
    the inline horizontal overflow fallback so an empty or narrow table does
    not render a second scrollbar beneath the surface. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .revenue-goals-table-scroll {
   overflow-x: hidden !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .revenue-goals-table {
   width: 100% !important;
   max-width: 100%;
@@ -240,8 +351,11 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   table-layout: fixed;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .revenue-goals-table :is(th, td) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .revenue-goals-table
+  :is(th, td) {
   min-width: 0;
   padding: clamp(0.3rem, calc(0.15rem + 0.42vw), 0.85rem)
     clamp(0.25rem, calc(0.12rem + 0.42vw), 1rem) !important;
@@ -254,33 +368,71 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* Audit log: keep badges and cells on one line while shrinking their
    footprint. The fixed table tracks ensure the left columns cannot disappear
    behind an accidental horizontal scroll position. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table-card .top-scroll-sync__bottom {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table-card
+  .top-scroll-sync__bottom {
   overflow-x: hidden !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .audit-log-table {
   width: 100% !important;
   min-width: 0 !important;
   table-layout: fixed;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table .audit-log-expand-column { width: 4% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table .audit-log-timestamp-column { width: 24% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table .audit-log-user-column { width: 27% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table .audit-log-action-column { width: 19% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table .audit-log-entity-column { width: 15% !important; }
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table .audit-log-id-column { width: 11% !important; }
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  .audit-log-expand-column {
+  width: 4% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  .audit-log-timestamp-column {
+  width: 24% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  .audit-log-user-column {
+  width: 27% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  .audit-log-action-column {
+  width: 19% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  .audit-log-entity-column {
+  width: 15% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  .audit-log-id-column {
+  width: 11% !important;
+}
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table :is(th, td) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  :is(th, td) {
   min-width: 0;
   padding: clamp(0.25rem, calc(0.12rem + 0.38vw), 0.7rem)
     clamp(0.2rem, calc(0.1rem + 0.38vw), 0.8rem) !important;
@@ -290,34 +442,52 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   font-size: var(--generic-ui-cell) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table td > div {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  td
+  > div {
   min-width: 0;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table td > :is(div, span) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  td
+  > :is(div, span) {
   max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table th {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  th {
   font-size: clamp(0.5rem, calc(0.38rem + 0.2vw), 0.72rem) !important;
   letter-spacing: 0.02em !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table td .audit-log-action-badge,
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .audit-log-table td > span {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  td
+  .audit-log-action-badge,
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .audit-log-table
+  td
+  > span {
   display: inline-flex;
   align-items: center;
   max-width: 100%;
-  padding: clamp(0.12rem, 0.2vw, 0.25rem)
-    clamp(0.25rem, 0.38vw, 0.65rem) !important;
+  padding: clamp(0.12rem, 0.2vw, 0.25rem) clamp(0.25rem, 0.38vw, 0.65rem) !important;
   white-space: nowrap !important;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -325,21 +495,25 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 }
 
 /* Keep the Generic Inbox frame within the page viewport. */
-body[data-vertical="generic"] .app-main > main.generic-page-content:has(
-    .inbox-page-shell--generic
-  ) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content:has(.inbox-page-shell--generic) {
   overflow-y: hidden !important;
 }
 
 /* The toolbar stays fixed in the card while only the message rows scroll. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-page-shell--generic {
   height: 100% !important;
   min-height: 0;
   overflow: hidden !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-list-card--generic {
   flex: 1 1 auto !important;
   min-height: 0 !important;
@@ -347,7 +521,9 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
   overflow: hidden !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-message-scroll--generic {
   flex: 1 1 auto !important;
   min-height: 0;
@@ -363,7 +539,9 @@ body[data-vertical="generic"] .workflow-webhook-edit-button {
   justify-self: start;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-list-card--generic {
   container: generic-inbox / inline-size;
 }
@@ -371,37 +549,52 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* Scale the inbox toolbar from the card width. Keep the controls on one line
    through tablet/split-pane widths; only phones need a second row. */
 @container generic-inbox (max-width: 850px) {
-  body[data-vertical="generic"] .app-main > main.generic-page-content
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
     .inbox-toolbar--generic {
     display: flex !important;
     flex-wrap: nowrap !important;
     gap: clamp(0.25rem, 0.8cqw, 0.65rem) !important;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-folder-tabs {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-folder-tabs {
     flex: 0 1 9.2rem !important;
     min-width: 0 !important;
     overflow: hidden;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-search {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-search {
     flex: 1 1 10rem !important;
     min-width: 7rem !important;
     margin-left: 0 !important;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-date-filter {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-date-filter {
     flex: 1 1 15rem !important;
     min-width: 0 !important;
     overflow: hidden;
     gap: clamp(0.15rem, 0.35cqw, 0.4rem);
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-date-filter input[type="date"] {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-date-filter
+    input[type="date"] {
     flex: 1 1 4.5rem;
     width: clamp(4rem, 7.5cqw, 6rem);
     min-width: 4rem;
@@ -409,39 +602,58 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
     font-size: clamp(0.58rem, 0.75cqw, 0.8rem) !important;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-toolbar-actions {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-toolbar-actions {
     width: auto;
     max-width: none;
     flex: 0 0 auto !important;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-folder-tabs button {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-folder-tabs
+    button {
     padding-inline: clamp(0.3rem, 0.7cqw, 0.65rem) !important;
     font-size: clamp(0.62rem, 0.8cqw, 0.85rem) !important;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-toolbar-actions > span {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-toolbar-actions
+    > span {
     font-size: clamp(0.65rem, 0.85cqw, 0.95rem) !important;
   }
 }
 
 @container generic-inbox (max-width: 600px) {
-  body[data-vertical="generic"] .app-main > main.generic-page-content
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
     .inbox-toolbar--generic {
     flex-wrap: wrap !important;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-search {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-search {
     flex-basis: 100%;
     order: 4;
   }
 
-  body[data-vertical="generic"] .app-main > main.generic-page-content
-    .inbox-toolbar--generic .inbox-date-filter {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .inbox-toolbar--generic
+    .inbox-date-filter {
     flex-basis: 100%;
     order: 5;
   }
@@ -450,14 +662,19 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* Native date controls have an intrinsic calendar affordance and cannot be
    safely compressed like a text input. Preserve their compact minimum width
    so the From/To labels and calendar icon never overlap. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   .inbox-date-filter--generic {
   flex: 0 0 auto !important;
   min-width: 0;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .inbox-date-filter--generic input[type="date"] {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-date-filter--generic
+  input[type="date"] {
   flex: 0 0 clamp(6rem, 9vw, 7.5rem);
   width: clamp(6rem, 9vw, 7.5rem);
   min-width: 6rem;
@@ -469,15 +686,20 @@ body[data-vertical="generic"] .app-main > main.generic-page-content
 /* The search wrapper already supplies its vertical padding. Prevent the
    global control density rule from adding a second min-height/padding layer
    to the nested search input. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  .inbox-search input[type="search"] {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-search
+  input[type="search"] {
   min-height: 0 !important;
   height: auto !important;
   padding-block: 0 !important;
   line-height: 1.2;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(h1, h2, h3, h4, h5, h6) {
   line-height: 1.22;
 }
@@ -494,44 +716,64 @@ body[data-vertical="generic"] .app-main > main.generic-page-content h3 {
   font-size: var(--generic-ui-h3) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(h4, h5, h6) {
   font-size: var(--generic-ui-control) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(p, li, label, legend, dt, dd, summary, figcaption, blockquote) {
   font-size: var(--generic-ui-small) !important;
   line-height: 1.35;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(button, input, select, textarea, [role="button"], [role="tab"]) {
   font-size: var(--generic-ui-control) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content table
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  table
   :is(th, td, caption) {
   font-size: var(--generic-ui-cell) !important;
   line-height: 1.3;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
   :is(small, .badge, .status-badge, [class*="badge"], [class*="chip"]) {
   font-size: var(--generic-ui-small) !important;
   line-height: 1.25;
 }
 
-body[data-vertical="generic"] .app-topbar
+body[data-vertical="generic"]
+  .app-topbar
   :is(button, a, [role="button"], .app-tenant-chip, .app-profile-name),
 body[data-vertical="generic"] .app-topbar .omnibar-root input,
-body[data-vertical="generic"] .app-sidebar
-  :is(.nav-link, .generic-nav-section-trigger, .generic-nav-section-items .nav-link) {
+body[data-vertical="generic"]
+  .app-sidebar
+  :is(
+    .nav-link,
+    .generic-nav-section-trigger,
+    .generic-nav-section-items .nav-link
+  ) {
   font-size: var(--generic-ui-control) !important;
 }
 
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  :is(button, a, h1, h2, h3, h4, [role="button"]) > svg,
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  :is(button, a, h1, h2, h3, h4, [role="button"])
+  > svg,
 body[data-vertical="generic"] .app-main > main.generic-page-content svg.lucide {
   width: var(--generic-ui-icon) !important;
   height: var(--generic-ui-icon) !important;
@@ -540,7 +782,11 @@ body[data-vertical="generic"] .app-main > main.generic-page-content svg.lucide {
 
 /* Inline pixel sizes are common in older Generic pages. Map them to the same
    fluid curve without changing the value of data-driven or Travel surfaces. */
-body[data-vertical="generic"] .app-main > main.generic-page-content
-  :not(:is(h1, h2, h3, h4, h5, h6, button, input, select, textarea, th, td))[style*="font-size"] {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  :not(
+    :is(h1, h2, h3, h4, h5, h6, button, input, select, textarea, th, td)
+  )[style*="font-size"] {
   font-size: calc(1em * clamp(0.86, calc(0.7 + 0.02vw), 1)) !important;
 }

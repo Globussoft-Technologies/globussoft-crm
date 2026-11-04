@@ -83,7 +83,7 @@ const {
 
 // #651 — third-party credentials on WhatsAppConfig. GET masks; PUT requires
 // full fresh value; rotation stamps lastRotatedAt + emits audit row.
-const WA_SECRET_FIELDS = ["accessToken", "webhookVerifyToken"];
+const WA_SECRET_FIELDS = ["appSecret", "accessToken", "webhookVerifyToken"];
 
 const GENERIC_TEMPLATE_FALLBACK_MAPPING = Object.freeze({
   1: "contact.first_name",
@@ -2409,10 +2409,16 @@ router.post(
         const status =
           r.code === "NOT_CONNECTED"
             ? 404
+            : r.code === "WHATSAPP_TOKEN_EXPIRED" ||
+                r.code === "WHATSAPP_ACCESS_TOKEN_INVALID"
+              ? 422
             : r.code === "GRAPH_ERROR"
               ? 502
               : 400;
-        return res.status(status).json({ error: r.code, detail: r.error });
+        return res.status(status).json({
+          error: r.error || "WhatsApp template sync failed.",
+          code: r.code,
+        });
       }
       res.json({ success: true, synced: r.synced, total: r.total });
     } catch (err) {
@@ -2541,6 +2547,8 @@ router.post(
         phoneNumberId: req.body.phoneNumberId,
         businessAccountId: req.body.businessAccountId,
         businessId: req.body.businessId,
+        appId: req.body.appId,
+        appSecret: req.body.appSecret,
         accessToken: req.body.accessToken,
         webhookVerifyToken: req.body.webhookVerifyToken,
         subscribeWebhooks: req.body.subscribeWebhooks !== false,

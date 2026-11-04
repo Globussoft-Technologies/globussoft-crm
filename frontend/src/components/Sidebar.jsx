@@ -26,6 +26,7 @@ import {
   FileDigit,
   Database,
   Network,
+  GitBranch,
   Target,
   CheckSquare,
   UserPlus,
@@ -48,7 +49,6 @@ import {
   // #917 slice 5  CSP Violations admin nav entry icon.
   ShieldAlert,
   ScrollText,
-  GitBranch,
   TrendingUp,
   BookOpen,
   PenTool,
@@ -139,6 +139,7 @@ import {
   Brain,
   PanelLeftClose,
   PanelLeftOpen,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { AuthContext } from "../App";
@@ -2760,7 +2761,7 @@ function renderGenericNav({
         <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
         <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
         <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-        {/* <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} /> */}
+        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
         <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
         <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
       </>)}
@@ -2774,6 +2775,7 @@ function renderGenericNav({
             affecting Callified's separate assigning-staff controls. */}
         {/* <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly requiredPermission={{ module: "leads", action: "read" }} /> */}
         <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly requiredPermission={{ module: "reports", action: "read" }} />
+        <Link to="/field-config" icon={SlidersHorizontal} label="Field Config" adminOnly />
       </>, "leads-group")}
 
       {renderGroup("Communication", <>
@@ -2786,7 +2788,9 @@ function renderGenericNav({
       {renderGroup("Work Management", <>
         <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
         <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
-        <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+        {/* Generic CRM: hide the standalone Workflows page without touching
+            the embedded Marketing Sequences webhook workflow feature. */}
+        {/* <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} /> */}
       </>)}
 
       {renderGroup("Customer Support", <>

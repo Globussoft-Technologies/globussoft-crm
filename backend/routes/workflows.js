@@ -108,6 +108,22 @@ function maskWorkflowSecrets(rule) {
   return { ...rule, targetState: JSON.stringify(target) };
 }
 
+async function findDuplicateWorkflowName(tenantId, name, excludeId = null) {
+  const normalizedName = String(name == null ? "" : name).trim();
+  if (!normalizedName) return null;
+
+  const matches = await prisma.automationRule.findMany({
+    where: {
+      tenantId,
+      name: normalizedName,
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    },
+    select: { id: true },
+    take: 1,
+  });
+  return matches[0] || null;
+}
+
 // ── Catalogue endpoints ──────────────────────────────────────────────
 // TRIGGER_TYPES / ACTION_TYPES were maintained here, in lib/eventBus.js and
 // again in the React builder. They had drifted: `nin` and `exists` worked in
@@ -143,11 +159,12 @@ router.get("/actions", canRead, (req, res) => {
 router.get("/schema", canRead, async (req, res) => {
   const vertical = await workflowTenantVertical(req);
   res.json({
+    vertical,
     modules: workflowSchema.MODULES,
     triggers: workflowSchema.publicTriggers(vertical),
     actions: ACTION_TYPES,
     operators: workflowSchema.CONDITION_OPS,
-    fields: workflowSchema.FIELD_OPTIONS,
+    fields: workflowSchema.fieldsForVertical(vertical),
     scheduleTriggers: SCHEDULE_TRIGGERS,
     scheduleEntities: Object.fromEntries(
       Object.entries(SCHEDULE_ENTITIES).map(([key, value]) => [key, { dateFields: value.dateFields }]),
@@ -417,7 +434,15 @@ router.post("/test-webhook", canWrite, async (req, res) => {
       tenantId: req.user.tenantId,
       _test: true,
     };
-    const result = await deliverConfiguredWebhook(config, req.body?.event || "contact.updated", payload, req.user.tenantId, secret);
+    const vertical = req.user.vertical || req.permissionTenant?.vertical;
+    const result = await deliverConfiguredWebhook(
+      config,
+      req.body?.event || "contact.updated",
+      payload,
+      req.user.tenantId,
+      secret,
+      { includeDiagnostics: vertical === "generic" }
+    );
     res.json({ success: true, result });
   } catch (error) {
     const status = /invalid|must|cannot|at most|valid JSON|required/i.test(error.message) ? 400 : 502;
@@ -543,8 +568,17 @@ router.post("/", canWrite, async (req, res) => {
   try {
     const { name, triggerType, actionType, targetState, condition, isActive, scheduleConfig } = req.body;
 
-    if (!name || !triggerType || !actionType) {
+    const normalizedName = String(name == null ? "" : name).trim();
+
+    if (!normalizedName || !triggerType || !actionType) {
       return res.status(400).json({ error: "name, triggerType, and actionType are required" });
+    }
+
+    if (await findDuplicateWorkflowName(req.user.tenantId, normalizedName)) {
+      return res.status(409).json({
+        error: "A workflow with this name already exists",
+        code: "WORKFLOW_NAME_EXISTS",
+      });
     }
 
     const enumErr = validateTriggerAction({ triggerType, actionType });
@@ -579,7 +613,7 @@ router.post("/", canWrite, async (req, res) => {
 
     const newRule = await prisma.automationRule.create({
       data: {
-        name,
+        name: normalizedName,
         triggerType,
         actionType,
         targetState: JSON.stringify(preparedTarget),
@@ -616,12 +650,29 @@ router.put("/:id", canUpdate, async (req, res) => {
 
     const { name, triggerType, actionType, targetState, isActive, condition, scheduleConfig } = req.body;
 
+    let normalizedName;
+    if (name !== undefined) {
+      normalizedName = String(name == null ? "" : name).trim();
+      if (!normalizedName) {
+        return res.status(400).json({
+          error: "Workflow name is required",
+          code: "WORKFLOW_NAME_REQUIRED",
+        });
+      }
+      if (await findDuplicateWorkflowName(req.user.tenantId, normalizedName, existing.id)) {
+        return res.status(409).json({
+          error: "A workflow with this name already exists",
+          code: "WORKFLOW_NAME_EXISTS",
+        });
+      }
+    }
+
     // #18: enforce trigger/action whitelist on update too.
     const enumErr = validateTriggerAction({ triggerType, actionType });
     if (enumErr) return res.status(enumErr.status).json(enumErr);
 
     const data = {};
-    if (name !== undefined) data.name = name;
+    if (name !== undefined) data.name = normalizedName;
     if (triggerType !== undefined) data.triggerType = triggerType;
     if (actionType !== undefined) data.actionType = actionType;
     if (targetState !== undefined) {

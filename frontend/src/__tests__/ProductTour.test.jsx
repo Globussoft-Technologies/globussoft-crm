@@ -108,11 +108,11 @@ describe("generic product tours", () => {
   });
 
   it("registers every generic sidebar destination, including hard-coded omissions", () => {
-    expect(GENERIC_FEATURE_TOURS).toHaveLength(94);
+    expect(GENERIC_FEATURE_TOURS).toHaveLength(95);
     const tourIds = GENERIC_FEATURE_TOURS.map((tour) => tour.id);
     expect(tourIds).toEqual(
       expect.arrayContaining([
-        "adsgpt", "callified", "whatsapp", "lead-reports", "workflows",
+        "adsgpt", "callified", "whatsapp", "lead-reports", "field-config",
         "pickup-plot-inventory", "transport-persons", "plot-brokers",
         "billing-persons", "pickup-customers",
         "transport-workspace", "sales-workspace", "pickup-work-assignments",
@@ -120,10 +120,12 @@ describe("generic product tours", () => {
     );
     expect(tourIds).not.toContain("lead-routing");
     expect(tourIds).not.toContain("estimates");
+    expect(tourIds).not.toContain("workflows");
   });
 
   it("has a detailed capability profile for every module beyond the four hand-authored tours", () => {
-    expect(GENERIC_TOUR_PROFILE_IDS).toHaveLength(80);
+    expect(GENERIC_TOUR_PROFILE_IDS).toHaveLength(81);
+    expect(GENERIC_TOUR_PROFILE_IDS).toContain("field-config");
     const detailedTours = GENERIC_FEATURE_TOURS.filter(
       (tour) => !tour.secondary && !["dashboard", "contacts", "leads", "pipeline"].includes(tour.id),
     );

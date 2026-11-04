@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { AuthContext } from '../appContexts';
@@ -155,6 +155,44 @@ describe('ContactDetail profile', () => {
     });
   });
 
+  it('sends an approved WhatsApp template from Generic CRM without sending its name as message text', async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      if (url === '/api/whatsapp/templates') return Promise.resolve([{
+        id: 91,
+        name: 'appointment_reminder',
+        body: 'Hi {{1}}, your appointment is tomorrow at {{2}}.',
+        status: 'APPROVED',
+      }]);
+      if (url === '/api/whatsapp/send' && options?.method === 'POST') {
+        return Promise.resolve({ success: true, status: 'QUEUED' });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'WhatsApp' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'WhatsApp Ahmad Malik' }));
+
+    fireEvent.click(await dialog.findByRole('checkbox', { name: 'Use approved template' }));
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Approved template' }), {
+      target: { value: 'appointment_reminder' },
+    });
+    expect(dialog.getByText('Hi {{1}}, your appointment is tomorrow at {{2}}.')).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      const sendCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/whatsapp/send' && options?.method === 'POST');
+      expect(JSON.parse(sendCall[1].body)).toEqual({
+        to: baseContact.phone,
+        templateName: 'appointment_reminder',
+        contactId: baseContact.id,
+      });
+    });
+  });
+
   it('shows the Generic CRM contact WhatsApp chat in Conversation', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
@@ -183,6 +221,49 @@ describe('ContactDetail profile', () => {
     expect(panel.getByRole('button', { name: 'New WhatsApp' })).toBeInTheDocument();
     expect(panel.getByText(/whatsapp.*DELIVERED/i)).toBeInTheDocument();
     expect(fetchApiMock).toHaveBeenCalledWith('/api/whatsapp/messages?contactId=7', { silent: true });
+  });
+
+  it('refreshes WhatsApp delivery status in the Generic CRM Conversation tab', async () => {
+    let whatsappRequestCount = 0;
+    let statusRefresh;
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((callback, delay) => {
+      if (delay === 10_000) statusRefresh = callback;
+      return 91;
+    });
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval').mockImplementation(() => {});
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url.startsWith('/api/staff')) return Promise.resolve([]);
+      if (url === '/api/whatsapp/messages?contactId=7') {
+        whatsappRequestCount += 1;
+        return Promise.resolve({ messages: [{
+          id: 81,
+          direction: 'OUTBOUND',
+          to: baseContact.phone,
+          body: 'Your quotation is ready',
+          status: whatsappRequestCount === 1 ? 'SENT' : 'DELIVERED',
+          createdAt: '2026-10-26T10:00:00.000Z',
+          contact: { id: 7, name: baseContact.name },
+        }] });
+      }
+      return Promise.resolve([]);
+    });
+
+    try {
+      renderProfile();
+      const panel = within(await screen.findByLabelText('Contact profile'));
+      fireEvent.click(panel.getByRole('button', { name: 'Conversation' }));
+      expect(await panel.findByText(/whatsapp.*SENT/i)).toBeInTheDocument();
+      expect(statusRefresh).toBeTypeOf('function');
+
+      await act(async () => { await statusRefresh(); });
+
+      expect(panel.getByText(/whatsapp.*DELIVERED/i)).toBeInTheDocument();
+      expect(panel.queryByText(/whatsapp.*SENT/i)).not.toBeInTheDocument();
+    } finally {
+      intervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 
   it('keeps the files workflow reachable from the profile navigation', async () => {

@@ -30,7 +30,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   CalendarRange, ChevronLeft, Download, Edit2, Filter,
-  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, Upload, X, ChevronDown, ChevronUp, ArrowUpDown,
+  Percent, Plus, Save, Trash2, Upload, X, ChevronDown, ChevronUp, ArrowUpDown,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -1172,10 +1172,44 @@ function MarkupRulesSection() {
                   <td style={td}>{formatMarkup(r)}</td>
                   <td style={td}>{r.priority}</td>
                   <td style={td}>
-                    <button type="button" onClick={() => toggleActive(r)} style={iconBtn} aria-label={`Toggle active for rule ${r.id}`}>
-                      {r.isActive
-                        ? <ToggleRight size={20} style={{ color: "var(--success-color)" }} />
-                        : <ToggleLeft size={20} />}
+                    <button
+                      className="cost-master-active-toggle"
+                      type="button"
+                      onClick={() => toggleActive(r)}
+                      aria-label={`Toggle active for rule ${r.id}`}
+                      aria-pressed={r.isActive}
+                      style={{
+                        position: "relative",
+                        width: 40,
+                        height: 22,
+                        borderRadius: 999,
+                        border: r.isActive
+                          ? "1px solid var(--success-color, #3ecf7e)"
+                          : "1px solid var(--border-color)",
+                        background: r.isActive
+                          ? "rgba(62,207,126,0.18)"
+                          : "var(--surface-color)",
+                        cursor: "pointer",
+                        padding: 0,
+                        flexShrink: 0,
+                        transition: "background .15s ease, border-color .15s ease",
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          position: "absolute",
+                          top: 2,
+                          left: r.isActive ? 20 : 2,
+                          width: 16,
+                          height: 16,
+                          borderRadius: "50%",
+                          background: r.isActive
+                            ? "var(--success-color, #3ecf7e)"
+                            : "var(--text-secondary)",
+                          transition: "left .15s ease, background .15s ease",
+                        }}
+                      />
                     </button>
                   </td>
                   <td style={actionsTd}>

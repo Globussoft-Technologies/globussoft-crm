@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AuthContext } from "../appContexts";
 
 const fetchApiMock = vi.fn();
 vi.mock("../utils/api", () => ({ fetchApi: (...args) => fetchApiMock(...args) }));
@@ -53,14 +56,40 @@ function mockApi(path, overrides = {}) {
   }
   // null → the builder keeps its built-in fallback catalogue.
   if (path === "/api/workflows/schema") return Promise.resolve(null);
+  if (path === "/api/table-column-prefs/leads") return Promise.resolve(null);
   if (path === "/api/workflows/email-templates") return Promise.resolve([{ id: 4, name: "Welcome email" }]);
   if (path === "/api/workflows/sequences") return Promise.resolve([{ id: 8, name: "Nurture", isActive: true }]);
   if (path === "/api/workflows/assignees") return Promise.resolve([{ id: 11, name: "Ada" }, { id: 12, name: "Grace" }]);
+  if (path === "/api/contacts/filter-values/webForm") return Promise.resolve({ values: [] });
   if (path === "/api/workflows/stats/actions") return Promise.resolve({});
   return Promise.resolve([existingWorkflow]);
 }
 
 describe("Workflows page", () => {
+  it("hides Test workflow and Apply to existing records in the webhook-only editor", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/workflows": [{
+        ...existingWorkflow,
+        actionType: "send_webhook",
+        targetState: JSON.stringify({
+          module: "contact",
+          actions: [{ type: "send_webhook", config: { url: "https://hooks.example.com/leads" } }],
+        }),
+      }],
+    }));
+    render(<Workflows webhookOnly embedded />);
+    await user.click(await screen.findByRole("button", { name: "Welcome new leads" }));
+
+    expect(screen.queryByRole("button", { name: /^test workflow$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /apply to existing records/i })).not.toBeInTheDocument();
+  });
+
+  it("reserves space between the webhook field-search icon and its text", () => {
+    const css = readFileSync(join(process.cwd(), "src/styles/generic-global-scaling.css"), "utf8");
+    expect(css).toMatch(/\.workflow-webhook-field-search\s*>\s*input\[type="search"\]\s*\{[^}]*padding-left:\s*36px\s*!important/s);
+  });
+
   it("loads the workflow directory and exposes status controls", async () => {
     render(<Workflows />);
     expect(await screen.findByRole("heading", { name: "All workflows" })).toBeInTheDocument();
@@ -69,12 +98,37 @@ describe("Workflows page", () => {
     expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows");
   });
 
+  it("shows Contact-backed records as Leads in the Generic CRM workflow type", async () => {
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/workflows": [{
+        ...existingWorkflow,
+        condition: JSON.stringify({ groups: [{ match: "all", clauses: [{ entity: "contact", field: "status", op: "eq", value: "Lead" }] }] }),
+      }],
+    }));
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" }, user: null }}><Workflows /></AuthContext.Provider>);
+
+    expect(await screen.findByText("Leads")).toBeInTheDocument();
+    expect(screen.queryByText("Contacts")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /disable welcome new leads/i }).closest(".workflow-page--generic")).toBeInTheDocument();
+  });
+
   it("opens the Freshsales-style builder with modules, conditions, and actions", async () => {
     const user = userEvent.setup();
     render(<Workflows />);
     await user.click(screen.getByRole("button", { name: /create workflow/i }));
     expect(screen.getByRole("textbox", { name: "Workflow name" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Contacts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leads" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Contacts" })).not.toBeInTheDocument();
+    expect(screen.getByText("Run this workflow for").nextElementSibling.querySelectorAll("button")).toHaveLength(7);
+    const triggerOptions = Array.from(screen.getByRole("combobox", { name: "Workflow trigger" }).options);
+    expect(triggerOptions.map((option) => option.value)).toContain("lead.converted");
+    expect(triggerOptions.map((option) => option.textContent)).toEqual(expect.arrayContaining([
+      "When a lead is created",
+      "When a lead is updated",
+      "When a lead is created or updated",
+    ]));
+    expect(triggerOptions.some((option) => /contact/i.test(option.textContent))).toBe(false);
     expect(screen.getByRole("heading", { name: /what conditions should be met/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /what actions should be executed/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add group/i })).toBeInTheDocument();
@@ -110,6 +164,21 @@ describe("Workflows page", () => {
     expect(notify.success).toHaveBeenCalledWith("Workflow saved as draft");
   });
 
+  it("blocks a duplicate workflow name before sending a create request", async () => {
+    const user = userEvent.setup();
+    render(<Workflows />);
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    const name = screen.getByRole("textbox", { name: "Workflow name" });
+    await user.clear(name);
+    await user.type(name, "  WELCOME NEW LEADS  ");
+    await user.click(screen.getByRole("button", { name: /save as draft/i }));
+
+    expect(notify.error).toHaveBeenCalledWith("A workflow with this name already exists");
+    expect(fetchApiMock.mock.calls.some(([path, options]) => (
+      path === "/api/workflows" && options?.method === "POST"
+    ))).toBe(false);
+  });
+
   it("calls the existing tenant-scoped toggle endpoint", async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((path) => mockApi(path, {
@@ -122,7 +191,7 @@ describe("Workflows page", () => {
 
   it("configures and tests a webhook action", async () => {
     const user = userEvent.setup();
-    render(<Workflows />);
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" } }}><Workflows /></AuthContext.Provider>);
     await user.click(screen.getByRole("button", { name: /create workflow/i }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
     const editWebhookButton = screen.getByRole("button", { name: /edit webhook settings/i });
@@ -131,30 +200,74 @@ describe("Workflows page", () => {
     await user.click(editWebhookButton);
 
     expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
-    const webhookFields = [
-      "contactId", "name", "email", "phone", "company", "title", "status", "source", "tags",
-      "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus",
-      "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk",
-      "metaIsQualified", "changedFields", "createdAt",
+    const defaultWebhookFields = [
+      "name", "email", "phone", "source", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content",
     ];
-    webhookFields.forEach((field) => expect(screen.getByRole("checkbox", { name: field })).toBeChecked());
-    await user.click(screen.getByRole("checkbox", { name: "company" }));
+    defaultWebhookFields.forEach((field) => expect(screen.getByRole("checkbox", { name: field })).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: "company" })).not.toBeChecked();
+    const fieldPicker = screen.getByLabelText("Webhook fields");
+    const initiallyOrderedFields = within(fieldPicker).getAllByRole("checkbox");
+    defaultWebhookFields.forEach((field, index) => expect(initiallyOrderedFields[index]).toHaveAccessibleName(field));
+    await user.click(screen.getByRole("checkbox", { name: "email" }));
+    const reorderedFields = within(fieldPicker).getAllByRole("checkbox");
+    const firstUncheckedIndex = reorderedFields.findIndex((checkbox) => !checkbox.checked);
+    expect(firstUncheckedIndex).toBe(defaultWebhookFields.length - 1);
+    expect(reorderedFields.slice(0, firstUncheckedIndex).every((checkbox) => checkbox.checked)).toBe(true);
+    expect(reorderedFields.slice(firstUncheckedIndex).every((checkbox) => !checkbox.checked)).toBe(true);
+    const fieldSearch = screen.getByRole("searchbox", { name: "Search webhook fields" });
+    await user.type(fieldSearch, "status");
+    expect(screen.getByRole("checkbox", { name: "status" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "callifiedLeadStatus" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "email" })).not.toBeInTheDocument();
+    await user.clear(fieldSearch);
+    expect(screen.getByRole("checkbox", { name: "email" })).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Webhook callback URL" }), "https://hooks.example.com/meta-feedback");
     await user.click(screen.getByRole("button", { name: /add custom header/i }));
     await user.type(screen.getByRole("textbox", { name: "Webhook header 1 name" }), "X-Webhook-Secret");
     await user.type(screen.getByLabelText("Webhook header 1 value"), "secret-value");
     fetchApiMock.mockImplementation((path) => mockApi(path, {
-      "/api/workflows/test-webhook": { success: true, result: { status: 202 } },
+      "/api/workflows/test-webhook": { success: true, result: {
+        status: 202,
+        statusText: "Accepted",
+        request: { url: "https://hooks.example.com/meta-feedback", method: "POST", headers: { "X-Webhook-Secret": "[redacted]" }, body: "{\"contactId\":0}" },
+        responseHeaders: { "content-type": "application/json" },
+        response: "{\"received\":true}",
+        attempts: 1,
+      } },
     }));
     await user.click(screen.getByRole("button", { name: /test this webhook/i }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows/test-webhook", expect.objectContaining({ method: "POST" })));
     const testWebhookCall = fetchApiMock.mock.calls.find(([path]) => path === "/api/workflows/test-webhook");
-    expect(JSON.parse(testWebhookCall[1].body).config.selectedFields).toEqual(expect.not.arrayContaining(["company"]));
-    expect(notify.success).toHaveBeenCalledWith("Webhook responded with HTTP 202");
+    expect(JSON.parse(testWebhookCall[1].body).config.selectedFields).toEqual(expect.not.arrayContaining(["email", "company"]));
+    expect(screen.getByRole("dialog", { name: "Test webhook result" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Received success response (HTTP 202)");
+    expect(screen.getByLabelText("Webhook request sent")).toHaveTextContent("https://hooks.example.com/meta-feedback");
+    expect(screen.getByLabelText("Webhook request sent")).toHaveTextContent("[redacted]");
+    expect(screen.getByLabelText("Webhook response received")).toHaveTextContent("received");
+    expect(notify.success).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /back to webhook settings/i }));
+    expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save settings/i }));
     expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Action 1 webhook URL" })).toHaveValue("https://hooks.example.com/meta-feedback");
+  });
+
+  it("keeps the existing compact webhook-test notification outside Generic CRM", async () => {
+    const user = userEvent.setup();
+    render(<Workflows />);
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    await user.type(screen.getByRole("textbox", { name: "Webhook callback URL" }), "https://hooks.example.com/test");
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/workflows/test-webhook": { success: true, result: { status: 204 } },
+    }));
+
+    await user.click(screen.getByRole("button", { name: /test this webhook/i }));
+
+    await waitFor(() => expect(notify.success).toHaveBeenCalledWith("Webhook responded with HTTP 204"));
+    expect(screen.queryByRole("dialog", { name: "Test webhook result" })).not.toBeInTheDocument();
   });
 
   // ── Parity-wave coverage ─────────────────────────────────────────────
@@ -213,6 +326,46 @@ describe("Workflows page", () => {
     expect(screen.getByText(/no value needed/i)).toBeInTheDocument();
   });
 
+  it("shows every generic CRM web form in a dynamic condition-value dropdown", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => mockApi(path, {
+      "/api/contacts/filter-values/webForm": {
+        values: [
+          { value: "Contact Us", label: "Contact Us", count: 4 },
+          { value: "Newsletter Signup", label: "Newsletter Signup", count: 0 },
+        ],
+      },
+    }));
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" }, user: null }}><Workflows /></AuthContext.Provider>);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/contacts/filter-values/webForm"));
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    await user.click(within(screen.getByRole("listbox", { name: "Condition 1 field 1" })).getByRole("option", { name: "webForm" }));
+
+    const valuePicker = screen.getByRole("combobox", { name: "Condition 1 value 1" });
+    expect(Array.from(valuePicker.options).map((option) => option.textContent)).toEqual([
+      "Select web form",
+      "Contact Us",
+      "Newsletter Signup",
+    ]);
+    await user.selectOptions(valuePicker, "Newsletter Signup");
+    expect(valuePicker).toHaveValue("Newsletter Signup");
+  });
+
+  it("does not load or render the web-form dropdown outside Generic CRM", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => mockApi(path));
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "wellness" }, user: null }}><Workflows /></AuthContext.Provider>);
+    await user.click(await screen.findByRole("button", { name: /create workflow/i }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    await user.click(within(screen.getByRole("listbox", { name: "Condition 1 field 1" })).getByRole("option", { name: "webForm" }));
+
+    expect(fetchApiMock).not.toHaveBeenCalledWith("/api/contacts/filter-values/webForm");
+    expect(screen.getByRole("textbox", { name: "Condition 1 value 1" })).toBeInTheDocument();
+  });
+
   it("exposes deal stage-change fields so 'changed from X to Y' is buildable", async () => {
     // fromStage/toStage rode on every deal.stage_changed payload but were
     // absent from the field list, making the condition impossible to express.
@@ -220,9 +373,49 @@ describe("Workflows page", () => {
     render(<Workflows />);
     await user.click(screen.getByRole("button", { name: /create workflow/i }));
     await user.click(screen.getByRole("button", { name: "Deals" }));
-    const fields = screen.getByRole("combobox", { name: "Condition 1 field 1" });
-    const values = Array.from(fields.options).map((option) => option.value);
-    expect(values).toEqual(expect.arrayContaining(["fromStage", "toStage"]));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    const fields = screen.getByRole("listbox", { name: "Condition 1 field 1" });
+    expect(within(fields).getByRole("option", { name: "fromStage" })).toBeInTheDocument();
+    expect(within(fields).getByRole("option", { name: "toStage" })).toBeInTheDocument();
+  });
+
+  it("shows the complete field set for every selected Generic CRM module", async () => {
+    const user = userEvent.setup();
+    render(<Workflows />);
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+
+    const expectedField = {
+      Deals: "pipelineId",
+      Tasks: "projectId",
+      Tickets: "slaResolveDue",
+      Invoices: "nextRecurDate",
+      Payments: "plotPaymentReference",
+      Leads: "lifecycleStageKey",
+      Approvals: "approvedAt",
+    };
+
+    for (const [module, field] of Object.entries(expectedField)) {
+      await user.click(screen.getByRole("button", { name: module }));
+      await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+      const fields = screen.getByRole("listbox", { name: "Condition 1 field 1" });
+      expect(within(fields).getByRole("option", { name: field })).toBeInTheDocument();
+    }
+  });
+
+  it("keeps condition rows in sync with the selected Generic CRM module", async () => {
+    const user = userEvent.setup();
+    render(<Workflows />);
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+
+    await user.click(screen.getByRole("button", { name: "Deals" }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    await user.click(screen.getByRole("option", { name: "stage" }));
+    expect(screen.getByRole("combobox", { name: "Condition 1 entity 1" })).toHaveValue("deal");
+
+    await user.click(screen.getByRole("button", { name: "Tickets" }));
+
+    expect(screen.getByRole("combobox", { name: "Condition 1 entity 1" })).toHaveValue("ticket");
+    expect(screen.getByRole("combobox", { name: "Condition 1 field 1" })).toHaveValue("Select field");
   });
 
   it("builds a time-based workflow and posts its schedule", async () => {
@@ -356,5 +549,63 @@ describe("Workflows page", () => {
     expect(runCalls).toHaveLength(1);
     expect(JSON.parse(runCalls[0][1].body).dryRun).toBe(true);
     confirmSpy.mockRestore();
+  });
+
+  it("loads live field catalogs for Leads and every other Generic CRM tab", async () => {
+    const user = userEvent.setup();
+    const leadColumns = Array.from({ length: 199 }, (_, index) => ({
+      key: index === 0 ? "name" : index === 1 ? "utm_source" : `cf_field_${index}`,
+      label: index === 0 ? "Name" : index === 1 ? "UTM Source" : `Custom field ${index}`,
+      ...(index < 2 ? {} : { filterField: `custom_${index}` }),
+    }));
+    const serverFields = {
+      contact: [{ value: "name", label: "Name", type: "string" }],
+      deal: [{ value: "serverDealField", label: "Server deal field", type: "string" }],
+      task: [{ value: "serverTaskField", label: "Server task field", type: "string" }],
+      ticket: [{ value: "serverTicketField", label: "Server ticket field", type: "string" }],
+      invoice: [{ value: "serverInvoiceField", label: "Server invoice field", type: "string" }],
+      payment: [{ value: "serverPaymentField", label: "Server payment field", type: "string" }],
+      approval: [{ value: "serverApprovalField", label: "Server approval field", type: "string" }],
+    };
+    fetchApiMock.mockImplementation((path) => {
+      // Deliberately omit `vertical` to pin rolling-deploy compatibility: the
+      // tenant field endpoint is authoritative and already vertical-gated.
+      if (path === "/api/workflows/schema") return Promise.resolve({ fields: serverFields });
+      if (path === "/api/table-column-prefs/leads") return Promise.resolve({ availableColumns: leadColumns, visible: [] });
+      return mockApi(path);
+    });
+
+    render(<Workflows />);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads", { silent: true }));
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+
+    const expectedByTab = {
+      Deals: "Server deal field",
+      Tasks: "Server task field",
+      Tickets: "Server ticket field",
+      Invoices: "Server invoice field",
+      Payments: "Server payment field",
+      Approvals: "Server approval field",
+    };
+    for (const [tab, expected] of Object.entries(expectedByTab)) {
+      await user.click(screen.getByRole("button", { name: tab }));
+      await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+      const fieldList = screen.getByRole("listbox", { name: "Condition 1 field 1" });
+      expect(within(fieldList).getByRole("option", { name: expected })).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole("button", { name: "Leads" }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    const leadOptions = within(screen.getByRole("listbox", { name: "Condition 1 field 1" })).getAllByRole("option");
+    expect(leadOptions).toHaveLength(200); // 199 live fields + Select field placeholder.
+    expect(leadOptions.map((option) => option.textContent)).toContain("Custom field 198");
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    expect(screen.getByRole("checkbox", { name: "Custom field 198" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "custom_198" })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("searchbox", { name: "Search webhook fields" }), "utm");
+    expect(screen.getByRole("checkbox", { name: "UTM Source" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Custom field 198" })).not.toBeInTheDocument();
   });
 });

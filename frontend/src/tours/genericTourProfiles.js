@@ -73,6 +73,7 @@ const FEATURE_PROFILES = {
   "pickup-customers": ["admin", "customer workflow", "customer workflows", "review pickup and billing progress, including converted customers"],
   privacy: ["admin", "privacy request", "privacy requests", "review retention and DSAR handling"],
   "field-permissions": ["admin", "field rule", "field rules", "edit role-level visibility and access"],
+  "field-config": ["admin", "lead field", "lead fields", "configure required fields, quick-add visibility, choices, and field groups"],
   "admin-csp-violations": ["analytics", "CSP violation", "CSP violations", "inspect blocked resources and directives"],
   "admin-embed-allowlist": ["admin", "allowed embed origin", "allowed embed origins", "edit trusted domains"],
   "admin-status": ["admin", "status component", "status components", "edit availability and notices"],

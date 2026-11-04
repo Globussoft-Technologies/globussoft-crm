@@ -103,7 +103,7 @@ const SAMPLE_CAMPAIGNS = [
   },
 ];
 
-function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], whatsapp = [], forms = [], sequences = [] } = {}) {
+function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], whatsapp = [], forms = [], sequences = [], webhooks = [] } = {}) {
   fetchApiMock.mockImplementation((url, options = {}) => {
     if (typeof url !== 'string') return Promise.resolve(null);
     if (url === '/api/marketing/campaigns' && options.method === 'POST') {
@@ -134,6 +134,11 @@ function wireFetch({ campaigns = SAMPLE_CAMPAIGNS, sms = [], whatsapp = [], form
     if (url === '/api/sequences') {
       return Promise.resolve(sequences);
     }
+    if (url === '/api/developer/webhooks' && options.method === 'POST') {
+      return Promise.resolve({ id: 902, ...JSON.parse(options.body) });
+    }
+    if (url === '/api/developer/webhooks') return Promise.resolve(webhooks);
+    if (/^\/api\/developer\/webhooks\/\d+$/.test(url) && options.method === 'DELETE') return Promise.resolve({ success: true });
     return Promise.resolve(null);
   });
 }
@@ -223,8 +228,11 @@ describe('<Marketing /> — Generic campaign workflow', () => {
   it('shows Generic channel tabs and keeps legacy forms and push hidden', async () => {
     wireFetch();
     renderMarketing(GENERIC_USER);
-    expect(await screen.findByRole('heading', { name: 'Marketing Sequences' })).toBeInTheDocument();
-    for (const name of ['Email Sequences', 'SMS Sequences', 'WhatsApp Sequences']) {
+    const heading = await screen.findByRole('heading', { name: 'Marketing Sequences' });
+    expect(heading).toBeInTheDocument();
+    expect(heading.closest('.marketing-page')).toHaveClass('marketing-page--generic');
+    expect(heading.closest('.marketing-page__header')).toBeInTheDocument();
+    for (const name of ['Webhooks', 'Email Sequences', 'SMS Sequences', 'WhatsApp Sequences']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'Embedded Forms' })).not.toBeInTheDocument();
@@ -236,6 +244,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     renderMarketing(GENERIC_USER);
 
     fireEvent.click(await screen.findByRole('button', { name: 'WhatsApp Sequences' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
     fireEvent.click(screen.getByRole('button', { name: 'Configure WhatsApp' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Configure WhatsApp' });
@@ -249,6 +258,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close WhatsApp configuration' }));
     fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
     fireEvent.click(screen.getByRole('button', { name: 'Configure SMS' }));
 
     const smsDialog = screen.getByRole('dialog', { name: 'Configure SMS' });
@@ -266,8 +276,26 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     wireFetch();
     renderMarketing(WELLNESS_USER);
 
-    expect(await screen.findByRole('heading', { name: 'Marketing' })).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: 'Marketing' });
+    expect(heading).toBeInTheDocument();
+    expect(heading.closest('.marketing-page')).not.toHaveClass('marketing-page--generic');
     expect(screen.queryByRole('button', { name: /Configure (SMS|WhatsApp)/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Webhooks' })).not.toBeInTheDocument();
+  });
+
+  it('opens the workflow builder with a webhook action from the Generic CRM marketing page', async () => {
+    wireFetch({ campaigns: [] });
+    renderMarketing(GENERIC_USER);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Webhooks' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create webhook workflow' }));
+
+    expect(await screen.findByRole('heading', { name: 'Run this workflow for' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'When to trigger this workflow?' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'What conditions should be met?' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'What actions should be executed?' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Action 1' })).toHaveValue('send_webhook');
+    expect(screen.getByRole('textbox', { name: 'Action 1 webhook URL' })).toBeInTheDocument();
   });
 
   it.each([
@@ -277,11 +305,27 @@ describe('<Marketing /> — Generic campaign workflow', () => {
   ])('shows matching controls without a redundant creator for Generic %s sequences', async (label, tab) => {
     wireFetch({ campaigns: [], sms: [], whatsapp: [] });
     renderMarketing(GENERIC_USER);
-    if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
+    if (tab !== 'campaigns') {
+      fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
+      fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
+    }
 
     expect(await screen.findByRole('button', { name: 'Add a condition' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Select drafts' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['SMS Sequences', 'Build a SMS sequence'],
+    ['WhatsApp Sequences', 'Build a WhatsApp sequence'],
+  ])('opens the Add a condition builder when switching to Generic %s', async (tabName, builderHeading) => {
+    wireFetch({ campaigns: [], sms: [], whatsapp: [] });
+    renderMarketing(GENERIC_USER);
+
+    fireEvent.click(await screen.findByRole('button', { name: tabName }));
+
+    expect(await screen.findByRole('heading', { name: builderHeading })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add a condition' })).not.toBeInTheDocument();
   });
 
   it('highlights only the selected Generic marketing tab', async () => {
@@ -301,6 +345,21 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     expect(emailTab.style.background).toBe('var(--primary-color)');
     expect(emailTab.style.color).toBe('rgb(255, 255, 255)');
     window.history.pushState({}, '', '/marketing');
+  });
+
+  it.each([
+    ['Email', null, 'Email', 'EMAIL'],
+    ['SMS', 'SMS Sequences', 'SMS', 'SMS'],
+    ['WhatsApp', 'WhatsApp Sequences', 'WhatsApp', 'WHATSAPP'],
+  ])('opens %s templates from the matching Generic CRM sequence tab', async (_label, sequenceTab, expectedType, expectedChannel) => {
+    wireFetch({ campaigns: [], sms: [], whatsapp: [] });
+    renderMarketing(GENERIC_USER);
+
+    if (sequenceTab) fireEvent.click(await screen.findByRole('button', { name: sequenceTab }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Templates' }));
+
+    expect(await screen.findByRole('combobox', { name: 'Template type' })).toHaveValue(expectedChannel);
+    expect(screen.getByRole('combobox', { name: 'Template type' })).toHaveDisplayValue(expectedType);
   });
 
   it('renders percentage-based engagement and running status in Generic cards', async () => {
@@ -331,7 +390,10 @@ describe('<Marketing /> — Generic campaign workflow', () => {
       whatsapp: source === 'whatsapp' ? [sequence] : [],
     });
     renderMarketing(GENERIC_USER);
-    if (source !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
+    if (source !== 'campaigns') {
+      fireEvent.click(await screen.findByRole('button', { name: `${label} Sequences` }));
+      fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
+    }
     const listUrl = source === 'whatsapp'
       ? `/api/marketing/campaigns?channel=${channel}`
       : '/api/marketing/campaigns?paginate=1';
@@ -362,8 +424,6 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     expect(screen.getByText('Create an email template before adding an automation action.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
-    expect(screen.queryByRole('heading', { name: 'Build a SMS sequence' })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Add a condition' }));
     expect(await screen.findByRole('heading', { name: 'Build a SMS sequence' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create Sequence' })).not.toBeInTheDocument();
     expect(screen.queryByText('Filter by created date')).not.toBeInTheDocument();
@@ -390,10 +450,6 @@ describe('<Marketing /> — Generic campaign workflow', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'WhatsApp Sequences' }));
 
-    expect(screen.queryByRole('heading', { name: 'Build a WhatsApp sequence' })).not.toBeInTheDocument();
-    expect(await screen.findByText(whatsapp[0].name)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Pause sequence Request pickup location/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a condition' }));
     expect(await screen.findByRole('heading', { name: 'Build a WhatsApp sequence' })).toBeInTheDocument();
     expect(screen.queryByText(whatsapp[0].name)).not.toBeInTheDocument();
 
@@ -423,7 +479,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
 
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Build a Email sequence' })).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Add a condition' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Build a SMS sequence' })).toBeInTheDocument();
   });
 
   it('registers the browser leave warning only after a Generic sequence is changed', async () => {
@@ -459,7 +515,10 @@ describe('<Marketing /> — Generic campaign workflow', () => {
       whatsapp: channel === 'WHATSAPP' ? [campaign] : [],
     });
     renderMarketing(GENERIC_USER);
-    if (tab !== 'campaigns') fireEvent.click(await screen.findByRole('button', { name: `${tab === 'sms' ? 'SMS' : 'WhatsApp'} Sequences` }));
+    if (tab !== 'campaigns') {
+      fireEvent.click(await screen.findByRole('button', { name: `${tab === 'sms' ? 'SMS' : 'WhatsApp'} Sequences` }));
+      fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
+    }
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = scrollIntoView;

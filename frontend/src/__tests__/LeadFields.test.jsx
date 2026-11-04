@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -36,6 +36,7 @@ vi.mock("../App", () => {
 });
 
 import LeadFields from "../pages/settings/LeadFields";
+import FieldConfig from "../pages/settings/FieldConfig";
 
 function renderLeadFields() {
   return render(
@@ -68,6 +69,7 @@ const baseFields = [
 
 let serverFields = [];
 let pendingPuts = [];
+let serverFieldConfig = null;
 
 function sortedServerFields() {
   return [...serverFields].sort((a, b) => {
@@ -80,10 +82,12 @@ function sortedServerFields() {
 function flushPendingPuts() {
   const resolvers = pendingPuts;
   pendingPuts = [];
+  serverFieldConfig = null;
   resolvers.forEach((resolve) => resolve());
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   fetchApiMock.mockReset();
   notifyObj.success.mockReset();
   notifyObj.error.mockReset();
@@ -101,6 +105,31 @@ beforeEach(() => {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || "GET";
 
+    if (url === "/api/table-column-prefs/leads" && method === "GET") {
+      return Promise.resolve({
+        availableColumns: [
+          { key: "name", label: "Name", lockedVisible: true },
+          { key: "email", label: "Email" },
+          { key: "phone", label: "Phone" },
+          { key: "company", label: "Company" },
+          { key: "title", label: "Job Title" },
+          { key: "source", label: "Source" },
+          { key: "utm_source", label: "UTM Source" },
+          { key: "actions", label: "Actions", lockedVisible: true },
+        ],
+        visible: ["name", "email", "phone", "company", "source", "actions"],
+      });
+    }
+
+    if (url === "/api/tenant-settings/generic.fieldConfig" && method === "GET") {
+      return Promise.resolve(serverFieldConfig ? { value: JSON.stringify(serverFieldConfig) } : {});
+    }
+
+    if (url === "/api/tenant-settings/generic.fieldConfig" && method === "PUT") {
+      serverFieldConfig = JSON.parse(JSON.parse(opts.body).value);
+      return Promise.resolve({ value: JSON.stringify(serverFieldConfig) });
+    }
+
     if (url.startsWith("/api/lead-custom-fields?") && method === "GET") {
       const params = new URLSearchParams(url.split("?")[1]);
       return Promise.resolve({
@@ -113,6 +142,19 @@ beforeEach(() => {
         offset: Number(params.get("offset") || 0),
         limit: Number(params.get("limit") || 10),
       });
+    }
+
+    if (url === "/api/lead-custom-fields" && method === "POST") {
+      const body = JSON.parse(opts.body);
+      const created = {
+        id: Math.max(0, ...serverFields.map((field) => field.id)) + 1,
+        fieldKey: body.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
+        displayOrder: serverFields.length + 1,
+        options: null,
+        ...body,
+      };
+      serverFields.push(created);
+      return Promise.resolve(created);
     }
 
     if (/^\/api\/lead-custom-fields\/\d+$/.test(url) && method === "PUT") {
@@ -130,6 +172,12 @@ beforeEach(() => {
           });
         });
       });
+    }
+
+    if (/^\/api\/lead-custom-fields\/\d+$/.test(url) && method === "DELETE") {
+      const id = Number(url.split("/").pop());
+      serverFields = serverFields.filter((field) => field.id !== id);
+      return Promise.resolve({ success: true });
     }
 
     if (/^\/api\/lead-custom-fields\/\d+\/move$/.test(url) && method === "POST") {
@@ -150,6 +198,331 @@ beforeEach(() => {
 });
 
 describe("<LeadFields />", () => {
+  it("keeps the Field Type menu inside the viewport and preserves option selection", async () => {
+    const previousInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 250,
+    });
+    const boundsSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function getBounds() {
+        if (this.id === "lf-new-type") {
+          return {
+            x: 100, y: 160, left: 100, right: 500, top: 160, bottom: 190,
+            width: 400, height: 30, toJSON: () => ({}),
+          };
+        }
+        return {
+          x: 0, y: 0, left: 0, right: 0, top: 0, bottom: 0,
+          width: 0, height: 0, toJSON: () => ({}),
+        };
+      });
+
+    try {
+      const user = userEvent.setup();
+      renderLeadFields();
+      await screen.findByText("Alpha");
+      await user.click(screen.getByRole("button", { name: "Add Field" }));
+
+      const fieldType = screen.getByRole("combobox", { name: "Field Type" });
+      await user.click(fieldType);
+      const menu = await screen.findByRole("listbox", { name: "Field Type options" });
+
+      expect(menu.style.top).toBe("8px");
+      expect(menu.style.maxHeight).toBe("148px");
+      expect(menu.style.fontSize).toBe(window.getComputedStyle(fieldType).fontSize);
+      expect(within(menu).getAllByRole("option")).toHaveLength(9);
+
+      await user.click(within(menu).getByRole("option", { name: "URL" }));
+      expect(fieldType).toHaveTextContent("URL");
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    } finally {
+      boundsSpy.mockRestore();
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: previousInnerHeight,
+      });
+    }
+  });
+
+  it("renders the generic Field Config view with grouped built-in fields and search", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("heading", { name: "Field Config" })).toBeInTheDocument();
+    await screen.findByText("Alpha");
+    expect(screen.getByRole("button", { name: "Basic Information" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Telephone Numbers" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lead Details" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "UTM Tracker" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Email" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Company" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Account" })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("searchbox", { name: "Search fields" }), "phone");
+    expect(screen.getByText("Phone")).toBeInTheDocument();
+    expect(screen.queryByText("Email")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
+  });
+
+  it("restores collapsed generic groups after leaving and returning to Field Config", async () => {
+    authContextValue.tenant = { id: 42, vertical: "generic" };
+    const user = userEvent.setup();
+    const firstRender = render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    const basicInformation = await screen.findByRole("button", { name: "Basic Information" });
+    await user.click(basicInformation);
+    expect(basicInformation).toHaveAttribute("aria-expanded", "false");
+    expect(window.localStorage.getItem("generic-field-config.collapsed-groups.v1.42"))
+      .toBe('["Basic Information"]');
+
+    firstRender.unmount();
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Basic Information" }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Name" })).not.toBeInTheDocument();
+  });
+
+  it("opens the built-in choices viewer in Generic CRM", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Source");
+    await user.click(screen.getByRole("button", { name: "View choices" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Choices for Source" });
+    expect(within(dialog).getByText("Organic")).toBeInTheDocument();
+    expect(within(dialog).getByText("Website")).toBeInTheDocument();
+    expect(within(dialog).getByText("Referral")).toBeInTheDocument();
+    expect(within(dialog).getByText("Campaign")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Choices for Source" })).not.toBeInTheDocument();
+  });
+
+  it("persists built-in controls and new groups for the generic tenant", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    const fullNameRow = screen.getByRole("button", { name: "Name" }).closest(".field-config-row");
+    await user.click(within(fullNameRow).getByRole("checkbox", { name: "Required" }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      "/api/tenant-settings/generic.fieldConfig",
+      expect.objectContaining({ method: "PUT" }),
+    ));
+
+    await user.click(screen.getByRole("button", { name: "Add group" }));
+    await user.type(screen.getByLabelText("Group name"), "Qualification");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Qualification" })).toBeInTheDocument());
+  });
+
+  it("warns admins to move fields before deleting a non-empty generic group", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    serverFieldConfig = {
+      fieldOverrides: {},
+      groupOrder: ["Basic Information", "Custom Fields", "group-hello"],
+      groupNames: {},
+      customGroups: [{ id: "group-hello", name: "Hello" }],
+      customFieldGroups: { 1: "group-hello" },
+      fieldOrder: {},
+    };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    fetchApiMock.mockClear();
+    await user.click(screen.getByRole("button", { name: "Delete Hello" }));
+
+    expect(notifyObj.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Move fields before deleting this group",
+      message: expect.stringMatching(/contains 1 field.*Move it to another group/i),
+      confirmText: "Got it",
+      destructive: true,
+    }));
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      "/api/tenant-settings/generic.fieldConfig",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(screen.getByRole("region", { name: "Hello" })).toBeInTheDocument();
+  });
+
+  it("requires confirmation before deleting an empty generic group", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    serverFieldConfig = {
+      fieldOverrides: {},
+      groupOrder: ["Basic Information", "Custom Fields", "group-empty"],
+      groupNames: {},
+      customGroups: [{ id: "group-empty", name: "Empty group" }],
+      customFieldGroups: {},
+      fieldOrder: {},
+    };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    await user.click(screen.getByRole("button", { name: "Delete Empty group" }));
+
+    expect(notifyObj.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Delete this group?",
+      message: expect.stringMatching(/Are you sure.*empty "Empty group" group/i),
+      confirmText: "Delete group",
+      destructive: true,
+    }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Empty group" })).not.toBeInTheDocument());
+    expect(serverFieldConfig.customGroups).toEqual([]);
+    expect(serverFieldConfig.groupOrder).not.toContain("group-empty");
+  });
+
+  it("requires confirmation before deleting a generic custom field", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    const user = userEvent.setup();
+    notifyObj.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    await user.click(screen.getByRole("button", { name: "Alpha" }));
+    const alphaRow = screen.getByRole("button", { name: "Alpha" }).closest(".field-config-row");
+    await user.click(within(alphaRow).getByRole("button", { name: "Delete field" }));
+
+    expect(fetchApiMock).not.toHaveBeenCalledWith("/api/lead-custom-fields/1", { method: "DELETE" });
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+
+    await user.click(within(alphaRow).getByRole("button", { name: "Delete field" }));
+    expect(notifyObj.confirm).toHaveBeenLastCalledWith(expect.objectContaining({
+      title: "Delete this field?",
+      message: expect.stringContaining('The "Alpha" field will be removed'),
+      confirmText: "Delete",
+      destructive: true,
+    }));
+    await waitFor(() => expect(screen.queryByText("Alpha")).not.toBeInTheDocument());
+  });
+
+  it("uses the six-dot handle to persist built-in field order", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    const source = screen.getByRole("button", { name: "Drag Name to move up or down" });
+    const targetRow = screen.getByRole("button", { name: "Drag Company to move up or down" }).closest(".field-config-row");
+    fireEvent.dragStart(source);
+    fireEvent.dragOver(targetRow);
+    fireEvent.drop(targetRow);
+
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(([url, options]) => {
+        if (url !== "/api/tenant-settings/generic.fieldConfig" || options?.method !== "PUT") return false;
+        const saved = JSON.parse(JSON.parse(options.body).value);
+        return saved.fieldOrder?.["Basic Information"]?.join(",") === "email,company,name,title";
+      });
+      expect(saveCall).toBeTruthy();
+    });
+  });
+
+  it("loads custom fields beyond the first 100", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    serverFields = Array.from({ length: 101 }, (_, index) => ({
+      id: index + 1,
+      label: `Existing Field ${index + 1}`,
+      fieldKey: `existing_field_${index + 1}`,
+      fieldType: "text",
+      options: null,
+      isRequired: false,
+      displayOrder: index + 1,
+    }));
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Existing Field 101")).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields?page=2&offset=100&limit=100");
+  });
+
+  it("keeps a newly created field in its selected group", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    serverFieldConfig = {
+      fieldOverrides: {},
+      groupOrder: ["Basic Information", "Custom Fields", "group-hello"],
+      groupNames: {},
+      customGroups: [{ id: "group-hello", name: "Hello" }],
+      customFieldGroups: { 1: "group-hello" },
+    };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    const helloGroup = screen.getByRole("region", { name: "Hello" });
+    const search = screen.getByRole("searchbox", { name: "Search fields" });
+    await user.type(search, "hello");
+    expect(within(helloGroup).getByText("Alpha")).toBeInTheDocument();
+    await user.clear(search);
+    await user.click(within(helloGroup).getByRole("button", { name: /Add field/i }));
+    await user.type(screen.getByLabelText("Label"), "Hello Custom Field");
+    await user.click(screen.getByRole("button", { name: "Save field" }));
+
+    await waitFor(() => {
+      expect(within(screen.getByRole("region", { name: "Hello" })).getByText("Hello Custom Field")).toBeInTheDocument();
+    });
+    const created = serverFields.find((field) => field.label === "Hello Custom Field");
+    expect(serverFieldConfig.customFieldGroups[created.id]).toBe("group-hello");
+  });
+
   it("keeps Travel CRM lead fields available", async () => {
     authContextValue.tenant = { vertical: "travel" };
 
@@ -157,6 +530,65 @@ describe("<LeadFields />", () => {
 
     await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument());
     expect(fetchApiMock).toHaveBeenCalledWith(expect.stringContaining("/api/lead-custom-fields?"));
+    expect(screen.getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+  });
+
+  it("edits every configurable attribute of a Travel CRM lead field", async () => {
+    authContextValue.tenant = { vertical: "travel" };
+    const user = userEvent.setup();
+
+    renderLeadFields();
+    await screen.findByText("Alpha");
+    await user.click(screen.getByRole("button", { name: "Edit Alpha" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit Alpha" });
+    await user.clear(within(dialog).getByLabelText("Label"));
+    await user.type(within(dialog).getByLabelText("Label"), "Qualification Notes");
+    await user.type(within(dialog).getByLabelText("Tooltip"), "Notes collected during qualification");
+    await user.type(within(dialog).getByLabelText("Placeholder"), "Enter qualification notes");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Required" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(pendingPuts).toHaveLength(1));
+    expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields/1", {
+      method: "PUT",
+      body: JSON.stringify({
+        label: "Qualification Notes",
+        tooltip: "Notes collected during qualification",
+        placeholder: "Enter qualification notes",
+        isRequired: true,
+      }),
+    });
+
+    flushPendingPuts();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Edit Alpha" })).not.toBeInTheDocument();
+      expect(screen.getByText("Qualification Notes")).toBeInTheDocument();
+    });
+  });
+
+  it("updates the choices of a Travel CRM option-based lead field", async () => {
+    authContextValue.tenant = { vertical: "travel" };
+    const user = userEvent.setup();
+
+    renderLeadFields();
+    await screen.findByText("Beta");
+    await user.click(screen.getByRole("button", { name: "Edit Beta" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit Beta" });
+    const options = within(dialog).getByLabelText("Options");
+    await user.clear(options);
+    await user.type(options, "One, Two, Three");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(pendingPuts).toHaveLength(1));
+    const updateCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === "/api/lead-custom-fields/2" && opts?.method === "PUT",
+    );
+    expect(JSON.parse(updateCall[1].body).options).toEqual(["One", "Two", "Three"]);
+
+    flushPendingPuts();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Beta" })).not.toBeInTheDocument());
   });
 
   it("shows a drag handle and reorders without flashing the loading state", async () => {

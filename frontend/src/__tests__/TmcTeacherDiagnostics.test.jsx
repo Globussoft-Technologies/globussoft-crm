@@ -126,7 +126,7 @@ describe("TmcTeacherDiagnostics", () => {
 
     const pdf = await screen.findByRole("link", { name: "Download PDF" });
     expect(pdf.getAttribute("href")).toBe("/api/travel/diagnostics/public/readiness-report/42-0123456789abcdef.pdf");
-    expect(screen.getByRole("button", { name: "View trips" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View trips" })).toBeNull();
   });
 
   it("keeps the complete diagnostic and trip selection flow inside the teacher portal", async () => {

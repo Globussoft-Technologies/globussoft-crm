@@ -30,6 +30,8 @@ import {
   Bot,
   Globe2,
   Server,
+  Copy,
+  Search,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -47,6 +49,7 @@ import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEf
 import ProductTourSettings from "../components/ProductTourSettings";
 import GoogleMapsSettingsCard from "../components/GoogleMapsSettingsCard";
 import TwilioSettingsCard from "../components/TwilioSettingsCard";
+import { buildGenericTrackingCookieSetupCode } from "../utils/webForms";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -107,11 +110,25 @@ export default function Settings() {
   // Before the tenant request resolves, keep the generic settings surface
   // mounted. This also prevents generic-only controls (including Callified)
   // from disappearing during the initial render.
-  const isGenericVertical = !ctxTenant || ctxTenant.vertical === "generic";
+  const isGenericVertical = !ctxTenant || !ctxTenant.vertical || ctxTenant.vertical === "generic";
   // Settings tests and legacy callers can render before tenant context is
-  // available. Keep the stage editor available in that state while generic
-  // tenants continue to use the deal-type stage configuration.
-  const showLegacyPipelineStageEditor = !ctxTenant || !isGenericVertical;
+  // available. Restore the generic CRM pipeline-stage settings surface while
+  // keeping wellness/travel behavior unchanged.
+  const showLegacyPipelineStageEditor = !ctxTenant || isGenericVertical;
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const settingsGridRef = useRef(null);
+
+  // Generic CRM gets a local settings search without changing the shared
+  // Wellness/Travel settings surface or the global application search.
+  useEffect(() => {
+    const grid = settingsGridRef.current;
+    if (!grid) return;
+    const query = isGenericVertical ? settingsSearch.trim().toLowerCase() : "";
+    Array.from(grid.children).forEach((card) => {
+      const text = card.textContent?.toLowerCase() || "";
+      card.style.display = !query || text.includes(query) ? "" : "none";
+    });
+  }, [isGenericVertical, settingsSearch]);
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
@@ -1011,11 +1028,6 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    if (!ctxTenant || isGenericVertical) {
-      setStagesLoading(false);
-      if (!ctxTenant) fetchStages();
-      return undefined;
-    }
     fetchStages();
     return undefined;
   }, [isGenericVertical, ctxTenant]);
@@ -1163,6 +1175,55 @@ export default function Settings() {
           </Link>
         )} */}
       </header>
+      {isGenericVertical && (
+        <div
+          role="search"
+          aria-label="Search Generic CRM settings"
+          className="generic-settings-search"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            maxWidth: 520,
+            marginBottom: "1.25rem",
+            padding: "0 0.75rem",
+            border: "1px solid var(--border-color)",
+            borderRadius: 8,
+            background: "var(--surface-color)",
+          }}
+        >
+          <Search
+            size={17}
+            aria-hidden="true"
+            style={{
+              flex: "0 0 auto",
+              color: "var(--text-secondary)",
+              pointerEvents: "none",
+            }}
+          />
+          <input
+            type="search"
+            value={settingsSearch}
+            onChange={(event) => setSettingsSearch(event.target.value)}
+            placeholder="Search settings..."
+            aria-label="Search settings"
+            style={{
+              flex: "1 1 auto",
+              minWidth: 0,
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "0.7rem 0.15rem",
+              border: 0,
+              outline: "none",
+              background: "transparent",
+              color: "var(--text-primary)",
+              fontSize: "0.9rem",
+              appearance: "none",
+              WebkitAppearance: "none",
+            }}
+          />
+        </div>
+      )}
       {/* Cards flow through a CSS multi-column container so heights balance
           automatically across the two columns instead of pooling into two
           fixed lists (which left a tall empty gutter on the right whenever
@@ -1170,7 +1231,7 @@ export default function Settings() {
           right one). Each card carries `break-inside: avoid` + its own
           bottom margin via the `.settings-grid > .card` rule in index.css.
           Below ~720px the columns collapse to a single column. */}
-      <div className="settings-grid">
+      <div className="settings-grid" ref={settingsGridRef}>
           {isGenericVertical && <ProductTourSettings />}
           {isGenericVertical && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && <GoogleMapsSettingsCard />}
           {/* Organization Card */}
@@ -1276,7 +1337,7 @@ export default function Settings() {
                   link" moment. The URL is built from window.location.origin
                   + slug; SSR doesn't apply (Settings is auth-required, never
                   rendered server-side). */}
-                {tenant.slug && (
+                {tenant.vertical === "wellness" && tenant.slug && (
                   // #484: gridColumn:'1 / -1' (full row) replaces 'span 2' so
                   // the cell still spans every column whether the auto-fit grid
                   // resolved to 1, 2, or more columns. flexWrap on the inner
@@ -1336,11 +1397,8 @@ export default function Settings() {
                         color: "var(--text-secondary)",
                       }}
                     >
-                      Share this with{" "}
-                      {tenant.vertical === "wellness"
-                        ? "patients"
-                        : "customers"}{" "}
-                      to let them self-book without logging in.
+                      Share this with patients to let them self-book without
+                      logging in.
                     </p>
                   </div>
                 )}
@@ -1820,8 +1878,7 @@ export default function Settings() {
             <WellnessRoleTypesCard notify={notify} />
           )}
 
-          {/* Pipeline Stages are configured dynamically per deal type in
-              Generic CRM. The legacy flat editor remains for other verticals. */}
+          {/* Generic CRM pipeline stages are managed here as before. */}
           {showLegacyPipelineStageEditor && <div
             className="card settings-pipeline-stages-card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
@@ -3790,6 +3847,10 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
 }
 
 function GenericWebFormAutomaticTrackingCard() {
+  const [showSetupModal, setShowSetupModal] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const setupCode = buildGenericTrackingCookieSetupCode();
   const cookieKeys = [
     ["UTM Source", "utm_source"],
     ["UTM Medium", "utm_medium"],
@@ -3814,6 +3875,30 @@ function GenericWebFormAutomaticTrackingCard() {
     ["Landing Page", "landing_page"],
     ["Referrer", "referrer"],
   ];
+  useEffect(() => {
+    if (!showSetupModal) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setShowSetupModal(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showSetupModal]);
+  const closeSetupModal = () => {
+    setShowSetupModal(false);
+    setCopied(false);
+    setCopyError(false);
+  };
+  const copySetupCode = async () => {
+    try {
+      await navigator.clipboard.writeText(setupCode);
+      setCopyError(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+      setCopyError(true);
+    }
+  };
   return (
     <div
       className="card"
@@ -3826,6 +3911,20 @@ function GenericWebFormAutomaticTrackingCard() {
       <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", lineHeight: 1.55, marginBottom: "1rem" }}>
         Add these keys to the page URL. Generic CRM saves their values to internal cookies and attaches them to the lead.
       </p>
+      <div style={{ marginBottom: "1rem" }}>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setShowSetupModal(true)}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}
+        >
+          <Copy size={16} />
+          Get cookie setup function
+        </button>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5, margin: "0.6rem 0" }}>
+          Copy the ready-to-use function and add it once to your website header or footer.
+        </p>
+      </div>
       <div
         style={{
           display: "grid",
@@ -3844,6 +3943,78 @@ function GenericWebFormAutomaticTrackingCard() {
         Page URL, page source, current domain, form name, submission time, browser, operating system, device type,
         and permitted location are fetched automatically. Landing page and referrer are also detected automatically when their keys are absent.
       </p>
+      {showSetupModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cookie-setup-modal-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeSetupModal();
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            display: "grid",
+            placeItems: "center",
+            padding: "20px",
+            background: "rgba(3, 6, 16, 0.72)",
+          }}
+        >
+          <div
+            style={{
+              width: "min(100%, 920px)",
+              maxHeight: "90vh",
+              overflow: "auto",
+              color: "var(--text-primary)",
+              background: "var(--surface-color, var(--bg-primary))",
+              border: "1px solid var(--border-color)",
+              borderRadius: "18px",
+              boxShadow: "0 24px 80px rgba(0, 0, 0, 0.36)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "18px", padding: "20px 22px 18px", borderBottom: "1px solid var(--border-color)" }}>
+              <div>
+                <h3 id="cookie-setup-modal-title" style={{ fontSize: "1.05rem", fontWeight: 800, margin: 0 }}>
+                  Cookie setup function
+                </h3>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>
+                  Add this function once to your website header or footer. It keeps the first tracking value for 90 days.
+                </p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={closeSetupModal} aria-label="Close cookie setup modal" style={{ minWidth: "42px", minHeight: "42px", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ display: "grid", gap: "16px", padding: "20px 22px 22px" }}>
+              <label style={{ display: "grid", gap: "8px" }}>
+                <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website cookie function</span>
+                <textarea
+                  className="input-field"
+                  readOnly
+                  aria-label="Cookie setup function"
+                  value={setupCode}
+                  onFocus={(event) => event.target.select()}
+                  rows={12}
+                  style={{ width: "100%", minHeight: "260px", resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "0.82rem", lineHeight: 1.45 }}
+                />
+              </label>
+              {copyError && (
+                <p role="alert" style={{ color: "var(--danger-color)", fontSize: "0.8rem", margin: 0 }}>
+                  Clipboard access is unavailable. Select the code above and copy it manually.
+                </p>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
+                <button type="button" className="btn-secondary" onClick={copySetupCode} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                  {copied ? <Check size={16} /> : <Copy size={16} />}
+                  {copied ? "Copied" : "Copy function"}
+                </button>
+                <button type="button" className="btn-primary" onClick={closeSetupModal}>Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

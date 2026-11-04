@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { DollarSign, Plus, Edit, Star, Trash2, RefreshCw, X, TrendingUp } from 'lucide-react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
+import { DollarSign, Plus, Edit, Star, Trash2, RefreshCw, X, TrendingUp, Search, LineChart } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatCurrency } from '../utils/currency';
 import TopScrollSync from '../components/TopScrollSync';
+import ScrollableSelect from '../components/ScrollableSelect';
 import { AuthContext } from '../appContexts';
 
 export default function Currencies() {
@@ -13,6 +14,9 @@ export default function Currencies() {
   const [pivot, setPivot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [showRates, setShowRates] = useState(false);
+  const [rateBaseCode, setRateBaseCode] = useState('');
+  const [rateSearch, setRateSearch] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editRate, setEditRate] = useState('');
   const [form, setForm] = useState({ code: '', symbol: '', name: '', exchangeRate: '', isBase: false });
@@ -22,6 +26,7 @@ export default function Currencies() {
   const [manualEntry, setManualEntry] = useState(false);
   const [error, setError] = useState('');
   const [savingReportingCurrency, setSavingReportingCurrency] = useState(false);
+  const seedPromiseRef = useRef(null);
 
   // #473: the prior heuristic — `currencies[0].id > 0` — assumed the backend
   // ordering put a persisted row first. The /api/currencies route sorts by
@@ -35,13 +40,40 @@ export default function Currencies() {
   // contradictory "show banner over real data."
   const isPersisted = currencies.length > 0 && currencies.every((c) => c.id > 0);
 
+  const confirmCurrencyChange = (currency) => notify.confirm({
+    title: `Change base currency to ${currency.code}?`,
+    message: `This will make ${currency.code} (${currency.name}) the base and reporting currency.\n\n• All exchange rates will be recalculated relative to 1 ${currency.code}.\n• Revenue, pipeline, and other reporting totals will display in ${currency.code}.\n• Existing deals, invoices, and payments will keep their original currency and amount.\n\nDo you want to continue?`,
+    confirmText: `Change to ${currency.code}`,
+    cancelText: 'Keep current currency',
+  });
+
   const load = async () => {
     setLoading(true);
+    setError('');
     try {
-      const [c, p] = await Promise.all([
+      let [c, p] = await Promise.all([
         fetchApi('/api/currencies'),
         fetchApi('/api/currencies/pivot/deals').catch(() => null),
       ]);
+
+      // Persist preview defaults automatically. The shared promise prevents
+      // React StrictMode's duplicate mount effect from sending two seed calls.
+      if (Array.isArray(c) && c.some((currency) => currency.id <= 0)) {
+        if (!seedPromiseRef.current) {
+          seedPromiseRef.current = fetchApi('/api/currencies/seed', { method: 'POST' })
+            .catch((error) => {
+              seedPromiseRef.current = null;
+              throw error;
+            });
+        }
+        c = await seedPromiseRef.current;
+        const seededBase = c.find((currency) => currency.isBase);
+        if (seededBase && typeof setTenant === 'function') {
+          setTenant({ ...(tenant || {}), defaultCurrency: seededBase.code });
+        }
+        // The first pivot used preview data; refresh after initialization.
+        p = await fetchApi('/api/currencies/pivot/deals').catch(() => null);
+      }
       setCurrencies(c || []);
       setPivot(p);
     } catch (e) {
@@ -53,38 +85,33 @@ export default function Currencies() {
 
   useEffect(() => { load(); }, []);
 
-  const handleSeed = async () => {
-    try {
-      await fetchApi('/api/currencies/seed', { method: 'POST' });
-      load();
-    } catch (e) { notify.error(e.message || 'Failed to initialize defaults'); }
-  };
-
   const handleAdd = async () => {
     if (!form.code || !form.symbol || !form.name) return notify.error('Code, symbol, and name are required');
     const rate = Number(form.exchangeRate);
     if (!Number.isFinite(rate) || rate <= 0) return notify.error('Enter an exchange rate greater than zero');
+    if (form.isBase && !await confirmCurrencyChange(form)) return;
     try {
-      await fetchApi('/api/currencies', {
+      const created = await fetchApi('/api/currencies', {
         method: 'POST',
         body: JSON.stringify({ ...form, exchangeRate: rate }),
       });
+      if (form.isBase && typeof setTenant === 'function') {
+        setTenant({ ...(tenant || {}), defaultCurrency: created.code || form.code.toUpperCase() });
+      }
       setShowAdd(false);
       setForm({ code: '', symbol: '', name: '', exchangeRate: '', isBase: false });
-      load();
+      await load();
     } catch (e) { notify.error(e.message || 'Failed to create currency'); }
   };
 
   const handleSetBase = async (id) => {
+    const selected = currencies.find((currency) => currency.id === id);
+    if (!selected || selected.code === baseCode) return;
+    if (!await confirmCurrencyChange(selected)) return;
     try {
       await fetchApi(`/api/currencies/${id}/set-base`, { method: 'POST' });
-      const selected = currencies.find((currency) => currency.id === id);
-      if (selected?.code && selected.code !== reportingCurrency) {
-        const updatedTenant = await fetchApi('/api/tenants/current', {
-          method: 'PUT',
-          body: JSON.stringify({ defaultCurrency: selected.code }),
-        });
-        setTenant(updatedTenant);
+      if (selected?.code && typeof setTenant === 'function') {
+        setTenant({ ...(tenant || {}), defaultCurrency: selected.code });
       }
       await load();
       notify.success(`${selected?.code || 'Currency'} is now the reporting currency`);
@@ -135,28 +162,48 @@ export default function Currencies() {
   };
 
   useEffect(() => {
-    if (!showAdd) return undefined;
+    if (!showAdd && !showRates) return undefined;
     let active = true;
-    setForm({ code: '', symbol: '', name: '', exchangeRate: '', isBase: false });
-    setManualEntry(false);
+    if (showAdd) {
+      setForm({ code: '', symbol: '', name: '', exchangeRate: '', isBase: false });
+      setManualEntry(false);
+    }
     setCatalog(null);
     setCatalogError('');
     setCatalogLoading(true);
     fetchApi('/api/currencies/catalog')
-      .then((result) => { if (active) setCatalog(result); })
+      .then((result) => {
+        if (active) {
+          setCatalog(result);
+          setRateBaseCode(result?.baseCode || '');
+        }
+      })
       .catch(() => {
         if (active) {
           setCatalogError('Currency lookup is unavailable. Enter the details manually.');
-          setManualEntry(true);
+          if (showAdd) setManualEntry(true);
         }
       })
       .finally(() => { if (active) setCatalogLoading(false); });
     return () => { active = false; };
-  }, [showAdd]);
+  }, [showAdd, showRates]);
 
   const availableCurrencies = (catalog?.currencies || []).filter(
     (currency) => !currencies.some((existing) => existing.code === currency.code),
   );
+  const selectedRateBase = (catalog?.currencies || []).find((currency) => currency.code === rateBaseCode);
+  const selectedRateBaseValue = Number(selectedRateBase?.exchangeRate || 1);
+  const normalizedRateSearch = rateSearch.trim().toLowerCase();
+  const visibleCatalogCurrencies = (catalog?.currencies || [])
+    .filter((currency) => (
+      !normalizedRateSearch
+      || currency.code.toLowerCase().includes(normalizedRateSearch)
+      || currency.name.toLowerCase().includes(normalizedRateSearch)
+    ))
+    .map((currency) => ({
+      ...currency,
+      displayRate: Number(currency.exchangeRate) / selectedRateBaseValue,
+    }));
 
   const handleCurrencySelection = (event) => {
     const code = event.target.value;
@@ -179,13 +226,15 @@ export default function Currencies() {
   const handleReportingCurrencyChange = async (event) => {
     const defaultCurrency = event.target.value;
     if (!defaultCurrency || defaultCurrency === reportingCurrency || savingReportingCurrency) return;
+    const selected = currencies.find((currency) => currency.code === defaultCurrency);
+    if (!selected?.id || selected.id <= 0) return;
     setSavingReportingCurrency(true);
     try {
-      const updatedTenant = await fetchApi('/api/tenants/current', {
-        method: 'PUT',
-        body: JSON.stringify({ defaultCurrency }),
-      });
-      setTenant(updatedTenant);
+      if (!await confirmCurrencyChange(selected)) return;
+      await fetchApi(`/api/currencies/${selected.id}/set-base`, { method: 'POST' });
+      if (typeof setTenant === 'function') {
+        setTenant({ ...(tenant || {}), defaultCurrency });
+      }
       await load();
       notify.success(`Reporting currency set to ${defaultCurrency}`);
     } catch (e) {
@@ -197,7 +246,7 @@ export default function Currencies() {
 
   return (
     <div className="currencies-page" style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
-      <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <DollarSign size={24} style={{ color: 'var(--accent-color)' }} />
           <div>
@@ -205,7 +254,14 @@ export default function Currencies() {
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Manage currencies, FX rates, and per-deal currency conversion</p>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn-secondary"
+            onClick={() => { setRateBaseCode(''); setRateSearch(''); setShowRates(true); }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+          >
+            <LineChart size={14} /> Check Currency Rates
+          </button>
           <button className="btn-secondary" onClick={load} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
             <RefreshCw size={14} /> Refresh
           </button>
@@ -263,16 +319,6 @@ export default function Currencies() {
           </select>
         </label>
       </section>
-
-      {!isPersisted && (
-        <div className="card" style={{ padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderLeft: '3px solid #f59e0b' }}>
-          <div>
-            <div style={{ fontWeight: 600 }}>Default currencies (preview)</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>You have not initialized currencies for your tenant yet. Click below to persist USD, INR, EUR, GBP, CAD, AUD with USD as base.</div>
-          </div>
-          <button className="btn-primary" onClick={handleSeed} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>Initialize Defaults</button>
-        </div>
-      )}
 
       {error && (
         <div className="card" style={{ padding: '1rem', marginBottom: '1rem', color: '#ef4444', borderLeft: '3px solid #ef4444' }}>{error}</div>
@@ -404,10 +450,101 @@ export default function Currencies() {
         )}
       </div>
 
+      {/* Published currency-rate catalog */}
+      {showRates && (
+        <div className="currency-rates-overlay">
+          <div
+            className="card currency-rates-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="currency-rates-title"
+          >
+            <div className="currency-rates-header">
+              <div style={{ minWidth: 0 }}>
+                <h3 id="currency-rates-title" style={{ fontWeight: 700, marginBottom: '0.25rem' }}>Currency Exchange Rates</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
+                  {catalog
+                    ? `Published rates for 1 ${rateBaseCode || catalog.baseCode}${catalog.asOf ? `, as of ${catalog.asOf}` : ''}.`
+                    : 'Loading the latest published exchange rates.'}
+                </p>
+              </div>
+              <button className="currency-rates-close" onClick={() => setShowRates(false)} aria-label="Close currency rates dialog" title="Close"><X size={18} /></button>
+            </div>
+
+            {!catalogLoading && catalog && (
+              <div className="currency-rates-control-group">
+                <div className="currency-rates-controls-label">Reference currency</div>
+                <div className="currency-rates-controls">
+                  <div className="currency-rates-search">
+                    <Search size={16} aria-hidden="true" />
+                    <input
+                      className="input-field currency-rates-search-input"
+                      aria-label="Search currency rates"
+                      placeholder="Search by currency name or code"
+                      value={rateSearch}
+                      onChange={(event) => setRateSearch(event.target.value)}
+                    />
+                  </div>
+                  <ScrollableSelect
+                    className="currency-rates-select"
+                    ariaLabel="Rate reference currency"
+                    value={rateBaseCode || catalog.baseCode}
+                    onChange={setRateBaseCode}
+                    width="100%"
+                    maxVisibleRows={7}
+                    searchable
+                    searchPlaceholder="Search currencies…"
+                    options={catalog.currencies.map((currency) => ({
+                      value: currency.code,
+                      label: `${currency.code} — ${currency.name}`,
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="currency-rates-table-scroll" style={{ minHeight: 180 }}>
+              {catalogLoading && <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading currency rates...</div>}
+              {!catalogLoading && catalogError && (
+                <div role="alert" style={{ padding: '2rem 1rem', textAlign: 'center' }}>
+                  <p style={{ color: '#ef4444', marginBottom: '1rem' }}>Currency rates are temporarily unavailable.</p>
+                  <button className="btn-secondary" onClick={() => { setShowRates(false); setTimeout(() => setShowRates(true), 0); }}>Try Again</button>
+                </div>
+              )}
+              {!catalogLoading && catalog && (
+                <table className="stable-table" style={{ borderCollapse: 'collapse', width: '100%' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--subtle-bg)', textAlign: 'left' }}>
+                      <th style={th}>Code</th>
+                      <th style={th}>Symbol</th>
+                      <th style={th}>Currency</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Rate (1 {rateBaseCode || catalog.baseCode})</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleCatalogCurrencies.map((currency) => (
+                      <tr key={currency.code} style={{ borderTop: '1px solid var(--border-color)' }}>
+                        <td style={td}><strong>{currency.code}</strong></td>
+                        <td style={td}>{currency.symbol}</td>
+                        <td style={td}>{currency.name}</td>
+                        <td style={{ ...td, textAlign: 'right', fontFamily: 'monospace' }}>{currency.displayRate.toLocaleString(undefined, { maximumFractionDigits: 6 })}</td>
+                      </tr>
+                    ))}
+                    {visibleCatalogCurrencies.length === 0 && (
+                      <tr><td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No currencies match your search.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Modal */}
       {showAdd && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.6))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card" style={{ padding: '2rem', width: 460 }}>
+          <div className="card" style={{ padding: '2rem', width: 460, opacity: 1, background: 'var(--modal-bg, #ffffff)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
               <h3 style={{ fontWeight: 'bold' }}>Add Currency</h3>
               <button onClick={() => setShowAdd(false)} aria-label="Close add currency dialog" title="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={18} /></button>

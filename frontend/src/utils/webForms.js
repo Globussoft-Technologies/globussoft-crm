@@ -22,6 +22,16 @@ export function slugifyWebFormName(value, fallback = "web-form") {
   );
 }
 
+export function hasDuplicateWebFormName(forms, name, excludeId = null) {
+  const normalizedName = String(name == null ? "" : name).trim().toLowerCase();
+  if (!normalizedName) return false;
+
+  return (Array.isArray(forms) ? forms : []).some((form) => (
+    String(form?.id) !== String(excludeId) &&
+    String(form?.name == null ? "" : form.name).trim().toLowerCase() === normalizedName
+  ));
+}
+
 
 export function buildWebFormPreviewUrl(form, origin, options = {}) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
@@ -57,12 +67,53 @@ const EMBED_ATTRIBUTION_QUERY_KEYS = [
   'hsa_net', 'hsa_ver',
 ];
 
+export const GENERIC_TRACKING_COOKIE_KEYS = [
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_id', 'utm_term', 'utm_content',
+  'gclid', 'gbraid', 'wbraid', 'fbclid', 'fbc', 'fbp', 'campaign_id',
+  'adset_id', 'ad_id', 'campaign_name', 'adset_name', 'ad_name', 'placement',
+  'site_source_name', 'landing_page', 'referrer',
+];
+
+/**
+ * Return a self-contained snippet customers can paste into their website.
+ * It preserves the first campaign value for 90 days, matching Generic CRM's
+ * embedded-form attribution runtime. The `gbs_` prefix avoids overwriting a
+ * website's own analytics cookies.
+ */
+export function buildGenericTrackingCookieSetupCode() {
+  const keys = JSON.stringify(GENERIC_TRACKING_COOKIE_KEYS);
+  return `<script>
+(function saveGlobussoftTrackingCookies() {
+  var keys = ${keys};
+  var maxAge = 90 * 24 * 60 * 60;
+  var params = new URLSearchParams(window.location.search);
+  function readCookie(name) {
+    var prefix = name + "=";
+    var cookies = document.cookie.split(";");
+    for (var i = 0; i < cookies.length; i += 1) {
+      var cookie = cookies[i].trim();
+      if (cookie.indexOf(prefix) === 0) return cookie.substring(prefix.length);
+    }
+    return "";
+  }
+  keys.forEach(function (key) {
+    if (readCookie("gbs_" + key)) return;
+    var value = params.get(key);
+    if (!value) return;
+    document.cookie = "gbs_" + key + "=" + encodeURIComponent(value.slice(0, 2000))
+      + "; Max-Age=" + maxAge + "; Path=/; SameSite=Lax"
+      + (window.location.protocol === "https:" ? "; Secure" : "");
+  });
+})();
+</script>`;
+}
+
 function buildEmbedHostRuntime(enableAttribution, frameExpression = 'document.currentScript.previousElementSibling') {
   if (!enableAttribution) {
     return `(function(frame){if(!frame)return;var lastDevice="";function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(${frameExpression});`;
   }
   const keys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
-  return `(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=query?query.get(key):"";value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(${frameExpression});`;
+  return `(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=storedAttribution(key)||(query?query.get(key):"");value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(${frameExpression});`;
 }
 
 function buildEmbedHostScript(enableAttribution) {
@@ -91,6 +142,6 @@ export function buildWebFormScriptEmbedCode(form, origin) {
   // This makes script-only embeds work even when a browser/proxy delays or
   // drops the cross-window postMessage handshake. The form iframe then reads
   // the same values from its own URL and includes them in the submit payload.
-  const forwardAttribution = `var trackingKeys=${trackingKeys};try{var frameUrl=new URL(frame.src,document.baseURI),pageQuery=new URLSearchParams(window.location.search);function readTrackingCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}trackingKeys.forEach(function(key){var value=pageQuery.get(key)||readTrackingCookie("gbs_"+key);if(value)frameUrl.searchParams.set(key,String(value).slice(0,2000));});frame.src=frameUrl.toString();}catch(e){}`;
+  const forwardAttribution = `var trackingKeys=${trackingKeys};try{var frameUrl=new URL(frame.src,document.baseURI),pageQuery=new URLSearchParams(window.location.search);function readTrackingCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function storedTrackingCookie(key){return readTrackingCookie("gbs_"+key)||readTrackingCookie(key)||(key==="fbc"?readTrackingCookie("_fbc"):key==="fbp"?readTrackingCookie("_fbp"):"");}trackingKeys.forEach(function(key){var value=storedTrackingCookie(key)||pageQuery.get(key);if(value)frameUrl.searchParams.set(key,String(value).slice(0,2000));});frame.src=frameUrl.toString();}catch(e){}`;
   return `<script>(function(script){if(!script||!script.parentNode)return;var frame=document.createElement("iframe");frame.src=${safeJson(src)};frame.title=${safeJson(form?.name || 'Web form')};frame.allow="geolocation *";frame.loading="lazy";frame.style.cssText="width:100%;height:auto;border:0;display:block;";${forwardAttribution}script.parentNode.insertBefore(frame,script.nextSibling);${buildEmbedHostRuntime(true, 'frame')}})(document.currentScript);</script>`;
 }

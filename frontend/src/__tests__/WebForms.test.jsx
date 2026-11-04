@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 // These assertions check source contracts, not the formatter's quote style
 // or whitespace. Runtime/layout assertions below remain unchanged.
@@ -21,6 +21,48 @@ describe('webForms helpers', () => {
   test('slugifies a form name for public URLs', () => {
     expect(slugifyWebFormName('EmpMonitor Demo')).toBe('empmonitor-demo');
     expect(slugifyWebFormName('   ')).toBe('web-form');
+  });
+
+  test('detects duplicate form names case-insensitively while excluding the current form', () => {
+    const forms = [
+      { id: 1, name: 'Contact Us' },
+      { id: 2, name: 'Newsletter' },
+    ];
+
+    expect(hasDuplicateWebFormName(forms, '  contact us  ')).toBe(true);
+    expect(hasDuplicateWebFormName(forms, 'CONTACT US', 1)).toBe(false);
+    expect(hasDuplicateWebFormName(forms, 'New form', 1)).toBe(false);
+    expect(hasDuplicateWebFormName(forms, '', 1)).toBe(false);
+  });
+
+  test('builds a website snippet that preserves first-touch Generic tracking cookies', () => {
+    const source = buildGenericTrackingCookieSetupCode()
+      .replace(/^<script>\s*/, '')
+      .replace(/\s*<\/script>$/, '');
+    const cookies = new Map();
+    const document = {};
+    Object.defineProperty(document, 'cookie', {
+      get: () => [...cookies].map(([key, value]) => `${key}=${value}`).join('; '),
+      set: (value) => {
+        const pair = value.split(';', 1)[0];
+        const separator = pair.indexOf('=');
+        cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+      },
+    });
+    const context = {
+      document,
+      URLSearchParams,
+      window: { location: { search: '?utm_source=google&gclid=click-123', protocol: 'https:' } },
+    };
+
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('google');
+    expect(cookies.get('gbs_gclid')).toBe('click-123');
+
+    context.window.location.search = '?utm_source=facebook&gclid=click-456';
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('google');
+    expect(cookies.get('gbs_gclid')).toBe('click-123');
   });
 });
 
@@ -215,6 +257,49 @@ describe('buildWebFormScriptEmbedCode', () => {
     expect(code).not.toContain('Contact </script> Form');
     expect(code).toContain('Contact \\u003c/script> Form');
     expect(() => Function(code.slice('<script>'.length, -'</script>'.length))).not.toThrow();
+  });
+
+  test('forwards stored host cookies when a script embed URL has no tracking query', () => {
+    const code = buildWebFormScriptEmbedCode(
+      { id: 107, name: 'Cookie Contact', scope: 'generic' },
+      'https://crm.example.com',
+    );
+    const scriptBody = code.slice('<script>'.length, -'</script>'.length);
+    const insertedFrames = [];
+    const script = {
+      parentNode: {
+        insertBefore: (frame) => insertedFrames.push(frame),
+      },
+      nextSibling: null,
+    };
+    const originalUrl = window.location.href;
+
+    document.cookie = 'utm_source=stored-source; Path=/';
+    document.cookie = 'utm_campaign=stored-campaign; Path=/';
+    document.cookie = '_fbc=fb.1.1234567890.saved; Path=/';
+    window.history.replaceState({}, '', '/contact');
+    globalThis.__gbsScriptEmbedTag = script;
+
+    try {
+      Function(scriptBody.replace('document.currentScript);', 'globalThis.__gbsScriptEmbedTag);'))();
+
+      expect(insertedFrames).toHaveLength(1);
+      const frameUrl = new URL(insertedFrames[0].src);
+      expect(frameUrl.searchParams.get('utm_source')).toBe('stored-source');
+      expect(frameUrl.searchParams.get('utm_campaign')).toBe('stored-campaign');
+      expect(frameUrl.searchParams.get('fbc')).toBe('fb.1.1234567890.saved');
+      expect(document.cookie).toContain('gbs_utm_source=stored-source');
+      expect(document.cookie).toContain('gbs_fbc=fb.1.1234567890.saved');
+    } finally {
+      delete globalThis.__gbsScriptEmbedTag;
+      document.cookie = 'utm_source=; Max-Age=0; Path=/';
+      document.cookie = 'utm_campaign=; Max-Age=0; Path=/';
+      document.cookie = '_fbc=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_utm_campaign=; Max-Age=0; Path=/';
+      document.cookie = 'gbs_fbc=; Max-Age=0; Path=/';
+      window.history.replaceState({}, '', originalUrl);
+    }
   });
 
   test('does not generate the script-only option for non-Generic CRM forms', () => {
@@ -570,6 +655,60 @@ describe('public web form embed footer', () => {
     expect(html).toContain('button.disabled = false;');
     expect(html).toContain('updateGenericSubmitState(fields);');
     expect(html).toMatch(/if\s*\(!flag\s*&&\s*advanced\)\s*updateGenericSubmitState\(formData\.fields\s*\|\|\s*\[\]\);/);
+    expect(html).toContain('<form id="gbs-form" novalidate>');
+    expect(html).toContain('function validateFields(fields)');
+    expect(html).toContain('function fieldValidationMessage(field, controls)');
+    expect(html).toContain('return label + " is required.";');
+    expect(html).toContain('return "Enter a valid email address.";');
+    expect(html).toContain('return "Only letters and spaces are allowed.";');
+    expect(html).toContain('nameInput.setAttribute("autocomplete", "name");');
+    expect(html).not.toContain('function hasInvalidCharacters(value)');
+    expect(html).toContain('data-submit-validation="true"');
+    expect(html).toContain('formEl.addEventListener("focusout"');
+    expect(html).toContain('validateFieldOnBlur(fieldName);');
+    expect(html).toMatch(/else if \(!validateFields\(formData\.fields \|\| \[\]\)\)/);
+  });
+
+  test('validates required choice groups and typed values with inline messages', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+    const start = html.indexOf('function fieldValidationMessage(');
+    const end = html.indexOf('function validateFields(', start);
+    const context = {};
+    runInNewContext(html.slice(start, end), context);
+    const visible = { hidden: false };
+
+    expect(context.fieldValidationMessage(
+      { label: 'Preferred contact', required: true },
+      [
+        { type: 'radio', checked: false, disabled: false, closest: () => visible },
+        { type: 'radio', checked: false, disabled: false, closest: () => visible },
+      ],
+    )).toBe('Preferred contact is required.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Email', fieldType: 'email', required: true },
+      [{ type: 'email', value: 'not-an-email', disabled: false, closest: () => visible, validity: { valid: false, typeMismatch: true } }],
+    )).toBe('Enter a valid email address.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Name', sourceKey: 'name', fieldType: 'text', required: true },
+      [{ type: 'text', value: 'Rajesh123', disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('Only letters and spaces are allowed.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Email', sourceKey: 'email', fieldType: 'email', required: false },
+      [{ type: 'email', value: 'not-an-email', disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('Enter a valid email address.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Phone', sourceKey: 'phone', fieldType: 'phone', required: false },
+      [{ type: 'tel', value: '4556', minLength: 10, maxLength: 10, disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('Phone number must be 10 digits.');
+
+    expect(context.fieldValidationMessage(
+      { label: 'Phone', sourceKey: 'phone', fieldType: 'phone', required: false },
+      [{ type: 'tel', value: '', minLength: 10, maxLength: 10, disabled: false, closest: () => visible, validity: { valid: true } }],
+    )).toBe('');
   });
 
   test('does not cap long forms in an internal scroll container', () => {
@@ -578,6 +717,18 @@ describe('public web form embed footer', () => {
     expect(html).not.toContain('grid-scroll');
     expect(html).not.toContain('max-height:500px');
     expect(html).not.toContain('overflow-y:auto;overflow-x:hidden');
+  });
+
+  test('assigns each rendered web form a form-specific root id without breaking legacy custom CSS', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('<div class="gbs-web-form-root"></div>');
+    expect(html).not.toContain('<div id="app"></div>');
+    expect(html).toContain('return "formid-" + (safeReference || "preview");');
+    expect(html).toContain('setWebFormRootId(');
+    expect(html).toContain('formData.id != null && String(formData.id) !== ""');
+    expect(html).toContain('/#app\\b/g');
+    expect(html).toContain('".gbs-web-form-root"');
   });
 
   test('shows the WhatsApp validation message only when it is active', () => {

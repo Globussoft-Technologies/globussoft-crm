@@ -1,0 +1,42 @@
+name: PR merge policy
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+  # Review events use an unprivileged notification workflow. This trusted
+  # workflow then re-reads GitHub metadata; it never consumes PR artifacts.
+  workflow_run:
+    workflows: [PR review notification]
+    types: [completed]
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: pr-merge-policy
+  cancel-in-progress: false
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted main only
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Evaluate current PR policy
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const policy = require(process.env.GITHUB_WORKSPACE + '/.github/scripts/pr-merge-policy.cjs');
+            await policy.run({ github, context, core });

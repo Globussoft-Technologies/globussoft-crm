@@ -974,10 +974,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Privacy')).toBeTruthy();
       // Settings is admin-only here.
       expect(screen.getByText('Settings')).toBeTruthy();
-      expect(screen.getByText('Workflows').closest('a')).toHaveAttribute('href', '/workflows');
+      expect(screen.queryByText('Workflows')).toBeNull();
     });
 
-    it('hides Workflows when the Generic CRM role lacks workflows.read', () => {
+    it('hides standalone Workflows even when the Generic CRM role has workflows.read', () => {
+      renderSidebar({ vertical: 'generic', role: 'USER', permissions: [...GENERIC_USER_PERMS, 'workflows.read'] });
+      expect(screen.queryByText('Workflows')).toBeNull();
+    });
+
+    it('hides standalone Workflows when the Generic CRM role lacks workflows.read', () => {
       renderSidebar({ vertical: 'generic', role: 'USER', permissions: GENERIC_USER_PERMS });
       expect(screen.queryByText('Workflows')).toBeNull();
     });
@@ -1014,7 +1019,7 @@ describe('Sidebar — load-bearing render surface', () => {
           expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
         }
         expect(screen.getByText('Landing Sites')).toBeTruthy();
-        expect(screen.getByText('Workflows').closest('a')).toHaveAttribute('href', '/workflows');
+        expect(screen.queryByText('Workflows')).toBeNull();
         unmount();
       }
     });
@@ -1701,6 +1706,26 @@ describe('Sidebar — load-bearing render surface', () => {
   // which are the equivalent "automation cluster" navs.
 
   describe('Generic Reports cluster sub-items', () => {
+    it('shows Field Config only in the generic ADMIN Leads group', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const fieldConfigLink = screen.getByText('Field Config').closest('a');
+      expect(fieldConfigLink).toBeTruthy();
+      expect(fieldConfigLink.getAttribute('href')).toBe('/field-config');
+    });
+
+    it('does not expose Field Config to generic non-admins or other verticals', () => {
+      const genericUser = renderSidebar({ vertical: 'generic', role: 'USER' });
+      expect(screen.queryByText('Field Config')).toBeNull();
+      genericUser.unmount();
+
+      const travelAdmin = renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      expect(screen.queryByText('Field Config')).toBeNull();
+      travelAdmin.unmount();
+
+      renderSidebar({ vertical: 'wellness', role: 'ADMIN' });
+      expect(screen.queryByText('Field Config')).toBeNull();
+    });
+
     it('renders remaining Reports cluster items for MANAGER while custom shortcuts stay hidden', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       // "Reports" appears twice (the bare label + potential section header

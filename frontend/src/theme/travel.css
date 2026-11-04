@@ -1347,3 +1347,62 @@ html[data-theme="dark"][data-vertical="travel"],
   color: var(--text-primary) !important;
   border-color: var(--border-color) !important;
 }
+
+/* Lifecycle stages are two-line content controls. The shared Travel density
+   contract gives ordinary buttons a single-line control height, so these
+   controls explicitly opt back into their content-sized layout. */
+.travel-lead-lifecycle > .travel-lead-lifecycle-button {
+  height: 44px !important;
+  max-height: none !important;
+  min-height: 44px !important;
+  padding: 6px 14px !important;
+  font-size: 12px !important;
+  line-height: 15px !important;
+}
+
+.travel-lead-lifecycle > .travel-lead-lifecycle-button > :is(span, strong) {
+  display: block;
+  font-size: 12px !important;
+  line-height: 15px !important;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.travel-lead-lifecycle-terminals > .travel-lead-lifecycle-button {
+  height: 44px !important;
+  max-height: none !important;
+  min-height: 44px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+  line-height: 14px !important;
+}
+
+/* Keep the lead header visually separated from its navigation link. */
+.travel-lead-detail-page .travel-lead-back {
+  margin-bottom: 28px;
+}
+
+@media (max-width: 900px) {
+  /* The shared Travel mobile rule reduces every page's top padding to 1rem.
+     Keep this detail page aligned with the other Travel workspace pages. */
+  .travel-lead-detail-page {
+    padding-top: 28px !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .travel-lead-trip-progress {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .travel-lead-trip-progress small {
+    display: block;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    line-height: 1.25;
+  }
+}
+
+/* Travel CRM lead detail — compact card layout matching the travel workspace. */

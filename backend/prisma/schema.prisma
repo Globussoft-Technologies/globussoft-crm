@@ -1367,6 +1367,11 @@ model Deal {
   probability     Int       @default(50)
   stage           String    @default("lead") // lead, contacted, proposal, won, lost
   dealType        String?
+  contactType     String?   // lead or customer; informational snapshot of the selected contact category
+  dealKind        String?   // one-time or recurring
+  billingPeriod   String?   // monthly, quarterly, half-yearly, yearly
+  paymentInfo     String?   @db.Text
+  notes           String?   @db.Text
   pipelineId      Int? // links to Pipeline.id
   expectedClose   DateTime?
   lostReason      String?
@@ -2815,6 +2820,9 @@ model WhatsAppConfig {
   // forbids — one phone_number_id belongs to one WABA at a time).
   phoneNumberId      String?   @unique
   businessAccountId  String?
+  appId               String?
+  // Tenant-owned Meta App Secret; encrypted before persistence.
+  appSecret           String?   @db.Text
   // #651 — accessToken widened to @db.Text for AES-256-GCM ciphertext.
   accessToken        String?   @db.Text
   webhookVerifyToken String?

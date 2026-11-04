@@ -1293,7 +1293,20 @@ router.post(
             code: "MISSING_FRONTEND_BASE",
           });
       }
-      const reportSlug = buildReportSlug(diag.id);
+      // Reuse the token minted when the diagnostic was submitted. The public
+      // report endpoint validates both halves of the slug against the row;
+      // minting a fresh token here creates a link that can never resolve.
+      let reportSlugToken = String(diag.reportSlugToken || "")
+        .trim()
+        .toLowerCase();
+      if (!/^[0-9a-f]{16}$/.test(reportSlugToken)) {
+        reportSlugToken = crypto.randomBytes(8).toString("hex");
+        await prisma.travelDiagnostic.update({
+          where: { id: diag.id },
+          data: { reportSlugToken },
+        });
+      }
+      const reportSlug = buildReportSlug(diag.id, reportSlugToken);
       const shareUrl = `${portalBase}/p/tmc/report/${reportSlug}`;
 
       const contactName = contact?.name || "there";
@@ -1318,13 +1331,30 @@ router.post(
           subject: "Your readiness report is ready",
           text:
             `Hi ${contactName},\n\n` +
-            `Your readiness report is ready. View it here:\n${shareUrl}\n\n` +
-            "Thank you.",
+            "Your travel readiness report from Travel Stall is ready. It covers:\n" +
+            "- Your ambition and your students' readiness profile\n" +
+            "- What becomes possible and the planning runway\n" +
+            "- The cost of waiting and how the programme benefits your institution\n" +
+            "- How the decision is de-risked and how TMC works\n\n" +
+            `View my readiness report: ${shareUrl}\n\n` +
+            "If you have questions or need changes, reply to this email or contact your Travel Stall advisor.\n\n" +
+            "Thanks,\n" +
+            "The Travel Stall Team\n" +
+            `${contactPhone || "Travel Stall advisor"} · ${portalBase}`,
           html:
             `<p>Hi ${contactName},</p>` +
-            `<p>Your readiness report is ready.</p>` +
-            `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">Open your readiness report</a></p>` +
-            `<p>Thank you.</p>`,
+            "<p>Your travel readiness report from Travel Stall is ready. It covers:</p>" +
+            "<ul>" +
+            "<li>Your ambition and your students' readiness profile</li>" +
+            "<li>What becomes possible and the planning runway</li>" +
+            "<li>The cost of waiting and how the programme benefits your institution</li>" +
+            "<li>How the decision is de-risked and how TMC works</li>" +
+            "</ul>" +
+            `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">View my readiness report</a></p>` +
+            "<p>If you have questions or need changes, reply to this email or contact your Travel Stall advisor.</p>" +
+            "<p>Thanks,<br>" +
+            "The Travel Stall Team<br>" +
+            `${contactPhone || "Travel Stall advisor"} · <a href="${portalBase}">${portalBase}</a></p>`,
         }).catch(() => ({ sent: false }));
         emailStatus = result && result.sent ? "SENT" : "SKIPPED";
         if (result && result.sent) channelsUsed.push("email");

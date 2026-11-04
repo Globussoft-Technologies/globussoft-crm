@@ -467,6 +467,65 @@ describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', ()
     expect(prisma.notification.create).toHaveBeenCalled();
   });
 
+  test('a matching Generic web-form condition sends the submitted lead to the configured webhook URL', async () => {
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      {
+        id: 81,
+        name: 'Page 1 lead webhook',
+        triggerType: 'contact.created_or_updated',
+        actionType: 'send_webhook',
+        condition: JSON.stringify({
+          groups: [{
+            match: 'all',
+            clauses: [{ entity: 'contact', field: 'webForm', op: 'eq', value: 'page1' }],
+          }],
+        }),
+        targetState: JSON.stringify({
+          module: 'contact',
+          actions: [{
+            type: 'send_webhook',
+            config: {
+              url: 'https://hooks.example.com/page1',
+              method: 'POST',
+              encoding: 'json',
+              bodyMode: 'simple',
+              selectedFields: ['contactId', 'name', 'email', 'source', 'webForm'],
+            },
+          }],
+        }),
+      },
+    ]);
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => '{"received":true}',
+    });
+
+    await emitEvent('contact.created', {
+      contactId: 2001,
+      name: 'Submitted Lead',
+      email: 'submitted@example.com',
+      source: 'Website campaign',
+      webForm: 'page1',
+      webFormId: 82,
+      submissionId: 1001,
+      tenantId: 42,
+    }, 42);
+
+    const delivery = globalThis.fetch.mock.calls.find(([url]) => url === 'https://hooks.example.com/page1');
+    expect(delivery).toBeDefined();
+    expect(delivery[1].method).toBe('POST');
+    expect(JSON.parse(delivery[1].body)).toEqual({
+      contactId: 2001,
+      name: 'Submitted Lead',
+      email: 'submitted@example.com',
+      source: 'Website campaign',
+      webForm: 'page1',
+    });
+  });
+
   test('rule with empty/null condition fires unconditionally', async () => {
     prisma.automationRule.findMany.mockResolvedValueOnce([
       {

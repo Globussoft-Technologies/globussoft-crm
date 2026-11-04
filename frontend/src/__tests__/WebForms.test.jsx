@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 // These assertions check source contracts, not the formatter's quote style
 // or whitespace. Runtime/layout assertions below remain unchanged.
@@ -21,6 +21,18 @@ describe('webForms helpers', () => {
   test('slugifies a form name for public URLs', () => {
     expect(slugifyWebFormName('EmpMonitor Demo')).toBe('empmonitor-demo');
     expect(slugifyWebFormName('   ')).toBe('web-form');
+  });
+
+  test('detects duplicate form names case-insensitively while excluding the current form', () => {
+    const forms = [
+      { id: 1, name: 'Contact Us' },
+      { id: 2, name: 'Newsletter' },
+    ];
+
+    expect(hasDuplicateWebFormName(forms, '  contact us  ')).toBe(true);
+    expect(hasDuplicateWebFormName(forms, 'CONTACT US', 1)).toBe(false);
+    expect(hasDuplicateWebFormName(forms, 'New form', 1)).toBe(false);
+    expect(hasDuplicateWebFormName(forms, '', 1)).toBe(false);
   });
 
   test('builds a website snippet that preserves first-touch Generic tracking cookies', () => {
@@ -651,6 +663,18 @@ describe('public web form embed footer', () => {
     expect(html).not.toContain('grid-scroll');
     expect(html).not.toContain('max-height:500px');
     expect(html).not.toContain('overflow-y:auto;overflow-x:hidden');
+  });
+
+  test('assigns each rendered web form a form-specific root id without breaking legacy custom CSS', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('<div class="gbs-web-form-root"></div>');
+    expect(html).not.toContain('<div id="app"></div>');
+    expect(html).toContain('return "formid-" + (safeReference || "preview");');
+    expect(html).toContain('setWebFormRootId(');
+    expect(html).toContain('formData.id != null && String(formData.id) !== ""');
+    expect(html).toContain('/#app\\b/g');
+    expect(html).toContain('".gbs-web-form-root"');
   });
 
   test('shows the WhatsApp validation message only when it is active', () => {

@@ -824,7 +824,7 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
 });
 
 describe('tenant page visibility in the permission matrix', () => {
-  it('renders Workflows permissions for an enabled Generic CRM tenant', async () => {
+  it('hides the Workflows permission card while retaining it in the server catalog', async () => {
     const catalog = {
       ...CATALOG,
       vertical: 'generic',
@@ -840,12 +840,25 @@ describe('tenant page visibility in the permission matrix', () => {
       hiddenModules: [],
     };
 
-    renderPage([ADMIN_ROLE], { '/api/roles/catalog': catalog }, 'generic');
+    const roleWithWorkflowAccess = {
+      ...ADMIN_ROLE,
+      permissions: [...ADMIN_ROLE.permissions, { module: 'workflows', action: 'read' }],
+    };
+    renderPage([roleWithWorkflowAccess], { '/api/roles/catalog': catalog }, 'generic');
     fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
     await screen.findByText(/Permissions: Administrator/i);
 
-    expect(screen.getByText('workflows')).toBeInTheDocument();
-    expect(screen.getByText('Trigger-action automation rules across CRM objects.')).toBeInTheDocument();
+    expect(screen.queryByText('workflows')).not.toBeInTheDocument();
+    expect(screen.queryByText('Trigger-action automation rules across CRM objects.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Save permissions/i }));
+    await waitFor(() => {
+      const saveCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === `/api/roles/${ADMIN_ROLE.id}/permissions` && opts?.method === 'PUT',
+      );
+      expect(saveCall).toBeTruthy();
+      expect(JSON.parse(saveCall[1].body).permissions).toContainEqual({ module: 'workflows', action: 'read' });
+    });
   });
 
   it('does not render a module whose page is disabled for the tenant', async () => {

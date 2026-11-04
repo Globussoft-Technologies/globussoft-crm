@@ -455,7 +455,7 @@ describe('tenant page visibility', () => {
     expect(res.body.pages.find((page) => page.path === '/wellness/calendar').enabled).toBe(true);
   });
 
-  test('includes Workflows in Generic CRM organization page visibility', async () => {
+  test('hides standalone Workflows from Generic CRM organization page visibility', async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({
       id: 7,
       name: 'Acme Generic',
@@ -468,11 +468,7 @@ describe('tenant page visibility', () => {
     const res = await request(makeApp()).get('/api/super-admin/tenant-management/tenants/7/page-visibility');
 
     expect(res.status).toBe(200);
-    expect(res.body.pages.find((page) => page.path === '/workflows')).toMatchObject({
-      label: 'Workflows',
-      category: 'Work Management',
-      enabled: true,
-    });
+    expect(res.body.pages.find((page) => page.path === '/workflows')).toBeUndefined();
   });
 
   test('stores hidden paths and records the Super Admin username', async () => {

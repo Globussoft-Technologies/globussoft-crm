@@ -22,6 +22,16 @@ export function slugifyWebFormName(value, fallback = "web-form") {
   );
 }
 
+export function hasDuplicateWebFormName(forms, name, excludeId = null) {
+  const normalizedName = String(name == null ? "" : name).trim().toLowerCase();
+  if (!normalizedName) return false;
+
+  return (Array.isArray(forms) ? forms : []).some((form) => (
+    String(form?.id) !== String(excludeId) &&
+    String(form?.name == null ? "" : form.name).trim().toLowerCase() === normalizedName
+  ));
+}
+
 
 export function buildWebFormPreviewUrl(form, origin, options = {}) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');

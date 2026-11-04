@@ -48,7 +48,6 @@ import {
   // #917 slice 5  CSP Violations admin nav entry icon.
   ShieldAlert,
   ScrollText,
-  GitBranch,
   TrendingUp,
   BookOpen,
   PenTool,
@@ -2788,7 +2787,9 @@ function renderGenericNav({
       {renderGroup("Work Management", <>
         <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
         <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
-        <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+        {/* Generic CRM: hide the standalone Workflows page without touching
+            the embedded Marketing Sequences webhook workflow feature. */}
+        {/* <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} /> */}
       </>)}
 
       {renderGroup("Customer Support", <>

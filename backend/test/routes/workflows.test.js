@@ -405,6 +405,30 @@ describe('POST / — create automation rule', () => {
     expect(prisma.automationRule.create).not.toHaveBeenCalled();
   });
 
+  test('409 WORKFLOW_NAME_EXISTS when the tenant already has that workflow name', async () => {
+    prisma.automationRule.findMany.mockResolvedValueOnce([{ id: 81 }]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .post('/api/workflows')
+      .send({
+        name: '  Welcome new leads  ',
+        triggerType: 'contact.created',
+        actionType: 'send_email',
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: 'A workflow with this name already exists',
+      code: 'WORKFLOW_NAME_EXISTS',
+    });
+    expect(prisma.automationRule.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 42, name: 'Welcome new leads' },
+      select: { id: true },
+      take: 1,
+    });
+    expect(prisma.automationRule.create).not.toHaveBeenCalled();
+  });
+
   test('400 INVALID_TRIGGER_TYPE (#18) when triggerType is not in whitelist', async () => {
     const res = await request(makeApp())
       .post('/api/workflows')
@@ -547,6 +571,24 @@ describe('PUT /:id — update automation rule', () => {
     expect(res.body.error).toMatch(/not found/i);
     expect(prisma.automationRule.findFirst).toHaveBeenCalledWith({
       where: { id: 777, tenantId: 1 },
+    });
+    expect(prisma.automationRule.update).not.toHaveBeenCalled();
+  });
+
+  test('409 WORKFLOW_NAME_EXISTS when renaming to another workflow name', async () => {
+    prisma.automationRule.findFirst.mockResolvedValue({ id: 50, tenantId: 1, name: 'Original' });
+    prisma.automationRule.findMany.mockResolvedValueOnce([{ id: 51 }]);
+
+    const res = await request(makeApp())
+      .put('/api/workflows/50')
+      .send({ name: 'Existing workflow' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('WORKFLOW_NAME_EXISTS');
+    expect(prisma.automationRule.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, name: 'Existing workflow', id: { not: 50 } },
+      select: { id: true },
+      take: 1,
     });
     expect(prisma.automationRule.update).not.toHaveBeenCalled();
   });

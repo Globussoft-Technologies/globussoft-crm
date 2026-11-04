@@ -1268,14 +1268,16 @@ const PAGE_CATALOG = [
   },
 
   //  Automation 
-  {
-    path: '/workflows',
-    label: 'Workflows',
-    description: 'Workflow automation builder',
-    category: 'Automation',
-    vertical: 'generic',
-    requiredPermissions: [{ module: 'workflows', action: 'read' }],
-  },
+  // Generic CRM: standalone Workflows page intentionally hidden from page
+  // discovery. The route, API, and embedded webhook workflows remain intact.
+  // {
+  //   path: '/workflows',
+  //   label: 'Workflows',
+  //   description: 'Workflow automation builder',
+  //   category: 'Automation',
+  //   vertical: 'generic',
+  //   requiredPermissions: [{ module: 'workflows', action: 'read' }],
+  // },
 
   //  Admin & Developer (missing routes) 
   {

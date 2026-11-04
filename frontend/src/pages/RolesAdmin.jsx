@@ -1925,8 +1925,25 @@ function validateLandingPathClient(value) {
 // ──────────────────────── Permissions matrix modal ───────────────────
 
 function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMode = false, onClose, onSaved, onApply }) {
-  const matrix = Array.isArray(modules) ? modules : [];
-  const domainList = Array.isArray(domains) ? domains : [];
+  const matrix = useMemo(() => (Array.isArray(modules) ? modules : []), [modules]);
+  const domainList = useMemo(() => (Array.isArray(domains) ? domains : []), [domains]);
+  // The Generic CRM standalone Workflows page is hidden, but the underlying
+  // permission must stay in `matrix` and `selected`: Marketing Sequences uses
+  // it for its embedded webhook workflows. Filter only the rendered cards so
+  // saving any other permission cannot silently remove an existing grant.
+  const displayMatrix = useMemo(
+    () => matrix.filter(({ module }) => !(vertical === 'generic' && module === 'workflows')),
+    [matrix, vertical],
+  );
+  const displayDomainList = useMemo(
+    () => domainList
+      .map((domain) => ({
+        ...domain,
+        modules: (domain.modules || []).filter((module) => !(vertical === 'generic' && module === 'workflows')),
+      }))
+      .filter((domain) => domain.modules.length > 0),
+    [domainList, vertical],
+  );
   // Build the set of currently-catalogued "module.action" strings so we
   // can filter the role's stored grants through it. A grant whose module
   // is no longer in the catalog (e.g. `billing.delete` after the v3.8.x
@@ -2038,7 +2055,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
   // re-deriving descriptions and page labels each time.
   const searchCorpusByModule = useMemo(() => {
     const map = new Map();
-    for (const { module, actions } of matrix) {
+    for (const { module, actions } of displayMatrix) {
       const parts = [
         module,
         // Vertical-aware description — same source the tooltip + body
@@ -2052,7 +2069,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
       map.set(module, parts.join(' ').toLowerCase());
     }
     return map;
-  }, [matrix, pagesByPermission, vertical]);
+  }, [displayMatrix, pagesByPermission, vertical]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const matchesQuery = (module) => {
@@ -2291,7 +2308,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => setCollapsedDomains(new Set(domainList.map((item) => item.domain)))}
+            onClick={() => setCollapsedDomains(new Set(displayDomainList.map((item) => item.domain)))}
             style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', marginLeft: 'auto' }}
           >
             Collapse all
@@ -2319,9 +2336,9 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
           // order. Any module not listed in `domainList` lands in an
           // "Other" section at the bottom so nothing silently disappears
           // if a domain mapping is missed.
-          const byName = new Map(matrix.map((m) => [m.module, m]));
+          const byName = new Map(displayMatrix.map((m) => [m.module, m]));
           const seen = new Set();
-          const sections = domainList
+          const sections = displayDomainList
             .map(({ domain, modules: moduleNames }) => {
               const items = (moduleNames || [])
                 .map((name) => byName.get(name))
@@ -2334,7 +2351,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
               return { domain, items };
             })
             .filter((s) => s.items.length > 0);
-          const orphans = matrix
+          const orphans = displayMatrix
             .filter((m) => !seen.has(m.module))
             .filter((m) => matchesQuery(m.module) && matchesReviewFilter(m));
           if (orphans.length > 0) sections.push({ domain: 'Other', items: orphans });

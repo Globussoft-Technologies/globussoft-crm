@@ -764,6 +764,8 @@ const emailSchedulingRoutes = require("./routes/email_scheduling");
 const leadRoutingRoutes = require("./routes/lead_routing");
 const territoriesRoutes = require("./routes/territories");
 const pickupPlotInventoryRoutes = require("./routes/pickup_plot_inventory");
+const pickupPlotPayoutRoutes = require("./routes/pickup_plot_payouts");
+const plotCommissionRoutes = require("./routes/plot_commissions");
 const quotasRoutes = require("./routes/quotas");
 const winLossRoutes = require("./routes/win_loss");
 const attributionRoutes = require("./routes/attribution");
@@ -1072,6 +1074,7 @@ app.use("/api", (req, res, next) => {
     "/legal",
     "/landing-pages/public",
     "/pickup-plot-inventory/public",
+    "/pickup-plot-payouts/public",
     // Explore public API intentionally disabled.
     // "/explore",
     "/landing-sites/public",
@@ -1374,6 +1377,14 @@ app.use("/api/email-scheduling", emailSchedulingRoutes);
 app.use("/api/lead-routing", leadRoutingRoutes);
 app.use("/api/territories", territoriesRoutes);
 app.use("/api/pickup-plot-inventory", pickupPlotInventoryRoutes);
+// Deposit distribution is an additive, tenant-flagged surface. The route
+// itself returns a not-found envelope while disabled, leaving the legacy
+// pickup/plot inventory and payment flow untouched.
+app.use("/api/pickup-plot-payouts", pickupPlotPayoutRoutes);
+// Finance → Commissions. This is a separate, plot-level rule/records surface;
+// the older deposit-distribution route above remains available for legacy
+// payout and partner-confirmation flows.
+app.use("/api/commissions", plotCommissionRoutes);
 app.use("/api/quotas", quotasRoutes);
 app.use("/api/win-loss", winLossRoutes);
 app.use("/api/attribution", attributionRoutes);

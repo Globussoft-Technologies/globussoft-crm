@@ -23,7 +23,20 @@ async function reconcilePlotBookingPayment(payment) {
   try { metadata = JSON.parse(payment?.metadata || '{}'); } catch { return null; }
   const bookingId = Number(metadata?.plotBookingId);
   if (metadata?.kind !== 'plot-booking-payment' || !Number.isInteger(bookingId) || bookingId <= 0) return null;
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction((tx) => reconcilePlotBookingPaymentWithClient(tx, payment, metadata, bookingId));
+}
+
+// Transaction-safe primitive used by the deposit-distribution flow. The
+// original public helper keeps opening its own transaction for gateway/manual
+// callers; this variant lets a new receipt, legacy Payment row, booking
+// reconciliation, and distribution lines commit or roll back together.
+async function reconcilePlotBookingPaymentWithClient(tx, payment, parsedMetadata, parsedBookingId) {
+  let metadata = parsedMetadata;
+  const bookingId = parsedBookingId;
+  if (!metadata) {
+    try { metadata = JSON.parse(payment?.metadata || '{}'); } catch { return null; }
+  }
+  if (metadata?.kind !== 'plot-booking-payment' || !Number.isInteger(bookingId) || bookingId <= 0) return null;
     // All booking balance writers take the same row lock before reading.
     await lockBooking(tx, payment.tenantId, bookingId);
     const booking = await tx.plotBooking.findFirst({ where: { id: bookingId, tenantId: payment.tenantId } });
@@ -73,7 +86,11 @@ async function reconcilePlotBookingPayment(payment) {
       paidAt: payment.paidAt || new Date(),
     });
     return reconciled;
-  });
 }
 
-module.exports = { lockBooking, successfulPaymentTotal, reconcilePlotBookingPayment };
+module.exports = {
+  lockBooking,
+  successfulPaymentTotal,
+  reconcilePlotBookingPayment,
+  reconcilePlotBookingPaymentWithClient,
+};

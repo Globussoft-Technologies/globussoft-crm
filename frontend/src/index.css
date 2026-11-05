@@ -401,6 +401,242 @@ body[data-vertical="generic"] {
   overflow-x: hidden !important;
 }
 
+/* Commissions can still scroll when multiple rules or records exceed the
+   viewport, but the page-level scrollbar is redundant with the app shell and
+   visually competes with the workspace. Keep wheel/touch/keyboard scrolling
+   available while hiding only this page's scrollbar chrome. */
+.app-main > main:has([data-testid="commission-page"]),
+main[data-testid="commission-page"] {
+  scrollbar-width: none !important;
+}
+
+.app-main > main:has([data-testid="commission-page"])::-webkit-scrollbar,
+main[data-testid="commission-page"]::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+html:has([data-testid="commission-page"]),
+body:has([data-testid="commission-page"]),
+#root:has([data-testid="commission-page"]) {
+  scrollbar-width: none !important;
+}
+
+html:has([data-testid="commission-page"])::-webkit-scrollbar,
+body:has([data-testid="commission-page"])::-webkit-scrollbar,
+#root:has([data-testid="commission-page"])::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.commission-records-card {
+  overflow: visible;
+}
+
+.commission-records-filters {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.35fr) minmax(170px, 0.75fr);
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 12px;
+  background: var(--subtle-bg, #f8fafc);
+}
+
+.commission-records-filters .input-field {
+  min-width: 0;
+  background: var(--popover-bg, #fff);
+}
+
+.commission-records-table-wrap {
+  overflow: auto;
+  height: min(540px, calc(100vh - 300px));
+  min-height: 320px;
+  border: 1px solid var(--border-color, #dfe4ec);
+  border-radius: 14px;
+  background: var(--popover-bg, #fff);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.commission-rules-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #dfe4ec);
+  border-radius: 14px;
+  background: var(--popover-bg, #fff);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.commission-rules-table {
+  min-width: 980px !important;
+}
+
+.commission-records-table {
+  table-layout: auto !important;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--text-primary);
+}
+
+.commission-records-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 14px 16px !important;
+  border-bottom: 1px solid var(--border-color, #dfe4ec);
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 6%, var(--popover-bg, #fff));
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.commission-records-table tbody td {
+  padding: 18px 16px !important;
+  border-right: 1px solid color-mix(in srgb, var(--border-color, #dfe4ec) 62%, transparent);
+  border-bottom: 1px solid var(--border-color, #e6eaf0);
+  background: var(--popover-bg, #fff);
+  line-height: 1.45;
+}
+
+.commission-records-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 2.5%, var(--popover-bg, #fff));
+}
+
+.commission-records-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 7%, var(--popover-bg, #fff));
+}
+
+.commission-records-table :is(th, td):last-child {
+  border-right: 0;
+}
+
+.commission-records-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.commission-records-load-hint {
+  position: sticky;
+  bottom: 0;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border-color, #e6eaf0);
+  background: var(--popover-bg, #fff);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.commission-records-table :is(th, td):last-child {
+  width: 100px !important;
+  min-width: 100px !important;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.commission-records-table :is(th, td) {
+  text-align: left !important;
+}
+
+.commission-records-table tbody td:last-child .btn-secondary {
+  display: inline-flex;
+  min-width: 76px;
+  justify-content: center;
+}
+
+.commission-records-data-table :is(th, td):last-child {
+  width: auto !important;
+  min-width: 190px !important;
+  white-space: normal;
+}
+
+.commission-records-data-table .commission-record-actions-cell {
+  width: 320px !important;
+  min-width: 320px !important;
+  white-space: normal !important;
+}
+
+.commission-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.commission-record-actions .btn-secondary {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  min-width: 0 !important;
+  padding: 7px 9px;
+  clip-path: none;
+}
+
+.commission-record-actions .btn-secondary:hover {
+  transform: none;
+  box-shadow: 0 3px 9px rgba(15, 23, 42, 0.14);
+}
+
+.commission-payment-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  background: var(--surface-muted, #f8fafc);
+}
+
+.commission-payment-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.commission-payment-summary span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.commission-rule-id-button {
+  border: 1px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 35%, var(--border-color, #dfe4ec));
+  border-radius: 7px;
+  padding: 5px 8px;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 7%, var(--popover-bg, #fff));
+  color: var(--primary-color, var(--accent-color));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.commission-rule-id-button:hover {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, var(--popover-bg, #fff));
+}
+
+.commission-rule-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  background: var(--surface-muted, #f8fafc);
+}
+
+.commission-rule-detail-item > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .commission-records-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Generic CRM pages share the same fluid inset as the Deals and Pipelines
    reference view. Keep verticalized modules on their existing page spacing. */
 .app-main > main.generic-page-content {
@@ -10036,3 +10272,7 @@ body[data-vertical="generic"] .developer-api-data-scroll {
 @media(max-width:600px){.travel-lead-detail-page{padding:16px 12px 30px}.travel-lead-identity{align-items:flex-start;flex-wrap:wrap}.travel-lead-badge{margin-left:60px;margin-top:-5px}.travel-lead-actions{width:100%;flex-wrap:wrap}.travel-lead-actions .travel-lead-button{flex:1 1 auto}.travel-lead-section-heading{align-items:flex-start;flex-direction:column;gap:5px}.travel-lead-lifecycle{grid-template-columns:1fr}.travel-lead-lifecycle-terminals{display:flex;gap:8px}.travel-lead-lifecycle-terminals button{flex:1}.travel-lead-sidebar{grid-template-columns:1fr}.travel-lead-main{padding:0 12px 14px}.travel-lead-tabs{gap:17px;overflow-x:auto}.travel-lead-trip-hero{padding:16px 12px}.travel-lead-trip-progress{gap:4px}.travel-lead-trip-progress small{display:block;min-height:28px;font-size:10px}.travel-lead-trip-details{gap:12px}}
 .travel-lead-error{display:grid;gap:10px;max-width:420px;margin:48px auto;padding:22px;border:1px solid color-mix(in srgb,var(--danger-color) 28%,var(--border-color));border-radius:14px;background:var(--surface-color);color:var(--text-primary);box-shadow:var(--shadow-sm)}.travel-lead-error a{color:var(--primary-color,var(--accent-color));font-size:13px;font-weight:700;text-decoration:none}.travel-lead-error a:hover{text-decoration:underline}
 .travel-lead-lifecycle>button{height:44px;min-height:44px;padding-top:6px;padding-bottom:6px;line-height:15px}.travel-lead-lifecycle>button span,.travel-lead-lifecycle>button strong{line-height:15px}.travel-lead-lifecycle-terminals button{height:44px;min-height:44px}
+/* Travel lead notes composer and note cards */
+.travel-lead-note-composer{display:flex;align-items:center;gap:14px}.travel-lead-note-input-wrap{display:flex;align-items:center;gap:14px;min-width:0;flex:1;height:50px;padding:0 16px;border:1px solid var(--border-color);border-radius:12px;background:var(--surface-color);color:var(--text-secondary)}.travel-lead-note-input-wrap input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--text-primary);font:inherit;font-size:14px}.travel-lead-note-input-wrap input::placeholder{color:var(--text-secondary)}.travel-lead-add-note-button{min-width:150px;height:50px;border-radius:12px;font-size:14px}.travel-lead-note-list{display:grid;gap:14px}.travel-lead-note-card{display:flex;align-items:flex-start;gap:16px;padding:20px;border:1px solid var(--border-color);border-radius:14px;background:var(--surface-color)}.travel-lead-note-avatar{display:flex;align-items:center;justify-content:center;flex:0 0 42px;width:42px;height:42px;border-radius:50%;background:#eee9ff;color:#5b21e6;font-size:14px;font-weight:800}.travel-lead-note-content{min-width:0;flex:1;color:var(--text-primary);font-size:14px;line-height:1.5}.travel-lead-note-meta{display:flex;align-items:center;gap:8px;margin-bottom:5px;color:var(--text-secondary);font-size:12px}.travel-lead-note-meta strong{color:var(--text-primary);font-size:14px}
+.travel-lead-note-actions{display:flex;gap:8px;margin-left:auto}.travel-lead-note-actions button,.travel-lead-note-cancel{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid var(--border-color);border-radius:10px;background:var(--surface-color);color:var(--text-secondary);cursor:pointer}.travel-lead-note-actions button:hover,.travel-lead-note-cancel:hover{color:var(--primary-color,var(--accent-color));border-color:var(--primary-color,var(--accent-color))}.travel-lead-note-cancel{flex:0 0 38px}
+.travel-lead-note-input-wrap:has(input.is-editing){border-color:var(--primary-color,var(--accent-color));background:color-mix(in srgb,var(--primary-color,var(--accent-color)) 7%,var(--surface-color));box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-color,var(--accent-color)) 14%,transparent)}.travel-lead-note-input-wrap input.is-editing{font-weight:600}

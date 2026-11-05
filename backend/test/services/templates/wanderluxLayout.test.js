@@ -33,7 +33,7 @@ const wanderlux = require('../../../services/templates/wanderlux');
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', '..', 'services', 'templates', 'wanderlux', 'landing-page.dc.html');
 const TEMPLATE_HTML = fs.readFileSync(TEMPLATE_PATH, 'utf8');
 
-test('a partial payment offers the parent portal handoff and leaves later instalments payable', () => {
+test('a successful payment changes the final action to Register', () => {
   const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
   const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };
   vm.runInNewContext(`${script}\nglobalThis.PageComponent = Component;`, context);
@@ -51,15 +51,17 @@ test('a partial payment offers the parent portal handoff and leaves later instal
         { index: 1, amountPaise: 1000000, paidPaise: 0, duePaise: 1000000 },
       ] } };
   let submission;
+  page.setState = (next) => {
+    page.state = { ...page.state, ...(typeof next === 'function' ? next(page.state) : next) };
+  };
   page.submitForm = (options) => { submission = options; };
 
   const view = page.renderVals();
   expect(view.regPaymentEnabled).toBe(true);
-  expect(view.regPortalHandoffVisible).toBe(true);
-  expect(view.regPortalHandoffLabel).toBe('Reserve Orientation Seat');
-  expect(view.regPrimaryButtonLabel).toBe('Pay & continue');
+  expect(view.regPortalHandoffVisible).toBe(false);
+  expect(view.regPrimaryButtonLabel).toBe('Register');
   expect(view.regPaymentSelectedSummary).toBe('Instalment 2');
-  view.regContinueToPortal();
+  view.regPrimary();
   expect(submission).toMatchObject({ type: 'registration', endpoint: '/p/trip/submit',
     payment: { hostedPaymentLink: true, paymentLinkId: 'plink_first' } });
 });
@@ -321,6 +323,7 @@ describe('wanderlux render() integration', () => {
     expect(TEMPLATE_HTML).toContain('Object.assign({}, paymentPayload, { draftToken })');
     expect(TEMPLATE_HTML).toContain("params.get('payment') === 'success'");
     expect(TEMPLATE_HTML).toContain("razorpay_payment_link_status");
+    expect(TEMPLATE_HTML).toContain("X-Frontend-Origin");
     expect(TEMPLATE_HTML).toContain("document.getElementById('register')");
     expect(TEMPLATE_HTML).toContain("scrollIntoView({ block: 'start', behavior: 'auto' })");
     expect(TEMPLATE_HTML).toContain('hostedPaymentReturn = callbackParams.get');
@@ -332,7 +335,7 @@ describe('wanderlux render() integration', () => {
     expect(TEMPLATE_HTML).not.toContain('documentsUploaded');
     expect(TEMPLATE_HTML).not.toContain('regDocumentsUploaded');
     expect(TEMPLATE_HTML).toContain("Number.isFinite(Number(params.get('regStep')))");
-    expect(TEMPLATE_HTML).toContain("(reg.submitLabel || 'Register')");
+    expect(TEMPLATE_HTML).toContain("out.regPaymentCompleted ? 'Register'");
     expect(TEMPLATE_HTML).toContain('razorpay_payment_link_id');
     expect(TEMPLATE_HTML).toContain('hostedPaymentLink:true');
     expect(TEMPLATE_HTML).toContain("redirect.type === 'customer-registration'");

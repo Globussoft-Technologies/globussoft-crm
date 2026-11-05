@@ -109,6 +109,10 @@ const bank = {
       },
     ],
   }),
+  scoringRulesJson: JSON.stringify({
+    method: "tmc-deterministic-engine",
+    bands: [{ minScore: 0, maxScore: 999, classification: "tmc_engine" }],
+  }),
 };
 
 const catalogueTrip = {
@@ -267,6 +271,7 @@ describe("TMC teacher diagnostic flow", () => {
       data: expect.objectContaining({
         tenantId: 1,
         contactId: 55,
+        score: expect.any(Number),
         source: "tmc_teacher_portal",
         reportSlugToken: expect.stringMatching(/^[0-9a-f]{16}$/),
       }),

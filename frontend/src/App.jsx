@@ -53,6 +53,8 @@ const TransportPersons = lazy(() => import("./pages/TransportPersons"));
 const PlotBrokers = lazy(() => import("./pages/PlotBrokers"));
 const BillingPersons = lazy(() => import("./pages/BillingPersons"));
 const PickupCustomers = lazy(() => import("./pages/PickupCustomers"));
+const PlotPayouts = lazy(() => import("./pages/PlotPayouts"));
+const PayoutConfirmation = lazy(() => import("./pages/PayoutConfirmation"));
 const PickupPlotWorkAssignments = lazy(() => import("./pages/PickupPlotWorkAssignments"));
 const TransportDriverWorkspace = lazy(() => import("./components/TransportDriverWorkspace"));
 const BrokerCustomerWorkspace = lazy(() => import("./components/BrokerCustomerWorkspace"));
@@ -1632,6 +1634,7 @@ export default function App() {
                       element={<PaymentSuccess />}
                     />
                     <Route path="/payment-failed" element={<PaymentFailed />} />
+                    <Route path="/payout-confirmation" element={<PayoutConfirmation />} />
                     <Route
                       path="/get-started"
                       element={
@@ -3272,6 +3275,27 @@ export default function App() {
                           <GenericOnly>
                             <RoleGuard requiredPermission={{ module: "billing_workspace", action: "read" }}>
                               <PickupCustomers />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="commissions"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN", "MANAGER"]} message="Commissions requires Finance or manager access.">
+                              <PlotPayouts />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      {/* Backward-compatible deep link for the former payout page. */}
+                      <Route
+                        path="plot-payouts"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard allow={["ADMIN", "MANAGER"]} message="Commissions requires Finance or manager access.">
+                              <PlotPayouts />
                             </RoleGuard>
                           </GenericOnly>
                         }

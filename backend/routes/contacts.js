@@ -3364,6 +3364,26 @@ router.patch("/:id/activities/:activityId", async (req, res) => {
   }
 });
 
+router.delete("/:id/activities/:activityId", async (req, res) => {
+  try {
+    const contactId = parseInt(req.params.id);
+    const activityId = parseInt(req.params.activityId);
+    if (!Number.isFinite(contactId) || !Number.isFinite(activityId)) {
+      return res.status(400).json({ error: "Invalid contact or activity ID", code: "INVALID_ID" });
+    }
+    const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId: req.user.tenantId } });
+    if (!contact || !canAccessLead(req, contact)) return res.status(404).json({ error: "Contact not found" });
+    const activity = await prisma.activity.findFirst({
+      where: { id: activityId, contactId, tenantId: req.user.tenantId, type: "Note" },
+    });
+    if (!activity) return res.status(404).json({ error: "Note not found", code: "NOTE_NOT_FOUND" });
+    await prisma.activity.delete({ where: { id: activity.id } });
+    return res.json({ deleted: true, id: activity.id });
+  } catch (_err) {
+    return res.status(500).json({ error: "Failed to delete note" });
+  }
+});
+
 // "Summarize" (2026-07-07) — on-demand full-history AI narrative. Re-reads
 // EVERY WhatsApp message linked to this contact and REPLACES Contact.description
 // with one flowing narrative + a current lead-stage line. Independent of the

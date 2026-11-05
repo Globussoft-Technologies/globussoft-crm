@@ -172,6 +172,7 @@ const Layout = () => {
   const isTravel = tenant?.vertical === "travel";
   const isPickupPlotModule = !isWellness && !isTravel && (
     location.pathname === "/pickup-customers"
+    || location.pathname === "/plot-payouts"
     || location.pathname.startsWith("/pickup-")
     || location.pathname === "/transport-persons"
     || location.pathname === "/plot-brokers"

@@ -93,6 +93,11 @@ describe('tenant page visibility normalization', () => {
       label: 'Quotes',
       category: 'Finance',
     });
+    expect(catalog.find((page) => page.path === '/commissions')).toMatchObject({
+      path: '/commissions',
+      label: 'Commissions',
+      category: 'Finance',
+    });
     expect(catalog.find((page) => page.path === '/workflows')).toBeUndefined();
     expect(catalog.find((page) => page.path === '/field-config')).toMatchObject({
       label: 'Field Config',
@@ -115,6 +120,21 @@ describe('tenant page visibility normalization', () => {
       .some((page) => page.path === '/quotes')).toBe(false);
     expect(visibility.getTenantPageVisibilityCatalog('travel')
       .some((page) => page.path === '/quotes')).toBe(false);
+  });
+
+  it('includes the Generic CRM Commissions page in the Finance visibility catalog', () => {
+    const genericPage = visibility.getTenantPageVisibilityCatalog('generic')
+      .find((page) => page.path === '/commissions');
+    expect(genericPage).toMatchObject({
+      path: '/commissions',
+      label: 'Commissions',
+      category: 'Finance',
+      requiredPermissions: [],
+    });
+    expect(visibility.getTenantPageVisibilityCatalog('wellness')
+      .some((page) => page.path === '/commissions')).toBe(false);
+    expect(visibility.getTenantPageVisibilityCatalog('travel')
+      .some((page) => page.path === '/commissions')).toBe(false);
   });
 });
 

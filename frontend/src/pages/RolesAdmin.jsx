@@ -1048,8 +1048,8 @@ function TmcTeacherShareableLinkPanel() {
   const [copiedRegistrationLink, setCopiedRegistrationLink] = useState(false);
   const [copiedParentLinkId, setCopiedParentLinkId] = useState(null);
   const link = typeof window === 'undefined'
-    ? '/tmc/register/teacher'
-    : `${window.location.origin}/tmc/register/teacher`;
+    ? '/tmc/register/teacher?tenantSlug=travel-stall&tmcRole=TEACHER&next=%2Ftmc%2Fteacher-portal'
+    : `${window.location.origin}/tmc/register/teacher?tenantSlug=travel-stall&tmcRole=TEACHER&next=%2Ftmc%2Fteacher-portal`;
 
   const loadTeachers = useCallback(async () => {
     setIsLoading(true);

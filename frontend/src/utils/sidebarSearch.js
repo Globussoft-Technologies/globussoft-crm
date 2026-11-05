@@ -163,6 +163,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   { path: '/surveys', label: 'Surveys', description: 'Survey campaigns + responses', managerOnly: true, sidebarHidden: true },
   { path: '/sla', label: 'SLA Policies', description: 'Service level agreement setup', managerOnly: true },
   { path: '/payments', label: 'Payments', description: 'Payment history + gateway transactions', managerOnly: true },
+  { path: '/commissions', label: 'Commissions', description: 'Plot commissions, collection thresholds, and payout workflows', aliases: ['commission', 'payouts', 'plot payouts', 'deposit distribution'], managerOnly: true },
   { path: '/lead-scoring', label: 'Lead Scoring', description: 'Lead qualification engine', managerOnly: true, sidebarHidden: true },
   { path: '/staff', label: 'Staff', description: 'Team management', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' } },
   { path: '/settings/roles', label: 'Roles', description: 'RBAC roles + permissions matrix', requiredPermission: { module: 'roles', action: 'read' } },

@@ -275,6 +275,29 @@ describe('Omnibar (inline top-bar)', () => {
     expect(navigateMock).toHaveBeenCalledWith('/forms');
   });
 
+  it('finds and opens the Generic Commissions page from global search', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) return Promise.resolve({ pages: [] });
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'MANAGER' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'commission' } });
+
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    const row = await screen.findByRole('option', { name: /Commissions/i }, { timeout: 2000 });
+    expect(row).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/commissions');
+  });
+
   it('does not search a generic page hidden from the shared sidebar catalog', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/pages/me')) {

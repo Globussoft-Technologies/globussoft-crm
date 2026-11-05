@@ -36,6 +36,7 @@ const EXISTING_EMAIL_MESSAGE = "This email already exists. Sign in to your accou
 const SELECT_ORG_MESSAGE = "Select your organization first to verify email availability.";
 const EMAIL_CHECK_FAILED_MESSAGE = "Unable to check email availability. Please try again.";
 const MIN_ORG_SUGGESTION_CHARS = 3;
+const TMC_TENANT_SLUG = "travel-stall";
 const ORGANIZATION_SUGGESTION_PANEL_STYLE = {
   position: "absolute",
   top: "calc(100% + 6px)",
@@ -105,7 +106,9 @@ export default function CustomerRegister() {
   // safeNext() rejects external URLs so a hostile ?next= can't redirect off-app.
   const nextParam = searchParams.get("next");
   const tenantSlugParam = searchParams.get("tenantSlug");
-  const lockedToTenantSlug = !!tenantSlugParam;
+  const isTmcTeacherRegistration = searchParams.get("tmcRole") === "TEACHER";
+  const registrationTenantSlug = isTmcTeacherRegistration ? TMC_TENANT_SLUG : (tenantSlugParam || "");
+  const lockedToTenantSlug = Boolean(registrationTenantSlug);
   const initialEmail = (searchParams.get("email") || "").trim().toLowerCase();
   const initialName = (searchParams.get("name") || "").trim();
 
@@ -146,8 +149,8 @@ export default function CustomerRegister() {
   // Pre-select the locked tenant once the list arrives. Done in an effect (not
   // initial state) because the tenant list is fetched asynchronously.
   useEffect(() => {
-    if (!tenantSlugParam || tenants.length === 0) return;
-    const match = tenants.find((t) => t.slug === tenantSlugParam);
+    if (!registrationTenantSlug || tenants.length === 0) return;
+    const match = tenants.find((t) => t.slug === registrationTenantSlug);
     if (match) {
       setForm((prev) =>
         prev.tenantId
@@ -156,7 +159,7 @@ export default function CustomerRegister() {
       );
       setVerificationToken(null);
     }
-  }, [tenantSlugParam, tenants]);
+  }, [registrationTenantSlug, tenants]);
 
   const organizationQueryKey = normalizeOrganizationKey(form.organization);
   const organizationSuggestions = useMemo(() => {
@@ -574,7 +577,9 @@ export default function CustomerRegister() {
             error={errors.organization}
             help={
               lockedToTenantSlug
-                ? "You started this booking from a specific clinic — registration is scoped to it."
+                ? isTmcTeacherRegistration
+                  ? "Teacher registration is scoped to The Modern Classroom."
+                  : "You started this booking from a specific clinic — registration is scoped to it."
                 : `Type at least ${MIN_ORG_SUGGESTION_CHARS} characters to search registered organizations, then select yours from the list.`
             }
           >
@@ -601,6 +606,7 @@ export default function CustomerRegister() {
                 }}
                 onBlur={handleOrganizationBlur}
                 onKeyDown={handleOrganizationKeyDown}
+                readOnly={isTmcTeacherRegistration}
                 disabled={isLoading || lockedToTenantSlug}
                 required
               />

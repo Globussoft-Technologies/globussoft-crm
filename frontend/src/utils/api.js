@@ -231,6 +231,12 @@ export const fetchApi = async (url, options = {}) => {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  // The local Vite proxy rewrites Host to localhost. Preserve the browser's
+  // approved TMC origin so backend-generated links keep the branded domain.
+  if (typeof window !== 'undefined' && window.location?.origin && !headers['X-Frontend-Origin']) {
+    headers['X-Frontend-Origin'] = window.location.origin;
+  }
+
   // Attach the active tenant header on every authed request.
   const activeTenantId = getActiveTenantId();
   if (activeTenantId != null && !headers['X-Active-Tenant']) {

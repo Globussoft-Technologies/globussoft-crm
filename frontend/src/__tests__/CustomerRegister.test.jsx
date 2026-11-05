@@ -22,6 +22,7 @@ const TENANTS = [
   { id: 11, name: 'Dr. Enhanced Wellness', slug: 'dr-enhanced-wellness', vertical: 'wellness' },
   { id: 12, name: 'Dr. Enhanced Wellness South', slug: 'dr-enhanced-wellness-south', vertical: 'wellness' },
   { id: 13, name: 'Globussoft', slug: 'globussoft', vertical: 'generic' },
+  { id: 14, name: 'Travel Stall', slug: 'travel-stall', vertical: 'travel' },
 ];
 
 function fetchResponse(body, status = 200) {
@@ -84,6 +85,15 @@ describe('<CustomerRegister /> organization autocomplete', () => {
     navigateMock.mockReset();
     originalFetch = global.fetch;
     installCustomerRegisterFetch();
+  });
+
+  it('autofills and locks Travel Stall for TMC teacher registration', async () => {
+    renderPage('/customer/register?next=%2Ftmc%2Fteacher-portal&tmcRole=TEACHER');
+
+    const orgInput = await screen.findByLabelText(/Organization/i);
+    expect(orgInput).toHaveValue('Travel Stall');
+    expect(orgInput).toBeDisabled();
+    expect(screen.queryByText(/No matching organizations found/i)).not.toBeInTheDocument();
   });
 
   afterEach(() => {

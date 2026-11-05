@@ -6487,7 +6487,7 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       },
       notify: { sms: false, email: false },
       reminder_enable: false,
-      callback_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/p/${encodeURIComponent(page.slug)}?payment=success&draftToken=${encodeURIComponent(draftToken)}&regStep=${encodeURIComponent(String(req.body?.regStep || ""))}`,
+      callback_url: `${getFrontendUrlFromRequest(req) || "http://localhost:5173"}/p/${encodeURIComponent(page.slug)}?payment=success&draftToken=${encodeURIComponent(draftToken)}&regStep=${encodeURIComponent(String(req.body?.regStep || ""))}`,
       callback_method: "get",
       notes,
     });

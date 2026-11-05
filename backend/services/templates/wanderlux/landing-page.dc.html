@@ -1182,7 +1182,7 @@ class Component extends DCLogic {
       : {};
     this._registrationDraftPromise = fetch(draftEndpoint, {
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json','X-Frontend-Origin':window.location.origin},
       body:JSON.stringify({ fields, draftToken: currentDraftToken })
     })
       .then(async (r) => {
@@ -1345,7 +1345,7 @@ class Component extends DCLogic {
       return;
     }
     const s = {}; s[opts.sendingKey] = true; this.setState(s);
-    fetch(opts.endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+    fetch(opts.endpoint, { method:'POST', headers:{'Content-Type':'application/json','X-Frontend-Origin':window.location.origin}, body: JSON.stringify(payload) })
       .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
         .then((body) => {
         /* Phase 6 — hybrid registration-draft branch. When the backend
@@ -1661,8 +1661,10 @@ class Component extends DCLogic {
     out.regPaymentAmountLabel = this.formatMoney(paymentAmountMajor, paymentCfg.currency || 'INR');
     out.regPaymentStepTitle = paymentStepTitle;
     out.regPaymentIntro = paymentIntro;
-    out.regPaymentCompleted = (this.state.regPaymentCompleted || hostedPaymentReturn)
-      && (!paymentBalance || paymentBalance.remainingPaise <= 0);
+    // A successful payment completes the current registration payment action.
+    // The parent portal can collect later instalments, but the landing page
+    // must move on to the final Register action instead of showing Pay again.
+    out.regPaymentCompleted = this.state.regPaymentCompleted || hostedPaymentReturn;
     out.regPaymentLinkId = this.state.regPaymentLinkId || hostedPaymentLinkId;
     out.regPaymentButtonLabel = out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'));
     out.regPaymentInstallmentLabel = paymentInstallmentLabel;
@@ -1758,7 +1760,7 @@ class Component extends DCLogic {
             if(!draftToken) return null;
             const payload = Object.assign({}, paymentPayload, { draftToken });
             this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: draftToken, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
-            return fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            return fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json','X-Frontend-Origin':window.location.origin}, body: JSON.stringify(payload) });
           })
           .then(async (r) => {
             if(!r) return null;

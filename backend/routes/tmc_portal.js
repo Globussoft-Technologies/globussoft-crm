@@ -17,6 +17,7 @@ const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const tmcEngine = require("../lib/tmcDiagnosticEngine");
 const tmcLeadQuality = require("../lib/tmcLeadQuality");
+const { parseBank, scoreDiagnostic } = require("../lib/travelDiagnosticScoring");
 const travelRag = require("../lib/travelRag");
 const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
@@ -1874,6 +1875,48 @@ router.post(
         flags.push("suspect");
       }
 
+      // TMC diagnostics use the deterministic engine's per-trip score rather
+      // than the generic weighted-sum diagnostic score. Persist the winning
+      // survivor's total in the shared score column so the CRM detail page
+      // does not display the old hardcoded zero for every teacher submission.
+      const primaryEngineScore =
+        engineOutput.primary && Array.isArray(engineOutput.scores?.survivors)
+          ? engineOutput.scores.survivors.find(
+              (row) => row.tripId === engineOutput.primary.tripId,
+            )?.total
+          : null;
+
+      // Some tenants still have the retired 2–3 question TMC placeholder
+      // bank. Those rows cannot produce a TMC engine survivor, but they do
+      // have the generic weighted-sum rules that were used by that bank. Keep
+      // those submissions useful until the tenant's bank is upgraded.
+      let primaryScore = primaryEngineScore;
+      if (primaryScore == null && normalizedBank.scoringRulesJson) {
+        try {
+          const legacyBank = parseBank(
+            normalizedBank.questionsJson,
+            normalizedBank.scoringRulesJson,
+          ).bank;
+          if (legacyBank?.method === "weighted-sum") {
+            const legacyAnswers = { ...answers };
+            for (const question of legacyBank.questions || []) {
+              const field = question?.field || question?.id;
+              if (
+                question?.id &&
+                field !== question.id &&
+                legacyAnswers[question.id] == null &&
+                legacyAnswers[field] != null
+              ) {
+                legacyAnswers[question.id] = legacyAnswers[field];
+              }
+            }
+            primaryScore = scoreDiagnostic(legacyBank, legacyAnswers).score;
+          }
+        } catch {
+          // The TMC engine remains the source of truth for current banks.
+        }
+      }
+
       const reportSlugToken = crypto.randomBytes(8).toString("hex");
       const diag = await prisma.travelDiagnostic.create({
         data: {
@@ -1888,7 +1931,7 @@ router.post(
             questionsJson: normalizedBank.questionsJson,
           }),
           answersJson: JSON.stringify(answers),
-          score: 0,
+          score: Number.isFinite(Number(primaryScore)) ? Number(primaryScore) : null,
           classification: engineOutput.state,
           classificationLabel: "Routed by TMC Engine",
           recommendedTier: "engine",

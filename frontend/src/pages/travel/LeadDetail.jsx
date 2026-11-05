@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ChevronDown, Edit3, Plus } from "lucide-react";
+import { ArrowLeft, ChevronDown, Edit3, PenLine, Plus, StickyNote, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
+import { useNotify } from "../../utils/notify";
 import EditContactModal from "../../components/EditContactModal";
 
 const STAGES = ["Lead", "Prospect", "Customer"];
@@ -9,12 +10,15 @@ const TERMINAL_STAGES = ["Churned", "Junk"];
 const RUPEE = "\u20B9";
 const ARROW = "\u2192";
 const formatDate = (value) => value ? new Date(value).toLocaleDateString() : "";
+const formatDateTime = (value) => value ? new Date(value).toLocaleString([], { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 const formatMoney = (value, currency = "INR") => value == null || value === "" ? "" : (currency === "INR" ? RUPEE : currency + " ") + Number(value).toLocaleString();
 const formatStatus = (value) => value ? String(value).replaceAll("_", " ") : "";
 
 export default function LeadDetail() {
   const { contactId } = useParams(); const location = useLocation(); const navigate = useNavigate();
-  const [contact, setContact] = useState(null); const [contactError, setContactError] = useState(""); const [trips, setTrips] = useState([]); const [quotes, setQuotes] = useState([]); const [itineraries, setItineraries] = useState([]); const [activities, setActivities] = useState([]); const [paidAmounts, setPaidAmounts] = useState({}); const [tab, setTab] = useState("Trips"); const [editing, setEditing] = useState(false); const [note, setNote] = useState("");
+  const notify = useNotify();
+  const [contact, setContact] = useState(null); const [contactError, setContactError] = useState(""); const [trips, setTrips] = useState([]); const [quotes, setQuotes] = useState([]); const [itineraries, setItineraries] = useState([]); const [activities, setActivities] = useState([]); const [paidAmounts, setPaidAmounts] = useState({}); const [tab, setTab] = useState("Trips"); const [editing, setEditing] = useState(false); const [note, setNote] = useState(""); const [editingNoteId, setEditingNoteId] = useState(null);
+  const noteInputRef = useRef(null);
   const backTo = location.state?.backTo || "/leads"; const backLabel = location.state?.backLabel || "Back to Leads";
   useEffect(() => {
     let mounted = true;
@@ -79,6 +83,9 @@ export default function LeadDetail() {
     load();
     return () => { mounted = false; };
   }, [contactId]);
+  useEffect(() => {
+    if (editingNoteId && tab === "Notes") noteInputRef.current?.focus();
+  }, [editingNoteId, tab]);
   // Teachers manage the whole group, while student/parent contacts see their
   // individual amount. The API marks teacher-linked trips with teacherContactId.
   const allTrips = useMemo(() => trips.map((trip) => {
@@ -111,9 +118,37 @@ export default function LeadDetail() {
     isOtherTrip: true,
   }))), [quotes, itineraries, paidAmounts]);
   const displayTrips = useMemo(() => [...allTrips, ...otherTrips], [allTrips, otherTrips]);
+  const notes = activities.filter((activity) => activity.type === "Note");
   const totalValue = allTrips.reduce((sum, trip) => sum + (Number(trip.value) || 0), 0); const activeTrip = allTrips.find((trip) => !["completed", "cancelled"].includes(String(trip.status).toLowerCase())) || allTrips[0];
   const moveStage = async (stage) => { if (!contact || contact.status === stage) return; const updated = await fetchApi("/api/contacts/" + contact.id, { method: "PUT", body: JSON.stringify({ status: stage }) }); setContact((current) => ({ ...current, ...updated, status: updated?.status || stage })); };
-  const addNote = async () => { if (!note.trim()) return; await fetchApi("/api/contacts/" + contact.id + "/activities", { method: "POST", body: JSON.stringify({ type: "Note", description: note.trim() }) }); setNote(""); };
+  const addNote = async () => {
+    const description = note.trim();
+    if (!description) return;
+    const endpoint = "/api/contacts/" + contact.id + "/activities";
+    const response = await fetchApi(editingNoteId ? `${endpoint}/${editingNoteId}` : endpoint, {
+      method: editingNoteId ? "PATCH" : "POST",
+      body: JSON.stringify({ ...(editingNoteId ? {} : { type: "Note" }), description }),
+    });
+    if (editingNoteId) {
+      setActivities((current) => current.map((item) => item.id === editingNoteId ? { ...item, ...response, description } : item));
+    } else {
+      const activity = response?.id ? response : { id: `local-note-${Date.now()}`, type: "Note", description, createdAt: new Date().toISOString() };
+      setActivities((current) => [activity, ...current]);
+    }
+    setNote("");
+    setEditingNoteId(null);
+  };
+  const editNote = (activity) => { setEditingNoteId(activity.id); setNote(activity.description || ""); setTab("Notes"); };
+  const deleteNote = async (activity) => {
+    const confirmed = await notify.confirm({
+      message: "Delete this note?",
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    await fetchApi(`/api/contacts/${contact.id}/activities/${activity.id}`, { method: "DELETE" });
+    setActivities((current) => current.filter((item) => item.id !== activity.id));
+  };
   if (contactError) return <div className="travel-lead-detail-page"><div className="travel-lead-error" role="alert"><strong>{contactError}</strong><Link to={backTo}>Back to Leads</Link></div></div>;
   if (!contact) return <div className="travel-lead-detail-loading" role="status">Loading lead…</div>;
   const initials = String(contact.name || "?").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(); const stageIndex = STAGES.findIndex((stage) => stage.toLowerCase() === String(contact.status || "Lead").toLowerCase());
@@ -127,7 +162,24 @@ export default function LeadDetail() {
         {tab === "Trips" && <><TripHero trip={activeTrip} onViewTrip={() => navigate(`/travel/trips/${activeTrip.id}`, { state: { backTo: `/travel/leads/${contactId}`, backLabel: "Back to Lead" } })} /><section className="travel-lead-trips"><h2>All trips</h2><div className="travel-lead-table-wrap"><table><thead><tr>{["Trip", "Destination", "Dates", "Type", "Value", "Paid amount", "Status"].map((name) => <th key={name}>{name}</th>)}</tr></thead><tbody>{displayTrips.length ? displayTrips.map((trip) => <tr key={trip.id}><td><strong>{trip.idLabel}</strong></td><td>{trip.destination || ""}</td><td>{formatDate(trip.startDate)} {trip.endDate ? `${ARROW} ${formatDate(trip.endDate)}` : ""}</td><td>{trip.type}</td><td>{formatMoney(trip.value, trip.currency)}</td><td>{formatMoney(trip.paidAmount, trip.currency)}</td><td>{formatStatus(trip.status)}</td></tr>) : <tr><td colSpan="7">No travel trips linked to this contact.</td></tr>}</tbody></table></div></section></>}
         {tab === "Quotes" && quotes.map((quote) => <div className="travel-lead-empty-row" key={quote.id}>Quote Q-{quote.id} — {formatMoney(quote.totalAmount, quote.currency)} — {formatStatus(quote.status)}</div>)}
         {tab === "Activity" && activities.map((activity) => <div className="travel-lead-empty-row" key={activity.id}>{activity.type}: {activity.description || ""}</div>)}
-        {tab === "Notes" && <div className="travel-lead-notes"><textarea value={note} onChange={(event) => setNote(event.target.value)} /><button className="travel-lead-button travel-lead-button-primary" type="button" onClick={addNote}>Add note</button></div>}
+        {tab === "Notes" && <section className="travel-lead-notes" aria-label="Notes">
+          <div className="travel-lead-note-composer">
+            <div className="travel-lead-note-input-wrap">
+              <StickyNote size={20} aria-hidden />
+              <input ref={noteInputRef} className={editingNoteId ? "is-editing" : ""} aria-label={editingNoteId ? "Edit note" : "Write a note"} value={note} onChange={(event) => setNote(event.target.value)} placeholder={editingNoteId ? "Editing this note..." : "Write a note about this contact..."} />
+            </div>
+            <button className="travel-lead-button travel-lead-button-primary travel-lead-add-note-button" type="button" onClick={addNote}>{editingNoteId ? "Save Note" : <><Plus size={19} aria-hidden /> Add Note</>}</button>
+            {editingNoteId && <button className="travel-lead-note-cancel" type="button" onClick={() => { setEditingNoteId(null); setNote(""); }} aria-label="Cancel note edit"><X size={18} /></button>}
+          </div>
+          <div className="travel-lead-note-list">
+            {notes.map((activity) => <article className="travel-lead-note-card" key={activity.id}>
+              <div className="travel-lead-note-avatar">{String(contact.name || "?").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</div>
+              <div className="travel-lead-note-content"><div className="travel-lead-note-meta"><strong>{activity.user?.name || "You"}</strong><span>•</span><time>{formatDateTime(activity.createdAt)}</time></div><div>{activity.description || ""}</div></div>
+              <div className="travel-lead-note-actions"><button type="button" aria-label={`Edit note ${activity.description || activity.id}`} onClick={() => editNote(activity)}><PenLine size={17} /></button><button type="button" aria-label={`Delete note ${activity.description || activity.id}`} onClick={() => deleteNote(activity)}><Trash2 size={17} /></button></div>
+            </article>)}
+            {!notes.length && <div className="travel-lead-empty-row">No notes yet.</div>}
+          </div>
+        </section>}
       </main></div>
     {editing && <EditContactModal contact={contact} customFieldDefs={[]} onClose={() => setEditing(false)} onSaved={(updated) => { setContact((current) => ({ ...current, ...updated })); setEditing(false); }} />}
   </div>;

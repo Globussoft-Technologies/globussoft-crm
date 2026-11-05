@@ -90,9 +90,11 @@ describe('<CustomerRegister /> organization autocomplete', () => {
   it('autofills and locks Travel Stall for TMC teacher registration', async () => {
     renderPage('/customer/register?next=%2Ftmc%2Fteacher-portal&tmcRole=TEACHER');
 
-    const orgInput = await screen.findByLabelText(/Organization/i);
-    expect(orgInput).toHaveValue('Travel Stall');
-    expect(orgInput).toBeDisabled();
+    const orgInput = await screen.findByLabelText(/Booking for/i);
+    await waitFor(() => {
+      expect(orgInput).toHaveValue('Travel Stall');
+      expect(orgInput).toBeDisabled();
+    });
     expect(screen.queryByText(/No matching organizations found/i)).not.toBeInTheDocument();
   });
 

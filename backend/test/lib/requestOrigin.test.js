@@ -1,4 +1,4 @@
-const { describe, expect, it, afterEach } = require("vitest");
+import { describe, expect, it, afterEach } from "vitest";
 const { getFrontendUrlFromRequest } = require("../../lib/requestOrigin");
 
 describe("getFrontendUrlFromRequest", () => {

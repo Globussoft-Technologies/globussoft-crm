@@ -1666,7 +1666,7 @@ class Component extends DCLogic {
     // must move on to the final Register action instead of showing Pay again.
     out.regPaymentCompleted = this.state.regPaymentCompleted || hostedPaymentReturn;
     out.regPaymentLinkId = this.state.regPaymentLinkId || hostedPaymentLinkId;
-    out.regPaymentButtonLabel = out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'));
+    out.regPaymentButtonLabel = out.regPaymentCompleted ? 'Register' : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'));
     out.regPaymentInstallmentLabel = paymentInstallmentLabel;
     out.regPaymentCompleteLabel = paymentCompleteLabel;
     out.regPaymentOrderEndpoint = paymentOrderEndpoint;
@@ -1697,8 +1697,9 @@ class Component extends DCLogic {
     out.regPaymentCompleteBorder = paymentMode === 'complete' ? 'var(--c-brand)' : 'var(--c-border)';
     out.regPaymentCompleteBackground = paymentMode === 'complete' ? 'color-mix(in srgb,var(--c-brand) 8%,var(--c-light))' : 'var(--c-panel)';
     out.regPaymentSelectedSummary = paymentMode === 'complete' ? 'Remaining instalments' : (selectedPaymentInstallment ? selectedPaymentInstallment.label : '');
-    out.regPrimaryLabel = out.regIsLast ? (out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'))) : 'Next';
+    out.regPrimaryLabel = out.regIsLast ? (out.regPaymentCompleted ? 'Register' : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'))) : 'Next';
     out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...'
+      : out.regPaymentCompleted ? 'Register'
       : out.regPaymentEnabled && !out.regPaymentCompleted && !paymentBalance ? 'Check balance & continue'
       : out.regPaymentEnabled && !out.regPaymentCompleted && paymentAmountMajor <= 0 ? 'Paid in full'
       : out.regPrimaryLabel;
@@ -1718,6 +1719,10 @@ class Component extends DCLogic {
         const fields = (steps[idx] && steps[idx].fields) || [];
         for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
         this.setState({ regError:'' });
+        if(out.regPaymentCompleted){
+          this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });
+          return;
+        }
         if(idx < steps.length - 1){
           this.setState(st => ({ regStep: st.regStep + 1, regError:'' }));
           if(idx + 1 === steps.length - 1 && paymentEnabled && paymentOrderEndpoint && paymentOrderEndpoint !== '#'){
@@ -1725,10 +1730,6 @@ class Component extends DCLogic {
               this.setState({ regPaymentError: (err && err.message) || 'Could not load payment balance.' });
             });
           }
-          return;
-        }
-        if(out.regPaymentCompleted){
-          this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });
           return;
         }
         if(!out.regPaymentEnabled){

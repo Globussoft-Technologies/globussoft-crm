@@ -51,6 +51,9 @@ test('a successful payment changes the final action to Register', () => {
         { index: 1, amountPaise: 1000000, paidPaise: 0, duePaise: 1000000 },
       ] } };
   let submission;
+  page.setState = (next) => {
+    page.state = { ...page.state, ...(typeof next === 'function' ? next(page.state) : next) };
+  };
   page.submitForm = (options) => { submission = options; };
 
   const view = page.renderVals();
@@ -332,7 +335,7 @@ describe('wanderlux render() integration', () => {
     expect(TEMPLATE_HTML).not.toContain('documentsUploaded');
     expect(TEMPLATE_HTML).not.toContain('regDocumentsUploaded');
     expect(TEMPLATE_HTML).toContain("Number.isFinite(Number(params.get('regStep')))");
-    expect(TEMPLATE_HTML).toContain("(reg.submitLabel || 'Register')");
+    expect(TEMPLATE_HTML).toContain("out.regPaymentCompleted ? 'Register'");
     expect(TEMPLATE_HTML).toContain('razorpay_payment_link_id');
     expect(TEMPLATE_HTML).toContain('hostedPaymentLink:true');
     expect(TEMPLATE_HTML).toContain("redirect.type === 'customer-registration'");

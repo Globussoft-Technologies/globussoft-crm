@@ -388,6 +388,19 @@ model Tenant {
   plotBrokers          PlotBroker[]
   billingPersons       BillingPerson[]
   customerPickups      CustomerPickup[]
+  payoutPartners       PayoutPartner[]
+  plotOwnerships       PlotOwnership[]
+  payoutCommissionRules PayoutCommissionRule[]
+  payoutSettings       PayoutSettings[]
+  bookingPricingSnapshots BookingPricingSnapshot[]
+  paymentReceipts      PaymentReceipt[]
+  distributionLines    DistributionLine[]
+  payouts              Payout[]
+  payoutLines          PayoutLine[]
+  payoutDocuments      PayoutDocument[]
+  idempotencyRecords    IdempotencyRecord[]
+  payoutClawbacks       PayoutClawback[]
+  payoutConfirmations   PayoutConfirmation[]
   kbCategories         KbCategory[]
   kbArticles           KbArticle[]
   slaPolicies          SlaPolicy[]
@@ -569,6 +582,11 @@ model Tenant {
   securityIncidents        SecurityIncident[]
   travelPurchaseOrders     TravelPurchaseOrder[]
   pendingTripRegistrations PendingTripRegistration[]
+
+  // Plot-level commission plans and rules used by the Finance → Commissions
+  // workspace. These are additive to the existing deposit payout ledger.
+  plotCommissionPlans PlotCommissionPlan[]
+  plotCommissionRules PlotCommissionRule[]
 }
 
 model User {
@@ -1854,6 +1872,9 @@ model Invoice {
   shippingAddress String? @db.Text
   paymentMode     String? // cash, upi, card, bank_transfer, other
   lineItemsJson   String? @db.Text // [{type, itemId, name, quantity, unitPrice, amount}]
+  notes           String? @db.Text
+  proofScreenshotUrl      String? @db.Text
+  proofScreenshotFilename String?
   currency        String  @default("USD")
   amountPaid      Float?
   balance         Float?
@@ -3584,12 +3605,61 @@ model PlotSite {
   tenantId              Int              @default(1)
   tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   brokers               PlotBroker[]
+  commissionPlan        PlotCommissionPlan?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
 
   @@index([tenantId, availability, isActive])
   @@index([tenantId, pickupLocationId])
   @@index([tenantId, referenceCode])
+}
+
+// Plot-level commission configuration for the Finance → Commissions page.
+// The plan freezes the plot's actual price and the collection target after
+// markup so later inventory price edits do not rewrite a commission record.
+model PlotCommissionPlan {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  plotSiteId        Int      @unique
+  basePricePaise    BigInt
+  markupType        String   @default("PERCENT") // PERCENT | FIXED
+  markupBp          Int      @default(0)
+  markupPaise       BigInt   @default(0)
+  targetPricePaise  BigInt
+  isActive          Boolean  @default(true)
+  createdByUserId   Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plotSite          PlotSite @relation(fields: [plotSiteId], references: [id], onDelete: Cascade)
+  rules             PlotCommissionRule[]
+
+  @@unique([tenantId, plotSiteId])
+  @@index([tenantId, isActive, updatedAt])
+}
+
+// One plan can contain any number of independent commission rules. Staff
+// assignments are stored as a JSON id list because a rule may target many
+// users or all active staff without introducing a second join table into the
+// existing generic CRM schema.
+model PlotCommissionRule {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  planId            Int
+  name              String
+  commissionBasis   String   @default("COLLECTED_AMOUNT") // COLLECTED_AMOUNT | MARKUP_AMOUNT | ACTUAL_AMOUNT
+  rateBp            Int      @default(0)
+  applyToAllStaff   Boolean  @default(false)
+  staffUserIdsJson  String?  @db.Text
+  isActive          Boolean  @default(true)
+  createdByUserId   Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan              PlotCommissionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, planId, isActive])
+  @@index([tenantId, createdAt])
 }
 
 model TransportPerson {
@@ -3732,6 +3802,299 @@ model PlotCommission {
   @@index([tenantId, plotBookingId, createdAt])
   @@index([tenantId, plotBrokerId, status])
   @@index([tenantId, status, createdAt])
+}
+
+// Deposit-distribution payout ledger. These models deliberately reference
+// existing plot records by tenant-scoped scalar IDs instead of adding new
+// required relations to PlotBooking/PlotSite/PlotBroker. That keeps the
+// legacy pickup/plot migration path additive and lets the feature remain
+// disabled for tenants that do not opt in.
+model PayoutPartner {
+  id                    Int      @id @default(autoincrement())
+  tenantId              Int
+  partnerType           String   // OWNER, CHANNEL_PARTNER, BROKER
+  name                  String
+  mobile                String?
+  email                 String?
+  pan                   String?
+  gstin                 String?
+  bankAccountCiphertext String?  @db.Text
+  bankAccountLast4      String?
+  ifsc                  String?
+  bankVerified          Boolean  @default(false)
+  status                String   @default("ACTIVE")
+  plotBrokerId          Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, partnerType, status])
+  @@index([tenantId, mobile])
+  @@index([tenantId, plotBrokerId])
+}
+
+model PlotOwnership {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int
+  plotSiteId      Int
+  payoutPartnerId Int
+  ownershipBp     Int
+  askedPricePaise BigInt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, plotSiteId, payoutPartnerId])
+  @@index([tenantId, plotSiteId])
+  @@index([tenantId, payoutPartnerId])
+}
+
+model PayoutCommissionRule {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int
+  payoutPartnerId Int
+  plotSiteId      Int?
+  ruleType        String   // PCT_BASE, PCT_LIST, PCT_FINAL, FLAT
+  rateBp          Int      @default(0)
+  flatPaise       BigInt   @default(0)
+  paidFrom        String   @default("COMPANY_MARGIN")
+  effectiveFrom   DateTime?
+  effectiveTo     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, payoutPartnerId, plotSiteId])
+  @@index([tenantId, effectiveFrom, effectiveTo])
+}
+
+model PayoutSettings {
+  id                         Int      @id @default(autoincrement())
+  tenantId                   Int
+  scopeKey                   String   @default("TENANT")
+  pricingModel               String   @default("MARKUP")
+  splitMethod                String   @default("PRO_RATA")
+  companyMarkupBp            Int      @default(0)
+  cpCapBp                    Int      @default(0)
+  floorMarginPaise           BigInt   @default(0)
+  companyCommissionBp        Int      @default(100)
+  holdTrigger                String   @default("AGREEMENT_SIGNED")
+  holdValue                  String   @default("AGREEMENT_SIGNED")
+  ownerRelease               String   @default("ON_VERIFY")
+  dualApprovalThresholdPaise BigInt   @default(5000000)
+  allowCustomSplit           Boolean  @default(false)
+  maxTotalCommissionBp       Int      @default(1000)
+  reraEnabled                Boolean  @default(false)
+  reraEscrowLabel            String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  tenant                     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, scopeKey])
+  @@index([tenantId, pricingModel, splitMethod])
+}
+
+model BookingPricingSnapshot {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  plotBookingId       Int
+  plotSiteId          Int
+  contactId           Int
+  ownerPartnerIdsJson String?  @db.Text
+  channelPartnerId    Int?
+  brokerPartnerId     Int?
+  basePricePaise      BigInt
+  listPricePaise      BigInt
+  finalPricePaise     BigInt
+  cpMarkupPaise       BigInt   @default(0)
+  brokerCommissionPaise BigInt @default(0)
+  cpCommissionPaise   BigInt   @default(0)
+  pricingModel        String
+  splitMethod         String
+  splitMode           String   @default("CONFIGURED")
+  customSplitJson     String?  @db.LongText
+  bookingStatus       String   @default("PENDING_SPLIT_APPROVAL")
+  holdTrigger         String
+  ownerRelease        String
+  rulesJson            String?  @db.Text
+  createdByUserId      Int
+  approvedByUserId     Int?
+  approvedAt           DateTime?
+  lockedAt             DateTime?
+  cancelledAt          DateTime?
+  cancellationReason   String?  @db.Text
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, plotBookingId])
+  @@index([tenantId, bookingStatus, updatedAt])
+  @@index([tenantId, plotSiteId, createdAt])
+}
+
+model PaymentReceipt {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  plotBookingId     Int
+  bookingSnapshotId Int?
+  amountPaise       BigInt
+  mode              String
+  referenceNo       String?
+  receivedOn        DateTime
+  installmentNumber Int?
+  proofDocumentId   Int?
+  status            String   @default("RECORDED")
+  receivedInAccount String?
+  createdByUserId   Int
+  verifiedByUserId  Int?
+  verifiedAt        DateTime?
+  paymentId         Int?
+  rejectionReason   String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, mode, referenceNo])
+  @@index([tenantId, plotBookingId, status, receivedOn])
+  @@index([tenantId, paymentId])
+}
+
+model DistributionLine {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  plotBookingId     Int
+  paymentReceiptId  Int
+  payoutPartnerId   Int?
+  partyType         String   // OWNER, CHANNEL_PARTNER, BROKER, COMPANY
+  kind              String   // OWNER_SHARE, CP_MARKUP, BROKER_COMMISSION, COMPANY_SHARE
+  grossPaise        BigInt
+  tdsBp             Int      @default(0)
+  tdsPaise          BigInt   @default(0)
+  gstBp             Int      @default(0)
+  gstPaise          BigInt   @default(0)
+  netPaise          BigInt
+  status            String   @default("PENDING_HOLD")
+  holdUntil         DateTime?
+  approvedByUserId  Int?
+  approvedAt        DateTime?
+  financeApprovedByUserId Int?
+  financeApprovedAt       DateTime?
+  managerApprovedByUserId Int?
+  managerApprovedAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, paymentReceiptId, partyType, payoutPartnerId, kind])
+  @@index([tenantId, plotBookingId, status, createdAt])
+  @@index([tenantId, payoutPartnerId, status])
+}
+
+model Payout {
+  id                    Int      @id @default(autoincrement())
+  tenantId              Int
+  payoutPartnerId       Int
+  grossNetPaise         BigInt   @default(0)
+  clawbackPaise         BigInt   @default(0)
+  totalNetPaise         BigInt
+  utr                   String
+  paidOn                DateTime
+  bankProofDocumentId   Int?
+  advicePdfDocumentId   Int?
+  status                String   @default("PAID")
+  acknowledgedAt        DateTime?
+  disputedAt            DateTime?
+  disputeReason         String?  @db.Text
+  createdByUserId       Int
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, utr])
+  @@index([tenantId, payoutPartnerId, paidOn])
+}
+
+model PayoutLine {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  payoutId          Int
+  distributionLineId Int     @unique
+  amountPaise       BigInt
+  createdAt         DateTime @default(now())
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, payoutId])
+  @@index([tenantId, distributionLineId])
+}
+
+model PayoutDocument {
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  kind           String
+  fileUrl        String
+  fileName       String?
+  mimeType       String?
+  sizeBytes      Int?
+  uploadedByUserId Int
+  createdAt      DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, kind, createdAt])
+}
+
+model IdempotencyRecord {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int
+  scope        String
+  key          String
+  statusCode   Int
+  responseJson String   @db.Text
+  createdAt    DateTime @default(now())
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, scope, key])
+  @@index([tenantId, createdAt])
+}
+
+model PayoutClawback {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int
+  plotBookingId      Int
+  payoutPartnerId    Int
+  distributionLineId Int?
+  originalPayoutId   Int?
+  recoveredPayoutId  Int?
+  amountPaise        BigInt
+  recoveredPaise     BigInt   @default(0)
+  status             String   @default("PENDING_RECOVERY")
+  reason             String?  @db.Text
+  recoveredAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, payoutPartnerId, status])
+  @@index([tenantId, plotBookingId, status])
+}
+
+model PayoutConfirmation {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int
+  payoutId        Int      @unique
+  payoutPartnerId Int
+  mobile          String
+  otpHash         String
+  publicTokenHash String?  @unique
+  status          String   @default("PENDING")
+  sentAt          DateTime?
+  expiresAt       DateTime
+  attempts        Int      @default(0)
+  verifiedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, payoutPartnerId, status])
 }
 
 model PlotInstallment {

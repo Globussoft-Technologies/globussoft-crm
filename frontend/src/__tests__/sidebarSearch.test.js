@@ -135,10 +135,13 @@ describe('filterSidebarPages', () => {
     expect(manager).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: '/whatsapp' }),
       expect.objectContaining({ path: '/lead-reports' }),
+      expect.objectContaining({ path: '/commissions', label: 'Commissions', aliases: expect.arrayContaining(['plot payouts']) }),
       expect.objectContaining({ path: '/field-config', label: 'Field Config' }),
       expect.objectContaining({ id: 'adsgpt', actionTarget: '[data-tour-feature="adsgpt"]' }),
       expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
     ]));
+    expect(manager.some((page) => page.path === '/commissions')).toBe(true);
+    expect(getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission: () => true }).some((page) => page.path === '/commissions')).toBe(false);
     expect(manager).not.toContainEqual(expect.objectContaining({ path: '/workflows' }));
     expect(genericRoleGuardProps('/workflows')).toEqual({});
   });

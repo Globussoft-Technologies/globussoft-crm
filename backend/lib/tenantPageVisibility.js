@@ -98,6 +98,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/invoices', label: 'Invoices', category: 'Finance' },
   { path: '/expenses', label: 'Expenses', category: 'Finance' },
   { path: '/payments', label: 'Payments', category: 'Finance' },
+  { path: '/commissions', label: 'Commissions', category: 'Finance' },
   { path: '/quotes', label: 'Quotes', category: 'Finance' },
 
   { path: '/reports', label: 'Reports', category: 'Analytics & Reports' },
@@ -184,6 +185,13 @@ const LEGACY_GENERIC_PAGE_CATALOG = [
     description: 'Invoice ledger + payment links',
     category: 'Finance',
     requiredPermissions: [{ module: 'invoices', action: 'read' }],
+  },
+  {
+    path: '/commissions',
+    label: 'Commissions',
+    description: 'Plot commissions, collection thresholds, and payout workflows',
+    category: 'Finance',
+    requiredPermissions: [],
   },
   {
     path: '/signatures',

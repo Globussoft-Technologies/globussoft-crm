@@ -2825,6 +2825,7 @@ function renderGenericNav({
         {/* <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" requiredPermission={{ module: "estimates", action: "read" }} /> */}
         <Link to="/expenses" icon={IndianRupee} label="Expenses" requiredPermission={{ module: "expenses", action: "read" }} />
         <Link to="/payments" icon={CreditCard} label="Payments" managerOnly requiredPermission={{ module: "payments", action: "read" }} />
+        <Link to="/commissions" icon={Coins} label="Commissions" managerOnly />
       </>)}
 
       {renderGroup("Analytics & Reports", <>

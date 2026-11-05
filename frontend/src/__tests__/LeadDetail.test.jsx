@@ -4,6 +4,8 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 
 const fetchApiMock = vi.fn();
 vi.mock("../utils/api", () => ({ fetchApi: (...args) => fetchApiMock(...args) }));
+const confirmMock = vi.fn(() => Promise.resolve(true));
+vi.mock("../utils/notify", () => ({ useNotify: () => ({ confirm: confirmMock }) }));
 vi.mock("../components/EditContactModal", () => ({ default: () => null }));
 
 import LeadDetail from "../pages/travel/LeadDetail";
@@ -173,11 +175,27 @@ describe("LeadDetail", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Notes" }));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Call tomorrow" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Note" }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/contacts/77/activities", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ type: "Note", description: "Call tomorrow" }),
     })));
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(screen.getByText("Note: Call tomorrow")).toBeTruthy();
+  });
+
+  it("loads an existing note into the highlighted edit composer", async () => {
+    const existing = { id: 21, type: "Note", description: "Existing school note", createdAt: "2026-11-03T10:24:00.000Z" };
+    fetchApiMock.mockImplementation(makeFetchImpl({ activities: [existing] }));
+    renderPage();
+    await screen.findByRole("heading", { name: "Sharada School Trust" });
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit note Existing school note" }));
+    const input = screen.getByRole("textbox", { name: "Edit note" });
+    expect(input).toHaveValue("Existing school note");
+    expect(input).toHaveClass("is-editing");
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(screen.getByRole("button", { name: "Save Note" })).toBeTruthy();
   });
 
   it("renders a contact-load error", async () => {

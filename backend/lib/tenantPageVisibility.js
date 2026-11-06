@@ -24,10 +24,8 @@ const REQUIRED_PAGE_PATHS = new Set(['/home', '/dashboard', '/wellness', '/trave
 
 // These Generic routes are mounted in the SPA and remain available by direct
 // URL, but the canonical Generic navigation catalog deliberately marks them
-// `sidebarHidden` (or omits them entirely). Organization Page Visibility is a
-// navigation control, so presenting these routes there would create switches
-// for links that can never appear in the sidebar. Keep this deny-list aligned
-// with GENERIC_SIDEBAR_PAGE_SPECS in frontend/src/utils/sidebarSearch.js.
+// `sidebarHidden` (or omits them entirely). They must not appear in either
+// Organization Page Visibility or the Generic Omnibar.
 const GENERIC_NON_SIDEBAR_PAGE_PATHS = new Set([
   '/converted-leads',
   '/callified-data',
@@ -65,6 +63,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/pipeline', label: 'Deals and Pipeline', category: 'Sales' },
   { path: '/deal-insights', label: 'Deal Insights', category: 'Sales' },
   { path: '/playbooks', label: 'Playbooks', category: 'Sales' },
+  { path: '/pipelines', label: 'Pipelines', category: 'Sales' },
 
   { path: '/leads', label: 'All Leads', category: 'Leads' },
   { path: '/lead-reports', label: 'Lead Reports', category: 'Leads' },

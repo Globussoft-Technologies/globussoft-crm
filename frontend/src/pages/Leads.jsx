@@ -230,13 +230,14 @@ const DEFAULT_CREATE_LEAD_VISIBLE_FIELDS = [
   "source",
 ];
 const loadCreateLeadFieldPrefs = (storageKey) => {
-  if (typeof window === "undefined") return { visible: null, required: null };
+  if (typeof window === "undefined") return { visible: null, required: null, quickAddSnapshot: null };
   try {
     const saved = JSON.parse(window.localStorage.getItem(storageKey) || "null");
     if (Array.isArray(saved)) {
       return {
         visible: saved.filter((key) => typeof key === "string"),
         required: null,
+        quickAddSnapshot: null,
       };
     }
     return {
@@ -246,9 +247,17 @@ const loadCreateLeadFieldPrefs = (storageKey) => {
       required: Array.isArray(saved?.required)
         ? saved.required.filter((key) => typeof key === "string")
         : null,
+      quickAddSnapshot:
+        saved?.quickAddSnapshot && typeof saved.quickAddSnapshot === "object"
+          ? Object.fromEntries(
+              Object.entries(saved.quickAddSnapshot).filter(
+                ([key, value]) => typeof key === "string" && typeof value === "boolean",
+              ),
+            )
+          : null,
     };
   } catch (_err) {
-    return { visible: null, required: null };
+    return { visible: null, required: null, quickAddSnapshot: null };
   }
 };
 const LEADS_COLUMN_MIN_WIDTH = 72;
@@ -2801,7 +2810,7 @@ const Leads = () => {
     useState(() =>
       isGeneric
         ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
-        : { visible: null, required: null },
+        : { visible: null, required: null, quickAddSnapshot: null },
     );
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
@@ -2816,7 +2825,7 @@ const Leads = () => {
     setSavedCreateLeadFieldPrefs(
       isGeneric
         ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
-        : { visible: null, required: null },
+        : { visible: null, required: null, quickAddSnapshot: null },
     );
   }, [createLeadFieldsStorageKey, isGeneric]);
 
@@ -2967,6 +2976,7 @@ const Leads = () => {
       { key: "company", configId: "company", label: "Company", required: false, lockedVisible: false, lockedRequired: false },
       { key: "title", configId: "title", label: "Job Title", required: false, lockedVisible: false, lockedRequired: false },
       { key: "phone", configId: "phone", label: "Phone", required: false, lockedVisible: false, lockedRequired: false },
+      { key: "website", configId: "website", label: "Website URL", required: false, lockedVisible: false, lockedRequired: false },
       { key: "source", configId: "source", label: "Lead Source", required: false, lockedVisible: false, lockedRequired: false },
       ...customFieldDefs.map((field) => ({
         key: `custom:${field.fieldKey}`,
@@ -2979,17 +2989,56 @@ const Leads = () => {
     ],
     [customFieldDefs, tenantFieldConfig],
   );
+  const tenantQuickAddSnapshot = useMemo(() => {
+    const overrides = tenantFieldConfig?.fieldOverrides || {};
+    return Object.fromEntries(
+      createLeadFieldCatalog.map((field) => [
+        field.key,
+        field.lockedVisible ||
+          Boolean(
+            overrides[field.configId]?.quickAdd ??
+              DEFAULT_CREATE_LEAD_VISIBLE_FIELDS.includes(field.key),
+          ),
+      ]),
+    );
+  }, [createLeadFieldCatalog, tenantFieldConfig]);
   const createLeadVisibleFieldKeys = useMemo(() => {
     const overrides = tenantFieldConfig?.fieldOverrides || {};
-    const saved = Array.isArray(savedCreateLeadFieldPrefs.visible)
+    const hasSavedVisibility = Array.isArray(savedCreateLeadFieldPrefs.visible);
+    const saved = hasSavedVisibility
       ? new Set(savedCreateLeadFieldPrefs.visible)
-      : new Set(createLeadFieldCatalog
-          .filter((field) => overrides[field.configId]?.quickAdd ?? DEFAULT_CREATE_LEAD_VISIBLE_FIELDS.includes(field.key))
-          .map((field) => field.key));
+      : new Set(
+          createLeadFieldCatalog
+            .filter((field) => tenantQuickAddSnapshot[field.key])
+            .map((field) => field.key),
+        );
+    if (hasSavedVisibility) {
+      const previousQuickAdd = savedCreateLeadFieldPrefs.quickAddSnapshot;
+      for (const field of createLeadFieldCatalog) {
+        const current = tenantQuickAddSnapshot[field.key];
+        if (previousQuickAdd && typeof previousQuickAdd[field.key] === "boolean") {
+          if (previousQuickAdd[field.key] === current) continue;
+          if (current) saved.add(field.key);
+          else saved.delete(field.key);
+        } else if (typeof overrides[field.configId]?.quickAdd === "boolean") {
+          // Migrate older personal preferences: explicit tenant Quick-add
+          // selections win, while fields without a tenant override keep the
+          // user's existing Customize-fields choice.
+          if (current) saved.add(field.key);
+          else saved.delete(field.key);
+        }
+      }
+    }
     return createLeadFieldCatalog
       .filter((field) => field.lockedVisible || saved.has(field.key))
       .map((field) => field.key);
-  }, [createLeadFieldCatalog, savedCreateLeadFieldPrefs.visible, tenantFieldConfig]);
+  }, [
+    createLeadFieldCatalog,
+    savedCreateLeadFieldPrefs.quickAddSnapshot,
+    savedCreateLeadFieldPrefs.visible,
+    tenantFieldConfig,
+    tenantQuickAddSnapshot,
+  ]);
   const createLeadVisibleFieldSet = useMemo(
     () => new Set(createLeadVisibleFieldKeys),
     [createLeadVisibleFieldKeys],
@@ -3303,6 +3352,7 @@ const Leads = () => {
     countryCode: isWellness || isTravel ? "+91" : "+1",
     source: isWellness ? "walk-in" : isTravel ? "tmc_registration" : "Organic",
     status: "Lead",
+    ...(isGeneric ? { website: "" } : {}),
     treatmentOfInterest: "",
     preferredLocationId: "",
     preferredPractitionerId: "",
@@ -4856,9 +4906,18 @@ const Leads = () => {
         ),
       ]),
     ];
+    const nextQuickAddSnapshot = isAdmin
+      ? Object.fromEntries(
+          createLeadFieldCatalog.map((field) => [
+            field.key,
+            visibleSet.has(field.key),
+          ]),
+        )
+      : tenantQuickAddSnapshot;
     const normalized = {
       visible: normalizedVisible,
       required: normalizedRequired,
+      quickAddSnapshot: nextQuickAddSnapshot,
     };
     setSavedCreateLeadFieldPrefs(normalized);
     try {
@@ -4870,6 +4929,38 @@ const Leads = () => {
       notify.error("Could not save Create Lead field preferences.");
     }
     setCreateLeadFieldsPickerOpen(false);
+
+    // Generic CRM admins edit the tenant-wide Quick-add selection from the
+    // same Customize-fields surface. Non-admin users retain the established
+    // personal-only preferences and never write organization settings.
+    if (isAdmin) {
+      const previousConfig = tenantFieldConfig;
+      const nextOverrides = { ...(tenantFieldConfig?.fieldOverrides || {}) };
+      for (const field of createLeadFieldCatalog) {
+        nextOverrides[field.configId] = {
+          ...(nextOverrides[field.configId] || {}),
+          quickAdd: visibleSet.has(field.key),
+        };
+      }
+      const nextConfig = {
+        ...(tenantFieldConfig || {}),
+        fieldOverrides: nextOverrides,
+      };
+      setTenantFieldConfig(nextConfig);
+      void fetchApi(
+        `/api/tenant-settings/${encodeURIComponent(GENERIC_FIELD_CONFIG_SETTING_KEY)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            value: JSON.stringify(nextConfig),
+            category: "fields",
+          }),
+        },
+      ).catch((error) => {
+        setTenantFieldConfig(previousConfig);
+        notify.error(error?.body?.error || error?.message || "Could not update tenant Quick-add fields.");
+      });
+    }
   };
 
   const createSeparateProductLead = async () => {
@@ -4900,6 +4991,7 @@ const Leads = () => {
         phone: "",
         source: "Organic",
         status: "Lead",
+        ...(isGeneric ? { website: "" } : {}),
         customFields: {},
       });
       setLeadDuplicate(null);
@@ -5098,7 +5190,7 @@ const Leads = () => {
       notify.error("Please select a valid country code");
       return;
     }
-    for (const field of isGeneric ? ["company", "title"] : []) {
+    for (const field of isGeneric ? ["company", "title", "website"] : []) {
       const value = String(newLead[field] || "");
       if (value && CONTROL_CHAR_RE.test(value)) {
         notify.error(`${field} contains invalid control characters`);
@@ -5140,6 +5232,7 @@ const Leads = () => {
         phone: "",
         source: "Organic",
         status: "Lead",
+        ...(isGeneric ? { website: "" } : {}),
         customFields: {},
       });
       // #892  close the drawer on successful create; the list refresh
@@ -13887,6 +13980,24 @@ const Leads = () => {
                     className="input-field"
                     value={newLead.title}
                     onChange={(e) => handleChange("title", e.target.value)}
+                  />
+                </div>
+              )}
+              {isGeneric && createLeadVisibleFieldSet.has("website") && (
+                <div>
+                  <label htmlFor="create-lead-website" style={createLeadFieldLabelStyle}>
+                    Website URL
+                    {createLeadRequiredFieldSet.has("website") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}
+                  </label>
+                  <input
+                    id="create-lead-website"
+                    type="url"
+                    placeholder="https://example.com"
+                    maxLength={200}
+                    required={createLeadRequiredFieldSet.has("website")}
+                    className="input-field"
+                    value={newLead.website || ""}
+                    onChange={(e) => handleChange("website", e.target.value)}
                   />
                 </div>
               )}

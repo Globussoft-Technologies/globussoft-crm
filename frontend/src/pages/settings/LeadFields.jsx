@@ -49,6 +49,16 @@ const FIELD_TYPE_OPTIONS = [
 const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
 const LEAD_FIELDS_PAGE_SIZE = 10;
 const FIELD_CONFIG_SETTING_KEY = "generic.fieldConfig";
+const QUICK_ADD_SYSTEM_FIELD_IDS = new Set([
+  "name",
+  "email",
+  "company",
+  "title",
+  "phone",
+  "website",
+  "source",
+]);
+const LOCKED_QUICK_ADD_FIELD_IDS = new Set(["name", "email"]);
 const COLLAPSED_GROUPS_STORAGE_PREFIX = "generic-field-config.collapsed-groups.v1";
 const DEFAULT_FIELD_CONFIG = {
   fieldOverrides: {},
@@ -1000,12 +1010,20 @@ export default function LeadFields({
 
   const persistFieldConfig = async (nextConfig, successMessage) => {
     const previous = fieldConfig;
-    setFieldConfig(nextConfig);
+    const normalizedNextConfig = {
+      ...nextConfig,
+      fieldOverrides: {
+        ...(nextConfig.fieldOverrides || {}),
+        name: { ...(nextConfig.fieldOverrides?.name || {}), quickAdd: true },
+        email: { ...(nextConfig.fieldOverrides?.email || {}), quickAdd: true },
+      },
+    };
+    setFieldConfig(normalizedNextConfig);
     setConfigSaving(true);
     try {
       await fetchApi(`/api/tenant-settings/${encodeURIComponent(FIELD_CONFIG_SETTING_KEY)}`, {
         method: "PUT",
-        body: JSON.stringify({ value: JSON.stringify(nextConfig), category: "fields" }),
+        body: JSON.stringify({ value: JSON.stringify(normalizedNextConfig), category: "fields" }),
       });
       if (successMessage) notify.success(successMessage);
     } catch (error) {
@@ -1087,6 +1105,8 @@ export default function LeadFields({
       const rowId = custom ? `custom-${field.id}` : `system-${field.id}`;
       const overrideId = custom ? `custom:${field.id}` : field.id;
       const configuredField = { ...field, ...(fieldConfig.fieldOverrides?.[overrideId] || {}) };
+      const quickAddEligible = !configuredField.readOnly && (custom || QUICK_ADD_SYSTEM_FIELD_IDS.has(field.id));
+      const quickAddLocked = quickAddEligible && !custom && LOCKED_QUICK_ADD_FIELD_IDS.has(field.id);
       const isExpanded = expandedConfigRow === rowId;
       const options = Array.isArray(configuredField.options) ? configuredField.options : [];
       const editTooltip = () => setConfigDialog({ kind: "tooltip", title: `Tooltip for ${configuredField.label}`, field, custom, overrideId, value: configuredField.tooltip || "" });
@@ -1130,7 +1150,12 @@ export default function LeadFields({
               <span>Required</span>
             </label>
             <label className="field-config-check">
-              <input type="checkbox" checked={Boolean(configuredField.quickAdd)} disabled={configSaving || configuredField.readOnly} onChange={() => updateFieldOverride(overrideId, { quickAdd: !configuredField.quickAdd })} />
+              <input
+                type="checkbox"
+                checked={quickAddLocked || (quickAddEligible && Boolean(configuredField.quickAdd))}
+                disabled={configSaving || !quickAddEligible || quickAddLocked}
+                onChange={() => updateFieldOverride(overrideId, { quickAdd: !configuredField.quickAdd })}
+              />
               <span>Quick-add</span>
             </label>
             <div className="field-config-meta">

@@ -162,6 +162,33 @@ describe('filterSidebarPages', () => {
     expect(hiddenPages.some((page) => page.path === '/field-config')).toBe(false);
   });
 
+  it('keeps permission pages aligned with the visible Generic sidebar and RBAC', () => {
+    const adminPages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+    });
+    const deniedPages = getGenericSidebarPages({
+      isAdmin: false,
+      isManager: false,
+      permissionsReady: true,
+      hasPermission: () => false,
+    });
+    const tenantHiddenPages = getGenericSidebarPages({
+      isAdmin: true,
+      isManager: true,
+      permissionsReady: true,
+      hasPermission: () => true,
+      hiddenPagePaths: ['/settings/roles'],
+    });
+
+    expect(adminPages.some((page) => page.path === '/settings/roles')).toBe(true);
+    expect(adminPages.some((page) => page.path === '/field-permissions')).toBe(false);
+    expect(deniedPages.some((page) => page.path === '/settings/roles')).toBe(false);
+    expect(tenantHiddenPages.some((page) => page.path === '/settings/roles')).toBe(false);
+  });
+
   it('keeps only travel sidebar-visible pages and rewrites their labels', () => {
     const pages = [
       { path: '/leads', label: 'Travel Leads', description: 'Lead pipeline across all travel sub-brands' },

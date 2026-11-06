@@ -270,6 +270,37 @@ describe("<LeadFields />", () => {
     expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
   });
 
+  it("locks fixed Quick-add fields and disables unsupported system fields", async () => {
+    authContextValue.tenant = { vertical: "generic" };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    const nameRow = screen.getByRole("button", { name: "Name" }).closest(".field-config-row");
+    const emailRow = screen.getByRole("button", { name: "Email" }).closest(".field-config-row");
+    const unsupportedRow = screen.getByRole("button", { name: "UTM Source" }).closest(".field-config-row");
+    const companyRow = screen.getByRole("button", { name: "Company" }).closest(".field-config-row");
+
+    for (const row of [nameRow, emailRow]) {
+      const quickAdd = within(row).getAllByRole("checkbox")[1];
+      expect(quickAdd).toBeChecked();
+      expect(quickAdd).toBeDisabled();
+    }
+    const unsupportedQuickAdd = within(unsupportedRow).getAllByRole("checkbox")[1];
+    expect(unsupportedQuickAdd).not.toBeChecked();
+    expect(unsupportedQuickAdd).toBeDisabled();
+
+    await user.click(within(companyRow).getAllByRole("checkbox")[1]);
+    await waitFor(() => expect(serverFieldConfig).not.toBeNull());
+    expect(serverFieldConfig.fieldOverrides.name.quickAdd).toBe(true);
+    expect(serverFieldConfig.fieldOverrides.email.quickAdd).toBe(true);
+  });
+
   it("restores collapsed generic groups after leaving and returning to Field Config", async () => {
     authContextValue.tenant = { id: 42, vertical: "generic" };
     const user = userEvent.setup();

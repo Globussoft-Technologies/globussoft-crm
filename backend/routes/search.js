@@ -11,8 +11,10 @@ const {
 } = require("../middleware/travelGuards");
 const {
   getTenantPageVisibility,
+  getTenantPageVisibilityCatalog,
   isPathHidden,
 } = require("../lib/tenantPageVisibility");
+const { getCatalogForVertical, getAccessiblePages } = require("../lib/pageCatalog");
 
 const router = express.Router();
 
@@ -64,6 +66,7 @@ const TRAVEL_SEARCH_ORDER = [{ updatedAt: "desc" }, { id: "desc" }];
 const SEARCH_ENTITY_PAGE_PATHS = {
   contacts: ["/contacts"],
   deals: ["/pipeline"],
+  leads: ["/leads"],
   sequences: ["/sequences"],
   campaigns: ["/marketing"],
   invoices: ["/invoices", "/wellness/invoices"],
@@ -77,6 +80,49 @@ const SEARCH_ENTITY_PAGE_PATHS = {
   whatsappMessages: ["/wellness/whatsapp", "/whatsapp"],
   patients: ["/wellness/patients"],
   kbArticles: ["/knowledge-base"],
+  campaignTemplates: ["/marketing"],
+  webhookWorkflows: ["/marketing"],
+  quotes: ["/quotes"],
+  expenses: ["/expenses"],
+  payments: ["/payments"],
+  webForms: ["/forms"],
+  landingPages: ["/landing-sites"],
+  signatureRequests: ["/signatures"],
+  documentTemplates: ["/document-templates"],
+  pipelines: ["/pipelines"],
+  playbooks: ["/playbooks"],
+  abTests: ["/ab-tests"],
+  chatbots: ["/chatbots"],
+  slaPolicies: ["/sla"],
+  liveChatSessions: ["/live-chat"],
+  webVisitors: ["/web-visitors"],
+  socialPosts: ["/social"],
+  staffMembers: ["/staff"],
+  salesTeams: ["/sales-teams"],
+  territories: ["/territories"],
+  pickupLocations: ["/pickup-inventory", "/pickup-plot-inventory"],
+  plotSites: ["/pickup-plot-inventory"],
+  transportPersons: ["/transport-persons"],
+  plotBrokers: ["/plot-brokers"],
+  billingPersons: ["/billing-persons"],
+  customerPickups: ["/pickup-customers"],
+  auditLogs: ["/audit-log"],
+  commissionProfiles: ["/commission-profiles"],
+  commissionData: ["/commission-data"],
+  customEntities: ["/objects"],
+  genericWhatsAppMessages: ["/whatsapp"],
+  calendarEvents: ["/calendar-sync"],
+  leadFieldDefinitions: ["/field-config"],
+  dealInsights: ["/deal-insights"],
+  leadReportLeads: ["/lead-reports"],
+  reportSchedules: ["/reports"],
+  agentReportAgents: ["/agent-reports"],
+  tenantSettings: ["/settings"],
+  notificationPreferences: ["/notification-settings"],
+  revenueGoals: ["/revenue-goals"],
+  workAssignmentStaff: ["/pickup-work-assignments"],
+  transportWork: ["/transport-workspace"],
+  siteVisitWork: ["/sales-workspace"],
   itineraries: ["/travel/itineraries"],
   travelQuotes: ["/travel/quotes-admin", "/travel/quotes/builder"],
   travelInvoices: ["/travel/invoices-admin"],
@@ -84,10 +130,56 @@ const SEARCH_ENTITY_PAGE_PATHS = {
   tmcTrips: ["/travel/trips"],
 };
 
-function isSearchEntityAvailable(entityKey, visibility) {
+function isSearchEntityAvailable(entityKey, visibility, accessiblePaths = null) {
   const paths = SEARCH_ENTITY_PAGE_PATHS[entityKey];
   if (!paths || paths.length === 0) return true;
+  if (accessiblePaths instanceof Set) {
+    return paths.some((path) => accessiblePaths.has(path));
+  }
   return paths.some((path) => !isPathHidden(path, visibility?.hiddenPaths));
+}
+
+// Search-only permission bridge for Generic sidebar routes that intentionally
+// remain outside pageCatalog. Keeping this local prevents Omnibar coverage
+// from changing role editors, landing-page choices, or another vertical.
+const GENERIC_SEARCH_ONLY_PATH_PERMISSIONS = {
+  "/signatures": "signatures.read",
+  "/commission-profiles": "staff.manage",
+  "/sales-teams": "staff.manage",
+  "/pickup-inventory": "settings.manage",
+  "/pickup-plot-inventory": "settings.manage",
+  "/transport-persons": "settings.manage",
+  "/plot-brokers": "settings.manage",
+  "/billing-persons": "settings.manage",
+  "/reports": "reports.read",
+  "/revenue-goals": "reports.write",
+  "/pickup-work-assignments": "staff.manage",
+};
+
+async function getGenericAccessibleSearchPaths(req, visibility) {
+  const permissions = req.user.isOwner
+    ? null
+    : await getUserPermissions(req.user.tenantId, req.user.userId, "generic");
+  const pages = req.user.isOwner
+    ? getCatalogForVertical("generic")
+    : getAccessiblePages(permissions, { isOwner: false, vertical: "generic" });
+  const sidebarPaths = new Set(
+    getTenantPageVisibilityCatalog("generic").map((page) => page.path),
+  );
+  const accessiblePaths = new Set(pages
+    .filter((page) => sidebarPaths.has(page.path))
+    .filter((page) => !isPathHidden(page.path, visibility?.hiddenPaths))
+    .map((page) => page.path));
+  for (const [path, permission] of Object.entries(GENERIC_SEARCH_ONLY_PATH_PERMISSIONS)) {
+    if (
+      sidebarPaths.has(path)
+      && !isPathHidden(path, visibility?.hiddenPaths)
+      && (req.user.isOwner || permissions?.has(permission))
+    ) {
+      accessiblePaths.add(path);
+    }
+  }
+  return accessiblePaths;
 }
 
 function normalizeSearchText(value) {
@@ -97,6 +189,17 @@ function normalizeSearchText(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function parseStoredIdList(value) {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.map(Number).filter(Number.isInteger))];
+  } catch {
+    return [];
+  }
 }
 
 function travelRelevance(values, query) {
@@ -354,12 +457,33 @@ router.get("/", verifyToken, async (req, res) => {
 
     const canAccessConditional = await canAccessConditionalEntities(req);
     const visibility = await getTenantPageVisibility(tenantId, { vertical });
+    const genericAccessiblePaths = vertical === "generic"
+      ? await getGenericAccessibleSearchPaths(req, visibility)
+      : null;
     const searchFilter = searchContains(query);
+    const normalizedQuery = normalizeSearchText(query);
 
     // Always use all searchable entities and filter visibility per vertical + access level
     const queryPromises = {};
+    const assignmentCustomerIds = new Map();
+
+    const getAssignedCustomerIds = async (scope) => {
+      if (assignmentCustomerIds.has(scope)) return assignmentCustomerIds.get(scope);
+      const assignmentModel = scope === "transport" ? prisma.transportPerson : prisma.plotBroker;
+      const row = await assignmentModel.findFirst({
+        where: { tenantId, userId: req.user.userId },
+        select: { customerIdsJson: true },
+      });
+      const ids = parseStoredIdList(row?.customerIdsJson);
+      assignmentCustomerIds.set(scope, ids);
+      return ids;
+    };
 
     for (const entity of SEARCHABLE_ENTITIES) {
+      if (Array.isArray(entity.verticals) && !entity.verticals.includes(vertical)) {
+        queryPromises[entity.key] = Promise.resolve([]);
+        continue;
+      }
       // Check if entity is visible for this vertical
       const isWellnessOnly = entity.key === 'whatsappMessages' || entity.key === 'patients';
       if (isWellnessOnly && vertical !== 'wellness') {
@@ -373,7 +497,7 @@ router.get("/", verifyToken, async (req, res) => {
         continue;
       }
 
-      if (!isSearchEntityAvailable(entity.key, visibility)) {
+      if (!isSearchEntityAvailable(entity.key, visibility, genericAccessiblePaths)) {
         queryPromises[entity.key] = Promise.resolve([]);
         continue;
       }
@@ -386,26 +510,63 @@ router.get("/", verifyToken, async (req, res) => {
       }
 
 
+      const matchesQueryAlias = (entity.queryAliases || []).some((alias) => {
+        const normalizedAlias = normalizeSearchText(alias);
+        return normalizedAlias.includes(normalizedQuery) || normalizedQuery.includes(normalizedAlias);
+      });
       const searchFields = entity.searchFields.map(field => ({
         [field]: searchFilter,
       }));
+      const relationSearchFields = Object.entries(entity.relationSearchFields || {})
+        .flatMap(([relation, fields]) => fields.map((field) => ({
+          [relation]: { is: { [field]: searchFilter } },
+        })));
+      const searchClauses = matchesQueryAlias
+        ? []
+        : [...searchFields, ...relationSearchFields];
 
       const where = { tenantId };
+      if (vertical === "generic" && entity.genericFixedWhere) {
+        Object.assign(where, entity.genericFixedWhere);
+      }
+      if (entity.fixedWhere) Object.assign(where, entity.fixedWhere);
+      if (entity.scopeToUser) where.userId = req.user.userId;
+      if (entity.assignmentScope) {
+        const customerIds = await getAssignedCustomerIds(entity.assignmentScope);
+        if (customerIds.length === 0) {
+          queryPromises[entity.key] = Promise.resolve([]);
+          continue;
+        }
+        where.contactId = { in: customerIds };
+      }
+      if (entity.webhookOnly) {
+        where.AND = [{
+          OR: [
+            { actionType: "send_webhook" },
+            { targetState: { contains: '"send_webhook"' } },
+          ],
+        }];
+      }
       if (entity.model === 'patient') {
         where.deletedAt = null;
       }
 
       // Add search field conditions
-      if (searchFields.length > 1) {
-        where.OR = searchFields;
-      } else if (searchFields.length === 1) {
-        Object.assign(where, searchFields[0]);
+      if (searchClauses.length > 1) {
+        where.OR = searchClauses;
+      } else if (searchClauses.length === 1) {
+        Object.assign(where, searchClauses[0]);
       }
 
       const select = {};
       entity.selectFields.forEach(field => {
         select[field] = true;
       });
+      for (const [relation, fields] of Object.entries(entity.selectRelations || {})) {
+        select[relation] = {
+          select: Object.fromEntries(fields.map((field) => [field, true])),
+        };
+      }
 
       const findManyOptions = {
         where,

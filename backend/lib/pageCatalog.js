@@ -445,6 +445,14 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'quotes', action: 'read' }],
   },
   {
+    path: '/invoices',
+    label: 'Invoices',
+    description: 'Invoice ledger + payment links',
+    category: 'Finance',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
+  },
+  {
     path: '/wellness/pos',
     label: 'Point of Sale',
     description: 'Cash-and-carry sales + shifts',

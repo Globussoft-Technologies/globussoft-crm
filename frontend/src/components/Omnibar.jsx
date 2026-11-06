@@ -58,6 +58,11 @@ import {
   ScrollText,
   Shield,
   Settings,
+  BarChart3,
+  Target,
+  Bell,
+  Truck,
+  Handshake,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { AuthContext } from "../App";
@@ -156,6 +161,20 @@ const TRAVEL_PAGE_ICONS = {
 //   - Escape clears + blurs.
 //   - `omnibar:open` window event still focuses the input (back-compat
 //     for any legacy caller).
+
+const genericDataSection = ({ key, label, icon, color, to, primary, secondary }) => ({
+  key,
+  label,
+  icon,
+  color,
+  bg: `${color}1f`,
+  border: `${color}40`,
+  render: (row) => ({
+    primary: primary(row),
+    secondary: secondary(row),
+    to,
+  }),
+});
 
 const ENTITY_SECTIONS = [
   // Each section: results key on the API response, plural label rendered as
@@ -302,6 +321,7 @@ const ENTITY_SECTIONS = [
   {
     key: "campaigns",
     label: "Campaigns",
+    genericLabel: "Sequences",
     icon: Mail,
     color: "#8b5cf6",
     bg: "rgba(139, 92, 246, 0.12)",
@@ -309,7 +329,7 @@ const ENTITY_SECTIONS = [
     render: (c) => ({
       primary: c.name,
       secondary: `${c.type || ""} • ${c.status || ""}`.trim(),
-      to: "/marketing",
+      to: `/marketing?tab=${c.channel === "SMS" ? "sms" : c.channel === "WHATSAPP" ? "whatsapp" : "campaigns"}`,
     }),
   },
   {
@@ -447,7 +467,202 @@ const ENTITY_SECTIONS = [
       to: "/knowledge-base",
     }),
   },
+  {
+    key: "campaignTemplates",
+    label: "Templates",
+    icon: LayoutTemplate,
+    color: "#8b5cf6",
+    bg: "rgba(139, 92, 246, 0.12)",
+    border: "rgba(139, 92, 246, 0.25)",
+    render: (template) => ({
+      primary: template.name,
+      secondary: template.type || "Template",
+      to: "/marketing?tab=templates",
+    }),
+  },
+  {
+    key: "webhookWorkflows",
+    label: "Webhooks",
+    icon: Code,
+    color: "#10b981",
+    bg: "rgba(16, 185, 129, 0.12)",
+    border: "rgba(16, 185, 129, 0.25)",
+    render: (workflow) => ({
+      primary: workflow.name,
+      secondary: workflow.isActive ? "Active webhook workflow" : "Inactive webhook workflow",
+      badge: workflow.isActive ? "Active" : "Inactive",
+      badgeOk: Boolean(workflow.isActive),
+      to: "/marketing?tab=webhooks",
+    }),
+  },
+  {
+    key: "leads", label: "Leads", icon: UserPlus,
+    color: "#6366f1", bg: "rgba(99, 102, 241, 0.12)", border: "rgba(99, 102, 241, 0.25)",
+    render: (lead) => ({
+      primary: lead.name,
+      secondary: [lead.company, lead.email].filter(Boolean).join(" • "),
+      to: `/leads/${lead.id}`,
+    }),
+  },
+  {
+    key: "quotes", label: "Quotes", icon: FileText,
+    color: "#0ea5e9", bg: "rgba(14, 165, 233, 0.12)", border: "rgba(14, 165, 233, 0.25)",
+    render: (quote) => ({
+      primary: quote.title || quote.quoteNumber,
+      secondary: [quote.quoteNumber, quote.customerName, quote.status].filter(Boolean).join(" • "),
+      to: "/quotes",
+    }),
+  },
+  {
+    key: "expenses", label: "Expenses", icon: IndianRupee,
+    color: "#f97316", bg: "rgba(249, 115, 22, 0.12)", border: "rgba(249, 115, 22, 0.25)",
+    render: (expense) => ({
+      primary: expense.title,
+      secondary: [expense.category, expense.status, formatMoney(expense.amount, { currency: expense.currency })].filter(Boolean).join(" • "),
+      to: "/expenses",
+    }),
+  },
+  {
+    key: "payments", label: "Payments", icon: CreditCard,
+    color: "#10b981", bg: "rgba(16, 185, 129, 0.12)", border: "rgba(16, 185, 129, 0.25)",
+    render: (payment) => ({
+      primary: payment.description || `${payment.gateway || "Payment"} #${payment.id}`,
+      secondary: [payment.status, formatMoney(payment.amount, { currency: payment.currency })].filter(Boolean).join(" • "),
+      to: "/payments",
+    }),
+  },
+  {
+    key: "webForms", label: "Web Forms", icon: Code,
+    color: "#8b5cf6", bg: "rgba(139, 92, 246, 0.12)", border: "rgba(139, 92, 246, 0.25)",
+    render: (form) => ({ primary: form.name, secondary: form.slug, to: "/forms" }),
+  },
+  {
+    key: "landingPages", label: "Landing Sites", icon: PanelTop,
+    color: "#ec4899", bg: "rgba(236, 72, 153, 0.12)", border: "rgba(236, 72, 153, 0.25)",
+    render: (page) => ({ primary: page.title, secondary: [page.slug, page.status].filter(Boolean).join(" • "), to: "/landing-sites" }),
+  },
+  {
+    key: "signatureRequests", label: "E-Signatures", icon: FileText,
+    color: "#06b6d4", bg: "rgba(6, 182, 212, 0.12)", border: "rgba(6, 182, 212, 0.25)",
+    render: (request) => ({ primary: request.documentName || request.signerName, secondary: [request.signerName, request.status].filter(Boolean).join(" • "), to: "/signatures" }),
+  },
+  {
+    key: "documentTemplates", label: "Document Templates", icon: LayoutTemplate,
+    color: "#a855f7", bg: "rgba(168, 85, 247, 0.12)", border: "rgba(168, 85, 247, 0.25)",
+    render: (template) => ({ primary: template.name, secondary: template.type, to: "/document-templates" }),
+  },
+  {
+    key: "pipelines", label: "Pipelines", icon: Briefcase,
+    color: "#14b8a6", bg: "rgba(20, 184, 166, 0.12)", border: "rgba(20, 184, 166, 0.25)",
+    render: (pipeline) => ({ primary: pipeline.name, secondary: pipeline.isDefault ? "Default pipeline" : "Pipeline", to: "/pipelines" }),
+  },
+  {
+    key: "playbooks", label: "Playbooks", icon: BookOpen,
+    color: "#f59e0b", bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.25)",
+    render: (playbook) => ({ primary: playbook.name, secondary: [playbook.stage, playbook.isActive ? "Active" : "Inactive"].filter(Boolean).join(" • "), to: "/playbooks" }),
+  },
+  {
+    key: "abTests", label: "A/B Tests", icon: FileSpreadsheet,
+    color: "#ec4899", bg: "rgba(236, 72, 153, 0.12)", border: "rgba(236, 72, 153, 0.25)",
+    render: (test) => ({ primary: test.name, secondary: [test.status, test.winningVariant && `Winner ${test.winningVariant}`].filter(Boolean).join(" • "), to: "/ab-tests" }),
+  },
+  {
+    key: "chatbots", label: "Chatbots", icon: MessageSquare,
+    color: "#6366f1", bg: "rgba(99, 102, 241, 0.12)", border: "rgba(99, 102, 241, 0.25)",
+    render: (chatbot) => ({ primary: chatbot.name, secondary: chatbot.isActive ? "Active" : "Inactive", to: "/chatbots" }),
+  },
+  {
+    key: "slaPolicies", label: "SLA Policies", icon: Ticket,
+    color: "#ef4444", bg: "rgba(239, 68, 68, 0.12)", border: "rgba(239, 68, 68, 0.25)",
+    render: (policy) => ({ primary: policy.name, secondary: [policy.priority, policy.isActive ? "Active" : "Inactive"].filter(Boolean).join(" • "), to: "/sla" }),
+  },
+  genericDataSection({ key: "liveChatSessions", label: "Live Chat", icon: MessageSquare, color: "#06b6d4", to: "/live-chat", primary: (row) => row.visitorName || row.visitorEmail || row.visitorId, secondary: (row) => [row.visitorEmail, row.status].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "webVisitors", label: "Web Visitors", icon: User, color: "#14b8a6", to: "/web-visitors", primary: (row) => [row.city, row.country].filter(Boolean).join(", ") || row.sessionId, secondary: (row) => [row.ipAddress, row.identified ? "Identified" : "Anonymous"].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "socialPosts", label: "Social Media", icon: MessageSquare, color: "#3b82f6", to: "/social", primary: (row) => row.content, secondary: (row) => [row.platform, row.status].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "staffMembers", label: "Staff", icon: UsersRound, color: "#6366f1", to: "/staff", primary: (row) => row.name, secondary: (row) => [row.jobTitle, row.email, row.role].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "salesTeams", label: "Sales Teams", icon: Users, color: "#8b5cf6", to: "/sales-teams", primary: (row) => row.name, secondary: () => "Sales team" }),
+  genericDataSection({ key: "territories", label: "Territories", icon: Map, color: "#10b981", to: "/territories", primary: (row) => row.name, secondary: () => "Sales territory" }),
+  genericDataSection({ key: "pickupLocations", label: "Pickup Locations", icon: Map, color: "#f59e0b", to: "/pickup-inventory", primary: (row) => row.name, secondary: (row) => [row.address, row.isActive ? "Active" : "Inactive"].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "plotSites", label: "Plot Inventory", icon: Map, color: "#84cc16", to: "/pickup-plot-inventory", primary: (row) => row.name, secondary: (row) => [row.plotNumber, row.block, row.availability].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "transportPersons", label: "Transport Persons", icon: User, color: "#0ea5e9", to: "/transport-persons", primary: (row) => row.name, secondary: (row) => [row.phone, row.vehicleNumber].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "plotBrokers", label: "Sales Executives", icon: User, color: "#a855f7", to: "/plot-brokers", primary: (row) => row.name, secondary: (row) => [row.agency, row.email, row.phone].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "billingPersons", label: "Billing Persons", icon: User, color: "#f97316", to: "/billing-persons", primary: (row) => row.name, secondary: (row) => [row.email, row.phone].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "customerPickups", label: "Customer Workflows", icon: Map, color: "#14b8a6", to: "/pickup-customers", primary: (row) => row.pickupAddress, secondary: (row) => row.sourceTranscriptId || "Customer pickup" }),
+  genericDataSection({ key: "auditLogs", label: "Audit Log", icon: ScrollText, color: "#64748b", to: "/audit-log", primary: (row) => `${row.action} ${row.entity}`, secondary: (row) => row.entityId ? `Record #${row.entityId}` : "Audit event" }),
+  genericDataSection({ key: "commissionProfiles", label: "Commission Profiles", icon: Award, color: "#f59e0b", to: "/commission-profiles", primary: (row) => row.name, secondary: (row) => [row.basis, row.period, row.isActive ? "Active" : "Inactive"].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "commissionData", label: "Commission Data", icon: Award, color: "#f59e0b", to: "/commission-data", primary: (row) => row.employeeName, secondary: () => "Commission record" }),
+  genericDataSection({ key: "customEntities", label: "App Builder", icon: Code, color: "#8b5cf6", to: "/objects", primary: (row) => row.name, secondary: (row) => row.description || "Custom object" }),
+  genericDataSection({ key: "genericWhatsAppMessages", label: "WhatsApp", icon: MessageSquare, color: "#25d366", to: "/whatsapp", primary: (row) => row.body || row.to || row.from || "WhatsApp message", secondary: (row) => [row.direction, row.status, row.from || row.to].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "calendarEvents", label: "Calendar", icon: CalendarDays, color: "#3b82f6", to: "/calendar-sync", primary: (row) => row.title, secondary: (row) => [row.location, row.provider].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "leadFieldDefinitions", label: "Lead Fields", icon: FileText, color: "#6366f1", to: "/field-config", primary: (row) => row.label, secondary: (row) => [row.fieldKey, row.fieldType].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "dealInsights", label: "Deal Insights", icon: Brain, color: "#8b5cf6", to: "/deal-insights", primary: (row) => row.insight, secondary: (row) => [row.type, row.severity, row.isResolved ? "Resolved" : "Open"].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "leadReportLeads", label: "Lead Reports", icon: BarChart3, color: "#6366f1", to: "/lead-reports", primary: (row) => row.name, secondary: (row) => [row.company, row.email, row.status].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "reportSchedules", label: "Reports", icon: FileSpreadsheet, color: "#0ea5e9", to: "/reports", primary: (row) => row.name, secondary: (row) => [row.reportType, row.frequency, row.format, row.enabled ? "Enabled" : "Disabled"].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "agentReportAgents", label: "Agent Reports", icon: UsersRound, color: "#f59e0b", to: "/agent-reports", primary: (row) => row.name, secondary: (row) => [row.jobTitle, row.email, row.role].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "tenantSettings", label: "Settings", icon: Settings, color: "#64748b", to: "/settings", primary: (row) => row.key, secondary: (row) => row.category || "Tenant setting" }),
+  genericDataSection({ key: "notificationPreferences", label: "Notification Settings", icon: Bell, color: "#f43f5e", to: "/notification-settings", primary: () => "Notification preferences", secondary: (row) => [row.timezone, row.quietHoursStart && row.quietHoursEnd ? `Quiet hours ${row.quietHoursStart}–${row.quietHoursEnd}` : null].filter(Boolean).join(" • ") || "Personal alerts and channels" }),
+  genericDataSection({ key: "revenueGoals", label: "Revenue Goals", icon: Target, color: "#10b981", to: "/revenue-goals", primary: (row) => row.user?.name || `Staff #${row.userId}`, secondary: (row) => [row.period, row.scope, `${Number(row.achievedAmount || 0).toLocaleString()} / ${Number(row.targetAmount || 0).toLocaleString()}`].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "workAssignmentStaff", label: "Assign Staff Work", icon: ClipboardCheck, color: "#2563eb", to: "/pickup-work-assignments", primary: (row) => row.name, secondary: (row) => [row.jobTitle, row.email, row.phone].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "transportWork", label: "Transport Work", icon: Truck, color: "#2563eb", to: "/transport-workspace", primary: (row) => row.contact?.name || row.pickupAddress, secondary: (row) => [row.contact?.phone, row.pickupAddress].filter(Boolean).join(" • ") }),
+  genericDataSection({ key: "siteVisitWork", label: "Site Visits", icon: Handshake, color: "#7c3aed", to: "/sales-workspace", primary: (row) => row.contact?.name || row.pickupAddress, secondary: (row) => [row.contact?.company, row.contact?.phone, row.pickupAddress].filter(Boolean).join(" • ") }),
 ];
+
+const GENERIC_RESULT_PAGE_PATHS = {
+  contacts: "/contacts",
+  deals: "/pipeline",
+  leads: "/leads",
+  sequences: "/sequences",
+  campaigns: "/marketing",
+  campaignTemplates: "/marketing",
+  webhookWorkflows: "/marketing",
+  quotes: "/quotes",
+  expenses: "/expenses",
+  payments: "/payments",
+  webForms: "/forms",
+  landingPages: "/landing-sites",
+  signatureRequests: "/signatures",
+  documentTemplates: "/document-templates",
+  pipelines: "/pipelines",
+  playbooks: "/playbooks",
+  abTests: "/ab-tests",
+  chatbots: "/chatbots",
+  slaPolicies: "/sla",
+  liveChatSessions: "/live-chat",
+  webVisitors: "/web-visitors",
+  socialPosts: "/social",
+  staffMembers: "/staff",
+  salesTeams: "/sales-teams",
+  territories: "/territories",
+  pickupLocations: "/pickup-inventory",
+  plotSites: "/pickup-plot-inventory",
+  transportPersons: "/transport-persons",
+  plotBrokers: "/plot-brokers",
+  billingPersons: "/billing-persons",
+  customerPickups: "/pickup-customers",
+  auditLogs: "/audit-log",
+  commissionProfiles: "/commission-profiles",
+  commissionData: "/commission-data",
+  customEntities: "/objects",
+  genericWhatsAppMessages: "/whatsapp",
+  calendarEvents: "/calendar-sync",
+  leadFieldDefinitions: "/field-config",
+  dealInsights: "/deal-insights",
+  leadReportLeads: "/lead-reports",
+  reportSchedules: "/reports",
+  agentReportAgents: "/agent-reports",
+  tenantSettings: "/settings",
+  notificationPreferences: "/notification-settings",
+  revenueGoals: "/revenue-goals",
+  workAssignmentStaff: "/pickup-work-assignments",
+  transportWork: "/transport-workspace",
+  siteVisitWork: "/sales-workspace",
+  invoices: "/invoices",
+  tickets: "/tickets",
+  tasks: "/tasks",
+  projects: "/projects",
+  contracts: "/contracts",
+  emails: "/inbox",
+};
 
 function isWithinOneEdit(left, right) {
   if (Math.abs(left.length - right.length) > 1) return false;
@@ -755,7 +970,10 @@ export default function Omnibar() {
         tenant?.vertical === "generic"
           ? pagesIndex.filter((page) => {
               const spec = getGenericAccessByPath(page?.path);
-              return !spec || canUseGenericSidebarPage(spec, {
+              // Generic search is a projection of the shared sidebar catalog.
+              // A backend page that has no sidebar spec is a routable/catalog
+              // page, not a visible navigation destination, so fail closed.
+              return Boolean(spec) && canUseGenericSidebarPage(spec, {
                 isAdmin,
                 isManager,
                 permissionsReady,
@@ -808,26 +1026,46 @@ export default function Omnibar() {
   // Merge pages (client) + backend results into a single resultSet that the
   // section table iterates over.
   const resultSet = useMemo(
-    () => ({
-      pages: pageMatches,
-      ...results,
-      // Generic CRM intentionally hides the Estimates page. Suppress record
-      // matches too, otherwise backend search could still expose the page.
-      ...((tenant?.vertical === "generic" || !tenant?.vertical) ? { estimates: [] } : {}),
-    }),
-    [pageMatches, results, tenant?.vertical],
+    () => {
+      const merged = { pages: pageMatches, ...results };
+      if (tenant?.vertical === "generic") {
+        const visiblePaths = new Set(visiblePagesIndex.map((page) => page.path));
+        for (const [key, path] of Object.entries(GENERIC_RESULT_PAGE_PATHS)) {
+          if (!visiblePaths.has(path)) merged[key] = [];
+        }
+      }
+      // Generic CRM intentionally hides the Estimates page.
+      if (tenant?.vertical === "generic" || !tenant?.vertical) merged.estimates = [];
+      return merged;
+    },
+    [pageMatches, results, tenant?.vertical, visiblePagesIndex],
   );
 
+  // Generic CRM prioritizes lead matches because lead lookup is the primary
+  // day-to-day search flow. Keep Pages first when present, then Leads, while
+  // preserving the established ordering for every other result group and for
+  // the Wellness and Travel verticals.
+  const orderedEntitySections = useMemo(() => {
+    if (tenant?.vertical !== "generic") return ENTITY_SECTIONS;
+    const pagesSection = ENTITY_SECTIONS.find((section) => section.key === "pages");
+    const leadsSection = ENTITY_SECTIONS.find((section) => section.key === "leads");
+    return [
+      pagesSection,
+      leadsSection,
+      ...ENTITY_SECTIONS.filter((section) => section.key !== "pages" && section.key !== "leads"),
+    ].filter(Boolean);
+  }, [tenant?.vertical]);
+
   const totalResultCount = useMemo(() => {
-    return ENTITY_SECTIONS.reduce(
+    return orderedEntitySections.reduce(
       (sum, s) => sum + (resultSet[s.key]?.length || 0),
       0,
     );
-  }, [resultSet]);
+  }, [orderedEntitySections, resultSet]);
 
   const flatResults = useMemo(() => {
     const rows = [];
-    ENTITY_SECTIONS.forEach((section) => {
+    orderedEntitySections.forEach((section) => {
       (resultSet[section.key] || []).forEach((row, idx) => {
         rows.push({
           section,
@@ -839,7 +1077,7 @@ export default function Omnibar() {
       });
     });
     return rows;
-  }, [resultSet]);
+  }, [orderedEntitySections, resultSet]);
 
   const handleRowClick = useCallback(
     ({ to, actionTarget } = {}) => {
@@ -1072,7 +1310,7 @@ export default function Omnibar() {
 
           {totalResultCount > 0 && (
             <div style={{ padding: "0.4rem" }}>
-              {ENTITY_SECTIONS.map((section) => {
+              {orderedEntitySections.map((section) => {
                 const rows = resultSet[section.key] || [];
                 if (rows.length === 0) return null;
                 const Icon = section.icon;
@@ -1089,7 +1327,7 @@ export default function Omnibar() {
                         fontWeight: 700,
                       }}
                     >
-                      {section.label}
+                      {tenant?.vertical === "generic" && section.genericLabel ? section.genericLabel : section.label}
                     </h4>
                     {rows.map((row, idx) => {
                       const optionKey = resultKey(section.key, row, idx);

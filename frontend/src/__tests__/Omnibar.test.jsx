@@ -322,6 +322,67 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.queryByRole('option', { name: /Clients/i })).not.toBeInTheDocument();
   });
 
+  it('does not expose a catalog page that is absent from the Generic sidebar', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) {
+        return Promise.resolve({
+          pages: [{ path: '/shared-inbox', label: 'Shared Inbox', description: 'Team collaborative inbox' }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'shared inbox' } });
+
+    expect(
+      await screen.findByText(/No algorithmic matches located for/i, {}, { timeout: 2000 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Shared Inbox/i })).not.toBeInTheDocument();
+  });
+
+  it('shows Marketing Sequences but suppresses the separate hidden sequence builder in Generic CRM', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) {
+        return Promise.resolve({
+          pages: [
+            { path: '/marketing', label: 'Marketing Sequences' },
+            { path: '/sequences', label: 'Sequences' },
+          ],
+        });
+      }
+      return Promise.resolve({
+        campaigns: [
+          { id: 51, name: 'Holiday nurture sequence', channel: 'EMAIL', status: 'DRAFT' },
+        ],
+        sequences: [
+          { id: 52, name: 'Hidden visual sequence', status: 'ACTIVE' },
+        ],
+      });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'sequence' } });
+
+    expect(await screen.findByRole('option', { name: /Holiday nurture sequence/i }, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Marketing Sequences/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Hidden visual sequence/i })).not.toBeInTheDocument();
+  });
+
   it('launches searchable external integrations through their canonical sidebar action', async () => {
     fetchApi.mockImplementation((url) => {
       if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
@@ -722,6 +783,106 @@ describe('Omnibar (inline top-bar)', () => {
     });
     expect(screen.queryAllByText(/acme/i, { selector: 'mark' })).toHaveLength(0);
     expect(screen.getByText('PAID')).toBeInTheDocument();
+  });
+
+  it('renders generic template and webhook record results', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      return Promise.resolve({
+        campaignTemplates: [
+          { id: 401, name: 'Welcome email', channel: 'EMAIL' },
+        ],
+        webhookWorkflows: [
+          { id: 402, name: 'Push new leads', isActive: true },
+        ],
+      });
+    });
+    await renderOmnibarAndWaitForPages();
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'webhook' } });
+
+    expect(await screen.findByRole('option', { name: /Welcome email/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Push new leads/i })).toBeInTheDocument();
+    expect(screen.getByText('Templates')).toBeInTheDocument();
+    expect(screen.getByText('Webhooks')).toBeInTheDocument();
+  });
+
+  it('groups matching Generic CRM data beneath its visible sidebar pages', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) return Promise.resolve({ pages: [] });
+      return Promise.resolve({
+        leads: [{ id: 501, name: 'Titan Lead', email: 'titan@example.test', status: 'Lead' }],
+        pipelines: [{ id: 502, name: 'Retail Pipeline', isDefault: false }],
+        playbooks: [{ id: 503, name: 'Qualification Playbook', stage: 'Qualification', isActive: true }],
+        tasks: [{ id: 504, title: 'Initial qualification', status: 'PENDING', priority: 'HIGH' }],
+        genericWhatsAppMessages: [{ id: 505, body: 'Initial WhatsApp reply', direction: 'INBOUND', status: 'READ' }],
+      });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'ti' } });
+
+    expect(await screen.findByRole('option', { name: /Titan Lead/i }, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Retail Pipeline/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Qualification Playbook/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Initial qualification/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Initial WhatsApp reply/i })).toBeInTheDocument();
+    expect(screen.getByText('Leads', { selector: 'h4' })).toBeInTheDocument();
+    expect(screen.getByText('Pipelines', { selector: 'h4' })).toBeInTheDocument();
+    expect(screen.getByText('Playbooks', { selector: 'h4' })).toBeInTheDocument();
+    expect(screen.getByText('Tasks', { selector: 'h4' })).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp', { selector: 'h4' })).toBeInTheDocument();
+    const sectionLabels = screen.getAllByRole('heading', { level: 4 })
+      .map((heading) => heading.textContent);
+    expect(sectionLabels.indexOf('Leads')).toBeLessThan(sectionLabels.indexOf('Pipelines'));
+    expect(sectionLabels.indexOf('Leads')).toBeLessThan(sectionLabels.indexOf('Tasks'));
+    expect(sectionLabels.indexOf('Leads')).toBeLessThan(sectionLabels.indexOf('WhatsApp'));
+  });
+
+  it('renders the requested Generic CRM report, settings, goal, and work-page data without role records', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) return Promise.resolve({ pages: [] });
+      return Promise.resolve({
+        dealInsights: [{ id: 601, insight: 'Timeline risk for Titan', type: 'RISK', severity: 'WARNING', isResolved: false }],
+        leadReportLeads: [{ id: 602, name: 'Titan Lead', company: 'Titan Co', email: 'lead@titan.test', status: 'Lead' }],
+        reportSchedules: [{ id: 603, name: 'Titan pipeline report', reportType: 'pipeline', frequency: 'weekly', format: 'PDF', enabled: true }],
+        agentReportAgents: [{ id: 604, name: 'Tina Agent', jobTitle: 'Sales Agent', email: 'tina@titan.test', role: 'USER' }],
+        tenantSettings: [{ id: 605, key: 'titan.notifications', category: 'configuration' }],
+        notificationPreferences: [{ id: 606, timezone: 'Asia/Kolkata', quietHoursStart: '22:00', quietHoursEnd: '07:00' }],
+        revenueGoals: [{ id: 607, userId: 7, user: { name: 'Tina Revenue' }, period: 'MONTHLY', scope: 'ALL', achievedAmount: 25, targetAmount: 100 }],
+        workAssignmentStaff: [{ id: 608, name: 'Tim Worker', jobTitle: 'Driver', phone: '+91-100' }],
+        transportWork: [{ id: 609, pickupAddress: 'Titan Street', contact: { name: 'Titan Rider', phone: '+91-101' } }],
+        siteVisitWork: [{ id: 610, pickupAddress: 'Titan Site', contact: { name: 'Titan Visitor', company: 'Titan Co', phone: '+91-102' } }],
+        roles: [{ id: 611, name: 'Titan Custom Role' }],
+      });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'titan' } });
+
+    for (const name of [
+      'Timeline risk for Titan', 'Titan Lead', 'Titan pipeline report', 'Tina Agent',
+      'titan.notifications', 'Notification preferences', 'Tina Revenue', 'Tim Worker',
+      'Titan Rider', 'Titan Visitor',
+    ]) {
+      expect(await screen.findByRole('option', { name: new RegExp(name, 'i') }, { timeout: 2000 })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('option', { name: /Titan Custom Role/i })).not.toBeInTheDocument();
   });
 
   it('clicking a contact result row navigates to /contacts/:id', async () => {

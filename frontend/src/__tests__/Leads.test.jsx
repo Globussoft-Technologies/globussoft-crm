@@ -153,6 +153,65 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(Boolean(within(dialog).queryByPlaceholderText(/Phone \(/))).toBe(quickAdd);
   });
 
+  it('shows and submits Website URL when Generic CRM Quick-add enables it', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'company', 'title', 'phone'],
+      required: ['name', 'email'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { website: { quickAdd: true } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    const websiteInput = within(dialog).getByLabelText('Website URL');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Website URL' })).toBeChecked();
+    fireEvent.click(within(picker).getByRole('button', { name: 'Cancel' }));
+    fireEvent.change(within(dialog).getByPlaceholderText('Full Name'), { target: { value: 'Priya Sharma' } });
+    fireEvent.change(within(dialog).getByPlaceholderText('Email Address'), { target: { value: 'priya@example.com' } });
+    fireEvent.change(websiteInput, { target: { value: 'https://example.com' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add Lead/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts' && opts?.method === 'POST');
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall[1].body)).toMatchObject({
+        name: 'Priya Sharma',
+        email: 'priya@example.com',
+        website: 'https://example.com',
+      });
+    });
+  });
+
+  it('removes Website URL from Generic customization when Quick-add is turned off', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'company', 'website'],
+      required: ['name'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { website: { quickAdd: false } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).queryByLabelText('Website URL')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Website URL' })).not.toBeChecked();
+  });
+
   it('keeps tenant-required email required despite saved personal preferences', async () => {
     window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
       visible: ['name', 'email', 'company'], required: ['name'],
@@ -558,6 +617,18 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     fireEvent.click(within(picker).getByRole('checkbox', { name: 'Require Priority' }));
     fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
 
+    await waitFor(() => {
+      const settingsPut = fetchApiMock.mock.calls.find(([url, options]) =>
+        url === '/api/tenant-settings/generic.fieldConfig' && options?.method === 'PUT');
+      expect(settingsPut).toBeDefined();
+      const request = JSON.parse(settingsPut[1].body);
+      const config = JSON.parse(request.value);
+      expect(config.fieldOverrides.company.quickAdd).toBe(true);
+      expect(config.fieldOverrides.title.quickAdd).toBe(true);
+      expect(config.fieldOverrides['custom:201'].quickAdd).toBe(true);
+      expect(config.fieldOverrides.website.quickAdd).toBe(false);
+    });
+
     expect(within(dialog).getByPlaceholderText('Company')).toBeRequired();
     expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
     expect(within(dialog).getByPlaceholderText('Priority level *')).toBeRequired();
@@ -617,6 +688,30 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
         { name: 'Customize Create Lead fields' },
       ),
     ).toBeNull();
+  });
+
+  it('keeps non-admin Generic customization personal without changing tenant Quick-add', async () => {
+    renderLeads({
+      user: { userId: 7, role: 'MANAGER' },
+      tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+      loading: false,
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    fireEvent.click(within(dialog).getByRole('button', {
+      name: 'Customize Create Lead fields',
+    }));
+    const picker = await screen.findByRole('dialog', {
+      name: 'Customize Create Lead fields',
+    });
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Website URL' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
+
+    expect(within(dialog).getByLabelText('Website URL')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url, options]) =>
+      url === '/api/tenant-settings/generic.fieldConfig' && options?.method === 'PUT')).toBe(false);
   });
 });
 

@@ -3,10 +3,9 @@
  * Search route — backend coverage push (G-4 from docs/E2E_GAPS.md).
  *
  * routes/search.js (65 lines, smoke-only before this spec). Single endpoint
- * GET /api/search?q=<term> drives a Promise.all fan-out across 10 prisma
- * findMany calls (contact, deal, invoice, ticket, task, project, contract,
- * estimate, emailMessage, kbArticle), all tenant-scoped via req.user.tenantId
- * and capped at take:5 each. Used by the Omnibar / global command palette.
+ * GET /api/search?q=<term> drives a Promise.all fan-out across the searchable
+ * entity catalog. Queries are tenant-scoped via req.user.tenantId and capped
+ * at take:5 each. Used by the Omnibar / global command palette.
  *
  * Endpoint covered:
  *   GET /api/search?q=<term>
@@ -19,20 +18,16 @@
  *   - Doc card says "type=contacts|deals|leads|all" is a query param. REAL
  *     route ignores any `type` param and always returns all 10 result
  *     buckets. Spec covers this — extra ?type= is a no-op, not an error.
- *   - Doc card says response shape is `{ contacts: [], deals: [], leads: [] }`.
- *     REAL shape is `{ contacts, deals, invoices, tickets, tasks, projects,
- *     contracts, estimates, emails, kbArticles, totalResults }` with NO
- *     `leads` key (leads live inside `contacts` rows where status=Lead in
- *     this codebase — see prisma/seed.js). Spec asserts the real shape.
+ *   - Generic CRM search separates Contact rows by lifecycle: status=Lead
+ *     rows appear in `leads`; other statuses appear in `contacts`.
  *
  * Cross-tenant isolation pattern:
  *   1. As genericAdmin, create a Contact with a unique RUN_TAG name in
  *      tenant 1.
- *   2. As genericAdmin, search for that RUN_TAG and confirm the contact is
- *      returned.
+ *   2. As genericAdmin, search for that RUN_TAG and confirm the seeded lead is
+ *      returned in the `leads` bucket.
  *   3. As wellnessAdmin (tenant 2), search for the same RUN_TAG and confirm
- *      contacts/deals/invoices/tickets/tasks/projects/contracts/estimates/
- *      emails/kbArticles all come back empty — no leak.
+ *      every checked result bucket comes back empty — no leak.
  *   4. afterAll deletes the seeded contact.
  *
  * SQL-injection probe: `' OR 1=1 --` is sent as the q value. Prisma uses
@@ -152,9 +147,9 @@ test.describe('Search API — response shape', () => {
     const res = await get(request, token, `/api/search?q=ZZZ_${RUN_TAG}_NOMATCH`);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    // 10 buckets + totalResults — see routes/search.js response shape.
+    // Representative core buckets + totalResults — see routes/search.js.
     for (const key of [
-      'contacts', 'deals', 'invoices', 'tickets', 'tasks',
+      'contacts', 'leads', 'deals', 'invoices', 'tickets', 'tasks',
       'projects', 'contracts', 'estimates', 'emails', 'kbArticles',
     ]) {
       expect(Array.isArray(body[key]), `bucket ${key} must be an array`).toBe(true);
@@ -197,8 +192,8 @@ test.describe('Search API — response shape', () => {
     const res = await get(request, token, `/api/search?q=ZZZ_${RUN_TAG}&type=contacts`);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    // All 10 buckets still present, even though type=contacts was sent.
-    for (const key of ['contacts', 'deals', 'invoices', 'tickets', 'tasks', 'projects', 'contracts', 'estimates', 'emails', 'kbArticles']) {
+    // All representative buckets remain present even when type=contacts is sent.
+    for (const key of ['contacts', 'leads', 'deals', 'invoices', 'tickets', 'tasks', 'projects', 'contracts', 'estimates', 'emails', 'kbArticles']) {
       expect(Array.isArray(body[key])).toBe(true);
     }
   });
@@ -207,19 +202,19 @@ test.describe('Search API — response shape', () => {
 // ── Happy path — finds seeded row ──────────────────────────────────
 
 test.describe('Search API — happy path', () => {
-  test('finds seeded RUN_TAG contact in generic tenant', async ({ request }) => {
+  test('finds seeded RUN_TAG lead in generic tenant', async ({ request }) => {
     const seeded = await seedTaggedContact(request, 'happy');
     const { token } = await getGenericAdmin(request);
     const res = await get(request, token, `/api/search?q=${encodeURIComponent(RUN_TAG)}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(Array.isArray(body.contacts)).toBe(true);
-    const ids = body.contacts.map((c) => c.id);
+    expect(Array.isArray(body.leads)).toBe(true);
+    const ids = body.leads.map((lead) => lead.id);
     expect(ids).toContain(seeded.id);
     expect(body.totalResults).toBeGreaterThanOrEqual(1);
   });
 
-  test('contacts bucket is capped at 5 rows (route uses take:5)', async ({ request }) => {
+  test('leads bucket is capped at 5 rows (route uses take:5)', async ({ request }) => {
     // Route applies take:5 per bucket. If many rows match, only the first 5
     // come back. With one seeded row + nothing else matching the unique
     // RUN_TAG, this just asserts the cap rather than forcing >5 seeds.
@@ -227,7 +222,7 @@ test.describe('Search API — happy path', () => {
     const res = await get(request, token, `/api/search?q=${encodeURIComponent(RUN_TAG)}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.contacts.length).toBeLessThanOrEqual(5);
+    expect(body.leads.length).toBeLessThanOrEqual(5);
   });
 });
 
@@ -251,7 +246,7 @@ test.describe('Search API — cross-tenant isolation', () => {
     const body = await res.json();
     // Every bucket must come back empty for the wellness admin — the
     // RUN_TAG row only exists in the generic tenant.
-    for (const key of ['contacts', 'deals', 'invoices', 'tickets', 'tasks', 'projects', 'contracts', 'estimates', 'emails', 'kbArticles']) {
+    for (const key of ['contacts', 'leads', 'deals', 'invoices', 'tickets', 'tasks', 'projects', 'contracts', 'estimates', 'emails', 'kbArticles']) {
       expect(body[key].length, `bucket ${key} must be empty for wellness admin`).toBe(0);
     }
     expect(body.totalResults).toBe(0);
@@ -273,7 +268,7 @@ test.describe('Search API — SQL injection probe', () => {
     // any row WERE returned, the per-bucket take:5 cap would still apply,
     // so the route can never dump the table. We assert no full-table dump
     // by checking each bucket is bounded by the take:5 cap.
-    for (const key of ['contacts', 'deals', 'invoices', 'tickets', 'tasks', 'projects', 'contracts', 'estimates', 'emails', 'kbArticles']) {
+    for (const key of ['contacts', 'leads', 'deals', 'invoices', 'tickets', 'tasks', 'projects', 'contracts', 'estimates', 'emails', 'kbArticles']) {
       expect(Array.isArray(body[key])).toBe(true);
       expect(body[key].length).toBeLessThanOrEqual(5);
     }

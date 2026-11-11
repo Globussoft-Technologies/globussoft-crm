@@ -481,6 +481,26 @@ describe('<TripDetail /> — Overview tab', () => {
     // case in DOM).
     expect(screen.getByText('Not set yet')).toBeInTheDocument();
   });
+
+  it('shows itinerary family context without merging registration ownership', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        familyParent: {
+          id: 90,
+          tripCode: 'TMC-AND-2026-PRIMARY',
+          destination: 'Andaman',
+        },
+        familyVariants: [],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+
+    expect(screen.getByText('Trip family')).toBeInTheDocument();
+    expect(screen.getByText(/Teacher assignments, landing pages, parent links/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Primary trip: TMC-AND-2026-PRIMARY/i }))
+      .toHaveAttribute('href', '/travel/trips/90');
+  });
 });
 
 describe('<TripDetail /> — Participants tab', () => {

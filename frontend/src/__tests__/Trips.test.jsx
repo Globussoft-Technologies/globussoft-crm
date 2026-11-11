@@ -342,14 +342,14 @@ describe('<Trips /> — load + render lifecycle', () => {
     const bottomScroll = document.querySelector('.top-scroll-sync__bottom');
 
     expect(table.style.width).toBe('100%');
-    expect(table.style.minWidth).toBe('1640px');
+    expect(table.style.minWidth).toBe('1900px');
     expect(table.style.tableLayout).toBe('fixed');
     expect(topScroll).toBeTruthy();
     expect(bottomScroll).toBeTruthy();
     expect(topScroll.style.overflowX).toBe('scroll');
     expect(topScroll.style.overflowY).toBe('hidden');
     expect(bottomScroll.style.overflowX).toBe('scroll');
-    expect(table.querySelectorAll('col').length).toBe(11);
+    expect(table.querySelectorAll('col').length).toBe(12);
   });
 
   it('renders empty-state copy when trips=[]', async () => {
@@ -424,6 +424,53 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
     expect(link2).toHaveAttribute('href', '/travel/trips/102');
   });
 
+  it('renders trip-family membership in a dedicated column instead of a trip-code subtitle', async () => {
+    const primary = makeTrip({
+      id: 201,
+      tripCode: 'TMC-GROUP-PRIMARY',
+      _count: { participants: 5, documentRequirements: 1, familyVariants: 1 },
+    });
+    const variant = makeTrip({
+      id: 202,
+      tripCode: 'TMC-GROUP-VARIANT',
+      _count: { participants: 3, documentRequirements: 1, familyVariants: 0 },
+      familyParent: {
+        id: primary.id,
+        tripCode: primary.tripCode,
+        destination: primary.destination,
+      },
+    });
+    installFetchMock({
+      list: { trips: [variant, primary], total: 2, limit: 20, offset: 0 },
+    });
+    renderPage();
+
+    await screen.findByText(primary.tripCode);
+    const primaryRow = screen
+      .getAllByRole('link', { name: primary.tripCode })
+      .map((link) => link.closest('tr'))
+      .find((row) => row?.querySelector('td')?.textContent.includes(primary.tripCode));
+    expect(within(primaryRow).getByText('Primary')).toBeInTheDocument();
+    expect(within(primaryRow).getByText('1 school variant')).toBeInTheDocument();
+    expect(within(primaryRow).getByRole('link', { name: primary.tripCode }))
+      .toHaveAttribute('href', `/travel/trips/${primary.id}`);
+
+    fireEvent.click(within(primaryRow).getByRole('button', {
+      name: `Expand variants for ${primary.tripCode}`,
+    }));
+    const variantRow = (await screen.findByText(variant.tripCode)).closest('tr');
+    expect(within(variantRow).getByText('Variant')).toBeInTheDocument();
+    expect(within(variantRow).getByText(primary.tripCode)).toBeInTheDocument();
+    expect(within(variantRow.querySelector('td')).queryByText(/Variant of/i)).not.toBeInTheDocument();
+
+    fireEvent.click(within(primaryRow).getByRole('button', {
+      name: `Collapse variants for ${primary.tripCode}`,
+    }));
+    await waitFor(() => {
+      expect(screen.queryByText(variant.tripCode)).not.toBeInTheDocument();
+    });
+  });
+
   it('renders the date range with a dash separator', async () => {
     renderPage();
     const row1 = (await screen.findByText('TMC-AND-2026-MUMBAI-G7')).closest('tr');
@@ -491,6 +538,26 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
       'href',
       '/travel/trips/999',
     );
+  });
+
+  it('keeps the row action as a validated delete instead of opening trip-family grouping', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.queryByRole('button', { name: /Group trip/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete trip TMC-AND-2026-MUMBAI-G7',
+    }));
+
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Delete trip',
+        confirmText: 'Delete trip',
+        destructive: true,
+        message: expect.stringContaining('landing page'),
+      }));
+    });
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/trips/101', { method: 'DELETE' });
   });
 });
 
@@ -589,6 +656,39 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     expect(notifySuccess).toHaveBeenCalledWith(
       expect.stringMatching(/Trip created/i),
     );
+  });
+
+  it('creates a school variant with the source trip as its family parent', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('button', {
+      name: /Create school variant for TMC-AND-2026-MUMBAI-G7/i,
+    }));
+    const heading = await screen.findByRole('heading', { name: /Create school variant/i });
+    const form = heading.closest('form');
+    expect(within(form).getByText(/Itinerary copied from/i)).toBeInTheDocument();
+
+    const inputs = within(form).getAllByRole('textbox');
+    fireEvent.change(inputs[0], { target: { value: 'TMC-AND-2026-DPS-G7' } });
+    fireEvent.change(inputs[2], { target: { value: 'DPS North' } });
+    const dateInputs = form.querySelectorAll('input[type="date"]');
+    fireEvent.change(dateInputs[0], { target: { value: '2026-12-01' } });
+    fireEvent.change(dateInputs[1], { target: { value: '2026-12-08' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Create variant/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/travel/trips' && options?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body)).toMatchObject({
+        tripCode: 'TMC-AND-2026-DPS-G7',
+        familyParentId: 101,
+      });
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/School trip variant/i));
   });
 });
 

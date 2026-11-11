@@ -156,7 +156,9 @@ describe("TmcTeacherPortal", () => {
     expect(screen.getByText("Singapore")).toBeInTheDocument();
     expect(screen.getByText("Readiness report #12")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Parent portal links" })).not.toBeInTheDocument();
-    expect(document.querySelector('[data-tmc-teacher-sidebar="true"]')).toHaveStyle({
+    const sidebar = document.querySelector('[data-tmc-teacher-sidebar="true"]');
+    expect(sidebar).not.toHaveTextContent("aisha@example.com");
+    expect(sidebar).toHaveStyle({
       position: "fixed",
       top: "0px",
       left: "0px",

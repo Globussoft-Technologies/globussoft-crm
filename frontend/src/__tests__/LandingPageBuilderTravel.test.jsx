@@ -156,6 +156,49 @@ describe('<LandingPageBuilder /> — travel additions', () => {
     expect(screen.getByLabelText(/Brand color hex value/i)).toBeInTheDocument();
   });
 
+  it('exposes page-wide and per-section typography controls without removing raw JSON editing', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/99' && method === 'GET') {
+        return Promise.resolve({
+          ...TRAVEL_PAGE,
+          templateType: 'wanderlux-v1',
+          content: JSON.stringify({}),
+        });
+      }
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve([]);
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.queryByText(/^Loading\.\.\./)).not.toBeInTheDocument());
+
+    const pageFont = screen.getByLabelText(/Font style for entire page/i);
+    const heroFont = screen.getByLabelText(/Hero font style/i);
+    expect(pageFont).toBeInTheDocument();
+    expect(heroFont).toBeInTheDocument();
+    expect(pageFont).toHaveValue('__theme_default__');
+    expect(heroFont).toHaveTextContent(/Original typography/i);
+    expect(screen.getByRole('heading', { name: /Raw JSON \(advanced\)/i })).toBeInTheDocument();
+
+    await user.selectOptions(pageFont, 'classic');
+    expect(heroFont).toHaveValue('__current__');
+    expect(heroFont).toHaveTextContent(/Classic serif/i);
+    expect(heroFont).toHaveTextContent(/Use page default/i);
+    await user.selectOptions(heroFont, 'friendly');
+    await user.click(screen.getByRole('button', { name: /^Save/ }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/landing-pages/99',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const saveCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/landing-pages/99' && opts?.method === 'PUT');
+    const savedContent = JSON.parse(JSON.parse(saveCall[1].body).content);
+    expect(savedContent.theme.fontStyleId).toBe('classic');
+    expect(savedContent.theme.sectionFontStyles.hero).toBe('friendly');
+  });
+
   it('toggles the confirmed-trip template chooser and applies a selected template', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
@@ -195,6 +238,33 @@ describe('<LandingPageBuilder /> — travel additions', () => {
 
     await user.click(toggle);
     await waitFor(() => expect(screen.queryByRole('button', { name: /Sakura Indigo/i })).not.toBeInTheDocument());
+  });
+
+  it('keeps theme choice cards fluid so descriptions stay inside their cards', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/99' && method === 'GET') {
+        return Promise.resolve({
+          ...TRAVEL_PAGE,
+          templateType: 'wanderlux-v1',
+          content: JSON.stringify({}),
+        });
+      }
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve([]);
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.queryByText(/^Loading\.\.\./)).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Change template/i }));
+
+    const card = screen.getByRole('button', { name: /Alpine Azure/i });
+    expect(card).toHaveClass('wanderlux-theme-choice-card');
+    expect(card.style.width).toBe('100%');
+    expect(card.style.minWidth).toBe('0px');
+    expect(card.style.whiteSpace).toBe('normal');
+    expect(card.style.overflowWrap).toBe('anywhere');
   });
 
   it('lists all 8 travel block buttons in the palette', async () => {

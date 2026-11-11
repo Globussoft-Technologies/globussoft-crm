@@ -6,6 +6,7 @@
 
 import React, { useEffect } from 'react';
 import { safeUrl } from '../../utils/landingPageUtils';
+import { WANDERLUX_FONT_STYLES } from '../../utils/landingFontStyles';
 
 /**
  * Section components for Wanderlux config.
@@ -521,6 +522,18 @@ function FooterSection({ config = {}, theme = {} }) {
   );
 }
 
+function resolveWanderluxSectionTheme(theme, sectionKey) {
+  const overrideId = theme?.sectionFontStyles?.[sectionKey];
+  const styleId = overrideId || theme?.fontStyleId;
+  const style = WANDERLUX_FONT_STYLES.find((fontStyle) => fontStyle.id === styleId) || null;
+  if (!style || (!overrideId && !theme?.fontStyleId)) return theme;
+  return {
+    ...theme,
+    serifFont: style.family,
+    sansFont: style.family,
+  };
+}
+
 /**
  * Main Wanderlux Renderer
  */
@@ -530,7 +543,7 @@ export default function WanderluxRenderer({ landingPage = {} }) {
   const tmcParentRegistrationUrl = landingPage.tmcParentRegistrationUrl || '';
 
   // Extract theme from config or use defaults
-  const theme = config.theme || {
+  const theme = {
     brandColor: '#122647',
     accentColor: '#C89A4E',
     textColor: '#15242B',
@@ -542,6 +555,7 @@ export default function WanderluxRenderer({ landingPage = {} }) {
     footerColor: '#072438',
     serifFont: "'Cormorant Garamond', Georgia, serif",
     sansFont: "'Inter', system-ui, sans-serif",
+    ...(config.theme || {}),
   };
 
   // Track analytics
@@ -567,13 +581,13 @@ export default function WanderluxRenderer({ landingPage = {} }) {
         a:hover { text-decoration: underline; }
       `}</style>
 
-      {config.hero && <HeroSection config={{ ...config.hero, ctaLink: tmcParentRegistrationUrl || config.hero.ctaLink }} theme={theme} slug={slug} />}
-      {config.intro && <IntroSection config={config.intro} theme={theme} />}
-      {config.cities && <CitiesSection config={config.cities} theme={theme} />}
-      {config.highlights && <HighlightsSection config={config.highlights} theme={theme} />}
-      {config.investment && <PricingSection config={config.investment} theme={theme} />}
-      {config.faqs && <FaqSection config={config.faqs} theme={theme} />}
-      {config.footer && <FooterSection config={config.footer} theme={theme} />}
+      {config.hero && <HeroSection config={{ ...config.hero, ctaLink: tmcParentRegistrationUrl || config.hero.ctaLink }} theme={resolveWanderluxSectionTheme(theme, 'hero')} slug={slug} />}
+      {config.intro && <IntroSection config={config.intro} theme={resolveWanderluxSectionTheme(theme, 'intro')} />}
+      {config.cities && <CitiesSection config={config.cities} theme={resolveWanderluxSectionTheme(theme, 'cities')} />}
+      {config.highlights && <HighlightsSection config={config.highlights} theme={resolveWanderluxSectionTheme(theme, 'highlights')} />}
+      {config.investment && <PricingSection config={config.investment} theme={resolveWanderluxSectionTheme(theme, 'investment')} />}
+      {config.faqs && <FaqSection config={config.faqs} theme={resolveWanderluxSectionTheme(theme, 'faqs')} />}
+      {config.footer && <FooterSection config={config.footer} theme={resolveWanderluxSectionTheme(theme, 'footer')} />}
     </main>
   );
 }

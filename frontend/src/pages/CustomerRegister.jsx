@@ -29,7 +29,9 @@ function passwordStrength(p) {
   if (/[a-z]/.test(p)) s += 1;
   if (/[0-9]/.test(p)) s += 1;
   if (/[^A-Za-z0-9]/.test(p)) s += 1;
-  return s;
+  // A password cannot be rated as good/strong while it still fails the
+  // minimum-length requirement, even when it contains varied characters.
+  return p.length < 8 ? Math.min(s, 2) : s;
 }
 
 const EXISTING_EMAIL_MESSAGE = "This email already exists. Sign in to your account.";
@@ -328,7 +330,9 @@ export default function CustomerRegister() {
 
   const strength = passwordStrength(form.password);
   const strengthLabel =
-    strength <= 2
+    form.password.length < 8
+      ? "Too short"
+      : strength <= 2
       ? "Weak"
       : strength === 3
         ? "Fair"
@@ -336,7 +340,7 @@ export default function CustomerRegister() {
           ? "Good"
           : "Strong";
   const strengthColor =
-    strength <= 2 ? "#ef4444" : strength === 3 ? "#f59e0b" : "#10b981";
+    form.password.length < 8 || strength <= 2 ? "#ef4444" : strength === 3 ? "#f59e0b" : "#10b981";
 
   const validate = () => {
     const e = {};

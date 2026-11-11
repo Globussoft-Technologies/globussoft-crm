@@ -109,6 +109,55 @@ function normalizeRules(rawRules, staffById) {
   return rules;
 }
 
+const staffSelect = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  jobTitle: true,
+  userRoles: {
+    take: 1,
+    orderBy: { assignedAt: "desc" },
+    select: {
+      role: { select: { id: true, key: true, name: true } },
+    },
+  },
+};
+
+function normalizeStaffRows(rows) {
+  return rows
+    .map((member) => {
+      const role = member.userRoles?.[0]?.role || null;
+      const normalized = {
+        ...member,
+        primaryRole: role ? { id: role.id, key: role.key, name: role.name } : null,
+      };
+      delete normalized.userRoles;
+      return normalized;
+    })
+    // Admins can manage commission rules but must never receive a staff
+    // commission assignment. Check both role sources because older users may
+    // have only the legacy User.role value while newer users use UserRole.
+    .filter((member) =>
+      String(member.role || "").toUpperCase() !== "ADMIN" &&
+      String(member.primaryRole?.key || "").toUpperCase() !== "ADMIN",
+    );
+}
+
+async function loadActiveStaff(tenantId) {
+  const rows = await prisma.user.findMany({
+    where: {
+      tenantId,
+      userType: { in: ["STAFF", "OWNER"] },
+      role: { not: "CUSTOMER" },
+      deactivatedAt: null,
+    },
+    orderBy: { name: "asc" },
+    select: staffSelect,
+  });
+  return normalizeStaffRows(rows);
+}
+
 async function loadOptions(tenantId) {
   const [plots, staff] = await Promise.all([
     prisma.plotSite.findMany({
@@ -117,11 +166,7 @@ async function loadOptions(tenantId) {
       take: 1000,
       select: { id: true, name: true, plotNumber: true, block: true, price: true, availability: true },
     }),
-    prisma.user.findMany({
-      where: { tenantId, userType: { in: ["STAFF", "OWNER"] }, role: { not: "CUSTOMER" }, deactivatedAt: null },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, email: true, role: true, jobTitle: true },
-    }),
+    loadActiveStaff(tenantId),
   ]);
   return {
     plots: plots.map((plot) => ({ ...plot, price: plot.price === null ? null : Number(plot.price) })),
@@ -414,7 +459,7 @@ router.put("/plots/:plotSiteId/rules", financeOnly, async (req, res) => {
     const plotSiteId = parseId(req.params.plotSiteId, "plotSiteId");
     const [plot, staff] = await Promise.all([
       prisma.plotSite.findFirst({ where: { id: plotSiteId, tenantId, isActive: true }, select: { id: true, price: true, name: true, plotNumber: true } }),
-      prisma.user.findMany({ where: { tenantId, userType: { in: ["STAFF", "OWNER"] }, role: { not: "CUSTOMER" }, deactivatedAt: null }, select: { id: true, name: true, email: true, role: true, jobTitle: true } }),
+      loadActiveStaff(tenantId),
     ]);
     if (!plot) return jsonError(res, 404, "Active plot not found", "PLOT_NOT_FOUND");
     const basePricePaise = priceToPaise(plot.price || 0, "plot price");

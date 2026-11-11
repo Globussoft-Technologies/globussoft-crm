@@ -249,3 +249,9 @@ scripts/staging/export-wellness-client-1-complete.js
 scripts/staging/export-wellness-client-1.js
 staging/wellness-client-1-catalog.json
 staging/wellness-client-1-complete.json
+staging/globussoft_wellness_complete_local_*.json
+staging/globussoft_wellness_complete_local_*.sql
+
+# Local database import/export scripts and generated migration artifacts
+scripts/local/
+staging/

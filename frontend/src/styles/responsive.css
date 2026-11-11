@@ -2471,7 +2471,23 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
+/* The landing-page content editor keeps a right rail on desktop, but the rail
+   must become a normal-flow section before it can squeeze the editor into a
+   narrow viewport. The option cards themselves use a fluid grid in JSX; this
+   rule only controls the editor's two-column shell. */
+.landing-page-editor {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
 @media (max-width: 899px) {
+  .landing-page-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .landing-page-editor__rail {
+    position: static !important;
+  }
+
   .landing-builder__toolbar {
     flex-wrap: wrap;
     gap: 0.5rem !important;

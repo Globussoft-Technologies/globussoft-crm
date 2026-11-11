@@ -37,6 +37,7 @@
 // `webcal:` requires an explicit allowlist update.
 const { normalizeVideoEmbedUrl, isDirectVideoFile } = require("../lib/videoUrl");
 const { getPreset: getRegistrationPreset } = require("../lib/travelRegistrationPresets");
+const { resolveLandingFontFamily } = require("../lib/landingFontStyles");
 const { resolveWellnessLandingTheme, resolveWellnessLandingLayout } = require("./wellnessLandingThemes");
 const { normalizeLandingContentYears } = require("./landingSitePrompts");
 
@@ -714,7 +715,7 @@ function renderComponent(component, slug, options = {}) {
             var fields = form.querySelectorAll("div > label, div > input, div > textarea, div > select");
             fields.forEach(function(el){ el.parentElement.style.display = "none"; });
             document.getElementById("${formId}_thanks").style.display = "block";`;
-      const formTitle = props.title ? `<h2 style="margin:0 0 28px;color:var(--wellness-ink,#173b2c);font-family:Georgia,'Times New Roman',serif;font-size:1.75rem;font-weight:600;">${escapeHtml(props.title)}</h2>` : "";
+      const formTitle = props.title ? `<h2 style="margin:0 0 28px;color:var(--wellness-ink,#173b2c);font-size:1.75rem;font-weight:600;">${escapeHtml(props.title)}</h2>` : "";
       const formStyle = isWellnessForm
         ? "width:100%;max-width:520px;min-width:0;margin:0 auto 16px;padding:clamp(16px,5vw,36px);background:var(--wellness-surface,#fffdf8);border-radius:20px;border:1px solid var(--wellness-border,#d7e2d0);border-top:2px solid var(--wellness-primary,#2f6b50);box-shadow:0 18px 55px rgba(23,59,53,0.10);box-sizing:border-box;"
         : "width:100%;max-width:480px;min-width:0;margin:0 auto 16px;padding:clamp(16px,5vw,24px);background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;box-sizing:border-box;";
@@ -1634,6 +1635,9 @@ function renderPage(landingPage, options = {}) {
   const wellnessLayout = isCampaignLandingPage
     ? resolveWellnessLandingLayout(wellnessRoot?.props?.layoutId || landingPage.wellnessLayout || landingPage.layoutId)
     : null;
+  const landingFontFamily = isCampaignLandingPage
+    ? resolveLandingFontFamily(wellnessRoot?.props?.fontStyleId || landingPage.fontStyleId)
+    : resolveLandingFontFamily(landingPage.fontStyleId);
   const wellnessVars = wellnessTheme
     ? Object.entries({
         '--wellness-bg': wellnessTheme.bg,
@@ -1647,8 +1651,9 @@ function renderPage(landingPage, options = {}) {
         '--wellness-accent-soft': wellnessTheme.accentSoft,
         '--wellness-border': wellnessTheme.border,
         '--wellness-inverse': wellnessTheme.inverse,
+        '--landing-font-family': landingFontFamily,
       }).map(([key, value]) => `${key}:${value}`).join(';')
-    : '';
+    : `--landing-font-family:${landingFontFamily}`;
   const renderOptions = wellnessTheme ? { ...options, wellnessTheme, wellnessLayout } : options;
   const bodyHtml = components.map((c) => renderComponent(c, slug, renderOptions)).join("\n");
   const pageTitle = escapeHtml(renderedMetaTitle || renderedTitle);
@@ -1676,15 +1681,17 @@ function renderPage(landingPage, options = {}) {
     body {
       margin: 0;
       padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-family: var(--landing-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif);
       color: #1a1a1a;
       background: #ffffff;
       -webkit-font-smoothing: antialiased;
     }
+    button, input, textarea, select { font-family: inherit; }
     .lp-container {
       max-width: 960px;
       margin: 0 auto;
       padding: 40px 24px;
+      font-family: var(--landing-font-family, inherit);
     }
     .lp-container--wellness {
       max-width: none;

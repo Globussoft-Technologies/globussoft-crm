@@ -133,12 +133,23 @@ body[data-vertical="generic"] .app-main > main.generic-page-content .pickup-cust
 .pickup-installment-table td:last-child button,.pickup-installment-table td:last-child a { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
 .pickup-payment-table { min-width:650px; }
 .pickup-payment-table th { color:var(--text-secondary); background:#f3f4f6; font-size:.7rem; }
+.pickup-commission-table { min-width:1235px; table-layout:fixed; }
+.pickup-commission-table th:nth-child(1),.pickup-commission-table td:nth-child(1) { width:170px; }
+.pickup-commission-table th:nth-child(2),.pickup-commission-table td:nth-child(2) { width:155px; }
+.pickup-commission-table th:nth-child(3),.pickup-commission-table td:nth-child(3) { width:210px; min-width:210px; }
+.pickup-commission-table th:nth-child(4),.pickup-commission-table td:nth-child(4) { width:215px; }
+.pickup-commission-table th:nth-child(5),.pickup-commission-table td:nth-child(5) { width:135px; }
+.pickup-commission-table th:nth-child(6),.pickup-commission-table td:nth-child(6) { width:135px; }
+.pickup-commission-table th:nth-child(7),.pickup-commission-table td:nth-child(7) { width:105px; }
+.pickup-commission-table th:nth-child(8),.pickup-commission-table td:nth-child(8) { width:110px; }
 .pickup-payment-action { width:1%; white-space:nowrap; }
 .pickup-payment-action a { display:inline-flex; align-items:center; gap:5px; text-decoration:none; }
 .pickup-payment-history-wrap { max-height:260px; overflow:auto; }
 .pickup-payment-history-wrap .pickup-payment-table th { position:sticky; top:0; z-index:1; }
-.pickup-commission-rate-control { display:inline-flex; align-items:center; gap:6px; min-width:180px; white-space:nowrap; }
-.pickup-commission-rate-control input { width:75px; min-width:75px; padding:.45rem .55rem; }
+.pickup-commission-rate-control { display:flex; align-items:center; gap:8px; width:100%; min-width:198px; box-sizing:border-box; padding:2px 8px 2px 0; white-space:nowrap; }
+.pickup-commission-rate-control input { flex:0 0 82px; width:82px; min-width:82px; max-width:82px; box-sizing:border-box; padding:.45rem .7rem; text-align:left; font-variant-numeric:tabular-nums; }
+.pickup-commission-rate-control > span { flex:0 0 auto; }
+.pickup-commission-rate-control > button { flex:0 0 auto; }
 .pickup-payment-status { display:inline-flex; padding:.18rem .4rem; border-radius:999px; color:#047857; background:rgba(16,185,129,.13); font-size:.68rem; font-weight:800; text-transform:capitalize; }
 .pickup-payment-status[data-status="PAYMENT_INITIATED"],.pickup-payment-status[data-status="LINK_CREATED"],.pickup-payment-status[data-status="PROCESSING"] { color:#1d4ed8; background:rgba(59,130,246,.13); }
 .pickup-payment-status[data-status="FAILED"],.pickup-payment-status[data-status="OVERDUE"] { color:#b91c1c; background:rgba(239,68,68,.13); }

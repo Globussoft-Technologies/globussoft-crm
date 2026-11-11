@@ -451,6 +451,7 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
 }
 
 .commission-records-table-wrap {
+  position: relative;
   overflow: auto;
   height: min(540px, calc(100vh - 300px));
   min-height: 320px;
@@ -458,18 +459,47 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
   border-radius: 14px;
   background: var(--popover-bg, #fff);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  isolation: isolate;
 }
 
 .commission-rules-table-wrap {
-  overflow-x: auto;
+  position: relative;
+  overflow: auto;
+  max-height: min(540px, calc(100vh - 300px));
   border: 1px solid var(--border-color, #dfe4ec);
   border-radius: 14px;
   background: var(--popover-bg, #fff);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  isolation: isolate;
 }
 
 .commission-rules-table {
-  min-width: 980px !important;
+  width: 100% !important;
+  min-width: 1330px !important;
+  table-layout: fixed !important;
+}
+
+.commission-rules-table :is(th, td) {
+  overflow-wrap: anywhere;
+}
+
+.commission-rules-table thead th {
+  white-space: normal;
+}
+
+.commission-rules-table :is(th, td):nth-child(1) { width: 80px !important; min-width: 80px !important; }
+.commission-rules-table :is(th, td):nth-child(2) { width: 215px !important; min-width: 215px !important; }
+.commission-rules-table :is(th, td):nth-child(3) { width: 220px !important; min-width: 220px !important; }
+.commission-rules-table :is(th, td):nth-child(4) { width: 200px !important; min-width: 200px !important; }
+.commission-rules-table :is(th, td):nth-child(5) { width: 185px !important; min-width: 185px !important; }
+.commission-rules-table :is(th, td):nth-child(6) { width: 90px !important; min-width: 90px !important; }
+.commission-rules-table :is(th, td):nth-child(7) { width: 220px !important; min-width: 220px !important; }
+.commission-rules-table :is(th, td):nth-child(8) { width: 120px !important; min-width: 120px !important; }
+
+.commission-records-table.commission-rules-table :is(th, td):last-child {
+  width: 120px !important;
+  min-width: 120px !important;
+  white-space: normal !important;
 }
 
 .commission-records-table {
@@ -479,26 +509,40 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
   color: var(--text-primary);
 }
 
+.commission-records-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
 .commission-records-table thead th {
   position: sticky;
   top: 0;
-  z-index: 2;
-  padding: 14px 16px !important;
-  border-bottom: 1px solid var(--border-color, #dfe4ec);
-  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 6%, var(--popover-bg, #fff));
+  z-index: 5;
+  padding: 12px 14px !important;
+  border-right: 1px solid color-mix(in srgb, var(--border-color, #dfe4ec) 78%, transparent);
+  border-bottom: 2px solid var(--border-color, #cfd6e2);
+  background: var(--popover-bg, #fff) !important;
+  background-clip: padding-box;
+  box-shadow: 0 2px 0 rgba(15, 23, 42, 0.04);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
+  line-height: 1.25;
   text-transform: uppercase;
 }
 
 .commission-records-table tbody td {
-  padding: 18px 16px !important;
-  border-right: 1px solid color-mix(in srgb, var(--border-color, #dfe4ec) 62%, transparent);
+  padding: 14px !important;
+  border-right: 1px solid color-mix(in srgb, var(--border-color, #dfe4ec) 78%, transparent);
   border-bottom: 1px solid var(--border-color, #e6eaf0);
   background: var(--popover-bg, #fff);
   line-height: 1.45;
+}
+
+.commission-records-table tbody tr:first-child td {
+  border-top: 1px solid var(--border-color, #dfe4ec);
 }
 
 .commission-records-table tbody tr:nth-child(even) td {
@@ -546,14 +590,37 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
 }
 
 .commission-records-data-table :is(th, td):last-child {
-  width: auto !important;
-  min-width: 190px !important;
+  width: 270px !important;
+  min-width: 270px !important;
   white-space: normal;
 }
 
+.commission-records-data-table {
+  table-layout: fixed !important;
+  min-width: 1525px !important;
+}
+
+.commission-records-data-table :is(th, td):nth-child(1) { width: 80px !important; min-width: 80px !important; }
+.commission-records-data-table :is(th, td):nth-child(2) { width: 155px !important; min-width: 155px !important; }
+.commission-records-data-table :is(th, td):nth-child(3) { width: 150px !important; min-width: 150px !important; }
+.commission-records-data-table :is(th, td):nth-child(4) { width: 195px !important; min-width: 195px !important; }
+.commission-records-data-table :is(th, td):nth-child(5) { width: 165px !important; min-width: 165px !important; }
+.commission-records-data-table :is(th, td):nth-child(6) { width: 205px !important; min-width: 205px !important; }
+.commission-records-data-table :is(th, td):nth-child(7) { width: 140px !important; min-width: 140px !important; }
+.commission-records-data-table :is(th, td):nth-child(8) { width: 165px !important; min-width: 165px !important; }
+.commission-records-data-table :is(th, td):nth-child(9) { width: 270px !important; min-width: 270px !important; }
+
+.commission-records-data-table :is(th, td) {
+  overflow-wrap: anywhere;
+}
+
+.commission-records-data-table :is(th, td) {
+  text-align: left !important;
+}
+
 .commission-records-data-table .commission-record-actions-cell {
-  width: 320px !important;
-  min-width: 320px !important;
+  width: 270px !important;
+  min-width: 270px !important;
   white-space: normal !important;
 }
 
@@ -3627,6 +3694,37 @@ body.body--builder-fullscreen .app-main {
 }
 body.body--builder-fullscreen .app-main > main {
   padding: 0 !important;
+}
+
+/* The travel content frame normally centers pages at the shared CRM max width.
+   A landing builder already owns the full-screen workspace, so applying that
+   cap here makes the editor look inexplicably shrunk in the middle of the
+   viewport. Keep the override limited to this route and mode. */
+body.body--builder-fullscreen .travel-content-frame > .landing-builder {
+  width: 100% !important;
+  max-width: none !important;
+  margin-inline: 0 !important;
+}
+
+@media (max-width: 899px) {
+  body.body--builder-fullscreen .landing-builder__template-shell {
+    display: block !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  body.body--builder-fullscreen .landing-builder__template-editor {
+    width: 100%;
+    overflow: visible !important;
+  }
+
+  body.body--builder-fullscreen .landing-builder__template-shell > aside {
+    box-sizing: border-box;
+    width: 100% !important;
+    border-left: 0 !important;
+    border-top: 1px solid var(--border-color);
+    overflow: visible !important;
+  }
 }
 
 /* ── #633 — Table hover stability ───────────────────────────────────────

@@ -98,6 +98,19 @@ describe('<CustomerRegister /> organization autocomplete', () => {
     expect(screen.queryByText(/No matching organizations found/i)).not.toBeInTheDocument();
   });
 
+  it('does not rate a password as good before it reaches eight characters', async () => {
+    renderPage();
+
+    const password = await screen.findByLabelText(/^Password$/i);
+    fireEvent.change(password, { target: { value: 'Ab1!xy' } });
+
+    expect(screen.getByText('Too short')).toBeInTheDocument();
+    expect(screen.queryByText('Good')).not.toBeInTheDocument();
+
+    fireEvent.change(password, { target: { value: 'Ab1!xyza' } });
+    expect(screen.getByText('Strong')).toBeInTheDocument();
+  });
+
   afterEach(() => {
     global.fetch = originalFetch;
   });

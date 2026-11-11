@@ -45,6 +45,7 @@ import { useNotify } from '../utils/notify';
 import { isUploadedS3Url, formatUploadFilename } from '../utils/uploadDisplay';
 import UploadedAssetChip from '../components/UploadedAssetChip';
 import ThemePaletteEditor, { THEME_COLOR_FIELDS, createThemeDraft } from '../components/landing-pages/ThemePaletteEditor';
+import WanderluxTypographyEditor from '../components/landing-pages/WanderluxTypographyEditor';
 import { listWanderluxThemePresets, resolveWanderluxThemePreset } from '../utils/wanderluxThemePresets';
 
 const sectionStyle = {
@@ -106,6 +107,7 @@ function ThemeChoiceCard({ choice, selected, onClick, disabled }) {
   return (
     <button
       type="button"
+      className="wanderlux-theme-choice-card"
       onClick={onClick}
       disabled={disabled}
       aria-pressed={selected}
@@ -121,7 +123,12 @@ function ThemeChoiceCard({ choice, selected, onClick, disabled }) {
         gap: '0.55rem',
         boxShadow: selected ? '0 0 0 1px rgba(184, 137, 59, 0.24), 0 12px 24px rgba(15, 23, 42, 0.08)' : 'none',
         transition: 'all 0.18s ease',
+        boxSizing: 'border-box',
+        width: '100%',
         minWidth: 0,
+        minHeight: '158px',
+        whiteSpace: 'normal',
+        overflowWrap: 'anywhere',
       }}
     >
       <div
@@ -132,18 +139,18 @@ function ThemeChoiceCard({ choice, selected, onClick, disabled }) {
           border: `1px solid ${theme.borderColor || 'rgba(255,255,255,0.08)'}`,
         }}
       />
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-        <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>{choice.label}</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', minWidth: 0 }}>
+        <div style={{ minWidth: 0, fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{choice.label}</div>
         {selected && (
-          <span style={{ fontSize: '0.62rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.14rem 0.35rem', borderRadius: 999, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>
+          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontSize: '0.62rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.14rem 0.35rem', borderRadius: 999, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>
             Selected
           </span>
         )}
       </div>
-      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+      <div style={{ minWidth: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
         {choice.description}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${swatches.length || 1}, minmax(0, 1fr))`, gap: '0.25rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${swatches.length || 1}, minmax(0, 1fr))`, gap: '0.25rem', minWidth: 0 }}>
         {swatches.map((swatch) => (
           <span
             key={swatch}
@@ -701,6 +708,22 @@ function effectiveLayoutItems(cfg) {
 function hiddenSectionKeys(items) {
   const visible = new Set(items.filter((it) => it.kind === 'section').map((it) => it.key));
   return LAYOUT_SECTIONS.filter((s) => !visible.has(s.key)).map((s) => s.key);
+}
+
+// Typography controls follow the active layout. This keeps the font editor
+// in sync when an operator inserts or restores a known template section.
+// Unknown keys are ignored here because the backend composer only renders
+// sections registered in LAYOUT_SECTIONS.
+function typographySectionsForLayout(cfg) {
+  const seen = new Set();
+  return effectiveLayoutItems(cfg).reduce((result, item) => {
+    if (!item || item.kind !== 'section' || seen.has(item.key)) return result;
+    const section = SECTION_BY_KEY[item.key];
+    if (!section) return result;
+    seen.add(item.key);
+    result.push(section);
+    return result;
+  }, []);
 }
 
 // ── per-type inline editors ──────────────────────────────────────
@@ -1600,6 +1623,7 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
     : resolveWanderluxThemePreset({ subBrand }).theme;
   const themeChoices = listWanderluxThemePresets(subBrand);
   const currentThemeChoice = findThemeChoice(seedTheme, themeChoices);
+  const typographySections = typographySectionsForLayout(cfg);
 
   return (
     <div style={{ padding: '1rem 1.4rem', background: 'var(--subtle-bg)', overflowY: 'auto', height: '100%' }}>
@@ -1702,6 +1726,11 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
           theme={seedTheme}
           onChange={(nextTheme) => setPath(['theme'], nextTheme)}
           note="These colors are persisted in the page JSON and are used by the confirmed-trip renderer."
+        />
+        <WanderluxTypographyEditor
+          theme={seedTheme}
+          sections={typographySections}
+          onChange={(nextTheme) => setPath(['theme'], nextTheme)}
         />
       </Section>
 

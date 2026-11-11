@@ -8451,6 +8451,12 @@ model TmcTrip {
   pricePerStudent       Decimal?                  @db.Decimal(15, 2)
   status                String                    @default("confirmed") // confirmed | in-trip | completed | cancelled
   driveFolderId         String?
+  // Optional administrative grouping for school-specific variants of the
+  // same itinerary. This never replaces tripId in parent registration,
+  // participant, payment, or landing-page relationships.
+  familyParentId        Int?
+  familyParent          TmcTrip?                  @relation("TmcTripFamily", fields: [familyParentId], references: [id], onDelete: SetNull)
+  familyVariants        TmcTrip[]                 @relation("TmcTripFamily")
   // TMC teacher portal assignment. This is intentionally a single teacher
   // for the first slice; it can be promoted to a join model if co-teachers
   // become a requirement.
@@ -8480,6 +8486,7 @@ model TmcTrip {
   @@index([tenantId, status])
   @@index([tenantId, departDate])
   @@index([tenantId, teacherContactId])
+  @@index([tenantId, familyParentId])
 }
 
 // Links a TMC parent portal account to the teacher and trip that issued the

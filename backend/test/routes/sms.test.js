@@ -80,6 +80,7 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const mockSendSms = vi.hoisted(() => vi.fn());
+const mockResolveProviderConfig = vi.hoisted(() => vi.fn());
 
 // Auth middleware bypass — pass through verifyToken so we exercise the
 // route + verifyRole flow without minting JWTs. verifyRole stays REAL so
@@ -107,7 +108,7 @@ vi.mock('../../services/smsProvider', () => ({
       .replace(/\{\{phone\}\}/g, contact.phone || '');
   },
   sendSms: mockSendSms,
-  resolveProviderConfig: vi.fn().mockResolvedValue(null),
+  resolveProviderConfig: mockResolveProviderConfig,
 }));
 
 // sms.js is CommonJS and destructures sendSms at module load. Patch the CJS
@@ -115,6 +116,7 @@ vi.mock('../../services/smsProvider', () => ({
 // Vitest's CJS/ESM interoperability layer.
 const smsProviderCJS = requireCJS('../../services/smsProvider');
 smsProviderCJS.sendSms = mockSendSms;
+smsProviderCJS.resolveProviderConfig = mockResolveProviderConfig;
 
 // Mock the audit lib so writeAudit's prisma calls don't hit a real DB.
 vi.mock('../../lib/audit', () => ({
@@ -168,6 +170,7 @@ beforeEach(() => {
     success: true,
     providerMsgId: 'mock-msg-id',
   });
+  mockResolveProviderConfig.mockReset().mockResolvedValue(null);
   prisma.smsConfig.findFirst.mockReset();
   prisma.smsConfig.findMany.mockReset();
   prisma.smsConfig.upsert.mockReset();
@@ -222,6 +225,33 @@ describe('POST /send — validation', () => {
       .send({ to: '9999999999', body: 'hello' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/No active SMS provider configured/i);
+  });
+
+  test('uses the resolved environment provider when no database config is active', async () => {
+    prisma.smsConfig.findFirst.mockResolvedValue(null);
+    mockResolveProviderConfig.mockResolvedValue({
+      provider: 'msg91',
+      apiKey: 'env-key',
+      senderId: 'ENVSMS',
+      authToken: '',
+      source: 'env',
+    });
+    prisma.smsMessage.create.mockImplementation(({ data }) => Promise.resolve({ id: 5003, ...data }));
+    prisma.smsMessage.update.mockResolvedValue({ id: 5003 });
+
+    const res = await request(makeApp())
+      .post('/api/sms/send')
+      .send({ to: '9876543210', body: 'hello from env config' });
+
+    expect(res.status).toBe(200);
+    expect(mockResolveProviderConfig).toHaveBeenCalledWith(prisma, 1);
+    expect(mockSendSms).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'msg91',
+      apiKey: 'env-key',
+      senderId: 'ENVSMS',
+      to: '919876543210',
+      body: 'hello from env config',
+    }));
   });
 
   test('persists OUTBOUND smsMessage with tenantId from req.user', async () => {

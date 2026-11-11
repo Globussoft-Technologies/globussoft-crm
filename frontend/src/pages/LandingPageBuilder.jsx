@@ -242,8 +242,9 @@ export default function LandingPageBuilder() {
   const [tripSearch, setTripSearch] = useState('');
   const tripPickerRef = useRef(null);
   const tripFetchSeqRef = useRef(0);
-  // #454: dirty-state tracking + beforeunload guard.
+  // #454: dirty-state tracking + unsaved-changes warning.
   const [isDirty, setIsDirty] = useState(false);
+  const reloadConfirmOpenRef = useRef(false);
   // Version-history drawer state. Lightweight versioning per PRD ?
   // snapshots are captured server-side on create / manual save /
   // publish / AI generation / restore; the drawer just lists them
@@ -374,17 +375,34 @@ export default function LandingPageBuilder() {
     }
   };
 
-  // #454: native beforeunload guard.
+  // Use the application's confirmation modal for keyboard reloads. This
+  // keeps the Reload/Cancel choice without using a toast or native alert.
+  // The browser toolbar refresh cannot be intercepted by page JavaScript.
   useEffect(() => {
-    if (!isDirty) return;
-    const onBeforeUnload = (e) => {
-      e.preventDefault();
-      e.returnValue = '';
-      return '';
+    const onRefreshShortcut = async (event) => {
+      const key = String(event.key || '').toLowerCase();
+      const isKeyboardReload = (event.ctrlKey || event.metaKey) && key === 'r';
+      const isFunctionReload = event.key === 'F5';
+      if (!isDirty || (!isKeyboardReload && !isFunctionReload)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (reloadConfirmOpenRef.current) return;
+      reloadConfirmOpenRef.current = true;
+      try {
+        const shouldReload = await notify.confirm({
+          title: 'Reload site?',
+          message: 'Changes you made may not be saved.',
+          confirmText: 'Reload',
+          cancelText: 'Cancel',
+        });
+        if (shouldReload) window.location.reload();
+      } finally {
+        reloadConfirmOpenRef.current = false;
+      }
     };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isDirty]);
+    window.addEventListener('keydown', onRefreshShortcut, true);
+    return () => window.removeEventListener('keydown', onRefreshShortcut, true);
+  }, [isDirty, notify]);
 
   // #450: keyboard shortcuts. Ctrl/Cmd + Z = undo, Ctrl/Cmd + Y or
   // Ctrl/Cmd + Shift + Z = redo. We intentionally skip when the user is
@@ -899,8 +917,8 @@ export default function LandingPageBuilder() {
           stays in place for every other page so non-template flows
           are unaffected. */}
       {isTemplateMode ? (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div className="landing-builder__template-shell" style={{ display: 'flex', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div className="landing-builder__template-editor" style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
             {page && page.templateType === 'wanderlux-v1' ? (
               <LandingPageWanderluxEditor
                 content={templateContent}
@@ -998,8 +1016,8 @@ export default function LandingPageBuilder() {
           </aside>
         </div>
       ) : isGenericLandingSite ? (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
             <LandingPageGenericEditor
               content={components}
               onChange={(next) => { dispatch({ type: 'COMMIT', value: next }); setIsDirty(true); }}
@@ -1008,8 +1026,8 @@ export default function LandingPageBuilder() {
           </div>
         </div>
       ) : isWellnessLandingSite ? (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
             <LandingPageWellnessEditor
               content={components}
               onChange={(next) => { dispatch({ type: 'COMMIT', value: next }); setIsDirty(true); }}
@@ -3010,10 +3028,17 @@ function RegistrationFormPreview({ p }) {
 }
 
 function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
+  const notify = useNotify();
   const presets = listRegFormPresets();
-  const onPresetChange = (newAudience) => {
+  const onPresetChange = async (newAudience) => {
     if (newAudience === p.audience) return;
-    if (!window.confirm('Switch audience preset? This will overwrite the current fields, submit text, and thank-you message with the new preset.\n\nClick "Cancel" to keep your custom edits.')) {
+    const shouldSwitch = await notify.confirm({
+      title: 'Switch audience preset?',
+      message: 'This will overwrite the current fields, submit text, and thank-you message with the new preset.',
+      confirmText: 'Switch preset',
+      cancelText: 'Cancel',
+    });
+    if (!shouldSwitch) {
       return;
     }
     const next = regFormDefaultPropsFor(newAudience);

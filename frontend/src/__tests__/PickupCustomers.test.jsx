@@ -108,6 +108,7 @@ describe('<PickupCustomers />', () => {
     );
 
     const ledger = await screen.findByRole('table', { name: 'Plot commission ledger' });
+    expect(ledger).toHaveClass('pickup-commission-table');
     expect(ledger).toHaveTextContent('Sanjeev');
     const rateInput = within(ledger).getByRole('spinbutton', { name: 'Commission percentage for Sanjeev' });
     expect(rateInput).toHaveValue(10);
@@ -967,6 +968,9 @@ describe('<PickupCustomers />', () => {
     expect(responsiveCss).toMatch(/\.pickup-installment-table-wrap\s*\{[^}]*max-height:330px[^}]*overflow:auto/s);
     expect(responsiveCss).toMatch(/\.pickup-installment-table th\s*\{[^}]*position:sticky[^}]*top:0/s);
     expect(responsiveCss).toMatch(/\.pickup-payment-history-wrap\s*\{[^}]*max-height:260px[^}]*overflow:auto/s);
+    expect(responsiveCss).toMatch(/\.pickup-commission-table\s*\{[^}]*min-width:1235px[^}]*table-layout:fixed/s);
+    expect(responsiveCss).toMatch(/\.pickup-commission-rate-control\s*\{[^}]*min-width:198px[^}]*box-sizing:border-box[^}]*padding:2px 8px 2px 0/s);
+    expect(responsiveCss).toMatch(/\.pickup-commission-rate-control input\s*\{[^}]*flex:0 0 82px[^}]*box-sizing:border-box[^}]*padding:\.45rem \.7rem/s);
     expect(responsiveCss).toMatch(/\.pickup-history-dialog\s*\{[^}]*overflow-x:hidden;[^}]*overflow-y:auto;/s);
     expect(responsiveCss).toMatch(/\.pickup-history-dialog::before\s*\{[^}]*display:none;/s);
     expect(responsiveCss).toMatch(/\.pickup-history-dialog:hover\s*\{[^}]*transform:none;[^}]*border-color:var\(--border-color\)/s);

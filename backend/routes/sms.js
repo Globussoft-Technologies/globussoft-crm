@@ -35,8 +35,19 @@ router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
       return res.status(400).json({ error: "to and body are required" });
     }
 
-    // Get active provider config for this tenant
-    const config = await prisma.smsConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
+    // Prefer the tenant's active database configuration, but fall back to the
+    // shared environment provider credentials when no usable DB credential is
+    // configured. This keeps direct sends consistent with /drain and the
+    // other SMS dispatch paths.
+    const storedConfig = await prisma.smsConfig.findFirst({ where: { isActive: true, tenantId: req.user.tenantId } });
+    const { decryptCredential: _decrypt } = require("../lib/credentialMasking");
+    const config = storedConfig?.apiKey
+      ? {
+          ...storedConfig,
+          apiKey: _decrypt(storedConfig.apiKey),
+          authToken: _decrypt(storedConfig.authToken || ""),
+        }
+      : await resolveProviderConfig(prisma, req.user.tenantId);
     if (!config) {
       return res.status(400).json({ error: "No active SMS provider configured" });
     }
@@ -73,14 +84,14 @@ router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
     // Send via provider
     // #651 — decrypt on-read in case at-rest encryption is enabled.
     // decryptCredential() is a no-op for legacy plaintext rows.
-    const { decryptCredential: _decrypt } = require("../lib/credentialMasking");
     const result = await sendSms({
       to: normalizedTo,
       body: messageBody,
       provider: config.provider,
-      apiKey: _decrypt(config.apiKey),
+      apiKey: config.apiKey,
       senderId: config.senderId,
-      authToken: _decrypt(config.authToken),
+      authToken: config.authToken,
+      dltTemplateId: templateRecord?.dltTemplateId || undefined,
     });
 
     // Update message status

@@ -218,7 +218,9 @@ describe("TmcParentPortal", () => {
     expect(screen.getByRole("button", { name: "Trips" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /My Bookings/ })).toBeInTheDocument();
     expect(screen.getByText("Upcoming trip")).toBeInTheDocument();
-    expect(document.querySelector('[data-tmc-parent-sidebar="true"]')).toHaveStyle({
+    const sidebar = document.querySelector('[data-tmc-parent-sidebar="true"]');
+    expect(sidebar).not.toHaveTextContent("arijit@example.com");
+    expect(sidebar).toHaveStyle({
       position: "fixed",
       top: "0px",
       left: "0px",

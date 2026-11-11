@@ -128,4 +128,43 @@ describe('<LandingPageWellnessEditor /> - wellness bootstrap', () => {
     expect(screen.queryByRole('button', { name: /Botanical calm/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Clinical trust/i })).not.toBeInTheDocument();
   });
+
+  it('keeps palette and composition copy inside responsive option cards', () => {
+    render(
+      <LandingPageWellnessEditor
+        content={[]}
+        onChange={vi.fn()}
+        page={{ ...PAGE, templateType: 'generic-site-technology-v2' }}
+        mode="generic"
+      />,
+    );
+
+    const paletteButton = screen.getByRole('button', { name: /Blueprint clarity/i });
+    const compositionButton = screen.getByRole('button', { name: /Conversion flow/i });
+
+    expect(paletteButton.style.width).toBe('100%');
+    expect(paletteButton.style.minWidth).toBe('0px');
+    expect(paletteButton.style.whiteSpace).toBe('normal');
+    expect(compositionButton.style.width).toBe('100%');
+    expect(compositionButton.style.minWidth).toBe('0px');
+    expect(compositionButton.style.whiteSpace).toBe('normal');
+  });
+
+  it('persists the selected font style on the campaign root', () => {
+    const onChange = vi.fn();
+
+    render(
+      <LandingPageWellnessEditor
+        content={[]}
+        onChange={onChange}
+        page={PAGE}
+        mode="generic"
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Font style'), { target: { value: 'classic' } });
+
+    const updatedContent = onChange.mock.calls.at(-1)?.[0];
+    expect(updatedContent?.[0]?.props?.fontStyleId).toBe('classic');
+  });
 });

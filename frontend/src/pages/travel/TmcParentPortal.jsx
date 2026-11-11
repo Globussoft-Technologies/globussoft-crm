@@ -570,10 +570,6 @@ export default function TmcParentPortal() {
       <style>{portalInteractionStyles}</style>
       <aside data-tmc-parent-sidebar="true" style={styles.sidebar}>
         <div style={styles.brand}><Plane size={21} /> <strong>Parent Portal</strong></div>
-        <div style={styles.profileCard}>
-          <div style={styles.avatar}>{(contact?.name || "P").slice(0, 1).toUpperCase()}</div>
-          <div style={styles.profileText}><strong>{contact?.name || "Parent"}</strong><span>{contact?.email || ""}</span></div>
-        </div>
         <nav aria-label="Parent portal sections" style={styles.sidebarNav}>
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => setActiveView("dashboard")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => setActiveView("trips")} />
@@ -1728,10 +1724,7 @@ const styles = {
   page: { minHeight: "100vh", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
   sidebar: { position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 20, width: 236, height: "100vh", minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", padding: "18px 8px", boxSizing: "border-box", background: "var(--tmc-parent-surface)", borderRight: "1px solid var(--tmc-parent-border)" },
   brand: { display: "flex", alignItems: "center", gap: 9, padding: "8px 9px 22px", color: "var(--tmc-parent-heading)", fontSize: 16 },
-  profileCard: { display: "flex", alignItems: "center", gap: 10, minWidth: 0, padding: "0 8px 22px", borderBottom: "1px solid var(--tmc-parent-border-light)" },
-  avatar: { flex: "0 0 auto", width: 38, height: 38, display: "grid", placeItems: "center", borderRadius: "50%", background: "var(--tmc-parent-accent)", color: "var(--tmc-parent-accent-contrast)", fontWeight: 800 },
-  profileText: { minWidth: 0, display: "grid", gap: 3, fontSize: 12 },
-  sidebarNav: { display: "grid", gap: 5, marginTop: 22 },
+  sidebarNav: { display: "grid", gap: 5, marginTop: 0 },
   navButton: { width: "100%", display: "flex", alignItems: "center", gap: 11, padding: "11px 12px", border: 0, borderRadius: 9, background: "transparent", color: "var(--tmc-parent-subtle)", cursor: "pointer", fontSize: 13, fontWeight: 650, textAlign: "left" },
   navButtonActive: { background: "var(--tmc-parent-accent)", color: "var(--tmc-parent-accent-contrast)" },
   navCount: { minWidth: 19, height: 19, display: "inline-grid", placeItems: "center", marginLeft: "auto", padding: "0 5px", borderRadius: 10, background: "var(--tmc-parent-profile-bg)", fontSize: 11 },

@@ -252,6 +252,9 @@ function OverviewTab({ trip, onJump, notify }) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <TeacherAssignment trip={trip} notify={notify} isAdmin={isAdmin} />
+      {(trip.familyParent || (trip.familyVariants || []).length > 0) && (
+        <TripFamilyCard trip={trip} />
+      )}
       {/* Hero band — destination + dates + readiness gauge */}
       <div style={{
         background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
@@ -368,6 +371,54 @@ function OverviewTab({ trip, onJump, notify }) {
           status pill (driven by microsite presence) for back-compat. */}
       <LandingPageCard trip={trip} notify={notify} />
     </div>
+  );
+}
+
+function TripFamilyCard({ trip }) {
+  const primary = trip.familyParent || trip;
+  const variants = Array.isArray(trip.familyVariants) ? trip.familyVariants : [];
+
+  return (
+    <section
+      style={{
+        background: "var(--surface-color)",
+        border: "1px solid var(--border-color)",
+        borderRadius: 10,
+        padding: 14,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 16 }}>Trip family</h2>
+          <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 }}>
+            Shared itinerary grouping only. Teacher assignments, landing pages,
+            parent links, registrations, participants, and payments remain separate.
+          </p>
+        </div>
+        <span style={{ color: "var(--text-secondary)", fontSize: 12, alignSelf: "center" }}>
+          {trip.familyParent
+            ? "School variant"
+            : `${variants.length} school variant${variants.length === 1 ? "" : "s"}`}
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+        <Link
+          to={`/travel/trips/${primary.id}`}
+          style={{ color: "var(--primary-color, var(--accent-color))", fontWeight: 600, textDecoration: "none" }}
+        >
+          Primary trip: {primary.tripCode}
+        </Link>
+        {variants.map((variant) => (
+          <Link
+            key={variant.id}
+            to={`/travel/trips/${variant.id}`}
+            style={{ color: "var(--text-primary)", textDecoration: "none", fontSize: 13 }}
+          >
+            {variant.tripCode} · {variant.destination}
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 

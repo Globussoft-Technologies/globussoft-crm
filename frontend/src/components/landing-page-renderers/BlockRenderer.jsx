@@ -28,6 +28,7 @@ import {
   ContactFooterBlock,
 } from '../landing-blocks/TravelBlocks';
 import { DEFAULT_WELLNESS_LANDING_THEME, resolveWellnessLandingTheme, isWellnessLandingPage as isWellnessPage } from '../../utils/wellnessLandingThemes';
+import { DEFAULT_LANDING_FONT_STYLE, resolveLandingFontStyle } from '../../utils/landingFontStyles';
 
 /**
  * Render a single block based on its type.
@@ -255,6 +256,9 @@ export default function BlockRenderer({ landingPage = {} }) {
     ? resolveWellnessLandingTheme(wellnessRoot?.props?.themeId || DEFAULT_WELLNESS_LANDING_THEME, wellnessRoot?.props?.customColors)
     : null;
   const wellnessLayoutId = wellnessRoot?.props?.layoutId || 'editorial';
+  const landingFontStyle = isCampaignLandingPage
+    ? resolveLandingFontStyle(wellnessRoot?.props?.fontStyleId || landingPage.fontStyleId || DEFAULT_LANDING_FONT_STYLE)
+    : null;
   const wellnessVars = wellnessTheme ? {
     '--wellness-bg': wellnessTheme.bg,
     '--wellness-surface': wellnessTheme.surface,
@@ -280,17 +284,21 @@ export default function BlockRenderer({ landingPage = {} }) {
   const renderBlockWithContext = (block) => renderBlock(block, slug, pageId, renderBlockWithContext, submitEndpoint, tmcParentRegistrationUrl);
 
   return (
-    <main className={`landing-page block-renderer${isCampaignLandingPage ? ` wellness-page wellness-campaign-page--${String(wellnessLayoutId).replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}` : ''}`}>
+    <main className={`landing-page block-renderer${isCampaignLandingPage ? ` wellness-page wellness-campaign-page--${String(wellnessLayoutId).replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}` : ''}`} style={landingFontStyle ? { fontFamily: landingFontStyle.family } : undefined}>
       <style>{`
         .landing-page {
           margin: 0;
           padding: 0;
           min-height: 100vh;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+          font-family: inherit;
           color: #243244;
           line-height: 1.6;
           background: var(--wellness-bg, #fbf8f1);
         }
+        .landing-page button,
+        .landing-page input,
+        .landing-page textarea,
+        .landing-page select { font-family: inherit; }
 
         .landing-page.wellness-page { min-height: 0 !important; background: var(--wellness-bg, #f4fbf7); overflow-x: hidden; }
         .landing-page.wellness-page .wellness-shell { position: relative; isolation: isolate; max-width: none; background: var(--wellness-bg, #f4fbf7) !important; color: var(--wellness-ink, #173b35) !important; overflow: hidden; }
@@ -918,7 +926,7 @@ export default function BlockRenderer({ landingPage = {} }) {
         .landing-page h3,
         .landing-page h4 {
           margin: 0 0 16px 0;
-          font-family: Georgia, 'Times New Roman', serif;
+          font-family: inherit;
           font-weight: 600;
           letter-spacing: -0.02em;
           color: #1f2937;

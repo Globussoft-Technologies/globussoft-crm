@@ -425,6 +425,42 @@ describe('POST /api/travel/trips', () => {
     );
   });
 
+  test('accepts a same-tenant family parent without changing trip ownership', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, familyParentId: null });
+    prisma.tmcTrip.create.mockResolvedValue({
+      id: 201,
+      tenantId: 1,
+      tripCode: 'bali2026-school-b',
+      familyParentId: 100,
+      status: 'confirmed',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        ...validBody(),
+        tripCode: 'bali2026-school-b',
+        familyParentId: 100,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.tmcTrip.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ familyParentId: 100 }),
+      }),
+    );
+  });
+
+  test('rejects a family parent that is not in the current tenant', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ...validBody(), familyParentId: 9999 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_FAMILY_PARENT_ID' });
+    expect(prisma.tmcTrip.create).not.toHaveBeenCalled();
+  });
+
   test('missing required fields returns 400 MISSING_FIELDS', async () => {
     const body = validBody();
     delete body.tripCode;
@@ -791,6 +827,51 @@ describe('PATCH /api/travel/trips/:id', () => {
       .send({ destination: 'X' });
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(prisma.tmcTrip.update).not.toHaveBeenCalled();
+  });
+
+  test('groups an existing trip with a same-tenant primary trip', async () => {
+    prisma.tmcTrip.findFirst
+      .mockResolvedValueOnce({
+        id: 100,
+        status: 'confirmed',
+        driveFolderId: 'stub-folder-x',
+        tripCode: 'bali-school-b',
+        destination: 'Bali',
+        departDate: new Date('2026-09-15'),
+        familyParentId: null,
+      })
+      .mockResolvedValueOnce({ id: 50, familyParentId: null });
+    prisma.tmcTrip.update.mockResolvedValue({ id: 100, familyParentId: 50 });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ familyParentId: 50 });
+    expect(res.status).toBe(200);
+    expect(prisma.tmcTrip.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 100 },
+        data: expect.objectContaining({ familyParentId: 50 }),
+      }),
+    );
+  });
+
+  test('rejects grouping a trip with itself', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      status: 'confirmed',
+      driveFolderId: 'stub-folder-x',
+      tripCode: 'bali-school-b',
+      destination: 'Bali',
+      departDate: new Date('2026-09-15'),
+      familyParentId: null,
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ familyParentId: 100 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_FAMILY_PARENT_ID' });
     expect(prisma.tmcTrip.update).not.toHaveBeenCalled();
   });
 });

@@ -181,6 +181,52 @@ async function requireTmcAccess(req, res, next) {
   }
 }
 
+// Resolve a supplied school-variant parent to the family's root trip. The
+// relationship is administrative only; every trip keeps its own teacher,
+// landing page, participants, payments, and parent-registration scope.
+async function resolveFamilyParentId({ tenantId, candidateId, currentTripId = null }) {
+  if (candidateId === undefined || candidateId === null || candidateId === "") return null;
+  const parsed = Number(candidateId);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    const error = new Error("familyParentId must be a positive integer");
+    error.status = 400;
+    error.code = "INVALID_FAMILY_PARENT_ID";
+    throw error;
+  }
+
+  const visited = new Set();
+  let cursor = parsed;
+  let rootId = null;
+  while (cursor) {
+    if (cursor === Number(currentTripId)) {
+      const error = new Error("A trip cannot be grouped with itself or one of its variants");
+      error.status = 400;
+      error.code = "INVALID_FAMILY_PARENT_ID";
+      throw error;
+    }
+    if (visited.has(cursor)) {
+      const error = new Error("Trip family relationship contains a cycle");
+      error.status = 400;
+      error.code = "INVALID_FAMILY_PARENT_ID";
+      throw error;
+    }
+    visited.add(cursor);
+    const parent = await prisma.tmcTrip.findFirst({
+      where: { id: cursor, tenantId },
+      select: { id: true, familyParentId: true },
+    });
+    if (!parent) {
+      const error = new Error("Family parent trip not found in this tenant");
+      error.status = 400;
+      error.code = "INVALID_FAMILY_PARENT_ID";
+      throw error;
+    }
+    rootId = parent.id;
+    cursor = parent.familyParentId;
+  }
+  return rootId;
+}
+
 // ─── Trip CRUD ────────────────────────────────────────────────────────
 
 // GET /api/travel/trips
@@ -274,9 +320,18 @@ router.get(
       } else {
         findManyArgs.include = {
           _count: {
-            select: { participants: true, documentRequirements: true },
+            select: { participants: true, documentRequirements: true, familyVariants: true },
           },
           paymentPlan: { select: { instalmentsJson: true } },
+          familyParent: {
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              departDate: true,
+              returnDate: true,
+            },
+          },
         };
       }
       const [trips, total] = await Promise.all([
@@ -363,6 +418,7 @@ router.post(
         micrositeUrl,
         driveFolderId,
         tripType,
+        familyParentId,
       } = req.body || {};
 
       // Either schoolContactId (existing FK — back-compat for any caller that
@@ -383,6 +439,13 @@ router.post(
           code: "MISSING_FIELDS",
         });
       }
+      // Validate the family target before the free-text school path can
+      // create a Contact. An invalid grouping request must not leave an
+      // orphan school contact behind as a side effect.
+      const resolvedFamilyParentId = await resolveFamilyParentId({
+        tenantId: req.travelTenant.id,
+        candidateId: familyParentId,
+      });
       let sid = null;
       if (schoolContactId) {
         const parsed = parseInt(schoolContactId, 10);
@@ -530,6 +593,7 @@ router.post(
           status: finalStatus,
           micrositeUrl: micrositeUrl || null,
           driveFolderId: resolvedDriveFolderId,
+          familyParentId: resolvedFamilyParentId,
         },
       });
       await ensureCostCentre({
@@ -543,6 +607,9 @@ router.post(
       });
       res.status(201).json(created);
     } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
       if (e.code === "P2002") {
         return res
           .status(409)
@@ -1266,6 +1333,27 @@ router.get(
           documentRequirements: { orderBy: { id: "asc" } },
           paymentPlan: true,
           microsite: true,
+          familyParent: {
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              departDate: true,
+              returnDate: true,
+            },
+          },
+          familyVariants: {
+            orderBy: { id: "asc" },
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              schoolContactId: true,
+              teacherContactId: true,
+              familyParentId: true,
+              status: true,
+            },
+          },
         },
       });
       if (!trip)
@@ -1636,6 +1724,7 @@ router.patch(
           tripCode: true,
           destination: true,
           departDate: true,
+          familyParentId: true,
         },
       });
       if (!existing)
@@ -1655,6 +1744,7 @@ router.patch(
         driveFolderId,
         tripType,
         teacherContactId,
+        familyParentId,
       } = req.body || {};
 
       if (destination !== undefined) data.destination = String(destination);
@@ -1705,6 +1795,13 @@ router.patch(
       if (micrositeUrl !== undefined) data.micrositeUrl = micrositeUrl || null;
       if (driveFolderId !== undefined)
         data.driveFolderId = driveFolderId || null;
+      if (familyParentId !== undefined) {
+        data.familyParentId = await resolveFamilyParentId({
+          tenantId: req.travelTenant.id,
+          candidateId: familyParentId,
+          currentTripId: id,
+        });
+      }
       if (teacherContactId !== undefined) {
         if (teacherContactId === null || teacherContactId === "") {
           data.teacherContactId = null;
@@ -1903,6 +2000,9 @@ router.patch(
 
       res.json(updated);
     } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
       if (e.code === "P2002") {
         return res
           .status(409)

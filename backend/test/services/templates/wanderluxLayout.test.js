@@ -181,6 +181,19 @@ describe('composeLayout', () => {
     expect(html).toContain('FLOATING REGISTER');
   });
 
+  test('section typography overrides are applied through scoped CSS variables', () => {
+    const html = composer.composeLayout(
+      TEMPLATE_HTML,
+      { theme: { sectionFontStyles: { hero: 'classic' } } },
+      'demo',
+    );
+
+    expect(html).toContain(
+      '<div data-wlx-section="hero" data-wlx-font-style="classic" style="--c-serif:Georgia, \'Times New Roman\', serif;--c-sans:Georgia, \'Times New Roman\', serif">',
+    );
+    expect(html).toContain('<div data-wlx-section="footer">');
+  });
+
   test('reordering moves the section marker in the emitted HTML', () => {
     const html = composer.composeLayout(
       TEMPLATE_HTML,
@@ -351,6 +364,16 @@ describe('wanderlux render() integration', () => {
     expect(out).toContain('window.__PAGE_CONFIG');
     // Support.js rewritten to absolute path.
     expect(out).toContain('/api/landing-pages/wanderlux-static/support.js');
+  });
+
+  test('a page-wide typography style resolves to safe font stacks', () => {
+    const out = wanderlux.render({
+      content: JSON.stringify({ theme: { fontStyleId: 'friendly' } }),
+    });
+
+    expect(out).toContain('"fontStyleId":"friendly"');
+    expect(out).toContain('"serifFont":"\'Trebuchet MS\', Arial, sans-serif"');
+    expect(out).toContain('"sansFont":"\'Trebuchet MS\', Arial, sans-serif"');
   });
 
   test('a page with _layout.items goes through composeLayout (reorder visible in HTML)', () => {

@@ -75,6 +75,23 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(screen.getByText('This is a test landing page')).toBeInTheDocument();
   });
 
+  test('applies the campaign font preset to the rendered page', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          slug: 'classic-campaign',
+          content: [{
+            id: 'campaign-root',
+            type: 'columns',
+            props: { variant: 'generic-campaign-page', fontStyleId: 'classic', columns: [] },
+          }],
+        }} />
+      </MemoryRouter>,
+    );
+
+    expect(container.querySelector('main')?.style.fontFamily).toContain('Georgia');
+  });
+
   test('extracts pageId from landingPage and passes to FormBlock', () => {
     const pageWithForm = {
       id: 456,

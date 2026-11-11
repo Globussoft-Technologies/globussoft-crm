@@ -140,6 +140,30 @@ describe('renderPage  top-level document', () => {
     expect(html).not.toContain('href="#event-details"');
   });
 
+  test('applies the selected campaign font preset and falls back for unknown ids', () => {
+    const classicHtml = renderPage({
+      title: 'Classic campaign',
+      slug: 'classic-campaign',
+      content: [{
+        id: 'campaign-root',
+        type: 'columns',
+        props: { variant: 'generic-campaign-page', fontStyleId: 'classic', columns: [] },
+      }],
+    });
+    expect(classicHtml).toContain('--landing-font-family:Georgia, Times New Roman, serif');
+
+    const fallbackHtml = renderPage({
+      title: 'Fallback campaign',
+      slug: 'fallback-campaign',
+      content: [{
+        id: 'campaign-root',
+        type: 'columns',
+        props: { variant: 'generic-campaign-page', fontStyleId: 'not-a-real-style', columns: [] },
+      }],
+    });
+    expect(fallbackHtml).toContain('--landing-font-family:Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif');
+  });
+
   test('normalizes legacy wellness headers and duplicate hero CTAs', () => {
     const html = renderPage({
       title: 'Legacy wellness campaign',

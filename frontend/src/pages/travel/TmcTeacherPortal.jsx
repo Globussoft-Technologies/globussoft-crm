@@ -533,10 +533,6 @@ export default function TmcTeacherPortal() {
       <style>{portalInteractionStyles}</style>
       <aside data-tmc-teacher-sidebar="true" style={styles.sidebar}>
         <div style={styles.sidebarBrand}><Plane size={20} /> <strong>TMC Teacher Portal</strong></div>
-        <div style={styles.profileCard}>
-          <div style={styles.avatar}>{(contact?.name || "T").slice(0, 1).toUpperCase()}</div>
-          <div style={styles.profileText}><strong>{contact?.name || "Teacher"}</strong><span>{contact?.email || ""}</span></div>
-        </div>
         <nav style={styles.sidebarNav} aria-label="Teacher portal sections">
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => openView("dashboard")} />
           <PortalNavButton icon={ClipboardCheck} label="Diagnostic" active={activeView === "diagnostic"} onClick={() => openView("diagnostic")} />
@@ -1130,10 +1126,7 @@ const styles = {
   page: { height: "100vh", minHeight: 0, display: "block", overflow: "hidden", background: "var(--tmc-bg)", color: "var(--tmc-text)" },
   sidebar: { position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 20, width: 250, height: "100vh", minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", overscrollBehavior: "contain", padding: "24px 16px", boxSizing: "border-box", background: "var(--tmc-surface)", borderRight: "1px solid var(--tmc-border)" },
   sidebarBrand: { display: "flex", alignItems: "center", gap: 9, padding: "0 9px", color: "var(--tmc-heading)", fontSize: 16 },
-  profileCard: { display: "flex", alignItems: "center", gap: 10, margin: "32px 8px 24px", padding: "12px 10px", borderRadius: 10, background: "var(--tmc-profile-bg)" },
-  avatar: { display: "grid", placeItems: "center", width: 38, height: 38, borderRadius: "50%", background: "var(--tmc-primary)", color: "var(--tmc-primary-contrast)", fontWeight: 700 },
-  profileText: { display: "grid", gap: 3, minWidth: 0, fontSize: 13 },
-  sidebarNav: { display: "grid", gap: 7 },
+  sidebarNav: { display: "grid", gap: 7, marginTop: 28 },
   navButton: { display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "12px 11px", border: 0, borderRadius: 9, background: "transparent", color: "var(--tmc-subtle-text)", cursor: "pointer", textAlign: "left", fontSize: 14, fontWeight: 600 },
   navButtonActive: { background: "var(--tmc-primary)", color: "var(--tmc-primary-contrast)" },
   sidebarFooter: { marginTop: "auto", padding: "16px 9px 0", borderTop: "1px solid var(--tmc-border-light)", color: "var(--tmc-muted)", fontSize: 11, lineHeight: 1.5 },

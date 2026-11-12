@@ -198,25 +198,22 @@ jobs:
             backend/package-lock.json
             e2e/package-lock.json
 
-      - name: Provide mysqldump client (for G-15 backup-engine-api.spec.js)
-        # Avoid apt/mysql-server package state on ubuntu-latest. The MySQL
-        # service image already contains a compatible client binary, so use a
-        # Docker-backed shim when the runner does not provide mysqldump.
+      - name: Configure mysqldump from the MySQL service (for G-15 backup-engine-api.spec.js)
+        # The MySQL service image already contains mysqldump. Avoid installing
+        # mysql-client on the hosted runner: ubuntu-latest can carry a
+        # partially configured mysql-server package, causing apt to fail while
+        # configuring an unrelated package and preventing every API shard from
+        # reaching its tests.
         run: |
           set -euo pipefail
-          if command -v mysqldump >/dev/null 2>&1; then
-            mysqldump --version
-            exit 0
+          mysql_container="$(docker ps --filter 'ancestor=mysql:8.0' --format '{{.ID}}' | head -n 1)"
+          if [ -z "$mysql_container" ]; then
+            echo "::error::Could not locate the MySQL service container"
+            docker ps --format 'table {{.ID}}\t{{.Image}}\t{{.Names}}'
+            exit 1
           fi
-          shim="$RUNNER_TEMP/mysqldump"
-          cat > "$shim" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec docker run --rm --network host mysql:8.0 mysqldump "$@"
-          EOF
-          chmod +x "$shim"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-          "$shim" --version
+          docker exec "$mysql_container" mysqldump --version
+          echo "MYSQLDUMP_DOCKER_CONTAINER=$mysql_container" >> "$GITHUB_ENV"
 
       - name: Wait for MySQL ready
         run: |

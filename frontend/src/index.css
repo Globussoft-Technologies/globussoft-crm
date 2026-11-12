@@ -902,15 +902,11 @@ body[data-vertical="generic"]
 /* Generic Pickup Inventory owns the only table viewport on the page. Keep
    the page shell from becoming a second vertical scroller and let the card
    fill the available height while its table body handles the rows. */
-body[data-vertical="generic"]
-  .app-main
-  > main.generic-page-content:has(.pickup-inventory-page) {
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-inventory-page) {
   overflow-y: hidden !important;
 }
 
-body[data-vertical="generic"]
-  .pickup-inventory-page
-  > .pickup-plot-table-body-scroll {
+body[data-vertical="generic"] .pickup-inventory-page > .pickup-plot-table-body-scroll {
   flex: 1 1 auto !important;
   max-height: none !important;
 }
@@ -10748,10 +10744,7 @@ body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
   /* Sticky headers overlap scrolling rows, so they need an opaque themed
      surface rather than the glass/translucent table-header token. */
-  background-color: var(
-    --popover-bg,
-    var(--modal-bg, var(--surface-color))
-  ) !important;
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
@@ -10769,31 +10762,17 @@ body[data-vertical="generic"] .pickup-plot-table-body-scroll {
   isolation: isolate;
 }
 
-body[data-vertical="generic"]
-  .pickup-plot-table-body-scroll
-  table.pickup-plot-leads-table
-  thead,
-body[data-vertical="generic"]
-  .pickup-plot-table-body-scroll
-  table.pickup-plot-leads-table
-  thead
-  tr {
+body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead,
+body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead tr {
   /* Do not make the table section and its row sticky as well. Chromium can
      composite the row independently and let the first body row show above
      the header. The cells below are the sole sticky layer. */
   position: static !important;
   z-index: auto;
-  background-color: var(
-    --popover-bg,
-    var(--modal-bg, var(--surface-color))
-  ) !important;
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
 }
 
-body[data-vertical="generic"]
-  .pickup-plot-table-body-scroll
-  table.pickup-plot-leads-table
-  thead
-  th {
+body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead th {
   position: sticky !important;
   top: 0 !important;
   inset-block-start: 0 !important;
@@ -10805,10 +10784,7 @@ body[data-vertical="generic"]
   vertical-align: middle;
   line-height: 1.25;
   letter-spacing: 0.01em;
-  background-color: var(
-    --popover-bg,
-    var(--modal-bg, var(--surface-color))
-  ) !important;
+  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
   background-clip: padding-box;
   box-shadow: inset 0 -1px 0 var(--border-color);
 }
@@ -10857,12 +10833,7 @@ body[data-vertical="generic"]
   ) !important;
 }
 
-body[data-vertical="generic"]
-  .pickup-customers-page
-  .pickup-directory-scroll
-  table.pickup-customer-table
-  thead
-  th,
+body[data-vertical="generic"] .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table thead th,
 body[data-vertical="generic"]
   .pickup-installment-table-wrap
   table.pickup-installment-table

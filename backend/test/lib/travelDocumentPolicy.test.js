@@ -32,6 +32,7 @@ describe("travel document policy", () => {
     })).toEqual({
       id: 7,
       docType: "School medical clearance",
+      captureMode: "file",
       acceptedFileTypes: ["pdf", "docx"],
       required: true,
     });

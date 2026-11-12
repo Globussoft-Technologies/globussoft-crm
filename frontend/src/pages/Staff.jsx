@@ -643,11 +643,12 @@ export default function Staff() {
   // the same AccessDenied card the rest of the RBAC pages use.
   const { hasPermission, isReady: permissionsReady } = usePermissions();
   const canManageStaff =
-    permissionsReady &&
-    (hasPermission("staff", "write") ||
-      hasPermission("staff", "update") ||
-      hasPermission("staff", "delete") ||
-      hasPermission("staff", "manage"));
+    user?.role === "ADMIN" ||
+    (permissionsReady &&
+      (hasPermission("staff", "write") ||
+        hasPermission("staff", "update") ||
+        hasPermission("staff", "delete") ||
+        hasPermission("staff", "manage")));
   const canViewPermissions = hasPermission("roles", "read");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();

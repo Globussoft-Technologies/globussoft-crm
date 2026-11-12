@@ -4472,15 +4472,33 @@ const Leads = () => {
       return;
     }
     fetchApi("/api/callified/status")
-      .then((d) => setCallifiedConfigured(!!d?.isActive))
-      .catch(() => setCallifiedConfigured(false));
+      .then(async (d) => {
+        if (typeof d?.isActive === "boolean") {
+          setCallifiedConfigured(d.isActive);
+          return;
+        }
+        // Keep compatibility with older tenants/backends that expose the
+        // integration status through the settings route. The status endpoint
+        // is preferred because it only needs leads.read; this fallback keeps
+        // the Leads surface usable during a rolling backend deployment.
+        const legacy = await fetchApi("/api/integrations/callified/config");
+        setCallifiedConfigured(!!legacy?.isActive);
+      })
+      .catch(async () => {
+        try {
+          const legacy = await fetchApi("/api/integrations/callified/config");
+          setCallifiedConfigured(!!legacy?.isActive);
+        } catch {
+          setCallifiedConfigured(false);
+        }
+      });
   }, [isGeneric, canLeadRead]);
 
   // Load Callified campaigns for campaign assignment + bulk dial (generic only).
   const loadCallifiedCampaigns = useCallback(async () => {
     if (!isGeneric || !callifiedConfigured) return;
     try {
-      const d = await fetchApi("/api/callified/campaigns/with-lead-counts", { silent: true });
+      const d = await fetchApi("/api/callified/campaigns/with-lead-counts");
       const list = Array.isArray(d?.campaigns) ? d.campaigns : [];
       setCallifiedCampaigns(list);
     } catch {

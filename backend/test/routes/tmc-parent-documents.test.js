@@ -1,5 +1,5 @@
 // TMC parent travel-document API coverage. Parent uploads are stored through
-// the private visa document store and every read path is scoped to the portal
+// the private document store and every read path is scoped to the portal
 // tenant + authenticated parent contact.
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -17,9 +17,8 @@ const tmcPortalRouter = requireCJS("../../routes/tmc_portal");
 prisma.tenant = { ...(prisma.tenant || {}), findUnique: vi.fn() };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn() };
 prisma.tmcParentTrip = { ...(prisma.tmcParentTrip || {}), findMany: vi.fn() };
-prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn() };
+prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn(), updateMany: vi.fn() };
 prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.fn() };
-prisma.tmcConsentTemplate = { ...(prisma.tmcConsentTemplate || {}), findUnique: vi.fn() };
 prisma.tmcParentDocument = {
   ...(prisma.tmcParentDocument || {}),
   findMany: vi.fn(),
@@ -45,8 +44,9 @@ function parent() {
 function storedDocument(overrides = {}) {
   return {
     id: 11,
-    documentType: "passport",
-    filename: "passport.pdf",
+    documentType: "Travel insurance certificate",
+    documentRequirementId: 101,
+    filename: "insurance.pdf",
     fileSize: 4,
     mimeType: "application/pdf",
     status: "in_review",
@@ -63,9 +63,16 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset().mockResolvedValue(parent());
   prisma.tmcParentTrip.findMany.mockReset().mockResolvedValue([{ tripId: 7 }]);
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripParticipant.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
-  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue({ id: 7, tripType: "international" });
-  prisma.tmcConsentTemplate.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue({
+    id: 7,
+    tripType: "international",
+    documentRequirements: [
+      { id: 101, tripId: 7, docType: "Travel insurance certificate", acceptedFileTypes: ["pdf", "jpg", "png"], required: true },
+      { id: 102, tripId: 7, docType: "School medical clearance", acceptedFileTypes: ["pdf", "docx"], required: true },
+    ],
+  });
   prisma.tmcParentDocument.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcParentDocument.findFirst.mockReset().mockResolvedValue(null);
   prisma.tmcParentDocument.create.mockReset().mockImplementation(async ({ data }) => ({
@@ -78,9 +85,7 @@ beforeEach(() => {
     url: "/api/uploads/visa-docs/parent-document.pdf",
     key: "parent-document.pdf",
   });
-  visaDocStore.resolveViewUrl = vi.fn().mockResolvedValue("/api/uploads/visa-docs/parent-document.pdf?t=signed");
   visaDocStore.readDocBuffer = vi.fn().mockResolvedValue(Buffer.from("stored document"));
-  visaDocStore.DEFAULT_VIEW_TTL_SEC = 300;
 });
 
 describe("TMC parent travel documents", () => {
@@ -92,6 +97,10 @@ describe("TMC parent travel documents", () => {
       destination: "Darjeeling",
       departDate: new Date("2026-11-06T00:00:00.000Z"),
       returnDate: new Date("2026-11-12T00:00:00.000Z"),
+      documentRequirements: [
+        { id: 101, tripId: 7, docType: "Travel insurance certificate", acceptedFileTypes: JSON.stringify(["pdf", "jpg"]), required: true },
+        { id: 102, tripId: 7, docType: "School medical clearance", acceptedFileTypes: JSON.stringify(["pdf", "docx"]), required: true },
+      ],
     }]);
 
     const response = await request(makeApp())
@@ -101,32 +110,37 @@ describe("TMC parent travel documents", () => {
     expect(response.status).toBe(200);
     expect(response.body.documents).toEqual([expect.objectContaining({
       id: 11,
-      filename: "passport.pdf",
+      filename: "insurance.pdf",
       trip: expect.objectContaining({ id: 7, destination: "Darjeeling" }),
     })]);
+    expect(response.body.documentRequirements).toEqual([
+      expect.objectContaining({ id: 101, tripId: 7, docType: "Travel insurance certificate", acceptedFileTypes: ["pdf", "jpg"] }),
+      expect.objectContaining({ id: 102, tripId: 7, docType: "School medical clearance", acceptedFileTypes: ["pdf", "docx"] }),
+    ]);
     expect(prisma.tmcParentDocument.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 1, parentContactId: 55 },
     }));
   });
 
-  test("uploads a supported file only for a trip the parent can access", async () => {
+  test("uploads a supported file against the selected trip requirement", async () => {
     const response = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "passport")
+      .field("documentRequirementId", "101")
       .field("tripId", "7")
-      .attach("file", Buffer.from("%PDF-1.7"), { filename: "passport.pdf", contentType: "application/pdf" });
+      .attach("file", Buffer.from("%PDF-1.7"), { filename: "insurance.pdf", contentType: "application/pdf" });
 
     expect(response.status).toBe(201);
-    expect(response.body.document).toMatchObject({ id: 11, documentType: "passport", status: "in_review" });
+    expect(response.body.document).toMatchObject({ id: 11, documentType: "Travel insurance certificate", documentRequirementId: 101, status: "in_review" });
     expect(visaDocStore.storeDoc).toHaveBeenCalledWith(expect.any(Buffer), "application/pdf");
     expect(prisma.tmcParentDocument.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         tenantId: 1,
         parentContactId: 55,
         tripId: 7,
-        documentType: "passport",
-        filename: "passport.pdf",
+        documentRequirementId: 101,
+        documentType: "Travel insurance certificate",
+        filename: "insurance.pdf",
         status: "in_review",
       }),
     }));
@@ -136,7 +150,7 @@ describe("TMC parent travel documents", () => {
     const badType = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "passport")
+      .field("documentRequirementId", "101")
       .attach("file", Buffer.from("text"), { filename: "notes.txt", contentType: "text/plain" });
     expect(badType.status).toBe(400);
     expect(badType.body.code).toBe("UNSUPPORTED_MIME");
@@ -144,209 +158,161 @@ describe("TMC parent travel documents", () => {
     const wrongTrip = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "passport")
+      .field("documentRequirementId", "101")
       .field("tripId", "999")
-      .attach("file", Buffer.from("%PDF-1.7"), { filename: "passport.pdf", contentType: "application/pdf" });
+      .attach("file", Buffer.from("%PDF-1.7"), { filename: "insurance.pdf", contentType: "application/pdf" });
     expect(wrongTrip.status).toBe(404);
     expect(wrongTrip.body.code).toBe("TRIP_NOT_FOUND");
     expect(visaDocStore.storeDoc).not.toHaveBeenCalled();
     expect(prisma.tmcParentDocument.create).not.toHaveBeenCalled();
   });
 
-  test("stores a signed consent file through the shared OCI/local document store", async () => {
-    const response = await request(makeApp())
+  test("requires a configured requirement and enforces its accepted file types", async () => {
+    const missingRequirement = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "consent-form")
       .field("tripId", "7")
-      .attach("file", Buffer.from("png image"), { filename: "signed-consent.png", contentType: "image/png" });
+      .attach("file", Buffer.from("%PDF-1.7"), { filename: "clearance.pdf", contentType: "application/pdf" });
+    expect(missingRequirement.status).toBe(400);
+    expect(missingRequirement.body.code).toBe("DOCUMENT_REQUIREMENT_REQUIRED");
 
-    expect(response.status).toBe(201);
-    expect(visaDocStore.storeDoc).toHaveBeenCalledWith(expect.any(Buffer), "image/png");
-    expect(prisma.tmcParentDocument.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        documentType: "consent-form",
-        storage: "disk",
-        fileUrl: "/api/uploads/visa-docs/parent-document.pdf",
-        fileBlob: null,
-        storageKey: "parent-document.pdf",
-        mimeType: "image/png",
-      }),
-    }));
-
-    const missingTrip = await request(makeApp())
+    const wrongFileType = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "consent-form")
-      .attach("file", Buffer.from("png image"), { filename: "signed-consent.png", contentType: "image/png" });
-    expect(missingTrip.status).toBe(400);
-    expect(missingTrip.body.code).toBe("TRIP_REQUIRED");
-
-    const pdf = await request(makeApp())
-      .post("/api/portal/tmc/parent/documents")
-      .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "consent-form")
       .field("tripId", "7")
-      .attach("file", Buffer.from("%PDF-1.7"), { filename: "signed-consent.pdf", contentType: "application/pdf" });
-    expect(pdf.status).toBe(201);
-    expect(visaDocStore.storeDoc).toHaveBeenCalledWith(expect.any(Buffer), "application/pdf");
-    expect(prisma.tmcParentDocument.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        documentType: "consent-form",
-        mimeType: "application/pdf",
-      }),
-    }));
+      .field("documentRequirementId", "102")
+      .attach("file", Buffer.from("png image"), { filename: "clearance.png", contentType: "image/png" });
+    expect(wrongFileType.status).toBe(400);
+    expect(wrongFileType.body).toMatchObject({
+      code: "UNSUPPORTED_FILE_TYPE_FOR_DOCUMENT",
+      acceptedFileTypes: ["pdf", "docx"],
+    });
+    expect(visaDocStore.storeDoc).not.toHaveBeenCalled();
+    expect(prisma.tmcParentDocument.create).not.toHaveBeenCalled();
   });
 
-  test("accepts only the four parent document types", async () => {
-    const supportedTypes = ["passport", "aadhaar", "visa"];
-    for (const documentType of supportedTypes) {
+  test("uses the admin-defined document name and accepts configured file types", async () => {
+    for (const [filename, contentType, requirementId, expectedName] of [
+      ["medical-clearance.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "102", "School medical clearance"],
+      ["insurance-certificate.jpg", "image/jpeg", "101", "Travel insurance certificate"],
+    ]) {
       const response = await request(makeApp())
         .post("/api/portal/tmc/parent/documents")
         .set("Authorization", "Bearer " + portalToken())
-        .field("documentType", documentType)
+        .field("documentRequirementId", requirementId)
         .field("tripId", "7")
-        .attach("file", Buffer.from("%PDF-1.7"), { filename: documentType + ".pdf", contentType: "application/pdf" });
+        .attach("file", Buffer.from("document"), { filename, contentType });
 
       expect(response.status).toBe(201);
-      expect(response.body.document.documentType).toBe(documentType);
+      expect(response.body.document).toMatchObject({
+        documentType: expectedName,
+        documentRequirementId: Number(requirementId),
+      });
     }
 
-    const consent = await request(makeApp())
+    const arbitraryName = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", "Bearer " + portalToken())
-      .field("documentType", "consent-form")
+      .field("documentType", "This client value is ignored")
+      .field("documentRequirementId", "101")
       .field("tripId", "7")
-      .attach("file", Buffer.from("png image"), { filename: "consent.png", contentType: "image/png" });
-    expect(consent.status).toBe(201);
-    expect(consent.body.document.documentType).toBe("consent-form");
-
-    const removedType = await request(makeApp())
-      .post("/api/portal/tmc/parent/documents")
-      .set("Authorization", "Bearer " + portalToken())
-      .field("documentType", "school-id")
-      .field("tripId", "7")
-      .attach("file", Buffer.from("%PDF-1.7"), { filename: "school-id.pdf", contentType: "application/pdf" });
-
-    expect(removedType.status).toBe(400);
-    expect(removedType.body.code).toBe("INVALID_DOCUMENT_TYPE");
-
-    const medicalType = await request(makeApp())
-      .post("/api/portal/tmc/parent/documents")
-      .set("Authorization", "Bearer " + portalToken())
-      .field("documentType", "medical-form")
-      .field("tripId", "7")
-      .attach("file", Buffer.from("%PDF-1.7"), { filename: "medical.pdf", contentType: "application/pdf" });
-    expect(medicalType.status).toBe(400);
-    expect(medicalType.body.code).toBe("INVALID_DOCUMENT_TYPE");
+      .attach("file", Buffer.from("%PDF-1.7"), { filename: "custom-name.pdf", contentType: "application/pdf" });
+    expect(arbitraryName.status).toBe(201);
+    expect(arbitraryName.body.document.documentType).toBe("Travel insurance certificate");
   });
 
-  test("enforces trip-specific document requirements", async () => {
-    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 7, tripType: "domestic" });
-
-    for (const documentType of ["passport", "visa"]) {
-      const response = await request(makeApp())
-        .post("/api/portal/tmc/parent/documents")
-        .set("Authorization", `Bearer ${portalToken()}`)
-        .field("documentType", documentType)
-        .field("tripId", "7")
-        .attach("file", Buffer.from("%PDF-1.7"), { filename: `${documentType}.pdf`, contentType: "application/pdf" });
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("DOCUMENT_NOT_REQUIRED_FOR_TRIP");
-    }
-
-    const aadhaar = await request(makeApp())
+  test("does not apply trip-type document restrictions", async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 7,
+      tripType: "domestic",
+      documentRequirements: [{ id: 101, tripId: 7, docType: "Student emergency authorization", acceptedFileTypes: ["pdf"], required: true }],
+    });
+    const response = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
       .set("Authorization", `Bearer ${portalToken()}`)
-      .field("documentType", "aadhaar")
+      .field("documentRequirementId", "101")
       .field("tripId", "7")
-      .attach("file", Buffer.from("%PDF-1.7"), { filename: "aadhaar.pdf", contentType: "application/pdf" });
-    expect(aadhaar.status).toBe(201);
+      .attach("file", Buffer.from("%PDF-1.7"), { filename: "authorization.pdf", contentType: "application/pdf" });
+    expect(response.status).toBe(201);
+    expect(response.body.document.documentType).toBe("Student emergency authorization");
   });
 
-  test("loads and streams trip-type-specific consent terms", async () => {
-    prisma.tmcParentTrip.findMany.mockResolvedValue([{ tripId: 7 }]);
+  test("submits a digital consent form without creating a file upload", async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({
       id: 7,
-      tripCode: "DARJ-2026",
       destination: "Darjeeling",
-      tripType: "domestic",
-      departDate: new Date("2026-11-06T00:00:00.000Z"),
-      returnDate: new Date("2026-11-12T00:00:00.000Z"),
+      tripType: "international",
+      documentRequirements: [{
+        id: 103,
+        tripId: 7,
+        docType: "Parent consent form",
+        acceptedFileTypes: [],
+        required: true,
+        captureMode: "digital_consent",
+        consentTerms: "I agree to the Darjeeling trip terms.",
+      }],
     });
-    prisma.tmcConsentTemplate.findUnique.mockResolvedValue({
-      id: 31,
-      tripType: "domestic",
-      filename: "domestic-terms.pdf",
-      mimeType: "application/pdf",
-      fileSize: 12,
-      fileBlob: Buffer.from("%PDF-1.7\nmock consent terms"),
-    });
-    prisma.tmcParentDocument.findFirst.mockResolvedValue({
-      id: 11,
-      filename: "signed-consent.png",
-      fileSize: 10,
-      mimeType: "image/png",
+
+    const response = await request(makeApp())
+      .post("/api/portal/tmc/parent/consents")
+      .set("Authorization", `Bearer ${portalToken()}`)
+      .send({
+        tripId: 7,
+        documentRequirementId: 103,
+        parentName: "Arijit Singh",
+        participantName: "Anaya Singh",
+        relationship: "Parent",
+        signatureName: "Arijit Singh",
+        notes: "No medical restrictions.",
+        agreedToTerms: true,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.document).toMatchObject({
+      documentType: "Parent consent form",
+      captureMode: "digital_consent",
+      signatureName: "Arijit Singh",
       status: "in_review",
-      uploadedAt: new Date("2026-08-31T00:00:00.000Z"),
     });
-
-    const metadata = await request(makeApp())
-      .get("/api/portal/tmc/parent/consent-forms/7")
-      .set("Authorization", `Bearer ${portalToken()}`);
-    expect(metadata.status).toBe(200);
-    expect(metadata.body).toMatchObject({
-      tripType: "domestic",
-      template: { filename: "domestic-terms.pdf", mimeType: "application/pdf" },
-      signedDocument: { filename: "signed-consent.png", status: "in_review" },
-    });
-
-    const file = await request(makeApp())
-      .get("/api/portal/tmc/parent/consent-forms/7/file?download=1")
-      .set("Authorization", `Bearer ${portalToken()}`);
-    expect(file.status).toBe(200);
-    expect(file.headers["content-type"]).toMatch(/application\/pdf/);
-    expect(file.headers["content-disposition"]).toMatch(/attachment/);
-    const fileText = file.text || (Buffer.isBuffer(file.body) ? file.body.toString() : "");
-    expect(fileText).toContain("%PDF-1.7");
+    expect(prisma.tmcParentDocument.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        captureMode: "digital_consent",
+        mimeType: "application/json",
+        fileBlob: null,
+        termsSnapshot: expect.stringContaining("TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES"),
+        answersJson: expect.stringContaining("Anaya Singh"),
+      }),
+    }));
+    expect(visaDocStore.storeDoc).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tripId: 7, parentEmail: "arijit@example.com" }),
+    }));
   });
 
-  test("falls back to bundled consent terms when the demo schema/client is behind", async () => {
-    prisma.tmcParentTrip.findMany.mockResolvedValue([{ tripId: 7 }]);
+  test("does not accept a file upload for a digital consent requirement", async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({
       id: 7,
-      tripCode: "DARJ-2026",
-      destination: "Darjeeling",
       tripType: "domestic",
-      departDate: new Date("2026-11-06T00:00:00.000Z"),
-      returnDate: new Date("2026-11-12T00:00:00.000Z"),
-    });
-    prisma.tmcConsentTemplate.findUnique.mockRejectedValue({
-      code: "P2021",
-      message: "The table `TmcConsentTemplate` does not exist in the current database.",
-    });
-
-    const metadata = await request(makeApp())
-      .get("/api/portal/tmc/parent/consent-forms/7")
-      .set("Authorization", `Bearer ${portalToken()}`);
-
-    expect(metadata.status).toBe(200);
-    expect(metadata.body).toMatchObject({
-      tripType: "domestic",
-      template: {
-        filename: "domestic-terms.pdf",
-        mimeType: "application/pdf",
-      },
+      documentRequirements: [{
+        id: 104,
+        tripId: 7,
+        docType: "Consent form",
+        acceptedFileTypes: ["pdf"],
+        required: true,
+        captureMode: "digital_consent",
+      }],
     });
 
-    const file = await request(makeApp())
-      .get("/api/portal/tmc/parent/consent-forms/7/file")
-      .set("Authorization", `Bearer ${portalToken()}`);
+    const response = await request(makeApp())
+      .post("/api/portal/tmc/parent/documents")
+      .set("Authorization", `Bearer ${portalToken()}`)
+      .field("documentRequirementId", "104")
+      .field("tripId", "7")
+      .attach("file", Buffer.from("%PDF-1.7"), { filename: "consent.pdf", contentType: "application/pdf" });
 
-    expect(file.status).toBe(200);
-    expect(file.headers["content-type"]).toMatch(/application\/pdf/);
-    const fileBuffer = Buffer.isBuffer(file.body) ? file.body : Buffer.from(file.text || "", "binary");
-    expect(fileBuffer.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("DIGITAL_CONSENT_USE_FORM");
+    expect(visaDocStore.storeDoc).not.toHaveBeenCalled();
   });
 
   test("streams an authenticated database-backed parent document", async () => {
@@ -394,31 +360,4 @@ describe("TMC parent travel documents", () => {
     });
   });
 
-  test("view-url is owner-scoped and resolves a short-lived private link", async () => {
-    prisma.tmcParentDocument.findFirst.mockResolvedValue({
-      id: 11,
-      fileUrl: "/api/uploads/visa-docs/parent-document.pdf",
-      storage: "disk",
-      storageKey: "parent-document.pdf",
-    });
-
-    const response = await request(makeApp())
-      .get("/api/portal/tmc/parent/documents/11/view-url")
-      .set("Authorization", `Bearer ${portalToken()}`);
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ url: "/api/uploads/visa-docs/parent-document.pdf?t=signed", expiresIn: 300 });
-    expect(visaDocStore.resolveViewUrl).toHaveBeenCalledWith({
-      attachmentUrl: "/api/uploads/visa-docs/parent-document.pdf",
-      attachmentStorage: "disk",
-      attachmentKey: "parent-document.pdf",
-    });
-
-    prisma.tmcParentDocument.findFirst.mockResolvedValue(null);
-    const forbidden = await request(makeApp())
-      .get("/api/portal/tmc/parent/documents/11/view-url")
-      .set("Authorization", `Bearer ${portalToken({ contactId: 56 })}`);
-    expect(forbidden.status).toBe(404);
-    expect(forbidden.body.code).toBe("NOT_FOUND");
-  });
 });

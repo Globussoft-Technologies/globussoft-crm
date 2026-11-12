@@ -607,6 +607,16 @@ describe('GET /api/contacts — list', () => {
     expect(args.where.assignedToId).toBe(42);
   });
 
+  test('Generic CRM open bucket lets a non-manager read across the tenant', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'open' });
+    const res = await request(makeApp({ role: 'USER', userId: 42 }))
+      .get('/api/contacts?assignedToId=999');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.where.assignedToId).toBe(999);
+  });
+
   test('travel MANAGER is scoped to their own assigned contacts — only travel ADMIN can view all', async () => {
     const res = await request(makeApp({ role: 'MANAGER', userId: 42, vertical: 'travel' }))
       .get('/api/contacts?assignedToId=999');

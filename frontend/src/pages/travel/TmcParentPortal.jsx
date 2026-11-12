@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
-  CircleHelp,
   Clock3,
   CreditCard,
   Download,
@@ -34,7 +33,15 @@ import {
   TRAVEL_PAYMENT_SYNC_EVENT,
 } from "../../utils/travelPaymentSync";
 import { persistTmcPortalView, readTmcPortalView } from "../../utils/tmcPortalView";
-import { normalizeTripType, requiredParentDocumentTypes } from "../../utils/travelDocumentPolicy";
+import {
+  acceptedFileTypesToAccept,
+  formatAcceptedFileTypes,
+} from "../../utils/travelDocumentPolicy";
+import {
+  TMC_DIGITAL_CONSENT_FIELDS,
+  consentTermsForRequirement,
+  isDigitalConsentRequirement,
+} from "../../utils/tmcDigitalConsent";
 
 const TOKEN_KEY = "tmcParentPortalToken";
 const THEME_KEY = "tmcParentPortalTheme";
@@ -277,37 +284,6 @@ async function uploadParentDocument(token, formData) {
   return data;
 }
 
-async function fetchParentVisaLetter(token, letterId, kind, { download = false } = {}) {
-  const query = download ? "?download=1" : "";
-  const response = await fetch(`/api/portal/tmc/parent/visa-letters/${letterId}/${kind}${query}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw Object.assign(new Error(data.error || "Unable to open letter"), {
-      status: response.status,
-      code: data.code,
-    });
-  }
-  return response.blob();
-}
-
-async function fetchParentConsentForm(token, tripId) {
-  return api(`/parent/consent-forms/${tripId}`, token);
-}
-
-async function fetchParentConsentFile(token, tripId, { download = false } = {}) {
-  const query = download ? "?download=1" : "";
-  const response = await fetch(`/api/portal/tmc/parent/consent-forms/${tripId}/file${query}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw Object.assign(new Error(data.error || "Unable to open consent form"), { status: response.status, code: data.code });
-  }
-  return response.blob();
-}
-
 async function fetchParentDocumentFile(token, documentId, { download = false } = {}) {
   const query = download ? "?download=1" : "";
   const response = await fetch(`/api/portal/tmc/parent/documents/${documentId}/file${query}`, {
@@ -318,36 +294,6 @@ async function fetchParentDocumentFile(token, documentId, { download = false } =
     throw Object.assign(new Error(data.error || "Unable to open document"), { status: response.status, code: data.code });
   }
   return response.blob();
-}
-
-async function fetchParentDocumentViewUrl(token, documentId) {
-  const response = await fetch(`/api/portal/tmc/parent/documents/${documentId}/view-url`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw Object.assign(new Error(data.error || "Unable to open document"), {
-      status: response.status,
-      code: data.code,
-    });
-  }
-  return data;
-}
-
-async function uploadParentSignedLetter(token, letterId, formData) {
-  const response = await fetch(`/api/portal/tmc/parent/visa-letters/${letterId}/signed-upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: formData,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw Object.assign(new Error(data.error || "Upload failed"), {
-      status: response.status,
-      code: data.code,
-    });
-  }
-  return data;
 }
 
 function readTheme() {
@@ -369,7 +315,7 @@ export default function TmcParentPortal() {
     participants: [],
     reviewTrips: [],
     documents: [],
-    visaApplications: [],
+    documentRequirements: [],
   });
   const [bookings, setBookings] = useState([]);
   const [activeView, setActiveView] = useState(() => readTmcPortalView(PARENT_PORTAL_VIEWS));
@@ -394,7 +340,7 @@ export default function TmcParentPortal() {
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
     setContact(null);
-    setPortalData({ trips: [], parentLinks: [], registrations: [], participants: [], reviewTrips: [], documents: [], visaApplications: [] });
+    setPortalData({ trips: [], parentLinks: [], registrations: [], participants: [], reviewTrips: [], documents: [], documentRequirements: [] });
     setBookings([]);
     setSelectedBookingId(null);
     setActiveView("dashboard");
@@ -407,13 +353,12 @@ export default function TmcParentPortal() {
     if (!silent) setLoading(true);
     setError("");
     try {
-      const [meResult, tripsResult, bookingsResult, reviewsResult, documentsResult, visaLettersResult] = await Promise.all([
+      const [meResult, tripsResult, bookingsResult, reviewsResult, documentsResult] = await Promise.all([
         api("/parent/me", token),
         api("/parent/trips", token),
         travelApi("/travel/bookings", token),
         api("/parent/reviews", token),
         api("/parent/documents", token),
-        api("/parent/visa-letters", token),
       ]);
       setContact(meResult.contact || null);
       setPortalData({
@@ -423,7 +368,7 @@ export default function TmcParentPortal() {
         participants: Array.isArray(tripsResult.participants) ? tripsResult.participants : [],
         reviewTrips: Array.isArray(reviewsResult.trips) ? reviewsResult.trips : [],
         documents: Array.isArray(documentsResult.documents) ? documentsResult.documents : [],
-        visaApplications: Array.isArray(visaLettersResult.applications) ? visaLettersResult.applications : [],
+        documentRequirements: Array.isArray(documentsResult.documentRequirements) ? documentsResult.documentRequirements : [],
       });
       setBookings(Array.isArray(bookingsResult) ? bookingsResult : []);
     } catch (err) {
@@ -574,7 +519,7 @@ export default function TmcParentPortal() {
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => setActiveView("dashboard")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => setActiveView("trips")} />
           <PortalNavButton icon={ReceiptText} label="My Bookings" count={bookings.length} active={activeView === "bookings"} onClick={() => setActiveView("bookings")} />
-          <PortalNavButton icon={FileText} label="Travel Documents" count={portalData.documents.length + portalData.visaApplications.reduce((total, application) => total + (application.visaLetters?.length || 0), 0)} active={activeView === "documents"} onClick={() => setActiveView("documents")} />
+          <PortalNavButton icon={FileText} label="Travel Documents" count={portalData.documents.length} active={activeView === "documents"} onClick={() => setActiveView("documents")} />
           <PortalNavButton icon={Star} label="Reviews" active={activeView === "reviews"} onClick={() => setActiveView("reviews")} />
         </nav>
         <div style={styles.sidebarFooter}>Use this portal to explore school trips, complete registrations, and keep track of payments.</div>
@@ -600,7 +545,7 @@ export default function TmcParentPortal() {
           {activeView === "dashboard" && <DashboardView contact={contact} trips={trips} bookings={bookings} registrations={portalData.registrations} onNavigate={setActiveView} onOpenBooking={(id) => { setActiveView("bookings"); setSelectedBookingId(id); }} />}
           {activeView === "trips" && <TripsView trips={trips} loading={loading} />}
           {activeView === "bookings" && (selectedBooking ? <BookingDetail booking={selectedBooking} onBack={() => setSelectedBookingId(null)} /> : <BookingsView bookings={bookings} loading={loading} onSelect={setSelectedBookingId} />)}
-          {activeView === "documents" && <ParentDocumentsView documents={portalData.documents} visaApplications={portalData.visaApplications} trips={trips} loading={loading} token={token} onRefresh={load} />}
+          {activeView === "documents" && <DynamicParentDocumentsView documents={portalData.documents} documentRequirements={portalData.documentRequirements} trips={trips} participants={portalData.participants} contact={contact} loading={loading} token={token} onRefresh={load} />}
           {activeView === "reviews" && <ParentReviewsView trips={portalData.reviewTrips} loading={loading} token={token} onRefresh={load} />}
           {activeView === "profile" && <ParentProfileView contact={contact} />}
         </main>
@@ -732,35 +677,8 @@ function ParentNotificationBell({ token, onNavigate }) {
   );
 }
 
-const parentDocumentTypes = [
-  { value: "passport", label: "Passport" },
-  { value: "aadhaar", label: "Aadhaar card" },
-  { value: "consent-form", label: "Consent form" },
-  { value: "visa", label: "Visa documents" },
-];
-
-const parentDocumentFileRules = {
-  passport: "JPG, PNG, or PDF",
-  aadhaar: "JPG, PNG, or PDF",
-  "consent-form": "JPG, PNG, or PDF",
-  visa: "JPG, PNG, or PDF",
-};
-
-function documentFileRule(value) {
-  return parentDocumentFileRules[value] || "JPG, PNG, or PDF";
-}
-
-const legacyParentDocumentTypeLabels = {
-  "birth-certificate": "Birth certificate",
-  "school-id": "School ID",
-  other: "Other travel document",
-  "medical-form": "Medical consent form",
-};
-
-function documentTypeLabel(value) {
-  return parentDocumentTypes.find((type) => type.value === value)?.label
-    || legacyParentDocumentTypeLabels[value]
-    || "Travel document";
+function parentDocumentLabel(value) {
+  return String(value || "Travel document").trim() || "Travel document";
 }
 
 function formatFileSize(value) {
@@ -770,490 +688,55 @@ function formatFileSize(value) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function parseConsentTermsForDisplay(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return { title: "", introduction: "", sections: [] };
+
+  const chunks = normalized.split(/(?=\b\d+\.\s+[A-Z])/g).filter(Boolean);
+  const opening = chunks.shift() || normalized;
+  const titleMatch = opening.match(/^(.+?)(?=\s+These Terms)/i);
+  const title = titleMatch ? titleMatch[1].trim() : "";
+  const introduction = title ? opening.slice(titleMatch[0].length).trim() : opening.trim();
+
+  const sections = chunks.map((chunk) => {
+    const headingMatch = chunk.match(/^((?:\d+)\.\s+[A-Z][A-Z0-9 ,/&'’()-]*?)(?=\s+(?:[A-Z][a-z]|[A-Z]\.))/);
+    const heading = headingMatch ? headingMatch[1].trim() : "";
+    const body = heading ? chunk.slice(headingMatch[0].length).trim() : chunk.trim();
+    const paragraphs = body.split(/(?=\b[A-Z]\.\s)/g).map((paragraph) => paragraph.trim()).filter(Boolean);
+    return { heading, paragraphs: paragraphs.length ? paragraphs : [body] };
+  });
+
+  return { title, introduction, sections };
+}
+
+function ConsentTermsDocument({ terms }) {
+  const content = parseConsentTermsForDisplay(terms);
+  return (
+    <div style={styles.consentTermsDocument}>
+      {content.title && <h3 style={styles.consentTermsTitle}>{content.title}</h3>}
+      {content.introduction && <p style={styles.consentTermsIntroduction}>{content.introduction}</p>}
+      {content.sections.map((section, index) => (
+        <section key={`${section.heading || "section"}-${index}`} style={styles.consentTermsSection}>
+          {section.heading && <h4 style={styles.consentTermsSectionHeading}>{section.heading}</h4>}
+          {section.paragraphs.map((paragraph, paragraphIndex) => (
+            <p key={`${index}-${paragraphIndex}`} style={styles.consentTermsParagraph}>{paragraph}</p>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function documentStatusLabel(status) {
   if (status === "approved") return "Approved";
   if (status === "rejected") return "Needs update";
   return "In review";
 }
 
-function consentTripTypeLabel(value) {
-  if (value === "day_trip") return "Day trip";
-  if (value === "domestic") return "Domestic trip";
-  if (value === "international") return "International trip";
-  return "School trip";
-}
-
 function parentTripOption(row) {
   const trip = row?.trip || row;
   const id = trip?.id || row?.tripId;
   return id ? { ...trip, id } : null;
-}
-
-function ParentDocumentsView({ documents, visaApplications, trips, loading, token, onRefresh }) {
-  const [documentType, setDocumentType] = useState("");
-  const [tripId, setTripId] = useState("");
-  const [file, setFile] = useState(null);
-  const [fileInputKey, setFileInputKey] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-  const [documentError, setDocumentError] = useState("");
-  const [letterBusyId, setLetterBusyId] = useState(null);
-  const [consentForm, setConsentForm] = useState(null);
-  const [consentLoading, setConsentLoading] = useState(false);
-  const [consentBusy, setConsentBusy] = useState(null);
-  const tripSelectRef = useRef(null);
-
-  const tripOptions = useMemo(() => {
-    const seen = new Set();
-    return trips.map(parentTripOption).filter((trip) => {
-      if (!trip || seen.has(String(trip.id))) return false;
-      seen.add(String(trip.id));
-      return true;
-    });
-  }, [trips]);
-  const selectedTrip = tripOptions.find((trip) => String(trip.id) === String(tripId)) || null;
-  const selectedTripType = normalizeTripType(selectedTrip?.tripType);
-  const requiredTypes = useMemo(() => (selectedTrip ? requiredParentDocumentTypes(selectedTripType) : []), [selectedTrip, selectedTripType]);
-  const availableDocumentTypes = useMemo(() => parentDocumentTypes.filter((type) => requiredTypes.includes(type.value)), [requiredTypes]);
-  const selectedTripDocuments = documents.filter((document) => String(document.tripId) === String(tripId));
-  const uploadedTypes = new Set(selectedTripDocuments.map((document) => document.documentType));
-  const documentTypeHint = "Select a trip first to choose a document type.";
-
-  const showDocumentTypeHint = (event) => {
-    event.preventDefault();
-    setDocumentError(documentTypeHint);
-    tripSelectRef.current?.focus();
-  };
-
-  useEffect(() => {
-    if (!selectedTrip) {
-      setDocumentType("");
-      return;
-    }
-    if (!requiredTypes.includes(documentType)) {
-      setDocumentType(requiredTypes[0] || "");
-      setFile(null);
-      setFileInputKey((current) => current + 1);
-    }
-  }, [documentType, requiredTypes, selectedTrip]);
-
-  useEffect(() => {
-    if (documentType !== "consent-form" || !tripId) {
-      setConsentForm(null);
-      setConsentLoading(false);
-      return undefined;
-    }
-    let cancelled = false;
-    setConsentLoading(true);
-    setConsentForm(null);
-    setDocumentError("");
-    fetchParentConsentForm(token, tripId)
-      .then((result) => {
-        if (!cancelled) setConsentForm(result);
-      })
-      .catch((err) => {
-        if (!cancelled) setDocumentError(err.message || "Unable to load the consent form.");
-      })
-      .finally(() => {
-        if (!cancelled) setConsentLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [documentType, token, tripId]);
-
-  const handleFileChange = (event) => {
-    const nextFile = event.target.files?.[0] || null;
-    setMessage("");
-    setDocumentError("");
-    if (!nextFile) {
-      setFile(null);
-      return;
-    }
-    const acceptedTypes = ["application/pdf", "image/jpeg", "image/png"];
-    if (!acceptedTypes.includes(nextFile.type)) {
-      setFile(null);
-      setDocumentError("Only JPG, PNG, or PDF files are allowed.");
-      return;
-    }
-    if (nextFile.size > 10 * 1024 * 1024) {
-      setFile(null);
-      setDocumentError("Files must be 10 MB or smaller.");
-      return;
-    }
-    setFile(nextFile);
-  };
-
-  const submit = async (event) => {
-    event.preventDefault();
-    setMessage("");
-    setDocumentError("");
-    if (!tripId) {
-      setDocumentError("Select the related trip before uploading a document.");
-      return;
-    }
-    if (!requiredTypes.includes(documentType)) {
-      setDocumentError("Select a document type for the selected trip.");
-      return;
-    }
-    if (!file) {
-      setDocumentError("Choose a JPG, PNG, or PDF file first.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("documentType", documentType);
-      if (tripId) formData.append("tripId", tripId);
-      const uploaded = await uploadParentDocument(token, formData);
-      setFile(null);
-      setFileInputKey((current) => current + 1);
-      if (documentType === "consent-form" && uploaded.document) {
-        setConsentForm((current) => current ? { ...current, signedDocument: uploaded.document } : current);
-      }
-      setMessage("Document uploaded. Our travel team will review it shortly.");
-      await onRefresh({ silent: true });
-    } catch (err) {
-      setDocumentError(err.message || "Unable to upload this document.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const openDocument = async (documentRecord, download = false) => {
-    setDocumentError("");
-    setMessage("");
-    try {
-      // Legacy consent images may still be stored in fileBlob. Keep the
-      // authenticated proxy for consent-form rows so those records remain
-      // viewable while new consent uploads use OCI/local storage underneath.
-      if (!download && documentRecord.documentType !== "consent-form") {
-        const view = await fetchParentDocumentViewUrl(token, documentRecord.id);
-        if (!view?.url) throw new Error("Document file not found");
-        window.open(view.url, "_blank", "noopener,noreferrer");
-        return;
-      }
-      const blob = await fetchParentDocumentFile(token, documentRecord.id, { download });
-      const url = URL.createObjectURL(blob);
-      if (download) {
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = documentRecord.filename || "travel-document";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      } else {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (err) {
-      setDocumentError(err.message || "Unable to open this document.");
-    }
-  };
-
-  const openConsentFile = async (download = false) => {
-    if (!tripId || !consentForm?.template) return;
-    setDocumentError("");
-    setConsentBusy(download ? "download" : "view");
-    try {
-      const blob = await fetchParentConsentFile(token, tripId, { download });
-      const url = URL.createObjectURL(blob);
-      if (download) {
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = consentForm.template.filename || "consent-terms.pdf";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      } else {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (err) {
-      setDocumentError(err.message || "Unable to open the consent form.");
-    } finally {
-      setConsentBusy(null);
-    }
-  };
-
-  const openVisaLetter = async (letter, kind = "generated", download = false) => {
-    setDocumentError("");
-    setLetterBusyId(letter.id);
-    try {
-      const blob = await fetchParentVisaLetter(token, letter.id, kind, { download });
-      const url = URL.createObjectURL(blob);
-      if (download) {
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = letter.signedFileName || letter.generatedFileName || "visa-letter.pdf";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      } else {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (err) {
-      setDocumentError(err.message || "Unable to open this letter.");
-    } finally {
-      setLetterBusyId(null);
-    }
-  };
-
-  const uploadSignedLetter = async (letter, file) => {
-    if (!file) return;
-    setMessage("");
-    setDocumentError("");
-    if (file.type !== "application/pdf") {
-      setDocumentError("Only PDF files are allowed for signed visa letters.");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setDocumentError("Files must be 10 MB or smaller.");
-      return;
-    }
-    setLetterBusyId(letter.id);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      await uploadParentSignedLetter(token, letter.id, formData);
-      setMessage("Signed letter uploaded. Your travel advisor has been notified.");
-      await onRefresh({ silent: true });
-    } catch (err) {
-      setDocumentError(err.message || "Unable to upload the signed letter.");
-    } finally {
-      setLetterBusyId(null);
-    }
-  };
-
-  const visaLetters = visaApplications
-    .filter((application) => !tripId || String(application.trip?.id || application.tripId) === String(tripId))
-    .flatMap((application) => (
-      (application.visaLetters || []).map((letter) => ({ application, letter }))
-    ));
-
-  return (
-    <div style={styles.contentStack}>
-      <section style={styles.pageIntro}>
-        <div>
-          <h2 style={styles.pageTitle}>Travel Documents</h2>
-          <p style={styles.muted}>Upload and view the documents needed for your child&apos;s school trips.</p>
-        </div>
-        <span style={styles.countPill}>{documents.length} {documents.length === 1 ? "document" : "documents"}</span>
-      </section>
-
-      <section style={styles.documentInfoCard}>
-        <div style={styles.documentInfoIcon}><FileText size={22} /></div>
-        <div>
-          <h2 style={styles.cardTitle}>Keep trip documents together</h2>
-          <p style={styles.muted}>Upload clear copies of passports, Aadhaar cards, signed consent forms, and visa documents. Files are private to your parent account and shared with the travel team for review.</p>
-        </div>
-      </section>
-
-      <section style={styles.card} aria-labelledby="parent-document-upload-heading">
-        <div style={styles.cardHeader}>
-          <div>
-            <h2 id="parent-document-upload-heading" style={styles.cardTitle}>Upload a document</h2>
-            <p style={styles.muted}>The accepted file type for the selected document is shown below. Files up to 10 MB.</p>
-          </div>
-          <Upload size={19} color={styles.colors.primary} aria-hidden="true" />
-        </div>
-        <form onSubmit={submit} style={styles.documentForm}>
-          <div data-tmc-parent-grid="true" style={styles.documentUploadGrid}>
-            <label htmlFor="parent-document-trip" style={styles.label}>
-              <span style={styles.labelText}>Select trip <span style={styles.requiredLabel}>*</span></span>
-              <select ref={tripSelectRef} id="parent-document-trip" aria-label="Related trip" required value={tripId} onChange={(event) => { setTripId(event.target.value); setDocumentType(""); setFile(null); setFileInputKey((current) => current + 1); setDocumentError(""); }} style={styles.input}>
-                <option value="">Select a trip</option>
-                {tripOptions.map((trip) => <option key={trip.id} value={String(trip.id)}>{trip.destination || trip.tripCode || "School trip"}</option>)}
-              </select>
-            </label>
-            <label htmlFor="parent-document-type" style={styles.label}>
-              <span style={styles.labelText}>
-                Document type <span style={styles.requiredLabel}>*</span>
-                {!selectedTrip && (
-                  <button type="button" aria-label="Why is document type disabled?" title={documentTypeHint} onClick={showDocumentTypeHint} style={styles.fieldHintButton}>
-                    <CircleHelp size={14} aria-hidden="true" />
-                  </button>
-                )}
-              </span>
-              <select id="parent-document-type" aria-label="Document type" title={!selectedTrip ? documentTypeHint : undefined} required disabled={!selectedTrip} value={documentType} onChange={(event) => { setDocumentType(event.target.value); setFile(null); setFileInputKey((current) => current + 1); setDocumentError(""); }} style={styles.input}>
-                <option value="">{selectedTrip ? "Select a document" : "Select a trip first"}</option>
-                {availableDocumentTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
-              </select>
-            </label>
-          </div>
-          {!selectedTrip ? (
-            <div style={styles.mutedPanel}>Select a trip to see the documents required for that trip.</div>
-          ) : (
-            <div style={styles.requiredDocumentsPanel} aria-label="Required documents for selected trip">
-              <div style={styles.requiredDocumentsHeading}>Required documents for this {selectedTripType === "international" ? "international" : selectedTripType === "day_trip" ? "day" : "domestic"} trip</div>
-              <div style={styles.requiredDocumentsList}>
-                {availableDocumentTypes.map((type) => (
-                  <button key={type.value} type="button" title={`${type.label}: ${documentFileRule(type.value)}`} onClick={() => { setDocumentType(type.value); setFile(null); setFileInputKey((current) => current + 1); setDocumentError(""); }} style={styles.requiredDocumentItem} aria-pressed={documentType === type.value}>
-                    <CheckCircle2 size={15} color={uploadedTypes.has(type.value) ? styles.colors.success : styles.colors.primary} />
-                    <span>{type.label}</span>
-                    <span style={{ color: uploadedTypes.has(type.value) ? styles.colors.success : styles.colors.muted }}>{uploadedTypes.has(type.value) ? "Uploaded" : "Pending"}</span>
-                  </button>
-                ))}
-              </div>
-              <div style={styles.acceptedFileTypes} aria-label="Accepted file types">
-                <div style={styles.acceptedFileTypesHeading}>Accepted file types</div>
-                {documentType ? (
-                  <div style={styles.acceptedFileTypesList}>
-                    <div style={styles.acceptedFileTypeItem}>
-                      <span style={styles.acceptedFileTypeName}>{documentTypeLabel(documentType)}:</span>
-                      <span>{documentFileRule(documentType)}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={styles.acceptedFileTypesNote}>Select a document type to see its accepted file type.</div>
-                )}
-                <div style={styles.acceptedFileTypesNote}>Maximum size: 10 MB per file.</div>
-              </div>
-            </div>
-          )}
-          {documentType === "consent-form" ? (
-            <div style={styles.visaLettersInline} aria-labelledby="parent-consent-form-heading">
-              <div style={styles.cardHeader}>
-                <div>
-                  <h3 id="parent-consent-form-heading" style={styles.cardTitle}>Consent form</h3>
-                  <p style={styles.muted}>View the terms for the selected trip, sign them, then upload a clear JPG, PNG, or PDF file.</p>
-                </div>
-                <FileText size={19} color={styles.colors.primary} />
-              </div>
-              {!tripId ? (
-                <p style={styles.muted}>Select a related trip to view its consent terms.</p>
-              ) : consentLoading ? (
-                <LoadingState />
-              ) : !consentForm?.template ? (
-                <EmptyState icon={FileText} title="Consent terms unavailable" text="Your travel advisor has not added terms for this trip type yet." />
-              ) : (
-                <>
-                  <div style={{ ...styles.documentRow, marginBottom: 20 }}>
-                    <div style={styles.documentIcon}><FileText size={19} /></div>
-                    <div style={styles.documentMain}>
-                      <strong style={styles.documentName}>{consentForm.template.filename}</strong>
-                      <span style={styles.documentMeta}>{consentTripTypeLabel(consentForm.tripType)} · {consentForm.trip?.destination || "Selected trip"}</span>
-                      <span style={{ ...styles.documentNote, color: consentForm.signedDocument ? styles.colors.success : styles.colors.primary }}>
-                        {consentForm.signedDocument ? `Signed copy ${documentStatusLabel(consentForm.signedDocument.status).toLowerCase()}` : "Signature pending"}
-                      </span>
-                    </div>
-                    <div style={styles.documentActions}>
-                      <button type="button" onClick={() => openConsentFile(false)} style={styles.secondary} disabled={Boolean(consentBusy)}><Eye size={14} /> View terms</button>
-                      <button type="button" onClick={() => openConsentFile(true)} style={styles.secondary} disabled={Boolean(consentBusy)}><Download size={14} /> Download terms</button>
-                    </div>
-                  </div>
-                  <label htmlFor={`parent-document-file-${fileInputKey}`} style={{ ...styles.label, gap: 8 }}>
-                    Upload signed consent file
-                    <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose signed consent file" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={handleFileChange} style={styles.fileInput} />
-                  </label>
-                  {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
-                  <div style={styles.documentFormFooter}>
-                    <button type="submit" disabled={saving} style={styles.primary}><Upload size={15} /> {saving ? "Uploading..." : "Upload signed consent"}</button>
-                  </div>
-                </>
-              )}
-            </div>
-          ) : documentType === "visa" ? (
-            <div style={styles.visaLettersInline} aria-labelledby="parent-visa-letters-heading">
-              <div style={styles.cardHeader}>
-                <div>
-                  <h3 id="parent-visa-letters-heading" style={styles.cardTitle}>Visa documents</h3>
-                  <p style={styles.muted}>Upload the visa document for this international trip. If visa letters are available, you can also sign and return them below.</p>
-                </div>
-                <FileText size={19} color={styles.colors.primary} />
-              </div>
-              <label htmlFor={`parent-document-file-${fileInputKey}`} style={styles.label}>
-                Choose visa document
-                <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose travel document" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={handleFileChange} style={styles.fileInput} />
-              </label>
-              {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
-              <div style={styles.documentFormFooter}>
-                <button type="submit" disabled={saving} style={styles.primary}><Upload size={15} /> {saving ? "Uploading..." : "Upload visa document"}</button>
-              </div>
-              {loading && visaLetters.length === 0 ? <LoadingState /> : visaLetters.length === 0 ? (
-                <EmptyState icon={FileText} title="No visa letters yet" text="Your travel advisor will add visa letters here when they are ready." />
-              ) : (
-                <div style={styles.documentList}>
-                  {visaLetters.map(({ application, letter }) => {
-                    const signed = letter.status === "SIGNED_UPLOADED";
-                    const busy = letterBusyId === letter.id;
-                    const letterTitle = letter.documentType || letter.docType || "Visa letter";
-                    const tripLabel = application.trip?.destination || application.destinationCountry || "International trip";
-                    return (
-                      <div key={letter.id} data-tmc-parent-visa-letter={letter.id} style={styles.documentRow}>
-                        <div style={styles.documentIcon}><FileText size={19} /></div>
-                        <div style={styles.documentMain}>
-                          <strong style={styles.documentName}>{letterTitle}</strong>
-                          <span style={styles.documentMeta}>{application.participant?.fullName || "Student"} · {tripLabel}</span>
-                          <span style={{ ...styles.documentNote, color: signed ? styles.colors.success : styles.colors.primary }}>{signed ? "Signed copy uploaded" : "Signature pending"}</span>
-                        </div>
-                        <div style={styles.documentActions}>
-                          <button type="button" onClick={() => openVisaLetter(letter, "generated")} style={styles.secondary} disabled={busy} aria-label={`View ${letterTitle}`}><Eye size={14} /> View</button>
-                          <button type="button" onClick={() => openVisaLetter(letter, "generated", true)} style={styles.secondary} disabled={busy} aria-label={`Download ${letterTitle}`}><Download size={14} /> Download</button>
-                          {signed && <button type="button" onClick={() => openVisaLetter(letter, "signed")} style={styles.secondary} disabled={busy} aria-label={`View signed ${letterTitle}`}><Eye size={14} /> View signed</button>}
-                          <label style={{ ...styles.primary, cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}>
-                            <Upload size={14} /> {busy ? "Uploading..." : signed ? "Replace signed" : "Upload signed"}
-                            <input type="file" accept="application/pdf" aria-label={`Upload signed ${letterTitle}`} disabled={busy} onChange={(event) => { const file = event.target.files?.[0] || null; event.target.value = ""; uploadSignedLetter(letter, file); }} style={styles.visuallyHiddenInput} />
-                          </label>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : documentType ? (
-            <>
-              <label htmlFor={`parent-document-file-${fileInputKey}`} style={styles.label}>
-                Choose file
-                <input key={fileInputKey} id={`parent-document-file-${fileInputKey}`} aria-label="Choose travel document" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={handleFileChange} style={styles.fileInput} />
-              </label>
-              {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
-              <div style={styles.documentFormFooter}>
-                <button type="submit" disabled={saving} style={styles.primary}><Upload size={15} /> {saving ? "Uploading..." : "Upload document"}</button>
-              </div>
-            </>
-          ) : (
-            <div style={styles.mutedPanel}>Select a document type to upload.</div>
-          )}
-          {documentError && <div role="alert" style={styles.error}>{documentError}</div>}
-          {message && <div role="status" style={styles.successMessage}>{message}</div>}
-        </form>
-      </section>
-
-      <section style={styles.card} aria-labelledby="parent-documents-heading">
-        <div style={styles.cardHeader}>
-          <div>
-            <h2 id="parent-documents-heading" style={styles.cardTitle}>Your uploaded documents</h2>
-            <p style={styles.muted}>Open a document to view the private file.</p>
-          </div>
-        </div>
-        {loading && documents.length === 0 ? <LoadingState /> : documents.length === 0 ? (
-          <EmptyState icon={FileText} title="No documents uploaded yet" text="Upload the documents requested for your child&apos;s upcoming trips." />
-        ) : (
-          <div style={styles.documentList}>
-            {documents.map((document) => (
-              <div key={document.id} data-tmc-parent-document={document.id} style={styles.documentRow}>
-                <div style={styles.documentIcon}><FileText size={19} /></div>
-                <div style={styles.documentMain}>
-                  <strong style={styles.documentName}>{document.filename}</strong>
-                  <span style={styles.documentMeta}>{documentTypeLabel(document.documentType)} · {document.trip?.destination || "General travel document"} · {formatFileSize(document.fileSize)}</span>
-                  {document.notes && <span style={styles.documentNote}>{document.notes}</span>}
-                </div>
-                <div style={styles.documentActions}>
-                  <span style={styles.documentStatus}>{documentStatusLabel(document.status)}</span>
-                  <button type="button" onClick={() => openDocument(document)} style={styles.secondary} aria-label={`View ${document.filename}`}><Eye size={14} /> View</button>
-                  <button type="button" onClick={() => openDocument(document, true)} style={styles.secondary} aria-label={`Download ${document.filename}`}><Download size={14} /> Download</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
 }
 
 function ParentProfileView({ contact }) {
@@ -1754,12 +1237,27 @@ const styles = {
   documentInfoCard: { display: "flex", alignItems: "flex-start", gap: 13, padding: 18, border: "1px solid var(--tmc-parent-border)", borderRadius: 14, background: "linear-gradient(115deg, var(--tmc-parent-surface) 0%, var(--tmc-parent-surface-soft) 100%)" },
   documentInfoIcon: { flex: "0 0 auto", display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 11, background: "var(--tmc-parent-profile-bg)", color: "var(--tmc-parent-primary)" },
   documentForm: { display: "grid", gap: 13 },
+  digitalConsentPanel: { display: "grid", gap: 13, padding: 14, border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface-soft)" },
+  digitalConsentTerms: { display: "grid", gap: 0, overflow: "hidden", borderRadius: 9, background: "var(--tmc-parent-surface)", border: "1px solid var(--tmc-parent-border-light)" },
+  digitalConsentTermsHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "13px 15px", borderBottom: "1px solid var(--tmc-parent-border-light)", background: "var(--tmc-parent-surface-soft)" },
+  digitalConsentTermsHeaderCopy: { display: "grid", gap: 3 },
+  digitalConsentTermsHint: { color: "var(--tmc-parent-muted)", fontSize: 11, lineHeight: 1.45 },
+  digitalConsentTermsRequired: { flex: "0 0 auto", padding: "4px 8px", borderRadius: 999, background: "var(--tmc-parent-pending-bg)", color: "var(--tmc-parent-pending)", fontSize: 10, fontWeight: 750, textTransform: "uppercase", letterSpacing: 0.4 },
+  digitalConsentTermsScroller: { maxHeight: 370, overflowY: "auto", padding: "15px 16px 17px", background: "var(--tmc-parent-surface)" },
+  consentTermsDocument: { display: "grid", gap: 12, color: "var(--tmc-parent-muted)", fontSize: 12, lineHeight: 1.65 },
+  consentTermsTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 14, lineHeight: 1.45, letterSpacing: 0.1 },
+  consentTermsIntroduction: { margin: 0, lineHeight: 1.7 },
+  consentTermsSection: { display: "grid", gap: 6, paddingTop: 12, borderTop: "1px solid var(--tmc-parent-border-light)" },
+  consentTermsSectionHeading: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 12, lineHeight: 1.45, fontWeight: 750 },
+  consentTermsParagraph: { margin: 0, lineHeight: 1.7 },
+  consentAgreement: { display: "flex", alignItems: "flex-start", gap: 8, color: "var(--tmc-parent-text)", fontSize: 12, lineHeight: 1.45 },
   visaLettersInline: { marginTop: 18, paddingTop: 20, borderTop: "1px solid var(--tmc-parent-border-light)" },
   documentUploadGrid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 13 },
   requiredDocumentsPanel: { display: "grid", gap: 9, padding: 13, border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface-soft)" },
   requiredDocumentsHeading: { color: "var(--tmc-parent-heading)", fontSize: 12, fontWeight: 750 },
   requiredDocumentsList: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: 7 },
   requiredDocumentItem: { display: "flex", alignItems: "center", gap: 6, minWidth: 0, padding: "8px 9px", border: "1px solid var(--tmc-parent-border)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "pointer", fontSize: 12, textAlign: "left" },
+  requiredDocumentItemActive: { borderColor: "var(--tmc-parent-primary)", boxShadow: "0 0 0 2px rgba(49, 88, 120, 0.18)" },
   acceptedFileTypes: { display: "grid", gap: 6, paddingTop: 8, borderTop: "1px solid var(--tmc-parent-border-light)" },
   acceptedFileTypesHeading: { color: "var(--tmc-parent-heading)", fontSize: 11, fontWeight: 750 },
   acceptedFileTypesList: { display: "flex", flexWrap: "wrap", gap: "5px 14px" },
@@ -1909,3 +1407,358 @@ const styles = {
   profileLabel: { color: "var(--tmc-parent-muted)", fontSize: 12 },
   profileValue: { margin: "3px 0 0", color: "var(--tmc-parent-text)", fontSize: 14, fontWeight: 600 },
 };
+function DynamicParentDocumentsView({ documents, documentRequirements, trips, participants, contact, loading, token, onRefresh }) {
+  const [tripId, setTripId] = useState("");
+  const [requirementId, setRequirementId] = useState("");
+  const [file, setFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [consentAnswers, setConsentAnswers] = useState({});
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [documentError, setDocumentError] = useState("");
+
+  const requirementsByTripId = useMemo(() => {
+    const grouped = new globalThis.Map();
+    (documentRequirements || []).forEach((requirement) => {
+      const key = String(requirement.tripId);
+      grouped.set(key, [...(grouped.get(key) || []), requirement]);
+    });
+    return grouped;
+  }, [documentRequirements]);
+
+  const tripOptions = useMemo(() => {
+    const seen = new Set();
+    return (trips || []).map(parentTripOption).filter((trip) => {
+      if (!trip || seen.has(String(trip.id))) return false;
+      seen.add(String(trip.id));
+      return true;
+    }).map((trip) => ({
+      ...trip,
+      documentRequirements: requirementsByTripId.get(String(trip.id)) || trip.documentRequirements || [],
+    }));
+  }, [requirementsByTripId, trips]);
+
+  const selectedTrip = tripOptions.find((trip) => String(trip.id) === String(tripId)) || null;
+  const selectedRequirements = useMemo(() => selectedTrip?.documentRequirements || [], [selectedTrip]);
+  const selectedRequirement = selectedRequirements.find((requirement) => String(requirement.id) === String(requirementId)) || null;
+  const selectedTripDocuments = documents.filter((document) => String(document.tripId) === String(tripId));
+  const selectedTripParticipants = useMemo(
+    () => (participants || []).filter((participant) => String(participant.tripId) === String(tripId)),
+    [participants, tripId],
+  );
+  const selectedRequirementIsDigitalConsent = isDigitalConsentRequirement(selectedRequirement);
+
+  const findUploadedDocument = (requirement) => selectedTripDocuments.find((document) => (
+    Number(document.documentRequirementId) === Number(requirement.id)
+    || String(document.documentType || "").trim().toLowerCase() === String(requirement.docType || "").trim().toLowerCase()
+  ));
+  const selectedConsentDocument = selectedRequirement ? findUploadedDocument(selectedRequirement) : null;
+  const digitalConsentSubmitted = selectedConsentDocument && selectedConsentDocument.status !== "rejected";
+
+  useEffect(() => {
+    if (!selectedTrip) {
+      setRequirementId("");
+      return;
+    }
+    if (!selectedRequirements.some((requirement) => String(requirement.id) === String(requirementId))) {
+      setRequirementId(selectedRequirements[0] ? String(selectedRequirements[0].id) : "");
+      setFile(null);
+      setFileInputKey((current) => current + 1);
+    }
+  }, [requirementId, selectedRequirements, selectedTrip]);
+
+  useEffect(() => {
+    if (!selectedRequirementIsDigitalConsent) {
+      setConsentAnswers({});
+      setAgreedToTerms(false);
+      return;
+    }
+    const firstParticipant = selectedTripParticipants[0];
+    setConsentAnswers({
+      parentName: contact?.name || "",
+      participantName: firstParticipant?.fullName || "",
+      relationship: "Parent / Guardian",
+      signatureName: "",
+      notes: "",
+    });
+    setAgreedToTerms(false);
+  }, [contact?.name, selectedRequirement?.id, selectedRequirementIsDigitalConsent, selectedTripParticipants]);
+
+  const resetUpload = () => {
+    setFile(null);
+    setFileInputKey((current) => current + 1);
+    setDocumentError("");
+    setMessage("");
+  };
+
+  const chooseTrip = (event) => {
+    setTripId(event.target.value);
+    setRequirementId("");
+    resetUpload();
+  };
+
+  const chooseRequirement = (id) => {
+    setRequirementId(String(id));
+    resetUpload();
+  };
+
+  const updateConsentAnswer = (key, value) => {
+    setConsentAnswers((current) => ({ ...current, [key]: value }));
+    setMessage("");
+    setDocumentError("");
+  };
+
+  const handleFileChange = (event) => {
+    const nextFile = event.target.files?.[0] || null;
+    setMessage("");
+    setDocumentError("");
+    if (!nextFile) {
+      setFile(null);
+      return;
+    }
+    const accepted = acceptedFileTypesToAccept(selectedRequirement?.acceptedFileTypes).split(",").filter(Boolean);
+    const isAccepted = accepted.some((item) => item.startsWith(".")
+      ? nextFile.name.toLowerCase().endsWith(item.toLowerCase())
+      : nextFile.type.toLowerCase() === item.toLowerCase());
+    if (!isAccepted) {
+      setFile(null);
+      setDocumentError("This trip accepts: " + formatAcceptedFileTypes(selectedRequirement?.acceptedFileTypes) + ".");
+      return;
+    }
+    if (nextFile.size > 10 * 1024 * 1024) {
+      setFile(null);
+      setDocumentError("Files must be 10 MB or smaller.");
+      return;
+    }
+    setFile(nextFile);
+  };
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    setDocumentError("");
+    if (!tripId) return setDocumentError("Select the related trip before uploading a document.");
+    if (!selectedRequirement) return setDocumentError("Choose one of the documents requested for this trip.");
+    if (!file) return setDocumentError("Choose a file first.");
+    setSaving(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("tripId", tripId);
+      formData.append("documentRequirementId", String(selectedRequirement.id));
+      await uploadParentDocument(token, formData);
+      resetUpload();
+      setMessage(parentDocumentLabel(selectedRequirement.docType) + " uploaded. The travel team will review it shortly.");
+      await onRefresh({ silent: true });
+    } catch (error) {
+      setDocumentError(error.message || "Unable to upload this document.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitConsent = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    setDocumentError("");
+    if (!tripId) return setDocumentError("Select the related trip before submitting consent.");
+    if (!selectedRequirementIsDigitalConsent || !selectedRequirement) return setDocumentError("Choose a digital consent form first.");
+    const missingField = TMC_DIGITAL_CONSENT_FIELDS.find((field) => field.required && !String(consentAnswers[field.key] || "").trim());
+    if (missingField) return setDocumentError(`Complete: ${missingField.label}.`);
+    if (!agreedToTerms) return setDocumentError("Agree to the terms and conditions before submitting.");
+    setSaving(true);
+    try {
+      await api("/parent/consents", token, {
+        method: "POST",
+        body: {
+          tripId,
+          documentRequirementId: String(selectedRequirement.id),
+          ...consentAnswers,
+          agreedToTerms: true,
+        },
+      });
+      setMessage(parentDocumentLabel(selectedRequirement.docType) + " submitted. The travel team will review it shortly.");
+      await onRefresh({ silent: true });
+    } catch (error) {
+      setDocumentError(error.message || "Unable to submit this consent form.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openDocument = async (documentRecord, download = false) => {
+    setDocumentError("");
+    try {
+      const blob = await fetchParentDocumentFile(token, documentRecord.id, { download });
+      const url = URL.createObjectURL(blob);
+      if (download) {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = documentRecord.filename || "travel-document";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (error) {
+      setDocumentError(error.message || "Unable to open this document.");
+    }
+  };
+
+  return (
+    <div style={styles.contentStack}>
+      <section style={styles.pageIntro}>
+        <div>
+          <h2 style={styles.pageTitle}>Travel Documents</h2>
+          <p style={styles.muted}>Upload only the documents requested for each school trip.</p>
+        </div>
+        <span style={styles.countPill}>{documents.length} {documents.length === 1 ? "document" : "documents"}</span>
+      </section>
+      <section style={styles.documentInfoCard}>
+        <div style={styles.documentInfoIcon}><FileText size={22} /></div>
+        <div>
+          <h2 style={styles.cardTitle}>Trip-specific document checklist</h2>
+          <p style={styles.muted}>Choose a trip to see the exact documents your travel team needs. Digital consent forms are completed here; other documents use the file types selected by the trip admin.</p>
+        </div>
+      </section>
+      <section style={styles.card} aria-labelledby="parent-document-upload-heading">
+        <div style={styles.cardHeader}>
+          <div>
+            <h2 id="parent-document-upload-heading" style={styles.cardTitle}>{selectedRequirementIsDigitalConsent ? "Complete consent form" : "Upload a document"}</h2>
+            <p style={styles.muted}>{selectedRequirementIsDigitalConsent ? "Complete the required details, agree to the terms, and submit the form securely in this portal." : "The trip admin controls the document names and accepted file types. Files up to 10 MB."}</p>
+          </div>
+          {selectedRequirementIsDigitalConsent ? <CheckCircle2 size={19} color={styles.colors.primary} aria-hidden="true" /> : <Upload size={19} color={styles.colors.primary} aria-hidden="true" />}
+        </div>
+        <form onSubmit={selectedRequirementIsDigitalConsent ? submitConsent : submit} style={styles.documentForm}>
+          <label htmlFor="parent-document-trip" style={styles.label}>
+            <span style={styles.labelText}>Select trip <span style={styles.requiredLabel}>*</span></span>
+            <select id="parent-document-trip" aria-label="Related trip" required value={tripId} onChange={chooseTrip} style={styles.input}>
+              <option value="">Select a trip</option>
+              {tripOptions.map((trip) => <option key={trip.id} value={String(trip.id)}>{trip.destination || trip.tripCode || "School trip"}</option>)}
+            </select>
+          </label>
+          {!selectedTrip ? (
+            <div style={styles.mutedPanel}>Select a trip to see its document checklist.</div>
+          ) : selectedRequirements.length === 0 ? (
+            <div style={styles.mutedPanel}>No documents have been requested for this trip yet.</div>
+          ) : (
+            <div style={styles.requiredDocumentsPanel} aria-label="Documents required for selected trip">
+              <div style={styles.requiredDocumentsHeading}>Documents requested for this trip</div>
+              <div style={styles.requiredDocumentsList}>
+                {selectedRequirements.map((requirement) => {
+                  const uploaded = findUploadedDocument(requirement);
+                  const active = String(requirement.id) === String(requirementId);
+                  return (
+                    <button key={requirement.id} type="button" onClick={() => chooseRequirement(requirement.id)} style={{ ...styles.requiredDocumentItem, ...(active ? styles.requiredDocumentItemActive : {}) }} aria-pressed={active}>
+                      <CheckCircle2 size={15} color={uploaded ? styles.colors.success : styles.colors.primary} />
+                      <span style={{ flex: 1, textAlign: "left" }}>{parentDocumentLabel(requirement.docType)}</span>
+                      <span style={{ color: uploaded ? (uploaded.status === "rejected" ? styles.colors.danger : styles.colors.success) : styles.colors.muted }}>{uploaded ? (isDigitalConsentRequirement(requirement) ? (uploaded.status === "rejected" ? "Needs update" : "Submitted") : "Uploaded") : "Pending"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedRequirement && !selectedRequirementIsDigitalConsent && (
+                <div style={styles.acceptedFileTypes} aria-label="Accepted file types">
+                  <div style={styles.acceptedFileTypesHeading}>Accepted file types</div>
+                  <div style={styles.acceptedFileTypesList}>
+                    <div style={styles.acceptedFileTypeItem}>
+                      <span style={styles.acceptedFileTypeName}>{parentDocumentLabel(selectedRequirement.docType)}:</span>
+                      <span>{formatAcceptedFileTypes(selectedRequirement.acceptedFileTypes)}</span>
+                    </div>
+                  </div>
+                  <div style={styles.acceptedFileTypesNote}>Maximum size: 10 MB per file.</div>
+                </div>
+              )}
+            </div>
+          )}
+          {selectedRequirement && selectedRequirementIsDigitalConsent && !digitalConsentSubmitted && (
+            <div style={styles.digitalConsentPanel}>
+              <div style={styles.digitalConsentTerms}>
+                <div style={styles.digitalConsentTermsHeader}>
+                  <div style={styles.digitalConsentTermsHeaderCopy}>
+                    <strong style={{ color: "var(--tmc-parent-heading)", fontSize: 13 }}>Terms and conditions</strong>
+                    <span style={styles.digitalConsentTermsHint}>Please read the applicable trip terms before completing the consent form.</span>
+                  </div>
+                  <span style={styles.digitalConsentTermsRequired}>Required</span>
+                </div>
+                <div data-testid="digital-consent-terms" style={styles.digitalConsentTermsScroller}>
+                  <ConsentTermsDocument terms={consentTermsForRequirement(selectedRequirement)} />
+                </div>
+              </div>
+              {TMC_DIGITAL_CONSENT_FIELDS.map((field) => (
+                <label key={field.key} htmlFor={`tmc-consent-${field.key}`} style={styles.label}>
+                  <span style={styles.labelText}>{field.label}{field.required && <span style={styles.requiredLabel}> *</span>}</span>
+                  {field.type === "textarea" ? (
+                    <textarea id={`tmc-consent-${field.key}`} aria-label={field.label} value={consentAnswers[field.key] || ""} onChange={(event) => updateConsentAnswer(field.key, event.target.value)} rows={3} maxLength={2000} style={{ ...styles.textarea, fontFamily: "inherit" }} />
+                  ) : (
+                    <input id={`tmc-consent-${field.key}`} aria-label={field.label} type="text" value={consentAnswers[field.key] || ""} onChange={(event) => updateConsentAnswer(field.key, event.target.value)} maxLength={255} style={styles.input} required={field.required} />
+                  )}
+                </label>
+              ))}
+              <label style={styles.consentAgreement}>
+                <input type="checkbox" checked={agreedToTerms} onChange={(event) => { setAgreedToTerms(event.target.checked); setDocumentError(""); }} />
+                <span>I agree to the terms and conditions above.</span>
+              </label>
+              <div style={styles.documentFormFooter}>
+                <button type="submit" disabled={saving} style={styles.primary}><CheckCircle2 size={15} /> {saving ? "Submitting..." : "Submit consent form"}</button>
+              </div>
+            </div>
+          )}
+          {selectedRequirement && selectedRequirementIsDigitalConsent && digitalConsentSubmitted && (
+            <div role="status" style={styles.successMessage}>This consent form has already been submitted. The travel team can review it from the trip participant list.</div>
+          )}
+          {selectedRequirement && !selectedRequirementIsDigitalConsent && (
+            <>
+              <label htmlFor={"parent-document-file-" + fileInputKey} style={styles.label}>
+                Choose file
+                <input key={fileInputKey} id={"parent-document-file-" + fileInputKey} aria-label="Choose travel document" type="file" accept={acceptedFileTypesToAccept(selectedRequirement.acceptedFileTypes)} onChange={handleFileChange} style={styles.fileInput} />
+              </label>
+              {file && <span style={styles.documentSelectedFile}>{file.name} · {formatFileSize(file.size)}</span>}
+              <div style={styles.documentFormFooter}>
+                <button type="submit" disabled={saving} style={styles.primary}><Upload size={15} /> {saving ? "Uploading..." : "Upload document"}</button>
+              </div>
+            </>
+          )}
+          {documentError && <div role="alert" style={styles.error}>{documentError}</div>}
+          {message && <div role="status" style={styles.successMessage}>{message}</div>}
+        </form>
+      </section>
+      <section style={styles.card} aria-labelledby="parent-documents-heading">
+        <div style={styles.cardHeader}>
+          <div>
+            <h2 id="parent-documents-heading" style={styles.cardTitle}>Your uploaded documents</h2>
+            <p style={styles.muted}>Open a document to view the private file.</p>
+          </div>
+        </div>
+        {loading && documents.length === 0 ? <LoadingState /> : documents.length === 0 ? (
+          <EmptyState icon={FileText} title="No documents uploaded yet" text="Your trip checklist will appear after a travel team member configures it." />
+        ) : (
+          <div style={styles.documentList}>
+          {documents.map((document) => (
+              <div key={document.id} data-tmc-parent-document={document.id} style={styles.documentRow}>
+                <div style={styles.documentIcon}><FileText size={19} /></div>
+                <div style={styles.documentMain}>
+                  <strong style={styles.documentName}>{document.documentType || document.filename}</strong>
+                  <span style={styles.documentMeta}>{document.filename} · {document.trip?.destination || "School trip"} · {formatFileSize(document.fileSize)}</span>
+                  {document.notes && <span style={styles.documentNote}>{document.notes}</span>}
+                </div>
+                <div style={styles.documentActions}>
+                  <span style={styles.documentStatus}>{isDigitalConsentRequirement(document) ? (document.status === "rejected" ? "Needs update" : "Submitted") : documentStatusLabel(document.status)}</span>
+                  {!isDigitalConsentRequirement(document) && <>
+                    <button type="button" onClick={() => openDocument(document)} style={styles.secondary} aria-label={"View " + document.filename}><Eye size={14} /> View</button>
+                    <button type="button" onClick={() => openDocument(document, true)} style={styles.secondary} aria-label={"Download " + document.filename}><Download size={14} /> Download</button>
+                  </>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+

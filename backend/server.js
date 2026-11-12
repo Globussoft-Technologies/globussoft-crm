@@ -848,7 +848,6 @@ const callifiedRoutes = require("./routes/callified");
 // 503 EXPEDIA_NOT_YET_ENABLED until DC-4 demand-threshold flips. FINAL
 // wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
 const bookingExpediaRoutes = require("./routes/booking_expedia");
-const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelMeetingFormsRoutes = require("./routes/travel_meeting_forms");
 // Brochure Engine — wraps the vendored agentic-orchcrm engine behind the
 // CRM's JWT + tenant guard. Subprocess-based bridge (see
@@ -1055,7 +1054,6 @@ app.use("/api", (req, res, next) => {
     "/wellness/public",
     "/wellness/portal",
     "/attendance/biometric/webhook",
-    "/travel/microsites/public",
     "/travel/meeting-forms/public",
     "/travel/diagnostics/public",
     "/diagnostic-pages/public",
@@ -1192,8 +1190,8 @@ app.use("/api", (req, res, next) => {
   // BEFORE the customer logs in (so the login screen itself can carry
   // the sub-brand chrome). We expose ONLY the public-safe fields (no
   // version history, no createdBy / audit metadata) — handler implements
-  // the field filter. Sub-path is also reachable by the public microsite
-  // and embed-widget consumers (G093 / G095) for the same reason. GET
+  // the field filter. Sub-path is also reachable by public landing-page and
+  // embed-widget consumers (G093 / G095) for the same reason. GET
   // only; mutations stay role-gated below.
   if (
     req.method === "GET" &&
@@ -1466,7 +1464,7 @@ app.use("/api/travel", travelPurchaseOrdersRoutes);
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
 // Public destination-photo proxy (Pexels server-side, Wikipedia fallback on the
 // client). Mounted at the dedicated prefix; the /public sub-path is auth-exempt
-// via openPaths. Consumed by the customer-facing quote/itinerary/microsite pages.
+// via openPaths. Consumed by customer-facing quote, itinerary, and landing pages.
 app.use("/api/travel/destination-photos", require("./routes/travel_destination_photos"));
 app.use(
   "/api/travel/quote-templates",
@@ -1545,7 +1543,6 @@ app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
-app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelMeetingFormsRoutes);
 // Brochure Engine — paths internally start with /brochures; route file owns
 // verifyToken + requireTravelTenant + requirePermission per endpoint.

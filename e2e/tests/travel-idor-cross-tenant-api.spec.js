@@ -3156,7 +3156,6 @@ test.describe("IDOR #919 slice 13 — by-year + expired-summary cross-tenant pro
 //
 //   NOT YET SHIPPED today (404 expected; forward-compat pin — same
 //   pattern as /pricing/by-year in slice 13):
-//     - GET /api/travel/microsites/by-month
 //     - GET /api/travel/webcheckins/by-quarter
 //     - GET /api/travel/religious-packets/by-month
 //     - GET /api/travel/diagnostics/by-quarter
@@ -3176,25 +3175,6 @@ test.describe("IDOR #919 slice 13 — by-year + expired-summary cross-tenant pro
 // is the actual IDOR leak that route-level *-api.spec.js catches; slice
 // 14 pins the broad surface no-5xx + no-leak signal.
 test.describe("IDOR #919 slice 14 — new-rollup endpoint cross-tenant probes", () => {
-  test("wellness admin GET /api/travel/microsites/by-month → [200, 403, 404]", async ({
-    request,
-  }) => {
-    const token = await getWellnessAdmin(request);
-    if (!token) test.skip(true, "wellness admin token required");
-    const res = await get(request, token, `/api/travel/microsites/by-month`);
-    expect(
-      [200, 403, 404],
-      `wellness admin GET /microsites/by-month: got ${res.status()} (${await res.text()})`,
-    ).toContain(res.status());
-    if (res.status() === 200) {
-      const body = await res.json();
-      const blob = JSON.stringify(body);
-      expect(blob.toLowerCase()).not.toMatch(
-        /yasin@travelstall|travelstall\.in/,
-      );
-    }
-  });
-
   test("wellness admin GET /api/travel/webcheckins/by-quarter → [200, 403, 404]", async ({
     request,
   }) => {
@@ -3911,7 +3891,7 @@ test.describe("IDOR #919 slice 15 — non-Travel /:id cross-tenant probes (share
 //
 // Slice 16 drift note (per .claude/skills/verifying-gap-card-claims/):
 // the slice-16 prompt listed `/api/travel/visa-applications/:id`,
-// `/api/travel/commission-profiles/:id`, `/api/travel/microsites/:id`,
+// `/api/travel/commission-profiles/:id`,
 // `/api/travel/cost-master/:id`, `/api/travel/rfu-profiles/:id`,
 // `/api/travel/diagnostics/:id`, `/api/travel/trips/:id`,
 // `/api/travel/suppliers/:id`, `/api/travel/quotes/:id`,

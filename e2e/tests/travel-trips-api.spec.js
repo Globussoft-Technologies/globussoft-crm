@@ -912,18 +912,18 @@ test.describe("Travel trips API — slim-shape opt-in (#920 S3)", () => {
 //
 // Covers the new GET /trips/:id/registrations/:rid/documents/:docType/view-url
 // endpoint that mints a short-lived signed URL for passport, Aadhaar scans
-// and parent consent letters uploaded by parents via the public microsite.
+// and parent consent letters uploaded during parent registration.
 //
-// Because real document uploads require multipart POSTs from the public
-// microsite surface (which this gate spec doesn't drive), we pin the
+// Because real document uploads require multipart POSTs from the portal
+// surface (which this gate spec doesn't drive), we pin the
 // shape-contract and auth-gate only:
 //   - 404 when no document has been uploaded for the draft
 //   - 400 on an invalid docType
 //   - 401 when unauthenticated
 //   - 403 when the caller is a non-TMC tenant (generic admin)
 //
-// The happy-path signed-URL response is exercised in the microsite E2E
-// spec (travel-microsites-api.spec.js) which does drive the full upload flow.
+// The happy-path signed-URL response belongs to the parent-portal document
+// flow and is covered by the portal document tests.
 
 test.describe("Travel trips API — registration document view-url", () => {
   let regTripId = null;
@@ -945,9 +945,9 @@ test.describe("Travel trips API — registration document view-url", () => {
     if (tripRes.ok()) {
       regTripId = (await tripRes.json()).id;
     }
-    // Seed a minimal pending registration (DRAFT) via the microsite OTP
+    // Seed a minimal pending registration (DRAFT) via the parent-registration
     // approach is complex from here; seed directly via the trips pending-reg
-    // list — the list endpoint exists; a real draft needs the microsite
+    // list — the list endpoint exists; a real draft needs the portal
     // public flow. We skip the beforeAll seeding for rid and use any
     // existing regIds from earlier in this suite if available.
     // For the auth-gate + invalid-docType tests we only need a valid trip.
@@ -1003,7 +1003,7 @@ test.describe("Travel trips API — registration document view-url", () => {
   test("GET view-url — response shape includes url + docType + expiresInSeconds", async ({ request }) => {
     // This test requires an actual draft with an uploaded passport.
     // We mark it conditional on the suite having created a registration with
-    // a document in the microsite flow. Skip when unavailable in the gate.
-    test.skip(true, "happy-path requires full microsite upload flow — covered in travel-microsites-api.spec.js");
+    // a document in the portal flow. Skip when unavailable in the gate.
+    test.skip(true, "happy-path requires a portal document upload");
   });
 });

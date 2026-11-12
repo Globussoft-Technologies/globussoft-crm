@@ -332,14 +332,14 @@ describe('exchangeCallback — redirect_uri override (OAuth authorize/token matc
       const out = await client.exchangeCallback({
         state: 'st',
         code: 'auth-code',
-        redirectUri: 'https://session.example/travel/kyc/callback',
+        redirectUri: 'https://session.example/travel/portal/kyc/callback',
       });
       expect(out.aadhaarLast4).toBe('1234');
       const tokenCall = calls.find((c) => c.url.includes('/token'));
       expect(tokenCall).toBeTruthy();
       // Token-exchange body must carry the SESSION redirect_uri (the one used
       // at authorize time), NOT the env default — otherwise OAuth rejects it.
-      expect(tokenCall.opts.body).toContain(encodeURIComponent('https://session.example/travel/kyc/callback'));
+      expect(tokenCall.opts.body).toContain(encodeURIComponent('https://session.example/travel/portal/kyc/callback'));
       expect(tokenCall.opts.body).not.toContain(encodeURIComponent('https://env.example/portal/callback'));
     } finally {
       global.fetch = origFetch;

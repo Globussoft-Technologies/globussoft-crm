@@ -7,8 +7,35 @@ const GENERIC_TERMS = new Set([
   'consult', 'consultation', 'day', 'event', 'experience', 'for', 'health',
   'landing', 'local', 'options', 'people', 'professional', 'registration',
   'site', 'the', 'treatment', 'wellness', 'with', 'your', 'book', 'booking',
-  'capture', 'lead', 'leads', 'enquiry', 'enquiries', 'follow', 'up', 'get',
+  'capture', 'lead', 'leads', 'enquiry', 'enquiries', 'follow', 'follow-up', 'up', 'get',
   'untitled', 'page', 'new', 'dr', 'doctor', 'studio', 'brand', 'enhanced',
+  'visit', 'call', 'write', 'invites', 'invite', 'learn', 'more', 'submit',
+  'receive', 'prompt', 'every', 'submission', 'submissions', 'editable',
+  'trackable', 'tracked', 'routed', 'route', 'right', 'team',
+  'instantly', 'audience', 'add', 'date', 'time', 'location', 'people',
+  // Default scaffold navigation is layout copy, not campaign intent.
+  'home', 'services', 'about', 'us', 'contact', 'menu', 'navigation', 'nav',
+]);
+
+// A blank wellness campaign still needs a useful image search. These terms
+// are intentionally broad and describe common Pexels alt text, so the strict
+// relevance gate can keep stock results wellness-related without requiring a
+// campaign-specific treatment or event name.
+const FALLBACK_WELLNESS_RELEVANCE_TERMS = Object.freeze([
+  'wellness',
+  'health',
+  'therapy',
+  'clinic',
+  'care',
+  'consultation',
+  'mindfulness',
+  'fitness',
+  'nutrition',
+  'lifestyle',
+  'self-care',
+  'patient',
+  'doctor',
+  'medical',
 ]);
 
 const SUBJECT_RULES = [
@@ -74,6 +101,13 @@ function sourceText(input = {}) {
 }
 
 function fallbackSubject(source) {
+  // A newly created wellness page contributes its generated scaffold copy
+  // (CTA labels, benefit headings, footer text, etc.) to the context. When
+  // the page is still untitled, none of that copy is campaign intent, so use
+  // the broad wellness fallback instead of phrases such as "started why".
+  if (/\buntitled\b/.test(source) && /\bwellness\b/.test(source)) {
+    return 'wellness consultation';
+  }
   const terms = source
     .split(/\s+/)
     .map((term) => term.replace(/[^\p{L}\p{N}-]/gu, ''))
@@ -91,7 +125,9 @@ function buildWellnessImagePlan(input = {}) {
   const relevanceTerms = matched
     ? matched.terms
     : subject.split(/\s+/).filter((term) => !GENERIC_TERMS.has(term)).slice(0, 3);
-  if (!relevanceTerms.length && subject === 'wellness consultation') relevanceTerms.push('wellness');
+  if (!relevanceTerms.length && subject === 'wellness consultation') {
+    relevanceTerms.push(...FALLBACK_WELLNESS_RELEVANCE_TERMS);
+  }
 
   return {
     subject,

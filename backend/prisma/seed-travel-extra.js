@@ -1683,8 +1683,6 @@ async function main() {
           departDate: daysFromNow(45 + i),
           returnDate: daysFromNow(50 + i),
           legalEntity: "tmc_nexus",
-          micrositeUrl: null,
-          micrositeUuid: null,
           pricePerStudent: dec((18000 + i * 450).toFixed(2)),
           status: i % 3 === 0 ? "confirmed" : i % 3 === 1 ? "in-trip" : "completed",
           driveFolderId: null,

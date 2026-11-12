@@ -84,6 +84,10 @@ prisma.rolePermission = {
 prisma.tenant = {
   findUnique: vi.fn(),
 };
+prisma.tenantSetting = {
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
 prisma.userRole = {
   findMany: vi.fn(),
   count: vi.fn(),
@@ -148,7 +152,7 @@ function makePermissionsApp(options = {}) {
 }
 
 beforeEach(() => {
-  for (const m of [prisma.role, prisma.rolePermission, prisma.tenant, prisma.userRole, prisma.user, prisma.contact, prisma.patient]) {
+  for (const m of [prisma.role, prisma.rolePermission, prisma.tenant, prisma.tenantSetting, prisma.userRole, prisma.user, prisma.contact, prisma.patient]) {
     for (const fn of Object.values(m)) {
       if (typeof fn === 'function' && typeof fn.mockReset === 'function') {
         fn.mockReset();
@@ -206,6 +210,41 @@ describe('GET /api/roles pagination', () => {
 
     expect(res.body.pagination).toMatchObject({ page: 1, limit: 100, totalPages: 0 });
     expect(prisma.role.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 100, skip: 0 }));
+  });
+});
+
+describe('Generic CRM lead visibility setting', () => {
+  test('reads the tenant bucket value', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'open' });
+
+    const res = await request(makeApp({ tenantId: 11, vertical: 'generic' }))
+      .get('/api/roles/lead-visibility');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ visibility: 'open' });
+  });
+
+  test('validates and saves a tenant bucket value', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'closed' });
+    prisma.tenantSetting.upsert.mockResolvedValue({
+      id: 91,
+      key: 'generic.leads.visibility',
+      value: 'open',
+    });
+
+    const res = await request(makeApp({ tenantId: 11, vertical: 'generic' }))
+      .put('/api/roles/lead-visibility')
+      .send({ visibility: 'open' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ visibility: 'open' });
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: 11, key: 'generic.leads.visibility' } },
+      create: { tenantId: 11, key: 'generic.leads.visibility', value: 'open', category: 'leads' },
+      update: { value: 'open', category: 'leads' },
+    });
   });
 });
 

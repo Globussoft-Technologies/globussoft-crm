@@ -65,6 +65,7 @@ prisma.territory = {
   findMany: vi.fn(),
 };
 prisma.userRole = {
+  findMany: vi.fn(),
   findFirst: vi.fn().mockResolvedValue(null),
   deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
   create: vi.fn().mockResolvedValue({}),
@@ -92,6 +93,7 @@ import request from 'supertest';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const staffRouter = requireCJS('../../routes/staff');
+const { clearAllCache } = requireCJS('../../middleware/requirePermission');
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
@@ -105,6 +107,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 }
 
 beforeEach(() => {
+  clearAllCache();
   prisma.user.findFirst.mockReset();
   prisma.user.findMany.mockReset();
   prisma.user.findUnique.mockReset();
@@ -113,10 +116,22 @@ beforeEach(() => {
   prisma.user.update.mockReset();
   prisma.user.delete.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
   prisma.role.findFirst.mockReset();
   prisma.pipeline.findFirst.mockReset();
   prisma.territory.findMany.mockReset();
   prisma.territory.findMany.mockResolvedValue([]);
+  prisma.userRole.findMany.mockResolvedValue([
+    {
+      role: {
+        permissions: [
+          { module: 'staff', action: 'write' },
+          { module: 'staff', action: 'update' },
+          { module: 'staff', action: 'delete' },
+        ],
+      },
+    },
+  ]);
   prisma.userRole.create.mockClear();
   prisma.$executeRawUnsafe.mockClear();
   prisma.auditLog.create.mockReset();

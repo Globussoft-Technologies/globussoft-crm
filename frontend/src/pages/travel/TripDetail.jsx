@@ -2,23 +2,27 @@
 //
 // Lands at /travel/trips/:id. Tabbed surface:
 //   Overview — trip card + status / dates / destination
-//   Participants — list, add, edit, remove (Aadhaar-safe inputs)
+//   Participants — registered roster, document/payment status, CSV/XLSX import
 //   Rooming — assignment list with capacity guards
 //   Payment plan — upsert plan + materialised per-participant instalments
-//   Microsite — preview + admin link + publicUuid copy
 
-import { useContext, useEffect, useRef, useState, useCallback } from "react";
+import { useContext, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
-  Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download, Upload,
+  Link2, Download,
   MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
-  Sparkles, ArrowRight, RotateCcw, X,
+  Sparkles, ArrowRight, X, Eye,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { tripRequiresPassport } from "../../utils/travelDocumentPolicy";
+import {
+  TMC_DOCUMENT_FILE_TYPES,
+  formatAcceptedFileTypes,
+  normalizeAcceptedFileTypes,
+} from "../../utils/travelDocumentPolicy";
+import { isDigitalConsentRequirement } from "../../utils/tmcDigitalConsent";
 import { TRAVEL_PAYMENT_SYNC_CHANNEL, TRAVEL_PAYMENT_SYNC_EVENT } from "../../utils/travelPaymentSync";
 import TripFinancialSummary from "./TripFinancialSummary";
 import { AuthContext } from "../../App";
@@ -38,17 +42,12 @@ function getTripsListUrl() {
 
 const TABS = [
   { key: "overview", label: "Overview", icon: Luggage },
-  // Per decision #7, Participants is the SINGLE home for both
-  // PendingTripRegistration drafts (DRAFT / OTP_VERIFIED / REJECTED)
-  // AND actual TripParticipant rows (pending / approved / rejected /
-  // waitlisted). No separate "Pending Registrations" tab.
+  // Participants is the operational roster. Document collection and payment
+  // operations remain in their dedicated tabs.
   { key: "participants", label: "Participants", icon: Users },
+  { key: "documents", label: "Documents", icon: FileText },
   { key: "rooming", label: "Rooming", icon: BedDouble },
   { key: "payment", label: "Payment plan", icon: Wallet },
-  // Per decision #10, the Trip is the single owner of the public
-  // experience — the tab now surfaces BOTH the LandingPage (marketing
-  // + registration draft collection) AND the Microsite (secure
-  // operational portal). Tab key stays "microsite" for URL back-compat.
 ];
 
 const PARTICIPANT_IMPORT_SCHEMA = [
@@ -93,17 +92,6 @@ function fmt(d) {
 /** Lightweight client-side HTML sanitiser — strips scripts, event handlers,
  *  and javascript: URLs as defence-in-depth even though the server already
  *  runs sanitizeBody on storage. */
-function sanitizeHtml(raw) {
-  if (!raw || typeof raw !== "string") return "";
-  let s = raw;
-  s = s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
-  s = s.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "");
-  s = s.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "");
-  s = s.replace(/(href|src|action)\s*=\s*("javascript:[^"]*"|'javascript:[^']*'|javascript:[^\s>]*)/gi, '$1="#"');
-  s = s.replace(/(href|src|action)\s*=\s*("data:[^"]*"|'data:[^']*'|data:[^\s>]*)/gi, '$1="#"');
-  return s;
-}
-
 function toDateInput(d) {
   if (!d) return "";
   const dt = new Date(d);
@@ -210,7 +198,8 @@ export default function TripDetail() {
       </div>
 
       {tab === "overview" && <OverviewTab trip={trip} onJump={setTab} notify={notify} />}
-      {tab === "participants" && <ParticipantsTab trip={trip} onChange={load} notify={notify} />}
+      {tab === "participants" && <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />}
+      {tab === "documents" && <DocumentsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} />}
       {tab === "payment" && <PaymentTab trip={trip} notify={notify} />}
     </div>
@@ -240,10 +229,7 @@ function OverviewTab({ trip, onJump, notify }) {
 
   const participants = trip.participants || [];
   const partCount = participants.length;
-  const docCount = (trip.documentRequirements || []).filter((doc) => (
-    tripRequiresPassport(trip.tripType)
-      || ![doc.docType, doc.code, doc.name].some((value) => String(value || "").toLowerCase().includes("passport"))
-  )).length;
+  const docCount = (trip.documentRequirements || []).length;
   const score = ops?.departureReadiness?.score;
   const comp = ops?.departureReadiness?.components || {};
   const pay = ops?.payments;
@@ -366,9 +352,7 @@ function OverviewTab({ trip, onJump, notify }) {
         )}
       </SummaryBand>
 
-      {/* Public Experience band — landing page + microsite live under
-          one tab per decision #10; the Overview band keeps the existing
-          status pill (driven by microsite presence) for back-compat. */}
+      {/* Public Experience band — landing page and registration entry point. */}
       <LandingPageCard trip={trip} notify={notify} />
     </div>
   );
@@ -782,8 +766,354 @@ function StatusPill({ hasFirstPayment }) {
   );
 }
 
-function ParticipantsTab({ trip, onChange, notify }) {
-  const requiresPassport = tripRequiresPassport(trip.tripType);
+function normalizedDocumentName(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function documentMatchesRequirement(document, requirement) {
+  if (!document || !requirement) return false;
+  if (document.documentRequirementId && requirement.id) {
+    return Number(document.documentRequirementId) === Number(requirement.id);
+  }
+  return normalizedDocumentName(document.documentType) === normalizedDocumentName(requirement.docType);
+}
+
+function documentRequirementLabel(requirement) {
+  return String(requirement?.docType || "Document").trim() || "Document";
+}
+
+function DocumentStatusChips({ requirements, documents, onView, testIdPrefix }) {
+  if (!requirements.length) {
+    return <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>No documents requested</span>;
+  }
+  const chipBase = {
+    display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 8px",
+    borderRadius: 6, border: "1px solid transparent", fontSize: 11, fontWeight: 650,
+  };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {requirements.map((requirement) => {
+        const document = [...documents].find((candidate) => documentMatchesRequirement(candidate, requirement));
+        return document ? (
+          <button
+            key={requirement.id}
+            type="button"
+            style={{ ...chipBase, background: "rgba(47,122,77,0.12)", color: "#2F7A4D", cursor: "pointer" }}
+            onClick={() => onView(document)}
+            title={`View uploaded ${documentRequirementLabel(requirement)}`}
+            data-testid={`view-${testIdPrefix}-${requirement.id}`}
+          >
+            <FileText size={11} aria-hidden /> {documentRequirementLabel(requirement)} · View
+          </button>
+        ) : (
+          <span
+            key={requirement.id}
+            style={{ ...chipBase, background: "rgba(100,116,139,0.10)", color: "var(--text-secondary)" }}
+            data-testid={`missing-${testIdPrefix}-${requirement.id}`}
+          >
+            <FileText size={11} aria-hidden /> {documentRequirementLabel(requirement)} · Pending
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function DigitalConsentReviewModal({ person, document, onClose }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="digital-consent-details-title"
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 16, background: "rgba(6, 10, 18, 0.78)" }}
+    >
+      <div onClick={(event) => event.stopPropagation()} style={{ width: "min(640px, 100%)", maxHeight: "90vh", overflowY: "auto", display: "grid", gap: 16, padding: 20, border: "1px solid var(--border-color)", borderRadius: 14, background: "var(--bg-color, #111318)", boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+          <div>
+            <h2 id="digital-consent-details-title" style={{ margin: 0, fontSize: 19 }}>Digital consent submission</h2>
+            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>{person?.name || "Participant"} Â· {documentRequirementLabel(document)}</p>
+          </div>
+          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close digital consent details"><X size={17} /></button>
+        </div>
+        <div style={{ display: "grid", gap: 9 }}>
+          {Object.entries(document?.answers || {})
+            .filter(([key]) => !["parentEmail", "parentPhone"].includes(key))
+            .map(([key, value]) => (
+              <div key={key} style={{ display: "grid", gap: 3, paddingBottom: 8, borderBottom: "1px solid var(--border-color)" }}>
+                <span style={{ color: "var(--text-secondary)", fontSize: 11, fontWeight: 700 }}>{key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase())}</span>
+                <span style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{String(value || "—")}</span>
+              </div>
+            ))}
+        </div>
+        {document?.termsSnapshot && (
+          <div style={{ display: "grid", gap: 5, padding: 12, borderRadius: 9, background: "var(--subtle-bg, var(--surface-color))" }}>
+            <strong style={{ fontSize: 12 }}>Terms accepted</strong>
+            <span style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{document.termsSnapshot}</span>
+          </div>
+        )}
+        <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+          Submitted {document?.agreedAt ? new Date(document.agreedAt).toLocaleString() : "—"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SimpleParticipantsTab({ trip, onChange, notify }) {
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkImportResult, setBulkImportResult] = useState(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
+  const importInputRef = useRef(null);
+  const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
+  const participants = Array.isArray(trip.participants) ? trip.participants : [];
+  const parentDocumentsByEmail = useMemo(() => new Map(
+    (trip.parentDocuments || []).map((row) => [
+      String(row.parentEmail || "").trim().toLowerCase(),
+      Array.isArray(row.documents) ? row.documents : [],
+    ]),
+  ), [trip.parentDocuments]);
+
+  const getDocuments = (participant) => participant.parentDocuments?.length
+    ? participant.parentDocuments
+    : parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [];
+
+  const getDocumentStatus = (participant) => {
+    const requiredRequirements = requirements.filter((requirement) => requirement.required !== false);
+    if (requiredRequirements.length === 0) {
+      return { completed: false, label: "Not configured", detail: "No required documents" };
+    }
+    const documents = getDocuments(participant);
+    const completedCount = requiredRequirements.filter((requirement) => {
+      const document = documents.find((candidate) => documentMatchesRequirement(candidate, requirement));
+      return document && String(document.status || "").toLowerCase() !== "rejected";
+    }).length;
+    return {
+      completed: completedCount === requiredRequirements.length,
+      label: completedCount === requiredRequirements.length ? "Completed" : "Pending",
+      detail: `${completedCount}/${requiredRequirements.length} documents`,
+    };
+  };
+
+  const getPaymentStatus = (participant) => {
+    const completed = String(participant.paymentStatus || "").toLowerCase() === "completed"
+      || (!participant.paymentStatus && Boolean(participant.hasFirstPayment));
+    const summary = participant.paymentSummary;
+    return {
+      completed,
+      label: completed ? "Completed" : "Pending",
+      detail: summary?.totalInstallments
+        ? `${summary.completedInstallments}/${summary.totalInstallments} instalments`
+        : "No instalments yet",
+    };
+  };
+
+  const closeBulkImportModal = () => {
+    setBulkImportModalOpen(false);
+    setBulkFile(null);
+    if (importInputRef.current) importInputRef.current.value = "";
+  };
+
+  const downloadImportTemplate = async (format) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(
+        `/api/travel/trips/${trip.id}/participants/import-template?format=${format}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.error || "Failed to download participant template");
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = format === "xlsx" ? "travel-participants-template.xlsx" : "travel-participants-template.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      notify.success(`Downloaded ${format.toUpperCase()} participant template`);
+    } catch (error) {
+      notify.error(error?.message || "Failed to download participant template");
+    }
+  };
+
+  const bulkImport = async () => {
+    if (!bulkFile) {
+      notify.error("Choose a CSV or XLSX file first");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", bulkFile);
+    setBulkImportResult(null);
+    setBulkImporting(true);
+    try {
+      const token = getAuthToken();
+      const response = await fetch(`/api/travel/trips/${trip.id}/participants/import`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw Object.assign(new Error(payload?.error || "Failed to import participants"), { body: payload });
+      }
+      setBulkImportResult(payload || null);
+      closeBulkImportModal();
+      notify.success(`Imported ${payload?.inserted || 0}, updated ${payload?.updated || 0}`);
+      onChange();
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || "Failed to import participants");
+    } finally {
+      setBulkImporting(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <section className="glass" data-testid="participant-bulk-import" style={{ padding: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Import participants</div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Download the database-aligned template, complete one participant per row, and upload CSV or XLSX.
+            </div>
+          </div>
+          <button type="button" onClick={() => setBulkImportModalOpen(true)} style={{ ...secondaryBtn, alignSelf: "center" }}>
+            <Download size={14} /> Import participants
+          </button>
+        </div>
+        {bulkImportResult && (
+          <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="participant-bulk-import-result">
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
+            </div>
+            {bulkImportResult.warnings?.length > 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Payment setup warnings: {bulkImportResult.warnings.length}
+              </div>
+            )}
+            {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
+              <div style={{ fontSize: 12, color: "var(--danger-color, #b91c1c)" }}>
+                <strong>Rows with errors</strong>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                  {bulkImportResult.errors.map((item, index) => <li key={`${item.row}-${index}`}>Row {item.row || "?"}: {item.reason || "Unknown error"}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section style={documentAdminCard} data-testid="registered-participants-list">
+        <div style={documentAdminHeader}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Participant status</h2>
+            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
+              Track whether each participant has completed the required documents and payment instalments.
+            </p>
+          </div>
+          <span data-testid="participants-list-count" style={countBadge}>
+            {participants.length} participant{participants.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        {participants.length === 0 ? (
+          <div style={empty}>No registered participants yet. Use the import option above to add the roster.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <div style={{ minWidth: 620 }}>
+              <div style={{ ...documentMatrixGrid, gridTemplateColumns: "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)" }}>
+                <strong>Participant</strong>
+                <strong>Documents</strong>
+                <strong>Payment</strong>
+              </div>
+              {participants.map((participant) => {
+                const documentStatus = getDocumentStatus(participant);
+                const paymentStatus = getPaymentStatus(participant);
+                return (
+                  <div key={participant.id} style={{ ...documentMatrixGrid, gridTemplateColumns: "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{participant.fullName || "Participant"}</strong>
+                      <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{participant.parentName || participant.parentEmail || "Parent details unavailable"}</span>
+                    </div>
+                    {[documentStatus, paymentStatus].map((status, index) => (
+                      <div key={index} style={{ display: "grid", gap: 3, justifyItems: "start" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: status.completed ? "#2F7A4D" : "var(--text-secondary)", fontWeight: 650, fontSize: 12 }}>
+                          {status.completed ? <CheckCircle2 size={14} aria-hidden /> : <Clock size={14} aria-hidden />}
+                          {status.label}
+                        </span>
+                        <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{status.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {bulkImportModalOpen && (
+        <div role="dialog" aria-modal="true" aria-labelledby="participant-import-modal-title" data-testid="participant-bulk-import-modal" style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 16, background: "rgba(6, 10, 18, 0.78)" }}>
+          <div style={{ width: "min(760px, 100%)", maxHeight: "90vh", overflowY: "auto", display: "grid", gap: 16, padding: 20, border: "1px solid var(--border-color)", borderRadius: 14, background: "var(--bg-color, #111318)", boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+              <div>
+                <h2 id="participant-import-modal-title" style={{ margin: 0, fontSize: 19 }}>Import registered participants</h2>
+                <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>Use the exact headers in the template. The first four columns are required; optional fields are applied when provided.</p>
+              </div>
+              <button type="button" onClick={closeBulkImportModal} style={iconBtn} aria-label="Close import modal"><X size={17} /></button>
+            </div>
+            <div data-testid="participant-import-schema" style={{ border: "1px solid var(--border-color)", borderRadius: 10, padding: 12, display: "grid", gap: 10, background: "var(--surface-color, var(--subtle-bg))" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 13 }}>Download a starter template</strong>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => downloadImportTemplate("csv")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}><Download size={13} /> CSV template</button>
+                  <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}><Download size={13} /> XLSX template</button>
+                </div>
+              </div>
+              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
+                <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr><th scope="col" style={importSchemaTh}>Column</th><th scope="col" style={importSchemaTh}>Required</th><th scope="col" style={importSchemaTh}>What to enter</th></tr></thead>
+                  <tbody>{PARTICIPANT_IMPORT_SCHEMA.map((column) => <tr key={column.key}><td style={importSchemaTd}><code>{column.key}</code></td><td style={{ ...importSchemaTd, color: column.required ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)", fontWeight: column.required ? 700 : 400 }}>{column.required ? "Yes" : "Optional"}</td><td style={importSchemaTd}>{column.description}</td></tr>)}</tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>Matching uses fullName + parentPhone + parentEmail. Never include a full Aadhaar number; only the last four digits are accepted.</div>
+            </div>
+            <label
+              htmlFor="participant-bulk-import-file"
+              style={{
+                display: "grid",
+                gap: 8,
+                padding: "12px 14px",
+                border: "1px solid var(--border-color)",
+                borderRadius: 10,
+                background: "var(--subtle-bg)",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Choose CSV or XLSX file
+              <input ref={importInputRef} id="participant-bulk-import-file" aria-label="Bulk import participants file" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => setBulkFile(event.target.files?.[0] || null)} style={{ width: "100%" }} />
+              <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>Selected file: {bulkFile?.name || "No file chosen"}</span>
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>Cancel</button>
+              <button type="button" onClick={bulkImport} disabled={bulkImporting || !bulkFile} style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}>{bulkImporting ? "Importing..." : "Confirm import"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Kept as a compatibility reference for older snapshots; the active TMC UI
+// uses SimpleParticipantsTab above.
+// eslint-disable-next-line no-unused-vars
+function LegacyParticipantsTab({ trip, onChange, notify }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ fullName: "", parentName: "", parentPhone: "" });
   const [decidingId, setDecidingId] = useState(null);
@@ -797,11 +1127,12 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // prefix so React doesn't collide on id since the two tables share
   // an autoincrement keyspace.
   const [pendingRegs, setPendingRegs] = useState([]);
-  const [decidingRegId, setDecidingRegId] = useState(null);
+  const [_decidingRegId, setDecidingRegId] = useState(null);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
+  const [viewingConsent, setViewingConsent] = useState(null);
   const importInputRef = useRef(null);
 
   const loadPendingRegs = useCallback(async () => {
@@ -983,21 +1314,11 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
-  // Open a short-lived signed URL for a passport or Aadhaar scan uploaded
-  // via the public microsite. The backend mints a 5-minute link so raw
-  // storage paths never reach the browser directly.
-  const viewRegistrationDoc = async (rid, docType) => {
-    try {
-      const data = await fetchApi(
-        `/api/travel/trips/${trip.id}/registrations/${rid}/documents/${docType}/view-url`,
-      );
-      if (data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
-    } catch (e) {
-      notify.error(e?.body?.error || `Failed to open ${docType} document`);
+  const viewParentConsentFile = async (path, document, person) => {
+    if (isDigitalConsentRequirement(document)) {
+      setViewingConsent({ person, document });
+      return;
     }
-  };
-
-  const viewParentConsentFile = async (path) => {
     try {
       const token = getAuthToken();
       const response = await fetch(`/api/travel${path}`, {
@@ -1022,7 +1343,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // side (decision #8 — no second approval workflow), so we refresh
   // BOTH the parent trip (to get the new participant row) AND the
   // pending-registration list (to reflect status=CONVERTED).
-  const decideRegistration = async (rid, action) => {
+  const _decideRegistration = async (rid, action) => {
     let reviewNotes;
     if (action === "reject") {
       reviewNotes = await notify.prompt({
@@ -1075,31 +1396,23 @@ function ParticipantsTab({ trip, onChange, notify }) {
       || (registration.parentPhone && normalizePhone(participant.parentPhone) === normalizePhone(registration.parentPhone)))
   );
   const reviewableRegs = pendingRegs.filter((r) => !["CONVERTED", "REJECTED"].includes(r.status) && !alreadyRegistered(r));
-  const convertedRegsByParticipantId = new Map(
-    pendingRegs.filter((r) => r.status === "CONVERTED" && r.convertedToParticipantId)
-      .map((r) => [Number(r.convertedToParticipantId), r]),
-  );
-  const consentDocumentsByEmail = new Map(
-    (trip.parentConsentDocuments || []).map((row) => [
-      String(row.parentEmail || "").trim().toLowerCase(),
-      row.document,
-    ]),
-  );
   const parentDocumentsByEmail = new Map(
     (trip.parentDocuments || []).map((row) => [
       String(row.parentEmail || "").trim().toLowerCase(),
       Array.isArray(row.documents) ? row.documents : [],
     ]),
   );
-  const parentDocumentLabel = (documentType) => ({
-    passport: "Passport",
-    aadhaar: "Aadhaar",
-    "consent-form": "Consent form",
-    visa: "Visa document",
-  }[documentType] || "Travel document");
+  const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
 
   return (
     <div>
+      {viewingConsent && (
+        <DigitalConsentReviewModal
+          person={viewingConsent.person}
+          document={viewingConsent.document}
+          onClose={() => setViewingConsent(null)}
+        />
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", gap: 12, color: "var(--text-secondary)", fontSize: 13, flexWrap: "wrap" }}>
           <span>
@@ -1335,29 +1648,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
           >
             {reviewableRegs.map((r) => {
             // Parse uploaded document status from extrasJson — booleans only, no raw keys
-            let regDocs = {};
-            if (r.extrasJson) {
-              try { regDocs = JSON.parse(r.extrasJson)?.documents || {}; } catch { regDocs = {}; }
-            }
-            const hasPassport = !!regDocs.passport;
-            const hasAadhaar = !!regDocs.aadhaar;
-            const legacyConsentType = regDocs.parentConsent
-              ? "parentConsent"
-              : regDocs.consentLetter
-                ? "consentLetter"
-                : regDocs.medicalConsent
-                  ? "medicalConsent"
-                  : null;
-            const parentConsentDocument = consentDocumentsByEmail.get(String(r.parentEmail || "").trim().toLowerCase());
             const parentDocuments = parentDocumentsByEmail.get(String(r.parentEmail || "").trim().toLowerCase()) || [];
-            const hasConsent = Boolean(parentConsentDocument || legacyConsentType);
-            const docBtnBase = {
-              display: "inline-flex", alignItems: "center", gap: 3,
-              fontSize: 12, fontWeight: 600, border: "1px solid transparent",
-              borderRadius: 6, padding: "6px 9px", cursor: "pointer",
-            };
-            const docUploaded = { ...docBtnBase, background: "rgba(47,122,77,0.12)", color: "#2F7A4D" };
-            const docMissing = { ...docBtnBase, background: "rgba(100,116,139,0.10)", color: "var(--text-secondary)", cursor: "default" };
             return (
             <div key={`reg:${r.id}`} style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 18, borderBottom: "1px solid var(--border-color)" }} data-testid={`pending-reg-row-${r.id}`}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
@@ -1383,68 +1674,12 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     {r.parentEmail && <span style={{ opacity: 0.85 }}>{r.parentEmail}</span>}
                   </div>
                   {/* Document upload status — clicking "View" opens a 5-min signed URL */}
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
-                    {parentDocuments.length > 0 ? parentDocuments.map((document) => (
-                      <button
-                        key={document.id}
-                        type="button"
-                        style={docUploaded}
-                        onClick={() => viewParentConsentFile(`/trips/${trip.id}/registrations/${r.id}/parent-documents/${document.id}/file`)}
-                        title={`View uploaded ${parentDocumentLabel(document.documentType)}`}
-                        data-testid={`view-registration-document-${r.id}-${document.id}`}
-                      >
-                        <FileText size={11} aria-hidden /> {parentDocumentLabel(document.documentType)} - View
-                      </button>
-                    )) : <>
-                    {requiresPassport && (hasPassport ? (
-                      <button
-                        type="button"
-                        style={docUploaded}
-                        onClick={() => viewRegistrationDoc(r.id, "passport")}
-                        title="View uploaded passport scan"
-                        data-testid={`view-passport-${r.id}`}
-                      >
-                        <FileText size={11} aria-hidden /> Passport - View
-                      </button>
-                    ) : (
-                      <span style={docMissing} data-testid={`passport-missing-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Passport not uploaded
-                      </span>
-                    ))}
-                    {hasAadhaar ? (
-                      <button
-                        type="button"
-                        style={docUploaded}
-                        onClick={() => viewRegistrationDoc(r.id, "aadhaar")}
-                        title="View uploaded Aadhaar scan"
-                        data-testid={`view-aadhaar-${r.id}`}
-                      >
-                        <FileText size={11} aria-hidden /> Aadhaar - View
-                      </button>
-                    ) : (
-                      <span style={docMissing} data-testid={`aadhaar-missing-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Aadhaar not uploaded
-                      </span>
-                    )}
-                    {hasConsent ? (
-                      <button
-                        type="button"
-                        style={docUploaded}
-                        onClick={() => parentConsentDocument
-                          ? viewParentConsentFile(`/trips/${trip.id}/registrations/${r.id}/consent-form/file`)
-                          : viewRegistrationDoc(r.id, legacyConsentType)}
-                        title="View uploaded consent form"
-                        data-testid={`view-parent-consent-${r.id}`}
-                      >
-                        <FileText size={11} aria-hidden /> Consent form - View
-                      </button>
-                    ) : (
-                      <span style={docMissing} data-testid={`parent-consent-missing-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Consent form not uploaded
-                      </span>
-                    )}
-                    </>}
-                  </div>
+                  <DocumentStatusChips
+                    requirements={requirements}
+                    documents={parentDocuments}
+                    onView={(document) => viewParentConsentFile(`/trips/${trip.id}/registrations/${r.id}/parent-documents/${document.id}/file`, document, { name: r.studentName })}
+                    testIdPrefix={`registration-${r.id}`}
+                  />
                   {r.reviewNotes && (
                     <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
                       Note: {r.reviewNotes}
@@ -1489,15 +1724,9 @@ function ParticipantsTab({ trip, onChange, notify }) {
             const isRejected = false;
             const busy = decidingId === p.id;
             const isApprovalUiEnabled = Boolean(window.__ENABLE_LEGACY_APPROVAL_UI__);
-            const consentDocument = consentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || p.consentDocument;
             const parentDocuments = p.parentDocuments?.length
               ? p.parentDocuments
               : parentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || [];
-            const convertedReg = convertedRegsByParticipantId.get(Number(p.id));
-            let registrationDocs = {};
-            try { registrationDocs = JSON.parse(convertedReg?.extrasJson || "{}")?.documents || {}; } catch { registrationDocs = {}; }
-            const registrationConsentType = ["parentConsent", "consentLetter", "medicalConsent"]
-              .find((type) => registrationDocs[type]);
             return (
               <div key={p.id} style={row}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
@@ -1523,45 +1752,12 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
-                  {parentDocuments.length > 0 ? parentDocuments.map((document) => (
-                    <button
-                      key={document.id}
-                      type="button"
-                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)" }}
-                      onClick={() => viewParentConsentFile(`/trips/${trip.id}/participants/${p.id}/parent-documents/${document.id}/file`)}
-                      title={`View uploaded ${parentDocumentLabel(document.documentType)}`}
-                      data-testid={`view-participant-document-${p.id}-${document.id}`}
-                    >
-                      <FileText size={11} aria-hidden /> {parentDocumentLabel(document.documentType)} - View
-                    </button>
-                  )) : consentDocument ? (
-                    <button
-                      type="button"
-                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)" }}
-                      onClick={() => viewParentConsentFile(`/trips/${trip.id}/participants/${p.id}/consent-form/file`)}
-                      title="View uploaded consent form"
-                      data-testid={`view-participant-consent-${p.id}`}
-                    >
-                      <FileText size={11} aria-hidden /> Consent form - View
-                    </button>
-                  ) : registrationConsentType ? (
-                    <button type="button" style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12 }}
-                      onClick={() => viewRegistrationDoc(convertedReg.id, registrationConsentType)}>
-                      <FileText size={11} aria-hidden /> Consent form - View
-                    </button>
-                  ) : (
-                    <span style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12, color: "var(--text-secondary)", cursor: "default" }} data-testid={`participant-consent-missing-${p.id}`}>
-                      <FileText size={11} aria-hidden /> Consent form not uploaded
-                    </span>
-                  )}
-                  {convertedReg && ["passport", "aadhaar"].filter((type) => registrationDocs[type]).map((type) => (
-                    <button key={type} type="button"
-                      style={{ ...secondaryBtn, padding: "5px 10px", fontSize: 12 }}
-                      onClick={() => viewRegistrationDoc(convertedReg.id, type)}
-                      data-testid={`view-participant-registration-${type}-${p.id}`}>
-                      <FileText size={11} aria-hidden /> {type === "aadhaar" ? "Aadhaar" : "Registration passport"} - View
-                    </button>
-                  ))}
+                  <DocumentStatusChips
+                    requirements={requirements}
+                    documents={parentDocuments}
+                    onView={(document) => viewParentConsentFile(`/trips/${trip.id}/participants/${p.id}/parent-documents/${document.id}/file`, document, { name: p.fullName })}
+                    testIdPrefix={`participant-${p.id}`}
+                  />
                   {/* Approve/Reject CTAs — visible only when an action makes sense.
                       Pending → both. Approved → "Reject" so a wrongly-approved
                       row can be reversed. Rejected → "Approve" so a re-review
@@ -1596,7 +1792,6 @@ function ParticipantsTab({ trip, onChange, notify }) {
                       <AlertCircle size={13} aria-hidden /> Reject
                     </button>
                   )}
-                  {requiresPassport && <PassportCell participant={p} notify={notify} onChange={onChange} />}
                   <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
                     <Trash2 size={14} />
                   </button>
@@ -1611,207 +1806,324 @@ function ParticipantsTab({ trip, onChange, notify }) {
   );
 }
 
-// ─── Passport upload cell (PRD_PASSPORT_OCR FR-1 operator-side) ──────
-//
-// Per-participant upload control feeding the verification queue at
-// /travel/passport-verification. Status derives from the passport columns
-// the trip GET already returns on each participant row:
-//   passportVerifiedAt   → "Passport verified" badge + Clear & re-upload
-//   passportRejectedAt   → "Passport rejected" badge + Re-upload CTA
-//   passportExtractedAt  → "Pending verification" badge + Re-upload CTA
-//   (none)               → "No passport" badge + Upload CTA
-// No plain upload CTA once verified: the upload route keeps
-// passportVerifiedAt intact, so a fresh extraction would never re-enter
-// the queue (it filters on verifiedAt IS NULL). The Clear & re-upload
-// action calls DELETE /passport-extraction (ADMIN/MANAGER-gated
-// server-side), which resets all markers so the next upload queues
-// normally. The queue page can't host that reset — it only lists
-// unverified rows.
-//
-// Upload calls pass { silent: true } and own ALL error toasts locally:
-// fetchApi's auto-toast would otherwise show the raw server string next
-// to (not deduped against) the friendlier vendor-pending copy below.
+function DocumentsTab({ trip, onChange, notify }) {
+  const [pendingRegs, setPendingRegs] = useState([]);
+  const [loadingRegs, setLoadingRegs] = useState(true);
+  const [editingId, setEditingId] = useState(null);
+  const [docName, setDocName] = useState("");
+  const [acceptedFileTypes, setAcceptedFileTypes] = useState(["pdf", "jpg", "png"]);
+  const [captureMode, setCaptureMode] = useState("file");
+  const [saving, setSaving] = useState(false);
+  const [viewingConsent, setViewingConsent] = useState(null);
 
-const PASSPORT_ACCEPT = ".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf";
-// Mirrors the multer cap in backend/routes/travel_passport.js (PRD FR-1).
-const PASSPORT_MAX_BYTES = 5 * 1024 * 1024;
+  const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
+  const parentDocumentsByEmail = useMemo(() => new Map(
+    (trip.parentDocuments || []).map((row) => [
+      String(row.parentEmail || "").trim().toLowerCase(),
+      Array.isArray(row.documents) ? row.documents : [],
+    ]),
+  ), [trip.parentDocuments]);
 
-function passportState(p) {
-  if (p.passportVerifiedAt) return { label: "Passport verified", bg: "rgba(47,122,77,0.14)", color: "#2F7A4D", canUpload: false };
-  if (p.passportRejectedAt) return { label: "Passport rejected", bg: "rgba(168,50,63,0.14)", color: "#A8323F", canUpload: true };
-  if (p.passportExtractedAt) return { label: "Pending verification", bg: "rgba(200,154,78,0.18)", color: "#9A6F2E", canUpload: true };
-  return { label: "No passport", bg: "var(--subtle-bg)", color: "var(--text-secondary)", canUpload: true };
-}
-
-function PassportCell({ participant: p, notify, onChange }) {
-  const fileRef = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const state = passportState(p);
-  // WCAG 2.5.3 Label in Name — the accessible name must contain the
-  // visible text, so the aria-label tracks the Re-upload/Upload state.
-  const isReupload = Boolean(p.passportExtractedAt || p.passportRejectedAt);
-  const ctaText = isReupload ? "Re-upload" : "Upload passport";
-  const ctaAria = `${isReupload ? "Re-upload" : "Upload"} passport for ${p.fullName}`;
-
-  const handleFile = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    // Reset so picking the same file again still fires onChange.
-    e.target.value = "";
-    if (!file) return;
-    const mime = (file.type || "").toLowerCase();
-    if (!["image/jpeg", "image/png", "application/pdf"].includes(mime)) {
-      notify.error("Unsupported file type — JPG, PNG or PDF only");
-      return;
-    }
-    if (file.size > PASSPORT_MAX_BYTES) {
-      notify.error("File exceeds the 5 MB limit");
-      return;
-    }
-    const fd = new FormData();
-    fd.append("file", file);
-    setBusy(true);
-    try {
-      await fetchApi(`/api/travel/passport/participants/${p.id}/passport-upload`, {
-        method: "POST",
-        body: fd,
-        silent: true,
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingRegs(true);
+    fetchApi(`/api/travel/trips/${trip.id}/registrations`, { silent: true })
+      .then((rows) => {
+        if (!cancelled) setPendingRegs(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setPendingRegs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRegs(false);
       });
-      notify.success(`Passport uploaded for ${p.fullName} — queued for verification`);
+    return () => { cancelled = true; };
+  }, [trip.id]);
+
+  const pendingPeople = pendingRegs
+    .filter((registration) => !["CONVERTED", "REJECTED"].includes(registration.status))
+    .map((registration) => ({
+      id: `registration-${registration.id}`,
+      sourceId: registration.id,
+      name: registration.studentName,
+      parentName: registration.parentName,
+      parentEmail: registration.parentEmail,
+      documents: parentDocumentsByEmail.get(String(registration.parentEmail || "").trim().toLowerCase()) || [],
+      pathPrefix: "registrations",
+    }));
+  const participantPeople = (trip.participants || []).map((participant) => ({
+    id: `participant-${participant.id}`,
+    sourceId: participant.id,
+    name: participant.fullName,
+    parentName: participant.parentName,
+    parentEmail: participant.parentEmail,
+    documents: participant.parentDocuments?.length
+      ? participant.parentDocuments
+      : parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [],
+    pathPrefix: "participants",
+  }));
+  const people = [...pendingPeople, ...participantPeople];
+
+  const resetForm = () => {
+    setEditingId(null);
+    setDocName("");
+    setAcceptedFileTypes(["pdf", "jpg", "png"]);
+    setCaptureMode("file");
+  };
+
+  const beginEdit = (requirement) => {
+    setEditingId(requirement.id);
+    setDocName(requirement.docType || "");
+    setAcceptedFileTypes(normalizeAcceptedFileTypes(requirement.acceptedFileTypes));
+    setCaptureMode(isDigitalConsentRequirement(requirement) ? "digital_consent" : "file");
+    window.setTimeout(() => document.getElementById("trip-document-name")?.focus(), 0);
+  };
+
+  const toggleFileType = (value) => {
+    setAcceptedFileTypes((current) => current.includes(value)
+      ? current.filter((item) => item !== value)
+      : [...current, value]);
+  };
+
+  const saveRequirement = async (event) => {
+    event.preventDefault();
+    const trimmedName = docName.trim();
+    if (!trimmedName) {
+      notify.error("Enter a document name");
+      return;
+    }
+    if (!acceptedFileTypes.length) {
+      notify.error("Choose at least one accepted file type");
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = {
+        docType: trimmedName,
+        acceptedFileTypes,
+        required: true,
+      };
+      if (captureMode === "digital_consent") {
+        body.captureMode = "digital_consent";
+      }
+      await fetchApi(editingId
+        ? `/api/travel/trips/${trip.id}/documents/${editingId}`
+        : `/api/travel/trips/${trip.id}/documents`, {
+          method: editingId ? "PATCH" : "POST",
+          body: JSON.stringify(body),
+        });
+      notify.success(editingId ? "Document requirement updated" : "Document requirement added");
+      resetForm();
       onChange();
-    } catch (err) {
-      // silent:true skips fetchApi's 401 redirect — restore it here since
-      // this is a user-initiated action (an expired session must boot).
-      if (err?.status === 401) {
-        window.location.href = "/login";
-        return;
-      }
-      if (err?.code === "PASSPORT_OCR_NOT_YET_ENABLED") {
-        notify.error("Passport OCR isn't enabled for this tenant yet (vendor integration pending) — please try again after it goes live.");
-      } else {
-        notify.error(err?.data?.error || err?.message || "Failed to upload passport");
-      }
+    } catch (error) {
+      notify.error(error?.body?.error || "Failed to save document requirement");
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   };
 
-  // Re-queue passport from the document uploaded during microsite registration.
-  // Appears only for "No passport" state participants (not re-upload / rejected).
-  const syncFromRegistration = async () => {
-    setBusy(true);
-    try {
-      await fetchApi(`/api/travel/passport/participants/${p.id}/requeue-registration-docs`, {
-        method: "POST",
-        silent: true,
-      });
-      notify.success(`Passport synced for ${p.fullName} — queued for verification`);
-      onChange();
-    } catch (err) {
-      const code = err?.data?.code || err?.code;
-      if (code === "ALREADY_QUEUED") {
-        notify.error("Already queued — try refreshing the page");
-        onChange();
-      } else if (code === "NO_REGISTRATION" || code === "NO_REGISTRATION_DOCS") {
-        notify.error("No registration document found — please upload the passport manually");
-      } else if (code === "DOC_NOT_READABLE") {
-        notify.error("Registration file not readable — please upload the passport manually");
-      } else {
-        notify.error(err?.data?.error || "Failed to sync registration documents");
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Verified-state escape hatch: a verified passport that needs replacing
-  // (renewal, mistaken approval) has to be cleared first. Rendered for all
-  // roles (this page does no client-side role gating); the DELETE route
-  // 403s non-ADMIN/MANAGER users with a friendly RBAC toast.
-  const clearAndReupload = async () => {
-    const ok = await notify.confirm({
-      title: "Clear passport",
-      message: `Clear ${p.fullName}'s verified passport so a new one can be uploaded?`,
-      confirmText: "Clear",
+  const removeRequirement = async (requirement) => {
+    const confirmed = await notify.confirm({
+      title: "Remove document requirement",
+      message: `Stop collecting “${documentRequirementLabel(requirement)}” for this trip? Existing uploads will stay available to the travel team.`,
+      confirmText: "Remove",
       destructive: true,
     });
-    if (!ok) return;
-    setBusy(true);
+    if (!confirmed) return;
     try {
-      await fetchApi(`/api/travel/passport/participants/${p.id}/passport-extraction`, {
-        method: "DELETE",
-      });
-      notify.success("Passport extraction cleared — upload a new one");
+      await fetchApi(`/api/travel/trips/${trip.id}/documents/${requirement.id}`, { method: "DELETE" });
+      notify.success("Document requirement removed");
+      if (editingId === requirement.id) resetForm();
       onChange();
-    } catch (err) {
-      notify.error(err?.data?.error || "Failed to clear passport extraction");
-    } finally {
-      setBusy(false);
+    } catch (error) {
+      notify.error(error?.body?.error || "Failed to remove document requirement");
     }
+  };
+
+  const viewDocument = async (person, document) => {
+    const token = getAuthToken();
+    const response = await fetch(`/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${document.id}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || "Failed to open document");
+    }
+    const url = URL.createObjectURL(await response.blob());
+    window.open(url, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+  };
+
+  const handleView = (person, document) => {
+    if (isDigitalConsentRequirement(document)) {
+      setViewingConsent({ person, document });
+      return;
+    }
+    viewDocument(person, document).catch((error) => notify.error(error.message || "Failed to open document"));
   };
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <span style={{
-        background: state.bg, color: state.color,
-        padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-        whiteSpace: "nowrap",
-      }}>
-        {state.label}
-      </span>
-      {state.canUpload ? (
-        <>
-          <button
-            type="button"
-            onClick={() => fileRef.current && fileRef.current.click()}
-            disabled={busy}
-            aria-label={ctaAria}
-            style={{
-              ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-              opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-            }}
-          >
-            <Upload size={13} aria-hidden /> {busy ? "Uploading…" : ctaText}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept={PASSPORT_ACCEPT}
-            onChange={handleFile}
-            disabled={busy}
-            aria-label={`Passport file for ${p.fullName}`}
-            style={visuallyHiddenInput}
-          />
-          {!isReupload && (
-            <button
-              type="button"
-              onClick={syncFromRegistration}
-              disabled={busy}
-              aria-label={`Sync passport from registration for ${p.fullName}`}
-              title="Re-sync the passport document uploaded during microsite registration"
-              style={{
-                ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-                opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-              }}
-            >
-              <RotateCcw size={12} aria-hidden /> Sync from registration
-            </button>
-          )}
-        </>
-      ) : (
-        <button
-          type="button"
-          onClick={clearAndReupload}
-          disabled={busy}
-          aria-label={`Clear & re-upload passport for ${p.fullName}`}
-          style={{
-            ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-            opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-          }}
+    <div style={{ display: "grid", gap: 16 }}>
+      {viewingConsent && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="digital-consent-details-title"
+          onClick={() => setViewingConsent(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 16, background: "rgba(6, 10, 18, 0.78)" }}
         >
-          Clear &amp; re-upload
-        </button>
+          <div onClick={(event) => event.stopPropagation()} style={{ width: "min(640px, 100%)", maxHeight: "90vh", overflowY: "auto", display: "grid", gap: 16, padding: 20, border: "1px solid var(--border-color)", borderRadius: 14, background: "var(--bg-color, #111318)", boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+              <div>
+                <h2 id="digital-consent-details-title" style={{ margin: 0, fontSize: 19 }}>Digital consent submission</h2>
+                <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>{viewingConsent.person?.name || "Participant"} · {documentRequirementLabel(viewingConsent.document)}</p>
+              </div>
+              <button type="button" onClick={() => setViewingConsent(null)} style={iconBtn} aria-label="Close digital consent details"><X size={17} /></button>
+            </div>
+            <div style={{ display: "grid", gap: 9 }}>
+              {Object.entries(viewingConsent.document?.answers || {})
+                .filter(([key]) => !["parentEmail", "parentPhone"].includes(key))
+                .map(([key, value]) => (
+                  <div key={key} style={{ display: "grid", gap: 3, paddingBottom: 8, borderBottom: "1px solid var(--border-color)" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: 11, fontWeight: 700 }}>{key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase())}</span>
+                    <span style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{String(value || "—")}</span>
+                  </div>
+                ))}
+            </div>
+            {viewingConsent.document?.termsSnapshot && (
+              <div style={{ display: "grid", gap: 5, padding: 12, borderRadius: 9, background: "var(--subtle-bg, var(--surface-color))" }}>
+                <strong style={{ fontSize: 12 }}>Terms accepted</strong>
+                <span style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{viewingConsent.document.termsSnapshot}</span>
+              </div>
+            )}
+            <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+              Submitted {viewingConsent.document?.agreedAt ? new Date(viewingConsent.document.agreedAt).toLocaleString() : "—"}
+            </div>
+          </div>
+        </div>
       )}
-    </span>
+      <section style={documentAdminCard}>
+        <div style={documentAdminHeader}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Documents to collect</h2>
+            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
+              Add the exact document name parents should see, then choose the file types this trip accepts.
+            </p>
+          </div>
+          <FileText size={20} aria-hidden />
+        </div>
+        <form onSubmit={saveRequirement} style={{ display: "grid", gap: 13 }}>
+          <label style={{ display: "grid", gap: 6, fontSize: 12, fontWeight: 700 }} htmlFor="trip-document-name">
+            Document name
+            <input
+              id="trip-document-name"
+              value={docName}
+              onChange={(event) => setDocName(event.target.value)}
+              placeholder="e.g. School medical clearance"
+              maxLength={120}
+              style={input}
+            />
+          </label>
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>How should parents complete it?</legend>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <label style={{ ...fileTypeChoice, ...(captureMode === "file" ? fileTypeChoiceActive : {}) }}>
+                <input type="radio" name="trip-document-capture-mode" checked={captureMode === "file"} onChange={() => setCaptureMode("file")} />
+                Upload a file
+              </label>
+              <label style={{ ...fileTypeChoice, ...(captureMode === "digital_consent" ? fileTypeChoiceActive : {}) }}>
+                <input type="radio" name="trip-document-capture-mode" checked={captureMode === "digital_consent"} onChange={() => setCaptureMode("digital_consent")} />
+                Digital consent form
+              </label>
+            </div>
+          </fieldset>
+          {captureMode === "file" ? (
+            <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+              <legend style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Accepted file types</legend>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {TMC_DOCUMENT_FILE_TYPES.map((type) => (
+                  <label key={type.value} style={{ ...fileTypeChoice, ...(acceptedFileTypes.includes(type.value) ? fileTypeChoiceActive : {}) }}>
+                    <input type="checkbox" checked={acceptedFileTypes.includes(type.value)} onChange={() => toggleFileType(type.value)} />
+                    {type.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ) : (
+            <div style={{ display: "grid", gap: 6, padding: 12, border: "1px solid var(--border-color)", borderRadius: 9, background: "var(--subtle-bg)" }}>
+              <strong style={{ fontSize: 12 }}>Approved trip terms</strong>
+              <span style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.5 }}>
+                Parents will see the approved {trip.tripType === "international" ? "international" : trip.tripType === "day_trip" ? "day-tour" : "domestic"} travel terms in the parent portal before completing this digital consent form.
+              </span>
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+            {editingId && <button type="button" onClick={resetForm} style={secondaryBtn}>Cancel edit</button>}
+            <button type="submit" disabled={saving} style={primaryBtn}>
+              <Save size={14} aria-hidden /> {saving ? "Saving…" : editingId ? "Save changes" : "Add document"}
+            </button>
+          </div>
+        </form>
+        <div style={{ display: "grid", gap: 8, marginTop: 18 }}>
+          {requirements.length === 0 ? (
+            <div style={empty}>No document requirements have been configured for this trip.</div>
+          ) : requirements.map((requirement) => (
+            <div key={requirement.id} style={documentRequirementRow}>
+              <div style={{ minWidth: 0 }}>
+                <strong style={{ display: "block", fontSize: 14 }}>{documentRequirementLabel(requirement)}</strong>
+                <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                  {isDigitalConsentRequirement(requirement) ? "Digital consent form" : formatAcceptedFileTypes(requirement.acceptedFileTypes)} · Required
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => beginEdit(requirement)} style={secondaryBtn}><Edit3 size={13} aria-hidden /> Edit</button>
+                <button type="button" onClick={() => removeRequirement(requirement)} style={dangerBtn}><Trash2 size={13} aria-hidden /> Remove</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={documentAdminCard}>
+        <div style={documentAdminHeader}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Participant documents</h2>
+            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
+              See every participant and open the documents submitted against this trip.
+            </p>
+          </div>
+          <span style={countBadge}>{people.length} participant{people.length === 1 ? "" : "s"}</span>
+        </div>
+        {loadingRegs && <div style={empty}>Loading registrations…</div>}
+        {!loadingRegs && !people.length && <div style={empty}>No participants or registrations yet.</div>}
+        {!loadingRegs && people.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <div style={{ minWidth: Math.max(620, 240 + requirements.length * 170) }}>
+              <div style={{ ...documentMatrixGrid, gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))` }}>
+                <strong>Participant</strong>
+                {requirements.length ? requirements.map((requirement) => <strong key={requirement.id}>{documentRequirementLabel(requirement)}</strong>) : <strong>Documents</strong>}
+              </div>
+              {people.map((person) => (
+                <div key={person.id} style={{ ...documentMatrixGrid, gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))` }}>
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{person.name || "Participant"}</strong>
+                    <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{person.parentName || person.parentEmail || "Parent details unavailable"}</span>
+                  </div>
+                  {requirements.length ? requirements.map((requirement) => {
+                    const document = person.documents.find((candidate) => documentMatchesRequirement(candidate, requirement));
+                    return document ? (
+                      <button key={requirement.id} type="button" onClick={() => handleView(person, document)} style={matrixUploaded} title={`View ${document.filename || documentRequirementLabel(requirement)}`}>
+                        <Eye size={13} aria-hidden /> {isDigitalConsentRequirement(document) ? "View consent" : "View document"}
+                      </button>
+                    ) : <span key={requirement.id} style={matrixPending}><Clock size={13} aria-hidden /> Pending</span>;
+                  }) : <span style={matrixPending}>No requirements</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -3031,98 +3343,6 @@ function PaymentTab({ trip, notify }) {
   );
 }
 
-// ─── Microsite tab ───────────────────────────────────────────────────
-//
-// Inline editor (Phase 1.5 / 8d). Two states:
-//   - no microsite yet → Create form (subdomain default + initial itineraryHtml).
-//   - already published → Edit form for subdomain + itineraryHtml + faqJson + expiresAt,
-//     plus Copy/Open/Preview buttons and Unpublish (ADMIN-only).
-//
-// Rich-text uses native `contenteditable` + document.execCommand (B / I / H2 /
-// list / link / image) rather than TipTap/Lexical/Slate. Trade-off: less
-// flexibility but zero new npm deps — avoids the Windows-npm-lockfile gotcha
-// (see project_frontend_npm_windows memory + the v3.9 handoff). The output
-// is plain HTML which is what the backend's itineraryHtml column already stores
-// and sanitizes via the global sanitizeBody middleware.
-
-const ITINERARY_PLACEHOLDER = `<h2>Day 1 — Arrival</h2>
-<p>Welcome and orientation. Hotel check-in.</p>
-<h2>Day 2 — Excursion</h2>
-<p>Full-day guided tour.</p>`;
-
-// Convert a LandingPage content payload (block-array or template object)
-// into a pre-filled itinerary HTML string for the microsite editor.
-// Prioritises explicit itineraryTimeline blocks; returns null when nothing
-// usable is found so the caller can fall back to the placeholder.
-function extractItineraryHtmlFromLandingPage(page) {
-  if (!page) return null;
-  let content;
-  try {
-    content = typeof page.content === "string" ? JSON.parse(page.content || "{}") : (page.content || {});
-  } catch {
-    return null;
-  }
-
-  // Block-based pages (legacy manual builder): array of components.
-  if (Array.isArray(content)) {
-    const timeline = content.find((c) => c?.type === "itineraryTimeline");
-    const days = Array.isArray(timeline?.props?.days) ? timeline.props.days : [];
-    if (days.length === 0) return null;
-    return days
-      .map((d) => {
-        const bullets = Array.isArray(d.bullets) ? d.bullets.filter(Boolean) : [];
-        const body = bullets.length ? `<ul>${bullets.map((b) => `<li>${escapeHtml(String(b))}</li>`).join("")}</ul>` : "<p>—</p>";
-        return `<h2>Day ${Number(d.day) || 1}${d.title ? ` — ${escapeHtml(String(d.title))}` : ""}</h2>\n${body}`;
-      })
-      .join("\n");
-  }
-
-  // Template-driven pages (wanderlux-v1 and registered templates): object
-  // with a sections[] array. Look for any section that carries days.
-  const sections = Array.isArray(content.sections) ? content.sections : [];
-  const fromSection = sections.find((s) => s?.type === "itinerary" || Array.isArray(s?.days));
-  const sectionDays = Array.isArray(fromSection?.days) ? fromSection.days : [];
-  if (sectionDays.length > 0) {
-    return sectionDays
-      .map((d) => {
-        const bullets = Array.isArray(d.bullets) ? d.bullets.filter(Boolean) : [d.description].filter(Boolean);
-        const body = bullets.length ? `<ul>${bullets.map((b) => `<li>${escapeHtml(String(b))}</li>`).join("")}</ul>` : "<p>—</p>";
-        return `<h2>Day ${Number(d.day) || 1}${d.title ? ` — ${escapeHtml(String(d.title))}` : ""}</h2>\n${body}`;
-      })
-      .join("\n");
-  }
-
-  return null;
-}
-
-function escapeHtml(s) {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-// Convert the structured suggestion returned by POST /itineraries/suggest
-// into the HTML shape the microsite editor stores.
-function suggestionToHtml(suggestion, destination) {
-  const daySplit = Array.isArray(suggestion?.daySplit)
-    ? suggestion.daySplit
-    : (Array.isArray(suggestion?.days) ? suggestion.days : []);
-  if (daySplit.length === 0) return "";
-  return daySplit
-    .map((day, idx) => {
-      const items = Array.isArray(day?.items) ? day.items : [];
-      const title = day?.title || (idx === 0 ? `Arrival in ${destination || ""}` : `Day ${idx + 1}`);
-      const body = items.length
-        ? `<ul>${items.map((it) => `<li>${escapeHtml(String(it.description || it.name || ""))}</li>`).join("")}</ul>`
-        : "<p>—</p>";
-      return `<h2>Day ${idx + 1} — ${escapeHtml(String(title))}</h2>\n${body}`;
-    })
-    .join("\n");
-}
-
 function tripDurationDays(trip) {
   if (!trip?.departDate || !trip?.returnDate) return 7;
   const ms = new Date(trip.returnDate) - new Date(trip.departDate);
@@ -3130,37 +3350,6 @@ function tripDurationDays(trip) {
   return days > 30 ? 30 : days;
 }
 
-async function generateItineraryHtml(trip, notify) {
-  const destination = trip?.destination;
-  if (!destination) {
-    notify.error("Trip destination is required to generate an itinerary.");
-    return null;
-  }
-  const days = tripDurationDays(trip);
-  try {
-    const res = await fetchApi(`/api/travel/itineraries/suggest`, {
-      method: "POST",
-      body: JSON.stringify({ destination, days, tier: "primary" }),
-    });
-    const html = suggestionToHtml(res?.suggestion, destination);
-    if (!html) {
-      notify.info("AI returned an empty itinerary — try editing the trip dates or destination.");
-      return null;
-    }
-    return html;
-  } catch (e) {
-    notify.error(e?.body?.error || e?.message || "Failed to generate itinerary");
-    return null;
-  }
-}
-
-// Phase 8 — Public Experience tab. Per decision #10 the Trip owns
-// BOTH the landing page (marketing + registration draft collection)
-// AND the microsite (secure operational portal), so this tab now
-// surfaces them as two stacked cards. The microsite card is the
-// existing MicrositeTab content (no UX changes); the landing-page
-// card is new and lets operators edit / preview / publish / copy URL
-// from one place.
 // LandingPageCard — read-only summary + jump-out to the existing
 // Landing Pages module. Per operator feedback we do NOT create,
 // edit, AI-generate, or publish landing pages from this trip-detail
@@ -3275,480 +3464,6 @@ function LandingPageCard({ trip, notify }) {
   );
 }
 
-// ─── Create form (no microsite yet) ──────────────────────────────────
-
-function MicrositeCreate({ trip, onChange, notify }) {
-  const [subdomain, setSubdomain] = useState(`trip-${trip.tripCode}`);
-  const [itineraryHtml, setItineraryHtml] = useState(ITINERARY_PLACEHOLDER);
-  const [saving, setSaving] = useState(false);
-  const [aiBusy, setAiBusy] = useState(false);
-  const [prefillSource, setPrefillSource] = useState(null);
-
-  // Pre-fill itinerary from the linked landing page when available.
-  useEffect(() => {
-    let cancelled = false;
-    fetchApi(`/api/travel/trips/${trip.id}/landing-page`, { silent: true })
-      .then((page) => {
-        if (cancelled) return;
-        const html = extractItineraryHtmlFromLandingPage(page);
-        if (html) {
-          setItineraryHtml(html);
-          setPrefillSource(page.title ? `Prefilled from “${page.title}”` : "Prefilled from linked landing page");
-        }
-      })
-      .catch(() => {
-        // No linked landing page → keep placeholder.
-      });
-    return () => { cancelled = true; };
-  }, [trip.id]);
-
-  const submit = async () => {
-    if (!itineraryHtml.trim()) {
-      notify.error("Itinerary content required");
-      return;
-    }
-    setSaving(true);
-    try {
-      await fetchApi(`/api/travel/trips/${trip.id}/microsite`, {
-        method: "POST",
-        body: JSON.stringify({ subdomain: subdomain.trim() || undefined, itineraryHtml }),
-      });
-      notify.success("Microsite published");
-      onChange?.();
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to publish microsite");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleAiGenerate = async () => {
-    setAiBusy(true);
-    const html = await generateItineraryHtml(trip, notify);
-    if (html) {
-      setItineraryHtml(html);
-      setPrefillSource("Generated by AI");
-    }
-    setAiBusy(false);
-  };
-
-  return (
-    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: 10,
-          background: "var(--primary-color)", color: "#fff",
-          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-        }}>
-          <Sparkles size={20} aria-hidden />
-        </div>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 2 }}>Create a public registration page</div>
-          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-            Pick a subdomain, fill the editor below, and hit Publish — parents and teachers get a shareable link where they can read the trip plan and register students.
-          </div>
-          {prefillSource && (
-            <div style={{ fontSize: 11, color: "var(--primary-color)", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
-              <CheckCircle2 size={11} aria-hidden /> {prefillSource}
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={handleAiGenerate}
-            disabled={aiBusy}
-            style={{ ...secondaryBtn, color: "var(--primary-color)", borderColor: "rgba(18,38,71,0.35)" }}
-          >
-            <Sparkles size={14} /> {aiBusy ? "Generating…" : "AI Generate itinerary"}
-          </button>
-          <button type="button" onClick={submit} disabled={saving} style={saving ? primaryBtnDisabled : primaryBtn}>
-            <Save size={14} /> {saving ? "Publishing…" : "Publish public page"}
-          </button>
-        </div>
-      </div>
-
-      <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-        Subdomain
-      </label>
-      <input
-        type="text"
-        value={subdomain}
-        onChange={(e) => setSubdomain(e.target.value)}
-        placeholder={`trip-${trip.tripCode}`}
-        style={{ ...input, width: "100%", boxSizing: "border-box", marginBottom: 12 }}
-        aria-label="Microsite subdomain"
-      />
-      <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-        Itinerary content
-      </label>
-      <RichTextEditor
-        value={itineraryHtml}
-        onChange={setItineraryHtml}
-        tripId={trip.id}
-        notify={notify}
-      />
-    </div>
-  );
-}
-
-// ─── Edit form (microsite exists) ────────────────────────────────────
-
-function MicrositeEditor({ trip, ms, onChange, notify }) {
-  const [subdomain, setSubdomain] = useState(ms.subdomain || "");
-  const [itineraryHtml, setItineraryHtml] = useState(ms.itineraryHtml || "");
-  const [expiresAt, setExpiresAt] = useState(toDateInput(ms.expiresAt));
-  const [saving, setSaving] = useState(false);
-  const [unpublishing, setUnpublishing] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
-  const [aiBusy, setAiBusy] = useState(false);
-
-  // Public-facing microsite is the rendered PAGE (PublicTripMicrosite, routed
-  // at /p/tripmicrosite/:publicUuid) — NOT the raw JSON API endpoint. The page
-  // fetches /api/travel/microsites/public/:uuid itself; linking parents at the
-  // API would show them raw JSON.
-  const publicUrl = `${window.location.origin}/p/tripmicrosite/${ms.publicUuid}`;
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(publicUrl);
-      notify.success("Public URL copied");
-    } catch {
-      /* clipboard not available */
-    }
-  };
-
-  const save = async () => {
-    if (!itineraryHtml.trim()) {
-      notify.error("Itinerary content required");
-      return;
-    }
-    setSaving(true);
-    try {
-      await fetchApi(`/api/travel/trips/${trip.id}/microsite`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          subdomain: subdomain.trim(),
-          itineraryHtml,
-          expiresAt: expiresAt || null,
-        }),
-      });
-      notify.success("Microsite updated");
-      onChange?.();
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to update");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const unpublish = async () => {
-    const ok = await notify.confirm({
-      title: "Unpublish microsite",
-      message: "Unpublish this microsite? The public URL will stop responding.",
-      confirmText: "Unpublish",
-      destructive: true,
-    });
-    if (!ok) return;
-    setUnpublishing(true);
-    try {
-      await fetchApi(`/api/travel/trips/${trip.id}/microsite`, { method: "DELETE" });
-      notify.success("Microsite unpublished");
-      onChange?.();
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to unpublish");
-    } finally {
-      setUnpublishing(false);
-    }
-  };
-
-  const handleAiGenerate = async () => {
-    setAiBusy(true);
-    const html = await generateItineraryHtml(trip, notify);
-    if (html) setItineraryHtml(html);
-    setAiBusy(false);
-  };
-
-  return (
-    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
-      {/* Live-link hero: promotes the public URL and hosts the primary
-          action buttons (Save / Unpublish / AI Generate) at the TOP of the
-          card so operators don't have to scroll to the bottom to act. */}
-      <div style={{
-        background: "linear-gradient(135deg, rgba(38,88,85,0.12), rgba(38,88,85,0.04))",
-        border: "1px solid var(--border-color)", borderRadius: 12, padding: 14,
-        marginBottom: 16,
-        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12,
-      }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: 10,
-          background: "var(--primary-color)", color: "#fff",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          flexShrink: 0,
-        }}>
-          <Globe size={20} aria-hidden />
-        </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
-              padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700,
-              textTransform: "uppercase", letterSpacing: 0.5,
-            }}>
-              <Sparkles size={10} aria-hidden /> Live
-            </span>
-            {ms.publishedAt && (
-              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                Published {fmt(ms.publishedAt)}
-              </span>
-            )}
-            {ms.expiresAt && (
-              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                · expires {fmt(ms.expiresAt)}
-              </span>
-            )}
-          </div>
-          <div style={{
-            fontSize: 13, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            color: "var(--text-primary)", wordBreak: "break-all",
-          }}>
-            {publicUrl}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={handleAiGenerate}
-            disabled={aiBusy || previewing}
-            style={{ ...secondaryBtn, color: "var(--primary-color)", borderColor: "rgba(18,38,71,0.35)", opacity: aiBusy || previewing ? 0.5 : 1 }}
-          >
-            <Sparkles size={14} /> {aiBusy ? "Generating…" : "AI Generate itinerary"}
-          </button>
-          <button type="button" onClick={() => setPreviewing((p) => !p)} style={secondaryBtn}>
-            {previewing ? <><Edit3 size={14} /> Edit</> : <><Eye size={14} /> Preview</>}
-          </button>
-          <button type="button" onClick={copy} style={secondaryBtn}>
-            <Copy size={14} /> Copy
-          </button>
-          <a href={publicUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
-            <ExternalLink size={14} /> Open
-          </a>
-          <button type="button" onClick={save} disabled={saving || previewing} style={(saving || previewing) ? primaryBtnDisabled : primaryBtn}>
-            <Save size={14} /> {saving ? "Saving…" : "Save changes"}
-          </button>
-          <button type="button" onClick={unpublish} disabled={unpublishing} style={dangerBtn}>
-            <Trash2 size={14} /> {unpublishing ? "Unpublishing…" : "Unpublish"}
-          </button>
-        </div>
-      </div>
-
-      {previewing ? (
-        <div
-          style={{
-            background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
-            borderRadius: 8, padding: 16, maxHeight: 500, overflow: "auto", fontSize: 14,
-          }}
-          // itineraryHtml is admin-authored; sanitization happens at the route's
-          // sanitizeBody middleware on write. Preview renders the in-edit state.
-          dangerouslySetInnerHTML={{ __html: sanitizeHtml(itineraryHtml) }}
-        />
-      ) : (
-        <>
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", marginBottom: 12 }}>
-            <div>
-              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-                Subdomain
-              </label>
-              <input
-                type="text"
-                value={subdomain}
-                onChange={(e) => setSubdomain(e.target.value)}
-                style={{ ...input, width: "100%", boxSizing: "border-box" }}
-                aria-label="Microsite subdomain"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-                Expires (optional)
-              </label>
-              <input
-                type="date"
-                value={expiresAt}
-                onChange={(e) => setExpiresAt(e.target.value)}
-                style={{ ...input, width: "100%", boxSizing: "border-box" }}
-                aria-label="Microsite expiry date"
-              />
-            </div>
-          </div>
-
-          <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-            Itinerary content
-          </label>
-          <RichTextEditor
-            value={itineraryHtml}
-            onChange={setItineraryHtml}
-            tripId={trip.id}
-            notify={notify}
-          />
-
-        </>
-      )}
-    </div>
-  );
-}
-
-// ─── Rich-text editor (contenteditable + execCommand) ────────────────
-//
-// document.execCommand is technically deprecated but is the only thing
-// every modern browser supports for contenteditable formatting without
-// a 100KB library. We use a narrow command set (bold, italic, H2, lists,
-// link, image) — the parts that work uniformly across Chrome / Edge /
-// Firefox / Safari. If we eventually adopt TipTap/Lexical (when the
-// Windows-lockfile gotcha is solved) this component is the sole replace-
-// site; the parent components pass HTML strings through opaquely.
-
-function RichTextEditor({ value, onChange, tripId, notify }) {
-  const editorRef = useRef(null);
-  const fileRef = useRef(null);
-  const [uploading, setUploading] = useState(false);
-
-  // Inject value into the contenteditable div when the prop changes.
-  // The innerHTML guard prevents fighting the browser's caret state
-  // on every keystroke — `value` only changes from the parent, not
-  // during local typing. We also skip the sync when the editor has
-  // focus so the parent re-rendering doesn't clobber the caret.
-  useEffect(() => {
-    if (
-      editorRef.current &&
-      editorRef.current.innerHTML !== value &&
-      document.activeElement !== editorRef.current
-    ) {
-      editorRef.current.innerHTML = value || "";
-    }
-  }, [value]);
-
-  const handleInput = () => {
-    if (editorRef.current) onChange(editorRef.current.innerHTML);
-  };
-
-  const exec = (cmd, arg) => {
-    editorRef.current?.focus();
-    document.execCommand(cmd, false, arg);
-    handleInput();
-  };
-
-  const insertLink = () => {
-    const url = window.prompt("Link URL", "https://");
-    if (!url) return;
-    exec("createLink", url);
-  };
-
-  const insertHeading = () => {
-    // execCommand "formatBlock" with H2 — wraps the current block in <h2>.
-    exec("formatBlock", "H2");
-  };
-
-  const insertImage = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch(`/api/travel/trips/${tripId}/microsite/upload`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
-        body: form,
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || `Upload failed (${res.status})`);
-      exec("insertImage", body.url);
-      notify.success("Image inserted");
-    } catch (e) {
-      notify.error(e.message || "Failed to upload image");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  };
-
-  return (
-    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden" }}>
-      <div style={toolbar} role="toolbar" aria-label="Formatting toolbar">
-        <ToolButton onClick={() => exec("bold")} label="Bold (Ctrl+B)"><Bold size={14} /></ToolButton>
-        <ToolButton onClick={() => exec("italic")} label="Italic (Ctrl+I)"><Italic size={14} /></ToolButton>
-        <ToolButton onClick={insertHeading} label="Heading"><Heading size={14} /></ToolButton>
-        <ToolButton onClick={() => exec("insertUnorderedList")} label="Bulleted list"><List size={14} /></ToolButton>
-        <ToolButton onClick={insertLink} label="Insert link"><Link2 size={14} /></ToolButton>
-        <ToolButton onClick={() => fileRef.current?.click()} label="Insert image" disabled={uploading}>
-          <ImageIcon size={14} /> {uploading && <span style={{ marginLeft: 4, fontSize: 11 }}>…</span>}
-        </ToolButton>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          onChange={insertImage}
-          style={{ display: "none" }}
-          aria-label="Upload image"
-        />
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: "var(--text-secondary)", padding: "0 6px" }}>
-          B / I / H2 / list / link / image · output is HTML
-        </span>
-      </div>
-      <div
-        ref={editorRef}
-        contentEditable
-        suppressContentEditableWarning
-        onInput={handleInput}
-        onBlur={handleInput}
-        style={{
-          padding: 16,
-          minHeight: 240,
-          maxHeight: 500,
-          overflow: "auto",
-          background: "var(--bg-color)",
-          color: "var(--text-primary)",
-          fontSize: 14,
-          lineHeight: 1.5,
-          outline: "none",
-        }}
-        aria-label="Itinerary content editor"
-      />
-    </div>
-  );
-}
-
-function ToolButton({ children, onClick, label, disabled }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-      style={{
-        ...toolBtn,
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? "not-allowed" : "pointer",
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-const toolbar = {
-  display: "flex", alignItems: "center", gap: 4, padding: 6,
-  background: "var(--subtle-bg)", borderBottom: "1px solid var(--border-color)",
-  flexWrap: "wrap",
-};
-const toolBtn = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  padding: "6px 8px", borderRadius: 4, border: "1px solid transparent",
-  background: "transparent", color: "var(--text-primary)",
-  cursor: "pointer",
-};
 const primaryBtnDisabled = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
@@ -3810,6 +3525,44 @@ const secondaryBtn = {
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
   background: "var(--bg-color, #111318)", color: "var(--text-primary)",
   border: "1px solid var(--border-color)", cursor: "pointer",
+};
+const documentAdminCard = {
+  background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)",
+  borderRadius: 12, padding: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)",
+};
+const documentAdminHeader = {
+  display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14,
+  marginBottom: 16, color: "var(--text-primary)",
+};
+const documentRequirementRow = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+  padding: "11px 12px", border: "1px solid var(--border-color)", borderRadius: 8,
+  background: "var(--bg-color, #111318)",
+};
+const fileTypeChoice = {
+  display: "inline-flex", alignItems: "center", gap: 7, padding: "7px 10px",
+  border: "1px solid var(--border-color)", borderRadius: 7, cursor: "pointer",
+  color: "var(--text-secondary)", fontSize: 12, fontWeight: 600,
+};
+const fileTypeChoiceActive = {
+  borderColor: "var(--primary-color)", color: "var(--text-primary)", background: "rgba(79,70,229,0.08)",
+};
+const countBadge = {
+  display: "inline-flex", alignItems: "center", padding: "5px 9px", borderRadius: 999,
+  background: "var(--subtle-bg)", color: "var(--text-secondary)", fontSize: 11, fontWeight: 700,
+  whiteSpace: "nowrap",
+};
+const documentMatrixGrid = {
+  display: "grid", alignItems: "center", gap: 10, padding: "11px 12px",
+  borderBottom: "1px solid var(--border-light, var(--border-color))", fontSize: 12,
+};
+const matrixUploaded = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
+  padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(47,122,77,0.35)",
+  background: "rgba(47,122,77,0.10)", color: "#2F7A4D", cursor: "pointer", fontSize: 11, fontWeight: 700,
+};
+const matrixPending = {
+  display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-secondary)", fontSize: 11,
 };
 const addBtn = {
   ...primaryBtn,

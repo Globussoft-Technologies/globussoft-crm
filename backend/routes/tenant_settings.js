@@ -13,7 +13,7 @@
  *   - backend/services/callifiedClient.js (stub, commit 9ec52df)
  *
  * Auth model: GET open to any authenticated user (operators can see caps);
- * PUT/DELETE ADMIN-only (cap changes are tenant-config changes).
+ * writes use the effective settings.manage permission.
  *
  * No sub-brand isolation: TenantSetting rows are tenant-wide.
  */
@@ -21,6 +21,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { KEYS, DEFAULTS, setSetting } = require("../lib/tenantSettings");
 const { writeAudit } = require("../lib/audit");
@@ -268,7 +269,7 @@ router.get("/", verifyToken, async (req, res) => {
 // The Leads dialog presents these values as one form. Persist them in one DB
 // transaction so a validation/database failure cannot leave a partially
 // updated retry policy behind.
-router.put("/callified", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.put("/callified", verifyToken, requirePermission("settings", "manage"), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const tenant = await prisma.tenant.findUnique({

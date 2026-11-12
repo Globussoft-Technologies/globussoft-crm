@@ -241,7 +241,7 @@ export default function CsvImportExportToolbar({
 
   useEffect(() => {
     if (!genericLeadWizard) return;
-    fetchApi("/api/csv/contacts/import-history")
+    fetchApi("/api/csv/contacts/import-history", { silent: true })
       .then((rows) => setImportHistory(Array.isArray(rows) ? rows : []))
       .catch(() => setImportHistory([]));
   }, [genericLeadWizard]);

@@ -938,7 +938,7 @@ router.get(
     try {
       // The queue unions TWO passport sources, both pending the same gate
       // (extractedAt NOT NULL AND verifiedAt NULL):
-      //   - TripParticipant   (kind "trip")     — TMC operator + microsite flow
+      //   - TripParticipant   (kind "trip")     — TMC operator + portal flow
       //   - CustomerTraveller (kind "customer") — unified portal flow, all 4
       //                                            sub-brands (PRD_PASSPORT_OCR)
       // Each row carries a `kind` discriminator so the operator UI calls the
@@ -1030,7 +1030,7 @@ router.get(
 
 // ─── POST /participants/:id/requeue-registration-docs (ADMIN+MANAGER) ──
 //
-// Re-syncs the passport from the microsite-uploaded document stored on the
+// Re-syncs the passport from the portal-uploaded document stored on the
 // participant's linked PendingTripRegistration. Called by the admin UI when
 // the post-approval OCR fire-and-forget didn't set passportExtractedAt
 // (e.g. participants approved before the bug fix). Returns a manual envelope

@@ -48,7 +48,7 @@
  *   POST   /api/travel/trips body:{tripCode,schoolContactId,destination,
  *                                  departDate,returnDate,status?,
  *                                  pricePerStudent?,legalEntity?,
- *                                  micrositeUrl?,driveFolderId?}
+ *                                  driveFolderId?}
  *          → 201 created
  *          | 400 MISSING_FIELDS / INVALID_CONTACT_ID / INVALID_STATUS /
  *                INVALID_DATE / INVERTED_DATES
@@ -143,7 +143,6 @@ function makeTrip(overrides = {}) {
     status: 'confirmed',
     _count: { participants: 24, documentRequirements: 3 },
     legalEntity: 'tmc_nexus',
-    micrositeUrl: null,
     driveFolderId: null,
     createdAt: '2026-05-20T10:00:00.000Z',
     ...overrides,

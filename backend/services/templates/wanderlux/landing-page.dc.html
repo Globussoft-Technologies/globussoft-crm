@@ -1355,9 +1355,9 @@ class Component extends DCLogic {
         /* Phase 6 — hybrid registration-draft branch. When the backend
            created a PendingTripRegistration (page is trip-linked +
            register.mode is 'registration-draft' in the stored config),
-           it returns { redirect: { type: 'microsite', url } }. The URL
-           carries only the opaque draftToken; navigate the user to the
-           microsite so they can verify their phone via OTP. Otherwise
+           it returns a customer-registration redirect. The URL carries
+           only a continuation token; navigate the parent to verify their
+           phone via OTP. Otherwise
            fall back to the toast + done-state (existing lead-capture
            behaviour). */
         const redirect = body && body.redirect;

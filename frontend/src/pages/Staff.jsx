@@ -632,7 +632,6 @@ export default function Staff() {
   // all. Hide both the Delete control and the inline RBAC role select
   // unless the viewer is an actual ADMIN.
   const { user, tenant } = useContext(AuthContext) || {};
-  const canManageStaff = user?.role === "ADMIN";
   const isWellness = tenant?.vertical === "wellness";
   // Travel-only: the sub-brand access picker (Q25) appears only for travel
   // tenants. Generic/wellness never render it and never send the field.
@@ -642,7 +641,13 @@ export default function Staff() {
   // permission (not the legacy ADMIN role), so a custom non-ADMIN role with
   // roles.read granted can still view permission sheets. Falls through to
   // the same AccessDenied card the rest of the RBAC pages use.
-  const { hasPermission } = usePermissions();
+  const { hasPermission, isReady: permissionsReady } = usePermissions();
+  const canManageStaff =
+    permissionsReady &&
+    (hasPermission("staff", "write") ||
+      hasPermission("staff", "update") ||
+      hasPermission("staff", "delete") ||
+      hasPermission("staff", "manage"));
   const canViewPermissions = hasPermission("roles", "read");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -722,7 +727,7 @@ export default function Staff() {
       loadWellnessRoleTypes();
       loadClinicLocations();
     }
-  }, [isWellness, isTravel]);
+  }, [isWellness, isTravel, canManageStaff]);
 
   const loadSalesTeams = async () => {
     try {

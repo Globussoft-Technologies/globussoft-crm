@@ -5,7 +5,7 @@
 // register/signup endpoints check + stamp emailVerifiedAt from.
 //
 // Mirrors the SendGrid fetch pattern in routes/communications.js + the
-// short-lived-access-JWT pattern in routes/travel_microsites.js verify-otp.
+// short-lived access-token patterns used by travel portal flows.
 
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");

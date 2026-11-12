@@ -38,7 +38,18 @@ const {
   verifyTmcRegistrationToken,
   setTmcRegistrationContext,
 } = require("../lib/tmcRegistrationContext");
-const { requiredParentDocumentTypes } = require("../lib/travelDocumentPolicy");
+const {
+  TMC_DOCUMENT_FILE_TYPES,
+  normalizeAcceptedFileTypes,
+  acceptedFileTypeMatches,
+  normalizeCaptureMode,
+  projectTripDocumentRequirement,
+} = require("../lib/travelDocumentPolicy");
+const {
+  DEFAULT_TMC_CONSENT_TERMS,
+  projectDigitalConsentRequirement,
+} = require("../lib/tmcDigitalConsent");
+const { loadBundledTmcConsentTerms } = require("../lib/tmcConsentTerms");
 const { ensureTmcTripTypeBank } = require("../lib/tmcTripTypePreference");
 
 const TMC_CONSENT_TEMPLATE_ASSETS = Object.freeze({
@@ -140,24 +151,15 @@ function requireParent(req, res, next) {
   return requirePortalPersona("PARENT", req, res, next);
 }
 
-const TMC_PARENT_DOCUMENT_TYPES = new Set([
-  "passport",
-  "aadhaar",
-  "consent-form",
-  "visa",
-]);
-
-const TMC_PARENT_DOCUMENT_MIME_EXT = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "application/pdf": ".pdf",
-};
+const TMC_PARENT_DOCUMENT_MIME_TYPES = new Set(
+  Object.values(TMC_DOCUMENT_FILE_TYPES).flatMap((rule) => rule.mimeTypes),
+);
 
 const tmcParentDocumentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (TMC_PARENT_DOCUMENT_MIME_EXT[(file.mimetype || "").toLowerCase()]) {
+    if (TMC_PARENT_DOCUMENT_MIME_TYPES.has((file.mimetype || "").toLowerCase())) {
       return cb(null, true);
     }
     return cb(new Error("UNSUPPORTED_MIME"));
@@ -173,7 +175,7 @@ const tmcParentDocumentUploadHandler = (req, res, next) => {
       return res.status(400).json({ error: "Upload error", code: "UPLOAD_ERROR" });
     }
     if (err) {
-      return res.status(400).json({ error: "Only JPG, PNG, or PDF files are allowed", code: "UNSUPPORTED_MIME" });
+      return res.status(400).json({ error: "This file type is not supported by the TMC document portal", code: "UNSUPPORTED_MIME" });
     }
     return next();
   });
@@ -231,11 +233,15 @@ function projectTmcParentDocument(document, trip = null) {
   return {
     id: document.id,
     documentType: document.documentType,
+    documentRequirementId: document.documentRequirementId || null,
+    captureMode: normalizeCaptureMode(document.captureMode),
     filename: document.filename,
     fileSize: document.fileSize,
     mimeType: document.mimeType,
     status: document.status,
     notes: document.notes,
+    signatureName: document.signatureName || null,
+    agreedAt: document.agreedAt || null,
     uploadedAt: document.uploadedAt,
     createdAt: document.createdAt,
     tripId: document.tripId,
@@ -249,6 +255,30 @@ function projectTmcParentDocument(document, trip = null) {
           returnDate: trip.returnDate,
         }
       : null,
+  };
+}
+
+function projectTmcParentRequirement(requirement, consentTerms = "") {
+  const projected = projectTripDocumentRequirement(requirement);
+  if (normalizeCaptureMode(projected.captureMode) === "digital_consent" && consentTerms) {
+    projected.consentTerms = consentTerms;
+  }
+  return projectDigitalConsentRequirement(projected);
+}
+
+function normalizeConsentField(value, maxLength = 500) {
+  return sanitizeText(String(value || "").trim()).slice(0, maxLength);
+}
+
+function buildTmcConsentAnswers(body, contact) {
+  return {
+    parentName: normalizeConsentField(body?.parentName, 255),
+    participantName: normalizeConsentField(body?.participantName, 255),
+    relationship: normalizeConsentField(body?.relationship, 120),
+    signatureName: normalizeConsentField(body?.signatureName, 255),
+    notes: normalizeConsentField(body?.notes, 2000),
+    parentEmail: normalizeConsentField(contact?.email, 255),
+    parentPhone: normalizeConsentField(contact?.phone, 80),
   };
 }
 
@@ -306,7 +336,7 @@ function normalizeTmcConsentTripType(value) {
   return TMC_CONSENT_TRIP_TYPES.has(normalized) ? normalized : null;
 }
 
-function projectTmcConsentTemplate(template) {
+function projectTmcConsentTemplate(template, terms = "") {
   if (!template) return null;
   const filename = pdfFilename(template.filename);
   return {
@@ -315,6 +345,7 @@ function projectTmcConsentTemplate(template) {
     filename,
     mimeType: PDF_MIME_TYPE,
     fileSize: template.mimeType === PDF_MIME_TYPE ? template.fileSize : null,
+    terms: terms || null,
   };
 }
 
@@ -2992,10 +3023,11 @@ router.get(
       }
       const context = await loadParentConsentContext(req, tripId);
       if (!context) return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
+      const terms = await loadBundledTmcConsentTerms(context.tripType);
       return res.json({
         trip: context.trip,
         tripType: context.tripType,
-        template: projectTmcConsentTemplate(context.template),
+        template: projectTmcConsentTemplate(context.template, terms),
         signedDocument: projectTmcConsentDocument(context.signedDocument),
       });
     } catch (err) {
@@ -3035,6 +3067,195 @@ router.get(
   },
 );
 
+// Digital TMC consent capture. This is intentionally separate from the
+// multipart document endpoint: a consent form is a structured, immutable
+// submission, not a file that the parent must download and upload again.
+router.post(
+  "/parent/consents",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireParent,
+  async (req, res) => {
+    try {
+      const tripId = Number.parseInt(req.body?.tripId, 10);
+      const documentRequirementId = Number.parseInt(req.body?.documentRequirementId, 10);
+      if (!Number.isInteger(tripId) || tripId <= 0) {
+        return res.status(400).json({ error: "tripId must be a positive integer", code: "INVALID_TRIP_ID" });
+      }
+      if (!Number.isInteger(documentRequirementId) || documentRequirementId <= 0) {
+        return res.status(400).json({ error: "Choose a consent form requirement", code: "DOCUMENT_REQUIREMENT_REQUIRED" });
+      }
+
+      const accessibleTripIds = await getParentAccessibleTripIds(req);
+      if (!accessibleTripIds.includes(tripId)) {
+        return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
+      }
+
+      const trip = await prisma.tmcTrip.findFirst({
+        where: {
+          id: tripId,
+          tenantId: Number(req.portal.tenantId),
+          status: { not: "cancelled" },
+        },
+        select: {
+          id: true,
+          destination: true,
+          tripType: true,
+          documentRequirements: {
+            where: { required: true },
+            orderBy: { id: "asc" },
+          },
+        },
+      });
+      if (!trip) return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
+
+      const requirement = (trip.documentRequirements || []).find((row) => row.id === documentRequirementId);
+      if (!requirement) {
+        return res.status(400).json({
+          error: "This consent form requirement is not available for the selected trip",
+          code: "DOCUMENT_REQUIREMENT_NOT_FOUND",
+        });
+      }
+      if (normalizeCaptureMode(requirement.captureMode) !== "digital_consent") {
+        return res.status(400).json({
+          error: "This requirement accepts a file upload, not a digital consent submission",
+          code: "DIGITAL_CONSENT_NOT_ENABLED",
+        });
+      }
+
+      const answers = buildTmcConsentAnswers(req.body, req.tmcContact);
+      const requiredAnswerKeys = ["parentName", "participantName", "relationship", "signatureName"];
+      const missingField = requiredAnswerKeys.find((key) => !answers[key]);
+      if (missingField) {
+        return res.status(400).json({
+          error: "Complete all required consent fields before submitting",
+          code: "CONSENT_FIELDS_REQUIRED",
+          field: missingField,
+        });
+      }
+      const agreedToTerms = req.body?.agreedToTerms === true || String(req.body?.agreedToTerms || "").toLowerCase() === "true";
+      if (!agreedToTerms) {
+        return res.status(400).json({
+          error: "You must agree to the terms and conditions before submitting",
+          code: "CONSENT_TERMS_REQUIRED",
+        });
+      }
+
+      const existing = await prisma.tmcParentDocument.findFirst({
+        where: {
+          tenantId: Number(req.portal.tenantId),
+          parentContactId: Number(req.tmcContact.id),
+          tripId,
+          documentRequirementId,
+          captureMode: "digital_consent",
+          status: { not: "rejected" },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: {
+          id: true,
+          documentType: true,
+          documentRequirementId: true,
+          captureMode: true,
+          filename: true,
+          fileSize: true,
+          mimeType: true,
+          status: true,
+          notes: true,
+          signatureName: true,
+          agreedAt: true,
+          uploadedAt: true,
+          createdAt: true,
+          tripId: true,
+        },
+      });
+      if (existing) {
+        return res.json({
+          alreadySubmitted: true,
+          document: projectTmcParentDocument(existing, trip),
+        });
+      }
+
+      const now = new Date();
+      const approvedTerms = await loadBundledTmcConsentTerms(trip.tripType);
+      const termsSnapshot = sanitizeText(approvedTerms || String(requirement.consentTerms || "").trim()) || DEFAULT_TMC_CONSENT_TERMS;
+      const document = await prisma.tmcParentDocument.create({
+        data: {
+          tenantId: Number(req.portal.tenantId),
+          parentContactId: Number(req.tmcContact.id),
+          tripId,
+          documentRequirementId: requirement.id,
+          documentType: String(requirement.docType || "Consent form").trim().slice(0, 255),
+          captureMode: "digital_consent",
+          filename: "digital-consent.json",
+          fileUrl: null,
+          fileBlob: null,
+          fileSize: null,
+          mimeType: "application/json",
+          storage: null,
+          storageKey: null,
+          status: "in_review",
+          notes: null,
+          answersJson: JSON.stringify(answers),
+          termsSnapshot,
+          signatureName: answers.signatureName,
+          agreedAt: now,
+          uploadedAt: now,
+        },
+        select: {
+          id: true,
+          documentType: true,
+          documentRequirementId: true,
+          captureMode: true,
+          filename: true,
+          fileSize: true,
+          mimeType: true,
+          status: true,
+          notes: true,
+          signatureName: true,
+          agreedAt: true,
+          uploadedAt: true,
+          createdAt: true,
+          tripId: true,
+        },
+      });
+
+      if (prisma.tripParticipant?.updateMany) {
+        await prisma.tripParticipant.updateMany({
+          where: {
+            tripId,
+            parentEmail: String(req.tmcContact.email || "").trim().toLowerCase(),
+          },
+          data: { consentCapturedAt: now },
+        });
+      }
+
+      writeAudit(
+        "TmcParentDocument",
+        "DIGITAL_CONSENT_SUBMITTED",
+        document.id,
+        null,
+        Number(req.portal.tenantId),
+        {
+          tripId,
+          documentRequirementId,
+          parentContactId: Number(req.tmcContact.id),
+          signatureName: answers.signatureName,
+          agreedAt: now.toISOString(),
+        },
+        { actorType: "portal" },
+      ).catch(() => {});
+
+      return res.status(201).json({
+        alreadySubmitted: false,
+        document: projectTmcParentDocument(document, trip),
+      });
+    } catch (err) {
+      console.error("[tmc-portal][parent/consents]", err);
+      return res.status(500).json({ error: "Failed to submit digital consent" });
+    }
+  },
+);
+
 // Parent travel documents. Every parent-uploaded file uses the private
 // visa-document store, which selects OCI when configured and local disk when
 // cloud storage is unavailable. Legacy database-backed consent images remain
@@ -3048,32 +3269,62 @@ router.get(
     try {
       const tenantId = Number(req.portal.tenantId);
       const parentContactId = Number(req.tmcContact.id);
-      const documents = await prisma.tmcParentDocument.findMany({
-        where: { tenantId, parentContactId },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: {
-          id: true,
-          documentType: true,
-          filename: true,
-          fileSize: true,
-          mimeType: true,
-          status: true,
-          notes: true,
-          uploadedAt: true,
-          createdAt: true,
-          tripId: true,
-        },
-      });
-      const tripIds = [...new Set(documents.map((document) => document.tripId).filter(Boolean))];
-      const trips = tripIds.length
-        ? await prisma.tmcTrip.findMany({
-            where: { tenantId, id: { in: tripIds } },
-          select: { id: true, tripCode: true, destination: true, tripType: true, departDate: true, returnDate: true },
-          })
-        : [];
+      const accessibleTripIds = await getParentAccessibleTripIds(req);
+      const [documents, trips] = await Promise.all([
+        prisma.tmcParentDocument.findMany({
+          where: { tenantId, parentContactId },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: {
+            id: true,
+            documentType: true,
+            documentRequirementId: true,
+            captureMode: true,
+            filename: true,
+            fileSize: true,
+            mimeType: true,
+            status: true,
+            notes: true,
+            signatureName: true,
+            agreedAt: true,
+            uploadedAt: true,
+            createdAt: true,
+            tripId: true,
+          },
+        }),
+        accessibleTripIds.length
+          ? prisma.tmcTrip.findMany({
+              where: { tenantId, id: { in: accessibleTripIds }, status: { not: "cancelled" } },
+              select: {
+                id: true,
+                tripCode: true,
+                destination: true,
+                tripType: true,
+                departDate: true,
+                returnDate: true,
+                documentRequirements: {
+                  where: { required: true },
+                  orderBy: { id: "asc" },
+                },
+              },
+            })
+          : [],
+      ]);
       const tripById = new Map(trips.map((trip) => [trip.id, trip]));
+      const documentRequirements = (await Promise.all(trips.map(async (trip) => {
+        const hasDigitalConsent = (trip.documentRequirements || []).some(
+          (requirement) => normalizeCaptureMode(requirement.captureMode) === "digital_consent",
+        );
+        const consentTerms = hasDigitalConsent
+          ? await loadBundledTmcConsentTerms(trip.tripType)
+          : "";
+        return (trip.documentRequirements || []).map((requirement) => ({
+          ...projectTmcParentRequirement(requirement, consentTerms),
+          tripId: trip.id,
+        }));
+      }))).flat();
       res.json({
         documents: documents.map((document) => projectTmcParentDocument(document, tripById.get(document.tripId))),
+        documentRequirements,
       });
     } catch (err) {
       console.error("[tmc-portal][parent/documents]", err);
@@ -3093,11 +3344,6 @@ router.post(
       if (!req.file || !req.file.buffer) {
         return res.status(400).json({ error: "Please choose a document to upload", code: "NO_FILE" });
       }
-      const documentType = String(req.body?.documentType || "").trim().toLowerCase();
-      if (!TMC_PARENT_DOCUMENT_TYPES.has(documentType)) {
-        return res.status(400).json({ error: "Choose a valid document type", code: "INVALID_DOCUMENT_TYPE" });
-      }
-
       if (req.body?.tripId === undefined || String(req.body.tripId).trim() === "") {
         return res.status(400).json({
           error: "Select the related trip before uploading a document",
@@ -3114,18 +3360,41 @@ router.post(
       }
       const trip = await prisma.tmcTrip.findFirst({
         where: { id: tripId, tenantId: Number(req.portal.tenantId) },
-        select: { id: true, tripType: true },
+        select: {
+          id: true,
+          documentRequirements: {
+            where: { required: true },
+            orderBy: { id: "asc" },
+          },
+        },
       });
       if (!trip) return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
-      const requiredDocumentTypes = requiredParentDocumentTypes(trip.tripType);
-      if (!requiredDocumentTypes.includes(documentType)) {
+      const documentRequirementId = Number(req.body?.documentRequirementId);
+      if (!Number.isInteger(documentRequirementId) || documentRequirementId <= 0) {
+        return res.status(400).json({ error: "Choose a document requirement for this trip", code: "DOCUMENT_REQUIREMENT_REQUIRED" });
+      }
+      const requirement = (trip.documentRequirements || []).find((row) => row.id === documentRequirementId);
+      if (!requirement) {
         return res.status(400).json({
-          error: "This document is not required for the selected trip",
-          code: "DOCUMENT_NOT_REQUIRED_FOR_TRIP",
-          tripType: trip.tripType,
-          requiredDocumentTypes,
+          error: "This document requirement is not available for the selected trip",
+          code: "DOCUMENT_REQUIREMENT_NOT_FOUND",
         });
       }
+      if (normalizeCaptureMode(requirement.captureMode) === "digital_consent") {
+        return res.status(400).json({
+          error: "Complete this consent form in the parent portal instead of uploading a file",
+          code: "DIGITAL_CONSENT_USE_FORM",
+        });
+      }
+      const acceptedFileTypes = normalizeAcceptedFileTypes(requirement.acceptedFileTypes);
+      if (!acceptedFileTypeMatches(req.file, acceptedFileTypes)) {
+        return res.status(400).json({
+          error: `This trip accepts: ${acceptedFileTypes.join(", ")}`,
+          code: "UNSUPPORTED_FILE_TYPE_FOR_DOCUMENT",
+          acceptedFileTypes,
+        });
+      }
+      const documentType = String(requirement.docType || "Travel document").trim();
       let stored;
       try {
         stored = await visaDocStore.storeDoc(req.file.buffer, req.file.mimetype);
@@ -3139,7 +3408,9 @@ router.post(
           tenantId: Number(req.portal.tenantId),
           parentContactId: Number(req.tmcContact.id),
           tripId,
+          documentRequirementId: requirement.id,
           documentType,
+          captureMode: "file",
           filename: (req.file.originalname || "travel-document").slice(0, 255),
           fileUrl: stored.url,
           fileBlob: null,
@@ -3153,11 +3424,15 @@ router.post(
         select: {
           id: true,
           documentType: true,
+          documentRequirementId: true,
+          captureMode: true,
           filename: true,
           fileSize: true,
           mimeType: true,
           status: true,
           notes: true,
+          signatureName: true,
+          agreedAt: true,
           uploadedAt: true,
           createdAt: true,
           tripId: true,

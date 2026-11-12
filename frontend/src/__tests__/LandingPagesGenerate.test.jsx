@@ -77,7 +77,7 @@ function renderPage(initialEntries = ['/landing-pages']) {
 const TRIP_PAGE_STATE = {
   returnTo: { label: 'TMC Trips', path: '/travel/trips/101?tab=overview' },
   currentLabel: 'Public experience',
-  currentPath: '/travel/trips/101?tab=microsite',
+  currentPath: '/travel/trips/101?tab=overview',
   backTo: '/travel/trips',
   backLabel: 'Trips',
   tripContext: {

@@ -70,7 +70,7 @@ export default defineConfig({
       // Vite falls through to the SPA's 404 page. Excludes the SPA routes
       // under /p/ (itinerary, quote, payment-success, review, etc.) so the
       // React router can render them.
-      "^/p/(?!(tripmicrosite|itinerary|tmc|quote|review|payment|flyer)(/|$))": {
+      "^/p/(?!(itinerary|tmc|quote|review|payment|flyer)(/|$))": {
         target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
         changeOrigin: true,
         rewrite: (p) => p,

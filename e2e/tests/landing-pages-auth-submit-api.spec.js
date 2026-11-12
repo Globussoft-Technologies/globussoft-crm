@@ -326,7 +326,7 @@ test.describe('POST /api/landing-pages/:id/submit — authenticated form submiss
           type: 'form',
           props: {
             fields: [{ name: 'email', label: 'Email', required: true }],
-            successRedirectUrl: '/trips/microsite-uuid',
+            successRedirectUrl: '/travel/portal',
           },
         },
       ]),
@@ -343,7 +343,7 @@ test.describe('POST /api/landing-pages/:id/submit — authenticated form submiss
 
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.successRedirectUrl).toBe('/trips/microsite-uuid');
+    expect(body.successRedirectUrl).toBe('/travel/portal');
 
     createdContactEmails.add(testEmail);
   });

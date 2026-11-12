@@ -2,6 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const { writeAudit } = require("../lib/audit");
 const { calculateCommission } = require("../lib/commissionCalculation");
 // #714 (HIGH): server-side validation for Staff edit. Pre-fix PUT /:id
@@ -494,7 +495,7 @@ router.get("/", async (req, res) => {
 // colleague. The new user's role is whatever the admin selected, so the
 // role-aware Dashboard (frontend/src/pages/Dashboard.jsx) automatically
 // renders the correct landing view on their first login.
-router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
+router.post("/", requirePermission("staff", "write"), async (req, res) => {
   try {
     const { name, email, password, role, wellnessRole, rbacRoleId, subBrandAccess, jobTitle, workNumber, mobileNumber, reportingToId, defaultPipelineId } =
       req.body || {};
@@ -557,14 +558,16 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       }
     }
 
-    // CSV imports do not expose internal Role ids. Resolve the canonical role
-    // inside this tenant so imported users receive effective permissions
-    // immediately instead of waiting for a backend restart.
-    if (!rbacRole && isGenericImport) {
+    // Older create flows only submit the legacy access tier (USER/MANAGER/
+    // ADMIN). Resolve that tier to the tenant's canonical RBAC role whenever
+    // an explicit rbacRoleId was not supplied, so the new account actually
+    // receives the permissions shown in Roles & Permissions. CSV imports use
+    // the same path and therefore retain their immediate role assignment.
+    if (!rbacRole) {
       rbacRole = await prisma.role.findFirst({
         where: { tenantId: req.user.tenantId, key: role, userType: 'STAFF', isActive: true },
       });
-      if (!rbacRole) {
+      if (!rbacRole && isGenericImport) {
         return res.status(409).json({
           error: `The ${role} permission role is not configured for this organization.`,
           code: 'IMPORT_ROLE_NOT_CONFIGURED',
@@ -750,7 +753,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // PUT /:id/role — update user role (ADMIN only)
-router.put("/:id/role", verifyRole(["ADMIN"]), async (req, res) => {
+router.put("/:id/role", requirePermission("staff", "update"), async (req, res) => {
   try {
     const { role } = req.body;
 
@@ -801,7 +804,7 @@ router.put("/:id/role", verifyRole(["ADMIN"]), async (req, res) => {
 // PUT /:id — edit user fields (ADMIN only). #618 — Settings Staff Directory
 // row-edit. Allows changing name, email, role, wellnessRole. Email uniqueness
 // is enforced by Prisma's @unique constraint; we surface a 409 on collision.
-router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
+router.put("/:id", requirePermission("staff", "update"), async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     if (!Number.isInteger(userId) || userId <= 0) {
@@ -1159,7 +1162,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
 // PATCH /:id — currently only the deactivate / reactivate toggle. #618 —
 // reversible alternative to DELETE. Body: `{ active: false }` sets
 // deactivatedAt = now(); `{ active: true }` clears it.
-router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
+router.patch("/:id", requirePermission("staff", "update"), async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     if (!Number.isInteger(userId) || userId <= 0) {
@@ -1226,7 +1229,7 @@ router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
 // itself is NEVER returned in the response (#526 hardening — same shape as
 // /api/auth/forgot-password). Returns 200 + a tokenIssued boolean so the UI
 // can confirm.
-router.post("/:id/reset-password", verifyRole(["ADMIN"]), async (req, res) => {
+router.post("/:id/reset-password", requirePermission("staff", "update"), async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     if (!Number.isInteger(userId) || userId <= 0) {
@@ -1286,7 +1289,7 @@ router.post("/:id/reset-password", verifyRole(["ADMIN"]), async (req, res) => {
 // reset-password but a different audit action and a different email body.
 // Useful when the original invite landed in spam / was deleted before the
 // user enrolled.
-router.post("/:id/resend-invite", verifyRole(["ADMIN"]), async (req, res) => {
+router.post("/:id/resend-invite", requirePermission("staff", "update"), async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     if (!Number.isInteger(userId) || userId <= 0) {
@@ -1331,7 +1334,7 @@ router.post("/:id/resend-invite", verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // DELETE /:id — delete user (ADMIN only)
-router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
+router.delete("/:id", requirePermission("staff", "delete"), async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
 

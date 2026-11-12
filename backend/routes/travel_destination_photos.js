@@ -1,5 +1,5 @@
 // Public destination-photo proxy for the customer-facing travel pages
-// (quote-accept landing, itinerary share, trip microsite).
+// (quote-accept landing, itinerary share, public travel pages).
 //
 // GET /api/travel/destination-photos/public?q=<destination>&limit=<n>
 //

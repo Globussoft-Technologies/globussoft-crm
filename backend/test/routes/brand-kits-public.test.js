@@ -5,7 +5,7 @@
  *
  * Pins the contract for the public, unauthenticated read endpoint that
  * resolves the active brand kit for a sub-brand. The customer portal,
- * the public trip microsite, the embed widget, and the public landing
+ * the public brand surface, embed widget, and public landing
  * page all consume this endpoint BEFORE the customer logs in (the login
  * screen / landing page itself must carry sub-brand chrome) so the
  * endpoint MUST be auth-free.

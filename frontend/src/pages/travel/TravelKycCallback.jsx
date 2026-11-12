@@ -5,22 +5,12 @@
 // them to the backend to complete verification, then bounces the user back
 // to where they started.
 //
-// Two flows share this component via the `flow` prop:
-//   - flow="portal"    → POST /api/portal/kyc/callback (Bearer portalToken),
-//                        then back to /travel/portal
-//   - flow="microsite" → POST /api/travel/microsites/public/:uuid/verify/
-//                        aadhaar/callback, then back to the trip page
-//
-// The microsite flow needs the publicUuid, which the public microsite page
-// stashes in sessionStorage before redirecting out to DigiLocker.
-
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 
 const PORTAL_TOKEN_KEY = "portalToken";
-const KYC_MICROSITE_UUID_KEY = "kycMicrositeUuid";
 
-export default function TravelKycCallback({ flow }) {
+export default function TravelKycCallback() {
   const [status, setStatus] = useState("working"); // working | ok | error
   const [message, setMessage] = useState("Completing your Aadhaar verification…");
   const ran = useRef(false);
@@ -52,33 +42,18 @@ export default function TravelKycCallback({ flow }) {
         return;
       }
       try {
-        if (flow === "portal") {
-          const token = localStorage.getItem(PORTAL_TOKEN_KEY);
-          const data = await postJson("/api/portal/kyc/callback", { state, code }, token);
-          setStatus("ok");
-          setMessage(`Verified ✓ — Aadhaar ••••${data.aadhaarLast4 || "????"}`);
-          redirectAfter("/travel/portal");
-        } else {
-          const uuid = sessionStorage.getItem(KYC_MICROSITE_UUID_KEY);
-          if (!uuid) {
-            throw new Error("Verification context was lost — please reopen the trip page and try again.");
-          }
-          const data = await postJson(
-            `/api/travel/microsites/public/${uuid}/verify/aadhaar/callback`,
-            { state, code },
-          );
-          sessionStorage.removeItem(KYC_MICROSITE_UUID_KEY);
-          setStatus("ok");
-          setMessage(`Verified ✓ — Aadhaar ••••${data.aadhaarLast4 || "????"}`);
-          redirectAfter(`/p/tripmicrosite/${uuid}?verified=1`);
-        }
+        const token = localStorage.getItem(PORTAL_TOKEN_KEY);
+        const data = await postJson("/api/portal/kyc/callback", { state, code }, token);
+        setStatus("ok");
+        setMessage(`Verified ✓ — Aadhaar ••••${data.aadhaarLast4 || "????"}`);
+        redirectAfter("/travel/portal");
       } catch (err) {
         setStatus("error");
         setMessage(err.message || "We couldn't complete the verification.");
       }
     }
     complete();
-  }, [flow]);
+  }, []);
 
   return (
     <div style={wrap}>

@@ -765,7 +765,7 @@ async function main() {
   }
   console.log(`[seed-travel] markup rules: ${mrCreated} created, ${markupRules.length - mrCreated} already existed`);
 
-  // ── 8. Sample TMC trips + RFU itinerary + microsite ─────────────────
+  // ── 8. Sample TMC trips + RFU itinerary ─────────────────────────────
   // Without entity data the Dashboard tiles all read 0 — fine for a unit
   // test, hostile for a demo. Add a small but realistic set so the
   // /travel landing surface is non-empty out of the box. Idempotency
@@ -1090,11 +1090,10 @@ async function seedDefaultCancellationPolicies(tenantId) {
 }
 
 /**
- * Seed 3 sample TmcTrips + 1 RFU Itinerary + 1 published microsite.
+ * Seed 3 sample TmcTrips + 1 RFU Itinerary.
  * Idempotent — each row keys on a stable natural identifier:
  *   - TmcTrip → tripCode (@unique)
  *   - Itinerary → (tenantId, contactId, destination) check
- *   - TripMicrosite → tripId (@unique)
  *   - Contacts → email
  *   - Participants → (tripId, fullName) check
  *
@@ -1160,7 +1159,6 @@ async function seedSampleTrips(tenantId) {
       pricePerStudent: 75000,
       status: "confirmed",
       participants: ["Aarav Sharma", "Diya Patel", "Vihaan Iyer", "Saanvi Reddy"],
-      withMicrosite: true,
     },
     {
       tripCode: "tmc-andaman-2026",
@@ -1170,7 +1168,6 @@ async function seedSampleTrips(tenantId) {
       pricePerStudent: 55000,
       status: "in-trip",
       participants: ["Kabir Singh", "Ishaan Verma", "Ananya Gupta"],
-      withMicrosite: false,
     },
     {
       tripCode: "tmc-jaipur-2025",
@@ -1180,7 +1177,6 @@ async function seedSampleTrips(tenantId) {
       pricePerStudent: 22000,
       status: "completed",
       participants: ["Arjun Mehta", "Riya Kapoor"],
-      withMicrosite: false,
     },
   ];
 
@@ -1216,36 +1212,8 @@ async function seedSampleTrips(tenantId) {
       }).catch(() => null);
     }
 
-    // Microsite for the Bali trip only — represents the "published &
-    // sent to parents" state the dashboard's microsite tile counts.
-    if (plan.withMicrosite) {
-      const existing = await prisma.tripMicrosite.findUnique({ where: { tripId: trip.id } });
-      if (!existing) {
-        const crypto = require("crypto");
-        await prisma.tripMicrosite.create({
-          data: {
-            tenantId,
-            tripId: trip.id,
-            publicUuid: crypto.randomUUID(),
-            subdomain: `trip-${plan.tripCode}`,
-            itineraryHtml:
-              `<h2>Day 1 — Arrival in Denpasar</h2>` +
-              `<p>Welcome briefing at the hotel; group orientation.</p>` +
-              `<h2>Day 2 — Ubud cultural day</h2>` +
-              `<p>Monkey forest, rice terraces, traditional dance performance.</p>` +
-              `<h2>Day 3 — Beach + marine biology workshop</h2>` +
-              `<p>Hands-on tide-pool study at Sanur. Departure brief.</p>`,
-            faqJson: JSON.stringify([
-              { q: "What to pack?", a: "Sunscreen, light cotton, ID, sturdy walking shoes." },
-              { q: "Pocket money?", a: "USD 30 per student is sufficient." },
-            ]),
-            publishedAt: new Date(),
-          },
-        });
-      }
-    }
   }
-  console.log(`[seed-travel] sample trips: ${tripPlans.length} (+ 1 microsite)`);
+  console.log(`[seed-travel] sample trips: ${tripPlans.length}`);
 
   // Seed a couple of CustomerTraveller rows for the portal demo customer
   // (Ahmed, RFU pilgrim) so the unified "Travel Documents" surface

@@ -174,9 +174,6 @@ const TmcTeacherPortal = lazy(
 const TmcParentPortal = lazy(
   () => import("./pages/travel/TmcParentPortal"),
 );
-const PublicTripMicrosite = lazy(
-  () => import("./pages/travel/PublicTripMicrosite"),
-);
 const TravelPaymentPortal = lazy(() => import("./pages/travel/TravelPaymentPortal"));
 // Public itinerary share page (no auth)  the advisor's "Share link" opens
 // /p/itinerary/:shareToken here. Backed by GET /api/travel/itineraries/public/:shareToken.
@@ -574,9 +571,6 @@ const TravelCommissionProfilesAdmin = lazy(
 );
 const TravelReligiousPackets = lazy(
   () => import("./pages/travel/ReligiousPackets"),
-);
-const TravelTmcMicrositePreview = lazy(
-  () => import("./pages/travel/TmcMicrositePreview"),
 );
 // Unified itinerary workspace — replaces the old ItineraryDetail (money /
 // status) + ItineraryEditor (days / map) two-page split, which forced an
@@ -1703,15 +1697,6 @@ export default function App() {
                       path="/travel/portal/*"
                       element={<TravelCustomerPortal />}
                     />
-                    {/* Public TMC trip microsite (parent/teacher, no login) +
-                      the DigiLocker/Aadhaar OAuth callback landing pages.
-                      All three are public  server openPath allowlist covers
-                      the backend. The two callback routes catch DigiLocker's
-                      ?code&state redirect and complete verification. */}
-                    <Route
-                      path="/p/tripmicrosite/:publicUuid"
-                      element={<PublicTripMicrosite />}
-                    />
                     <Route path="/pay/:token" element={<TravelPaymentPortal />} />
                     <Route path="/pay/trip/:tripId/installment/:installmentId" element={<TravelPaymentPortal />} />
                     {/* Public itinerary share link (no auth). The advisor's
@@ -1804,12 +1789,8 @@ export default function App() {
                       element={<Phase2ValidationSuite />}
                     />
                     <Route
-                      path="/travel/kyc/callback"
-                      element={<TravelKycCallback flow="microsite" />}
-                    />
-                    <Route
                       path="/travel/portal/kyc/callback"
-                      element={<TravelKycCallback flow="portal" />}
+                      element={<TravelKycCallback />}
                     />
                     <Route
                       path="/book/:slug"
@@ -3960,14 +3941,6 @@ export default function App() {
                         element={
                           <TravelOnly>
                             <TravelReligiousPackets />
-                          </TravelOnly>
-                        }
-                      />
-                      <Route
-                        path="travel/tmc/microsite-preview"
-                        element={
-                          <TravelOnly>
-                            <TravelTmcMicrositePreview />
                           </TravelOnly>
                         }
                       />

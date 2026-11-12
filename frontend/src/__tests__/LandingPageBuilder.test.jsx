@@ -245,7 +245,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
     renderBuilder("/landing-pages/42", "travel", {
       returnTo: { label: "TMC Trips", path: "/travel/trips/101?tab=overview" },
       currentLabel: "Public experience",
-      currentPath: "/travel/trips/101?tab=microsite",
+      currentPath: "/travel/trips/101?tab=overview",
     });
     await waitFor(() =>
       expect(screen.getByLabelText("Page title")).toBeInTheDocument(),
@@ -253,7 +253,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     expect(screen.getByTitle("Back to TMC Trips")).toHaveAttribute("href", "/travel/trips/101?tab=overview");
     expect(screen.getByRole("link", { name: "TMC Trips" })).toHaveAttribute("href", "/travel/trips/101?tab=overview");
-    expect(screen.getByRole("link", { name: "Public experience" })).toHaveAttribute("href", "/travel/trips/101?tab=microsite");
+    expect(screen.getByRole("link", { name: "Public experience" })).toHaveAttribute("href", "/travel/trips/101?tab=overview");
   });
 
   it("renders all 9 component-palette buttons in the left rail", async () => {

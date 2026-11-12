@@ -15,12 +15,12 @@
  *   5. Successful render: heading shows tripCode + Luggage icon, status
  *      badge renders the literal status text (e.g. "confirmed"), and the
  *      destination / depart / return appear in the header sub-row.
- *   6. Tab strip: 5 tabs render (Overview / Participants / Rooming /
- *      Payment plan / Microsite) with role="tab" + aria-selected wiring.
+ *   6. Tab strip: 5 tabs render (Overview / Participants / Documents /
+ *      Rooming / Payment plan) with role="tab" + aria-selected wiring.
  *   7. Overview tab (default): renders 9 metric cards including Destination,
  *      Depart, Return, Legal entity, Price/student, Participants count,
- *      Required docs, Payment plan ("configured" / "not set"), Microsite
- *      ("published" / "not published").
+ *      Required docs, Payment plan ("configured" / "not set"), and the
+ *      landing-page experience card.
  *   8. Participants tab: switching to it shows the count caption and an
  *      empty-state when no participants; populated trip renders names + the
  *      Trash2 remove buttons (one per participant).
@@ -29,17 +29,14 @@
  *  10. Rooming tab: triggers a secondary GET to /api/travel/trips/:id/rooming
  *      on mount (the inner tab fetches its own data) and renders the room
  *      count caption + Download-XLSX link.
- *  11. Microsite tab — un-published: renders MicrositeCreate copy ("No
- *      microsite published yet…") with the subdomain default seeded from
- *      trip-{tripCode}.
- *  12. Microsite tab — published: renders MicrositeEditor with publicUuid
- *      visible + Copy URL + Open + Preview buttons.
+ *  11. Documents tab: admin-defined names and accepted file types render in
+ *      the participant upload-status matrix.
+ *  12. Documents tab: add/edit/remove requests use the trip requirement API.
  *  13. Load error: GET rejection surfaces notify.error with the body.error.
  *
- * Backend contract pinned (per backend/routes/travel_trips.js:165+ for GET
- * /:id, line 190 participants include, line 193 microsite include):
+ * Backend contract pinned (per backend/routes/travel_trips.js):
  *   GET /api/travel/trips/:id → 200 { ...trip, participants[],
- *     microsite|null, documentRequirements[], _count? } | 404 "Trip not
+ *     documentRequirements[], _count? } | 404 "Trip not
  *     found" (catch path in SUT renders the !trip branch).
  *   POST /api/travel/trips/:id/participants body { fullName, parentName?,
  *     parentPhone? } → 201 created.
@@ -47,10 +44,8 @@
  *
  * Drift pinned (prompt vs. actual code):
  *   - Prompt mentioned "day-by-day itinerary" — the SUT does NOT render a
- *     day-by-day section. Itinerary content lives ONLY inside the
- *     Microsite tab's RichTextEditor (HTML string field), not as
- *     structured day cards on the detail page. Day-by-day rendering lives
- *     in a separate ItineraryDetail page. Tests OMIT day-card assertions.
+ *     day-by-day section. Day-by-day rendering lives in a separate
+ *     ItineraryDetail page. Tests OMIT day-card assertions.
  *   - Prompt mentioned "suppliers section" — the SUT has no suppliers tab.
  *     Suppliers are managed elsewhere (Suppliers admin page). Tests OMIT.
  *   - Prompt mentioned "status timeline" — the SUT has no status timeline.
@@ -60,8 +55,8 @@
  *     happen via the Deal in the sales pipeline). Tests OMIT transitions.
  *   - Prompt mentioned "edit flow" — there is no top-level "Edit trip"
  *     button; the page is read-only at the header level. Per-tab edits
- *     exist (rooming PATCH, payment-plan PUT, microsite PATCH, add-
- *     participant POST) but they are not gated by an explicit Edit toggle.
+ *     exist (rooming PATCH, payment-plan PUT, add-participant POST) but they
+ *     are not gated by an explicit Edit toggle.
  *   - Prompt mentioned "RBAC: USER role hides mutation CTAs" — the SUT
  *     does NOT consume AuthContext + does NOT gate CTAs by role. All
  *     mutation buttons render unconditionally; authz is enforced server-
@@ -117,12 +112,10 @@ vi.mock('../utils/api', () => ({
 // loading-state assertions.
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
-const notifyInfo = vi.fn();
 const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyPrompt = vi.fn(() => Promise.resolve('Documents do not meet trip requirements'));
 const notifyObj = {
   error: notifyError,
-  info: notifyInfo,
   success: notifySuccess,
   confirm: notifyConfirm,
   prompt: notifyPrompt,
@@ -134,9 +127,9 @@ vi.mock('../utils/notify', () => ({
 import TripDetail from '../pages/travel/TripDetail';
 import LandingPageBuilder from '../pages/LandingPageBuilder';
 
-// Canonical trip fixture — exercises Overview + Participants + Microsite
-// surfaces. Default has no microsite (un-published path), and one
-// participant so we can assert both populated + remove-button shape.
+// Canonical trip fixture — exercises Overview, Participants, Documents,
+// Rooming, and Payment Plan surfaces. One participant lets us assert both
+// populated + remove-button shape.
 function makeTrip(overrides = {}) {
   return {
     id: 101,
@@ -149,17 +142,15 @@ function makeTrip(overrides = {}) {
     pricePerStudent: 125000,
     status: 'confirmed',
     legalEntity: 'tmc_nexus',
-    micrositeUrl: null,
     driveFolderId: null,
     participants: [
       { id: 901, fullName: 'Anaya Sharma', parentName: 'Riya Sharma', parentPhone: '+919876543210' },
     ],
     documentRequirements: [
-      { id: 1, code: 'passport', required: true },
-      { id: 2, code: 'consent_form', required: true },
+      { id: 1, docType: 'School medical clearance', acceptedFileTypes: ['pdf', 'docx'], required: true },
+      { id: 2, docType: 'Emergency contact letter', acceptedFileTypes: ['pdf', 'jpg'], required: true },
     ],
     paymentPlan: null,
-    microsite: null,
     createdAt: '2026-05-20T10:00:00.000Z',
     ...overrides,
   };
@@ -232,8 +223,8 @@ function installFetchMock({
       if (builderLandingPage) return Promise.resolve(builderLandingPage);
       return Promise.resolve({
         id: 77,
-        title: 'Trip Microsite',
-        slug: 'trip-microsite',
+        title: 'Trip landing page',
+        slug: 'trip-landing-page',
         status: 'DRAFT',
         content: JSON.stringify([]),
       });
@@ -265,14 +256,6 @@ function installFetchMock({
     // any latent fire doesn't reject and surface a stray notify.error).
     if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
     if (method === 'GET' && /instalments$/.test(url)) return Promise.resolve({ instalments: [] });
-    // document view-url endpoint (registration doc signed URL)
-    if (method === 'GET' && /\/registrations\/\d+\/documents\/[^/]+\/view-url$/.test(url)) {
-      return Promise.resolve({ url: 'https://signed.example.com/doc.pdf', docType: url.includes('aadhaar') ? 'aadhaar' : 'passport', expiresInSeconds: 300 });
-    }
-    // passport requeue-registration-docs endpoint
-    if (method === 'POST' && /\/api\/travel\/passport\/participants\/\d+\/requeue-registration-docs$/.test(url)) {
-      return Promise.resolve({ queued: true });
-    }
     return Promise.resolve(null);
   });
 }
@@ -317,7 +300,6 @@ beforeEach(() => {
   globalThis.fetch = rawFetchMock;
   notifyError.mockReset();
   notifySuccess.mockReset();
-  notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
   notifyPrompt.mockReset();
@@ -325,17 +307,12 @@ beforeEach(() => {
   // Stub window.confirm for the remove-participant path (used only in the
   // remove case; harmless elsewhere).
   vi.stubGlobal('confirm', vi.fn(() => true));
-  // The legacy participant assertions below cover the participant controls
-  // that remain behind this rollout flag while the unified registration list
-  // is enabled separately by the page.
-  window.__SHOW_LEGACY_PARTICIPANT_LIST__ = true;
   installFetchMock();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.unstubAllGlobals();
-  delete window.__SHOW_LEGACY_PARTICIPANT_LIST__;
   vi.restoreAllMocks();
 });
 
@@ -412,7 +389,7 @@ describe('<TripDetail /> — header + status badge', () => {
 });
 
 describe('<TripDetail /> — tab strip', () => {
-  it('normalizes the legacy microsite route to Overview', async () => {
+  it('normalizes the removed microsite URL to Overview', async () => {
     renderPage(101, { search: '?tab=microsite' });
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     expect(screen.getByRole('tab', { name: /Overview/i })).toHaveAttribute('aria-selected', 'true');
@@ -427,14 +404,14 @@ describe('<TripDetail /> — tab strip', () => {
     );
   });
 
-  it('renders all 4 tabs with role="tab" + Overview selected by default', async () => {
+  it('renders all 5 tabs with role="tab" + Overview selected by default', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(4);
+    expect(tabs).toHaveLength(5);
     const labels = tabs.map((t) => t.textContent.trim());
     expect(labels).toEqual(
-      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan']),
+      expect.arrayContaining(['Overview', 'Participants', 'Documents', 'Rooming', 'Payment plan']),
     );
     // Overview is selected by default.
     const overview = screen.getByRole('tab', { name: /Overview/i });
@@ -471,8 +448,8 @@ describe('<TripDetail /> — Overview tab', () => {
     expect(kpiCards).toHaveLength(3);
     expect(kpiCards.every((card) => card.style.padding === '14px' && card.style.width === '100%')).toBe(true);
     expect(kpiCards[2].querySelector('div[style*="overflow-wrap"]')).toHaveStyle({ overflowWrap: 'anywhere' });
-    // 'Participants' / 'Public Experience' / 'Payment plan' all appear as both tab
-    // chrome AND in the overview (KPI card / summary band title). Scope via
+    // 'Participants' / 'Payment plan' appear as both tab chrome AND in the
+    // overview (KPI card / summary band title). Scope via
     // getAllByText.
     expect(screen.getAllByText('Participants').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Payment plan').length).toBeGreaterThanOrEqual(2);
@@ -504,28 +481,21 @@ describe('<TripDetail /> — Overview tab', () => {
 });
 
 describe('<TripDetail /> — Participants tab', () => {
-  it('switching to Participants shows the count caption + the existing participant + Add CTA', async () => {
+  it('switching to Participants shows the registered roster and no manual add CTA', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    // Caption: "1 participant" (singular form because count === 1).
-    expect(await screen.findByText('1 participant')).toBeInTheDocument();
+    expect(await screen.findByTestId('participants-list-count')).toHaveTextContent('1 participant');
+    expect(screen.queryByTestId('participants-tab-count')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Registered participants' })).not.toBeInTheDocument();
     // Existing participant row.
     expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
-    expect(screen.getByText('Participant list')).toHaveStyle({
-      background: 'var(--surface-hover, var(--subtle-bg))',
-      color: 'var(--text-primary)',
-    });
-    expect(screen.getByRole('region', { name: /Participant records/i })).toHaveStyle({
-      overflowY: 'auto',
-      maxHeight: 'min(60vh, 520px)',
-      overscrollBehavior: 'contain',
-    });
-    // Add CTA renders unconditionally (no RBAC gate).
-    expect(screen.getByRole('button', { name: /Add participant/i })).toBeInTheDocument();
+    expect(screen.getByTestId('registered-participants-list')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Import participants/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add participant/i })).not.toBeInTheDocument();
   });
 
-  it('empty trip renders "No participants yet." copy + "0 participants" caption', async () => {
+  it('empty trip renders the empty roster copy and a zero participant list badge', async () => {
     installFetchMock({ trip: makeTrip({ participants: [] }) });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
@@ -536,17 +506,15 @@ describe('<TripDetail /> — Participants tab', () => {
     const participantsTab = tabs.find((t) => /Participants/.test(t.textContent));
     expect(participantsTab).toBeTruthy();
     fireEvent.click(participantsTab);
-    // Empty-state copy renders.
-    expect(
-      await screen.findByText((content) => content.includes('No participants yet')),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/No registered participants yet/i)).toBeInTheDocument();
+    expect(screen.getByTestId('participants-list-count')).toHaveTextContent('0 participants');
   });
 
-  it('does not show passport status or upload controls for a day trip', async () => {
+  it('uses the configured document requirements without trip-type restrictions', async () => {
     installFetchMock({
       trip: makeTrip({
         tripType: 'day_trip',
-        documentRequirements: [{ id: 1, code: 'passport', required: true }],
+        documentRequirements: [{ id: 9, docType: 'Teacher emergency contact', acceptedFileTypes: ['docx'], required: true }],
       }),
     });
     renderPage();
@@ -554,56 +522,62 @@ describe('<TripDetail /> — Participants tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma');
 
-    expect(screen.queryByText(/passport/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /upload passport/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /sync passport/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
+    expect(screen.getByText('Teacher emergency contact')).toBeInTheDocument();
+    expect(screen.getByText('DOCX · Required')).toBeInTheDocument();
+    expect(screen.queryByText(/passport status|upload passport|sync passport/i)).not.toBeInTheDocument();
   });
 
-  it('add-participant happy path: typing fullName + clicking Add POSTs the right endpoint + notify.success', async () => {
+  it('keeps digital consent review out of the simplified participant roster', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        participants: [{
+          id: 901,
+          fullName: 'Anaya Sharma',
+          parentName: 'Riya Sharma',
+          parentPhone: '+919876543210',
+          parentDocuments: [{
+            id: 502,
+            documentRequirementId: 1,
+            documentType: 'Parent consent form',
+            captureMode: 'digital_consent',
+            answers: {
+              parentName: 'Riya Sharma',
+              participantName: 'Anaya Sharma',
+              relationship: 'Parent / Guardian',
+              signatureName: 'Riya Sharma',
+            },
+            termsSnapshot: 'I agree to this trip.',
+            agreedAt: '2026-06-01T10:00:00.000Z',
+          }],
+        }],
+        documentRequirements: [{ id: 1, docType: 'Parent consent form', captureMode: 'digital_consent', required: true }],
+      }),
+    });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Anaya Sharma');
-    // Open the inline add-form.
-    fireEvent.click(screen.getByRole('button', { name: /Add participant/i }));
-    // Three text inputs in the form (fullName, parentName, parentPhone).
-    const fullNameInput = await screen.findByPlaceholderText(/Full name/i);
-    fireEvent.change(fullNameInput, { target: { value: 'Kabir Mehta' } });
-    // Click the "Add" submit button (NOT the "Add participant" toggle).
-    // After opening the form, the toggle is hidden so only the submit Add
-    // button remains.
-    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/trips/101/participants' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.fullName).toBe('Kabir Mehta');
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Participant added/i),
-    );
+    expect(await screen.findByTestId('registered-participants-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('view-participant-901-1')).not.toBeInTheDocument();
+    expect(rawFetchMock).not.toHaveBeenCalled();
   });
 
-  it('add-participant validation: empty fullName surfaces notify.error + no POST', async () => {
+  it('does not expose manual participant creation', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Anaya Sharma');
-    fireEvent.click(screen.getByRole('button', { name: /Add participant/i }));
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Full name required/i),
-      );
-    });
-    const posts = fetchApiMock.mock.calls.filter(
-      ([, o]) => o?.method === 'POST',
-    );
-    expect(posts.length).toBe(0);
+    await screen.findByTestId('registered-participants-list');
+    expect(screen.queryByRole('button', { name: /Add participant/i })).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+  });
+
+  it('requires the import flow for adding participants', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Import participants/i }));
+    expect(await screen.findByTestId('participant-bulk-import-modal')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm import/i })).toBeDisabled();
   });
 
   it('bulk import panel opens a modal, posts multipart file, and shows the summary', async () => {
@@ -620,7 +594,7 @@ describe('<TripDetail /> — Participants tab', () => {
     expect(screen.queryByTestId('participant-bulk-import-modal')).toBeNull();
     expect(screen.queryByLabelText(/Bulk import participants file/i)).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Import participants/i }));
     expect(await screen.findByTestId('participant-bulk-import-modal')).toBeInTheDocument();
 
     const file = new File(['fullName,parentPhone\nKabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
@@ -653,11 +627,11 @@ describe('<TripDetail /> — Participants tab', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma');
-    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Import participants/i }));
 
     const schema = await screen.findByTestId('participant-import-schema');
     expect(schema).toHaveTextContent('fullName');
-    expect(schema).toHaveTextContent('Templates contain only the required columns');
+    expect(screen.getByRole('dialog')).toHaveTextContent(/first four columns are required/i);
     expect(screen.getByRole('button', { name: /CSV template/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /XLSX template/i })).toBeInTheDocument();
     expect(screen.getByText('applicationStatus')).toBeInTheDocument();
@@ -740,116 +714,6 @@ describe('<TripDetail /> — Rooming tab', () => {
   });
 });
 
-describe.skip('<TripDetail /> — Microsite tab (legacy UI)', () => {
-  it('un-published trip renders MicrositeCreate copy + subdomain default seeded from trip-{tripCode}', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Landing page/i }));
-    expect(
-      await screen.findByText(/Create a public registration page/i),
-    ).toBeInTheDocument();
-    // Subdomain input pre-fills with "trip-{tripCode}".
-    const subdomainInput = screen.getByLabelText(/Microsite subdomain/i);
-    expect(subdomainInput.value).toBe('trip-TMC-AND-2026-MUMBAI-G7');
-    // Publish button visible.
-    expect(
-      screen.getByRole('button', { name: /Publish public page/i }),
-    ).toBeInTheDocument();
-  });
-
-  it('published trip renders MicrositeEditor with publicUuid + Copy URL + Open + Preview', async () => {
-    const ms = {
-      id: 5001,
-      tripId: 101,
-      subdomain: 'tmc-andaman-mumbai-g7',
-      itineraryHtml: '<h2>Day 1</h2><p>Arrival</p>',
-      faqJson: null,
-      expiresAt: null,
-      publicUuid: 'abc-123-def-456',
-    };
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    // Scope tab click via getAllByRole + label filter to dodge the regex
-    // ambiguity ("Microsite" appears as tab + Overview card label).
-    const tabs = screen.getAllByRole('tab');
-    const micrositeTab = tabs.find((t) => /Public Experience/.test(t.textContent));
-    expect(micrositeTab).toBeTruthy();
-    fireEvent.click(micrositeTab);
-    // The full public URL renders in the live-link hero card; the publicUuid
-    // appears as a substring of that URL.
-    expect(
-      await screen.findByText((c) => c.includes('abc-123-def-456')),
-    ).toBeInTheDocument();
-    // Action buttons — the Copy button is now labelled just "Copy" inside
-    // the live-link hero (the verbose "Copy URL" was tightened in v3.9.x).
-    expect(screen.getByRole('button', { name: /^Copy$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Preview/i })).toBeInTheDocument();
-    // Open link → the rendered public page /p/tripmicrosite/<publicUuid>
-    // (NOT the raw JSON API). The page fetches the API itself.
-    const openLink = screen.getByRole('link', { name: /Open/i });
-    expect(openLink.getAttribute('href')).toContain(
-      '/p/tripmicrosite/abc-123-def-456',
-    );
-    expect(openLink.getAttribute('href')).not.toContain('/api/travel/microsites/public/');
-  });
-});
-
-describe.skip('<TripDetail /> — Microsite Create enhancements (legacy UI)', () => {
-  it('pre-fills itinerary from linked landing-page itineraryTimeline block', async () => {
-    installFetchMock({
-      landingPage: {
-        id: 77,
-        slug: 'trip-tmc-and-2026-mumbai-g7',
-        status: 'PUBLISHED',
-        tripId: 101,
-        title: 'Andaman Trip',
-        content: JSON.stringify([
-          {
-            type: 'itineraryTimeline',
-            props: {
-              days: [
-                { day: 1, title: 'Arrival', bullets: ['Airport pickup', 'Hotel check-in'] },
-                { day: 2, title: 'Island hopping', bullets: ['Boat ride', 'Snorkelling'] },
-              ],
-            },
-          },
-        ]),
-      },
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
-    expect(await screen.findByText(/Prefilled from “Andaman Trip”/i)).toBeInTheDocument();
-    // The editor receives the landing-page HTML, not the placeholder.
-    expect(screen.getByText('Day 1 — Arrival')).toBeInTheDocument();
-    expect(screen.getByText('Airport pickup')).toBeInTheDocument();
-    expect(screen.getByText('Day 2 — Island hopping')).toBeInTheDocument();
-  });
-
-  it('AI Generate itinerary calls /itineraries/suggest and replaces editor content', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
-    const aiBtn = await screen.findByRole('button', { name: /AI Generate itinerary/i });
-    fetchApiMock.mockClear();
-    fireEvent.click(aiBtn);
-    await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
-      );
-      expect(call).toBeTruthy();
-      const body = JSON.parse(call[1].body);
-      expect(body.destination).toBe('Andaman');
-      expect(body.days).toBe(8);
-    });
-    // Generated day content lands in the editor.
-    expect(await screen.findByText('Day 1 — Arrival')).toBeInTheDocument();
-    expect(screen.getByText('Airport transfer and hotel check-in')).toBeInTheDocument();
-    expect(screen.getByText('Day 2 — Local Sightseeing')).toBeInTheDocument();
-  });
-});
-
 // ─── EXTENSION WAVE — 2026-05-26 ────────────────────────────────────────
 //
 // Pins surface that the existing 15-case spec does NOT cover yet. Drift
@@ -867,86 +731,46 @@ describe.skip('<TripDetail /> — Microsite Create enhancements (legacy UI)', ()
 //   - Payment plan — loading-state then empty editor copy.
 //   - Payment plan — Add instalment + validation (missing dueDate).
 //   - Payment plan — total recomputes after adding rows.
-//   - Microsite Create — Publish POSTs the right endpoint + subdomain.
-//   - Microsite Create — empty itineraryHtml surfaces notify.error.
-//   - Microsite Editor — Preview toggle flips to Edit (button label).
 //   - Overview card values — Price/student formatted with ₹ + locale.
 //
 // All assertions use stable mocks + findBy / waitFor + getAllByText where
 // the same label appears in tab + card chrome.
 
 describe('<TripDetail /> — Participants remove flow', () => {
-  it('clicking Trash2 + confirm()=true DELETEs the participant + notify.success', async () => {
+  it('does not expose participant deletion from the simplified roster', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Anaya Sharma');
-    fetchApiMock.mockClear();
-    installFetchMock();
-    const removeBtn = screen.getByRole('button', { name: /Remove Anaya Sharma/i });
-    fireEvent.click(removeBtn);
-    await waitFor(() => {
-      const del = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/trips/101/participants/901' && o?.method === 'DELETE',
-      );
-      expect(del).toBeTruthy();
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Removed/i));
+    await screen.findByTestId('registered-participants-list');
+    expect(screen.queryByRole('button', { name: /Remove/i })).not.toBeInTheDocument();
   });
 
-  it('clicking Trash2 with confirm()=false short-circuits — no DELETE fires', async () => {
+  it('does not issue participant DELETE requests from the simplified roster', async () => {
     notifyConfirm.mockResolvedValue(false);
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Anaya Sharma');
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Remove Anaya Sharma/i }));
-    // Give microtasks a beat.
-    await Promise.resolve();
-    const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
-    expect(dels.length).toBe(0);
-    notifyConfirm.mockResolvedValue(true);
+    await screen.findByTestId('registered-participants-list');
+    expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE')).toHaveLength(0);
   });
 });
 
 describe('<TripDetail /> — Participants add error + cancel', () => {
-  it('POST rejection surfaces notify.error with the body.error', async () => {
-    const err = new Error('boom');
-    err.body = { error: 'Duplicate fullName' };
-    installFetchMock({ participantPost: err });
+  it('does not expose the legacy participant POST flow', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Add participant/i }));
-    fireEvent.change(await screen.findByPlaceholderText(/Full name/i), {
-      target: { value: 'Anaya Sharma' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Duplicate fullName');
-    });
+    await screen.findByTestId('registered-participants-list');
+    expect(screen.queryByRole('button', { name: /Add participant/i })).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST')).toHaveLength(0);
   });
 
-  it('Cancel button closes the inline add-form without POSTing', async () => {
+  it('keeps the import modal closed until the admin requests it', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Add participant/i }));
-    // Form is open — fullName placeholder visible.
-    expect(await screen.findByPlaceholderText(/Full name/i)).toBeInTheDocument();
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-    // Form closes (placeholder no longer in DOM).
-    await waitFor(() => {
-      expect(screen.queryByPlaceholderText(/Full name/i)).toBeNull();
-    });
-    // "Add participant" toggle reappears.
-    expect(screen.getByRole('button', { name: /Add participant/i })).toBeInTheDocument();
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
+    await screen.findByTestId('registered-participants-list');
+    expect(screen.queryByTestId('participant-bulk-import-modal')).not.toBeInTheDocument();
   });
 });
 
@@ -1148,95 +972,11 @@ describe('<TripDetail /> — Payment plan tab', () => {
   });
 });
 
-describe.skip('<TripDetail /> — Microsite Create flow (legacy UI)', () => {
-  it('Publish POSTs /api/travel/trips/:id/microsite with subdomain + itineraryHtml', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
-    await screen.findByText(/Create a public registration page/i);
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/trips/101/microsite' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.subdomain).toBe('trip-TMC-AND-2026-MUMBAI-G7');
-      // Default placeholder content begins with a Day 1 H2.
-      expect(body.itineraryHtml).toContain('Day 1');
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Microsite published/i),
-    );
-  });
-
-  it('Publish with blank itineraryHtml surfaces notify.error + no POST', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
-    // The RichTextEditor is contenteditable — direct DOM patching for an
-    // empty payload. The SUT's itineraryHtml state seed is the placeholder,
-    // so we have to mutate it via the editor's onInput hook. Easier path:
-    // patch the contenteditable div's innerHTML + fire input event.
-    const editorDiv = await screen.findByLabelText(/Itinerary content editor/i);
-    editorDiv.innerHTML = '';
-    fireEvent.input(editorDiv);
-    // Also fire blur to flush handleInput.
-    fireEvent.blur(editorDiv);
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Itinerary content required/i),
-      );
-    });
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
-  });
-});
-
-describe.skip('<TripDetail /> — Microsite Editor preview toggle (legacy UI)', () => {
-  it('clicking Preview flips the button label to Edit + renders preview surface', async () => {
-    const ms = {
-      id: 5001,
-      tripId: 101,
-      subdomain: 'tmc-andaman-mumbai-g7',
-      itineraryHtml: '<h2>Day 1 — Arrival</h2><p>Welcome aboard.</p>',
-      faqJson: null,
-      expiresAt: null,
-      publicUuid: 'abc-123-def-456',
-    };
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
-    await screen.findByText((c) => c.includes('abc-123-def-456'));
-    // Click Preview button — label flips to Edit.
-    fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
-    expect(
-      await screen.findByRole('button', { name: /Edit/i }),
-    ).toBeInTheDocument();
-    // Preview surface dangerouslySetInnerHTML renders the H2.
-    expect(screen.getByText(/Day 1 — Arrival/)).toBeInTheDocument();
-    // Click back to Edit to confirm the toggle is symmetric.
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /^Edit$/i })).toBeNull();
-    });
-    expect(screen.getByRole('button', { name: /Preview/i })).toBeInTheDocument();
-  });
-});
-
 // ─── EXTENSION WAVE 2 — 2026-05-26 ──────────────────────────────────────
 //
 // Second extension pass. The first extension covered participants-remove,
 // participants-add-error, header date edges, rooming Add-room form open,
-// payment-plan editor + Add-instalment + dueDate validation, microsite
-// Create POST + blank itineraryHtml, microsite Editor Preview toggle.
+// payment-plan editor + Add-instalment + dueDate validation.
 //
 // This wave pins the remaining uncovered surface:
 //
@@ -1255,13 +995,7 @@ describe.skip('<TripDetail /> — Microsite Editor preview toggle (legacy UI)', 
 //      sequential aria-labels after swap).
 //   9. Payment plan — per-participant instalments section renders the
 //      backend's payload when /instalments returns a populated list.
-//  10. Microsite Create — POST rejection surfaces notify.error with the
-//      body.error from fetchApi (not the default "Failed to publish…").
-//  11. Microsite Editor — Save (PATCH) happy path: PATCHes /microsite with
-//      subdomain + itineraryHtml + expiresAt:null and
-//      surfaces notify.success("Microsite updated").
-//  12. Microsite Editor — Unpublish (DELETE) with window.confirm=true.
-//  13. StatusBadge — unknown status string falls back to subtle colours
+//  10. StatusBadge — unknown status string falls back to subtle colours
 //      without crashing (renders the literal status text).
 //
 // All cases use stable mock object refs, findBy / waitFor for async, and
@@ -1504,114 +1238,6 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
   });
 });
 
-describe.skip('<TripDetail /> — Microsite Create POST error (legacy UI)', () => {
-  it('POST rejection surfaces notify.error with body.error from fetchApi', async () => {
-    // Use a custom fetch impl: trip GET resolves, microsite POST rejects.
-    const err = new Error('boom');
-    err.body = { error: 'Subdomain already taken' };
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
-        return Promise.resolve(makeTrip());
-      }
-      if (method === 'POST' && /\/microsite$/.test(url)) return Promise.reject(err);
-      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
-      if (method === 'GET' && /instalments$/.test(url)) {
-        return Promise.resolve({ instalments: [] });
-      }
-      if (method === 'GET' && /rooming$/.test(url)) {
-        return Promise.resolve({ rooming: [] });
-      }
-      return Promise.resolve(null);
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
-    await screen.findByText(/Create a public registration page/i);
-    fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Subdomain already taken');
-    });
-  });
-});
-
-describe.skip('<TripDetail /> — Microsite Editor save/unpublish/faq (legacy UI)', () => {
-  const ms = {
-    id: 5001,
-    tripId: 101,
-    subdomain: 'tmc-andaman-mumbai-g7',
-    itineraryHtml: '<h2>Day 1</h2><p>Arrival</p>',
-    faqJson: null,
-    expiresAt: null,
-    publicUuid: 'abc-123-def-456',
-  };
-
-  it('Save changes PATCHes /microsite with the editor state + notify.success', async () => {
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    // Extend the fetch mock to accept PATCH /microsite.
-    const origImpl = fetchApiMock.getMockImplementation();
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'PATCH' && /\/microsite$/.test(url)) return Promise.resolve({});
-      return origImpl(url, opts);
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
-    await screen.findByText((c) => c.includes('abc-123-def-456'));
-    fetchApiMock.mockClear();
-    // Re-install with PATCH support.
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    const baseImpl = fetchApiMock.getMockImplementation();
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'PATCH' && /\/microsite$/.test(url)) return Promise.resolve({});
-      return baseImpl(url, opts);
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
-    await waitFor(() => {
-      const patch = fetchApiMock.mock.calls.find(
-        ([u, o]) => /\/microsite$/.test(u) && o?.method === 'PATCH',
-      );
-      expect(patch).toBeTruthy();
-      const body = JSON.parse(patch[1].body);
-      expect(body.subdomain).toBe('tmc-andaman-mumbai-g7');
-      expect(body.itineraryHtml).toContain('Day 1');
-      expect(body.expiresAt).toBeNull();
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Microsite updated/i),
-    );
-  });
-
-  it('Unpublish with window.confirm=true DELETEs /microsite + notify.success', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true));
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    const baseImpl = fetchApiMock.getMockImplementation();
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'DELETE' && /\/microsite$/.test(url)) return Promise.resolve({});
-      return baseImpl(url, opts);
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
-    await screen.findByText((c) => c.includes('abc-123-def-456'));
-    fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
-    await waitFor(() => {
-      const del = fetchApiMock.mock.calls.find(
-        ([u, o]) => /\/microsite$/.test(u) && o?.method === 'DELETE',
-      );
-      expect(del).toBeTruthy();
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Microsite unpublished/i),
-    );
-  });
-});
-
 describe('<TripDetail /> — StatusBadge fallback', () => {
   it('unknown status renders the literal text using subtle fallback colours (no crash)', async () => {
     installFetchMock({ trip: makeTrip({ status: 'pending-approval' }) });
@@ -1623,241 +1249,150 @@ describe('<TripDetail /> — StatusBadge fallback', () => {
   });
 });
 
-// ─── EXTENSION WAVE 3 — 2026-06-12 ──────────────────────────────────────
-//
-// Passport OCR upload cell (PassportCell) on the Participants tab —
-// the operator-side upload surface feeding the verification queue
-// (backend/routes/travel_passport.js POST /participants/:id/passport-upload).
-//
-// Backend contract pinned:
-//   POST /api/travel/passport/participants/:id/passport-upload
-//     multipart, field name "file" → 201 { extraction, confidence, ... }
-//     503 { code: 'PASSPORT_OCR_NOT_YET_ENABLED' } when vendor disabled.
-// Client-side guards mirror the route's multer config: 5 MB cap, JPG/PNG/PDF.
-//
-// Badge state matrix (from participant passport columns on the trip GET):
-//   passportVerifiedAt   → "Passport verified", NO upload CTA, Clear &
-//                          re-upload CTA instead (DELETE /passport-extraction)
-//   passportRejectedAt   → "Passport rejected" + Re-upload CTA
-//   passportExtractedAt  → "Pending verification" + Re-upload CTA
-//   none                 → "No passport" + "Upload passport" CTA
-//
-// The upload POST passes { silent: true } — fetchApi's auto-toast would
-// stack a second (different-string, so un-deduped) toast next to the
-// component's vendor-pending copy. The component owns all error toasts.
-
-describe('<TripDetail /> — Participants passport upload', () => {
-  function makeFile(name = 'passport.jpg', type = 'image/jpeg', size = 1024) {
-    const f = new File(['x'], name, { type });
-    Object.defineProperty(f, 'size', { value: size });
-    return f;
+describe('<TripDetail /> — dynamic document requirements', () => {
+  async function openDocumentsTab(trip = makeTrip()) {
+    installFetchMock({ trip });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
+    await screen.findByRole('heading', { name: 'Documents to collect' });
   }
 
-  async function openParticipantsTab() {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Anaya Sharma');
-  }
+  it('shows custom requirements and participant upload status in the admin matrix', async () => {
+    await openDocumentsTab(makeTrip({
+      participants: [{
+        id: 901,
+        fullName: 'Anaya Sharma',
+        parentName: 'Riya Sharma',
+        parentEmail: 'parent@example.com',
+      }],
+      parentDocuments: [{
+        parentEmail: 'parent@example.com',
+        documents: [{
+          id: 501,
+          documentRequirementId: 1,
+          documentType: 'School medical clearance',
+          filename: 'medical-clearance.docx',
+        }],
+      }],
+    }));
 
-  it('renders the four passport status badges from the participant columns', async () => {
-    installFetchMock({
-      trip: makeTrip({
-        participants: [
-          { id: 901, fullName: 'Anaya Sharma' },
-          { id: 902, fullName: 'Kabir Mehta', passportExtractedAt: '2026-06-01T10:00:00.000Z' },
-          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
-          { id: 904, fullName: 'Dev Patel', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportRejectedAt: '2026-06-02T10:00:00.000Z' },
-        ],
-      }),
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    expect(await screen.findByText('No passport')).toBeInTheDocument();
-    expect(screen.getByText('Pending verification')).toBeInTheDocument();
-    expect(screen.getByText('Passport verified')).toBeInTheDocument();
-    expect(screen.getByText('Passport rejected')).toBeInTheDocument();
-    // Un-uploaded participant gets the "Upload passport" CTA; extracted +
-    // rejected get "Re-upload".
-    expect(screen.getByRole('button', { name: /Upload passport for Anaya Sharma/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Upload passport for Kabir Mehta/i })).toHaveTextContent(/Re-upload/);
-    expect(screen.getByRole('button', { name: /Upload passport for Dev Patel/i })).toHaveTextContent(/Re-upload/);
+    expect(screen.getAllByText('School medical clearance')).toHaveLength(2);
+    expect(screen.getAllByText('Emergency contact letter')).toHaveLength(2);
+    expect(screen.getByText(/PDF, DOCX · Required/)).toBeInTheDocument();
+    expect(screen.getByText(/PDF, JPG \/ JPEG · Required/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /View document/ })).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.queryByText(/Passport|Aadhaar|Visa documents/i)).not.toBeInTheDocument();
   });
 
-  it('VERIFIED participant shows the badge + Clear & re-upload CTA but NO upload CTA', async () => {
-    installFetchMock({
-      trip: makeTrip({
-        participants: [
-          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
-        ],
-      }),
+  it('opens an uploaded file from its participant-document cell', async () => {
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:uploaded-document');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    rawFetchMock.mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['document'], { type: 'application/pdf' })),
     });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    expect(await screen.findByText('Passport verified')).toBeInTheDocument();
-    // Anchored — the Clear CTA's name ends with "...passport for Riya Singh"
-    // too, so an unanchored regex would false-match it.
-    expect(screen.queryByRole('button', { name: /^Upload passport for Riya Singh$/i })).toBeNull();
-    expect(screen.queryByLabelText(/Passport file for Riya Singh/i)).toBeNull();
-    // The escape hatch for verified passports needing replacement.
-    expect(
-      screen.getByRole('button', { name: /Clear & re-upload passport for Riya Singh/i }),
-    ).toBeInTheDocument();
-  });
+    await openDocumentsTab(makeTrip({
+      participants: [{
+        id: 901,
+        fullName: 'Anaya Sharma',
+        parentName: 'Riya Sharma',
+        parentEmail: 'parent@example.com',
+      }],
+      parentDocuments: [{
+        parentEmail: 'parent@example.com',
+        documents: [{
+          id: 501,
+          documentRequirementId: 1,
+          documentType: 'School medical clearance',
+          filename: 'medical-clearance.pdf',
+        }],
+      }],
+    }));
 
-  it('Clear & re-upload on a VERIFIED participant DELETEs the extraction + reloads', async () => {
-    installFetchMock({
-      trip: makeTrip({
-        participants: [
-          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
-        ],
-      }),
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Passport verified');
-    fireEvent.click(screen.getByRole('button', { name: /Clear & re-upload passport for Riya Singh/i }));
+    fireEvent.click(screen.getByRole('button', { name: /View document/ }));
     await waitFor(() => {
-      const del = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/passport/participants/903/passport-extraction' && o?.method === 'DELETE',
-      );
-      expect(del).toBeTruthy();
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/cleared/i),
-    );
-  });
-
-  it('Clear & re-upload with confirm()=false short-circuits — no DELETE fires', async () => {
-    // Mock notify.confirm to return false, so the DELETE is skipped.
-    notifyObj.confirm = vi.fn(async () => false);
-    installFetchMock({
-      trip: makeTrip({
-        participants: [
-          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
-        ],
-      }),
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Passport verified');
-    fetchApiMock.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: /Clear & re-upload passport for Riya Singh/i }));
-    await Promise.resolve();
-    const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
-    expect(dels.length).toBe(0);
-  });
-
-  it('happy path: selecting a JPG POSTs FormData to the passport-upload endpoint + notify.success + trip reload', async () => {
-    await openParticipantsTab();
-    fetchApiMock.mockClear();
-    installFetchMock();
-    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
-    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/passport/participants/901/passport-upload' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      expect(post[1].body).toBeInstanceOf(FormData);
-      const sent = post[1].body.get('file');
-      expect(sent).toBeTruthy();
-      expect(sent.name).toBe('passport.jpg');
-      // silent:true — the component owns error toasts; fetchApi's
-      // auto-toast must stay off for this call.
-      expect(post[1].silent).toBe(true);
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/queued for verification/i),
-    );
-    // onChange() → load() refires the trip GET so the badge refreshes.
-    await waitFor(() => {
-      const reload = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/trips/101' && (!o?.method || o.method === 'GET'),
-      );
-      expect(reload).toBeTruthy();
-    });
-  });
-
-  it('oversize file (>5 MB) surfaces notify.error + no POST fires', async () => {
-    await openParticipantsTab();
-    fetchApiMock.mockClear();
-    installFetchMock();
-    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
-    fireEvent.change(fileInput, {
-      target: { files: [makeFile('big.jpg', 'image/jpeg', 6 * 1024 * 1024)] },
-    });
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/5 MB limit/i));
-    });
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
-  });
-
-  it('unsupported mime (.txt) surfaces notify.error + no POST fires', async () => {
-    await openParticipantsTab();
-    fetchApiMock.mockClear();
-    installFetchMock();
-    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
-    fireEvent.change(fileInput, {
-      target: { files: [makeFile('notes.txt', 'text/plain')] },
-    });
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/JPG, PNG or PDF only/i),
+      expect(rawFetchMock).toHaveBeenCalledWith(
+        '/api/travel/trips/101/participants/901/parent-documents/501/file',
+        { headers: { Authorization: 'Bearer test-token' } },
       );
     });
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
+    expect(createObjectUrlSpy).toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledWith('blob:uploaded-document', '_blank', 'noopener,noreferrer');
   });
 
-  it('PASSPORT_OCR_NOT_YET_ENABLED rejection surfaces the vendor-pending message', async () => {
-    await openParticipantsTab();
-    fetchApiMock.mockClear();
-    const err = new Error('Passport OCR vendor not yet enabled for this tenant');
-    err.code = 'PASSPORT_OCR_NOT_YET_ENABLED';
-    err.status = 503;
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'POST' && /passport-upload$/.test(url)) return Promise.reject(err);
-      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
-        return Promise.resolve(makeTrip());
-      }
-      return Promise.resolve(null);
-    });
-    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
-    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
+  it('creates an admin-defined requirement with the selected file types', async () => {
+    await openDocumentsTab();
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Travel insurance certificate' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'PDF' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'DOCX' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add document' }));
+
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/vendor integration pending/i),
+      const call = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/travel/trips/101/documents' && options?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({
+        docType: 'Travel insurance certificate',
+        acceptedFileTypes: ['jpg', 'png', 'docx'],
+        required: true,
+      });
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Document requirement added');
+  });
+
+  it('creates a digital consent requirement that uses the approved trip terms', async () => {
+    await openDocumentsTab(makeTrip({ tripType: 'international' }));
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Parent consent form' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'Digital consent form' }));
+    expect(screen.getByText(/approved international travel terms/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add document' }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/travel/trips/101/documents' && options?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({
+        docType: 'Parent consent form',
+        acceptedFileTypes: ['pdf', 'jpg', 'png'],
+        required: true,
+        captureMode: 'digital_consent',
+      });
+    });
+  });
+
+  it('edits and removes a configured requirement without a document-type restriction', async () => {
+    await openDocumentsTab();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    expect(screen.getByLabelText('Document name')).toHaveValue('School medical clearance');
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Updated authorization letter' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/travel/trips/101/documents/1' && options?.method === 'PATCH',
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({
+        docType: 'Updated authorization letter',
+        acceptedFileTypes: ['pdf', 'docx'],
+        required: true,
+      });
+    });
+
+    notifyConfirm.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/travel/trips/101/documents/1',
+        { method: 'DELETE' },
       );
     });
-    // No success toast + no reload on the failure path.
-    expect(notifySuccess).not.toHaveBeenCalled();
-  });
-
-  it('generic upload failure surfaces the server error body', async () => {
-    await openParticipantsTab();
-    fetchApiMock.mockClear();
-    const err = new Error('boom');
-    err.data = { error: 'Failed to process passport upload' };
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'POST' && /passport-upload$/.test(url)) return Promise.reject(err);
-      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
-        return Promise.resolve(makeTrip());
-      }
-      return Promise.resolve(null);
-    });
-    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
-    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Failed to process passport upload');
-    });
+    expect(notifySuccess).toHaveBeenCalledWith('Document requirement removed');
   });
 });
 
@@ -1881,32 +1416,18 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     };
   }
 
-  it('Participants tab fetches pending registrations on mount', async () => {
+  it('Participants tab shows the registered roster without fetching pending registrations', async () => {
     installFetchMock({ pendingRegs: [makePendingReg()] });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/trips/101/registrations' && (!o?.method || o.method === 'GET'),
-      );
-      expect(call).toBeTruthy();
-    });
-    expect(await screen.findByTestId('pending-registrations-list')).toBeInTheDocument();
-    expect(screen.getByText('Aarav Iyer')).toBeInTheDocument();
-    expect(screen.getByText('Verified')).toBeInTheDocument();
-    expect(screen.getByText('Pending registrations').parentElement.parentElement).toHaveStyle({
-      background: 'var(--surface-hover, var(--subtle-bg))',
-      color: 'var(--text-primary)',
-    });
-    expect(screen.getByRole('region', { name: /Registered participant records/i })).toHaveStyle({
-      overflowY: 'auto',
-      maxHeight: 'min(60vh, 520px)',
-      overscrollBehavior: 'contain',
-    });
+    expect(await screen.findByTestId('registered-participants-list')).toBeInTheDocument();
+    expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
+    expect(screen.queryByText('Aarav Iyer')).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/travel/trips/101/registrations')).toBe(false);
   });
 
-  it('shows "X pending registrations" count next to participants total', async () => {
+  it('does not show pending registration counters on the simplified roster', async () => {
     installFetchMock({
       pendingRegs: [
         makePendingReg(),
@@ -1917,25 +1438,55 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    const counter = await screen.findByTestId('pending-regs-count');
-    expect(counter.textContent).toMatch(/3 pending registrations/);
+    await screen.findByTestId('registered-participants-list');
+    expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-registrations-list')).not.toBeInTheDocument();
   });
 
-  it('DRAFT registration shows automatic conversion without Approve and Reject buttons', async () => {
+  it('shows document and payment completion status for each registered participant', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        participants: [
+          {
+            id: 901,
+            fullName: 'Complete Participant',
+            parentName: 'Complete Parent',
+            parentDocuments: [{ id: 700, documentRequirementId: 1, status: 'approved' }],
+            paymentStatus: 'completed',
+            paymentSummary: { completedInstallments: 2, totalInstallments: 2 },
+          },
+          {
+            id: 902,
+            fullName: 'Pending Participant',
+            parentName: 'Pending Parent',
+            paymentStatus: 'pending',
+            paymentSummary: { completedInstallments: 0, totalInstallments: 2 },
+          },
+        ],
+        documentRequirements: [{ id: 1, docType: 'Consent form', required: true }],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(await screen.findByText('Complete Participant')).toBeInTheDocument();
+    expect(screen.getByText('Pending Participant')).toBeInTheDocument();
+    expect(screen.getAllByText('Completed')).toHaveLength(2);
+    expect(screen.getAllByText('Pending')).toHaveLength(2);
+  });
+
+  it('does not render unregistered draft rows', async () => {
     installFetchMock({
       pendingRegs: [makePendingReg({ id: 9003, status: 'DRAFT', studentName: 'Sara' })],
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('Sara');
-    expect(screen.getByText('Draft')).toBeInTheDocument();
-    expect(screen.getByText('Awaiting completion')).toBeInTheDocument();
-    expect(screen.queryByTestId('approve-registration-9003')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('reject-registration-9003')).not.toBeInTheDocument();
+    await screen.findByTestId('registered-participants-list');
+    expect(screen.queryByText('Sara')).not.toBeInTheDocument();
   });
 
-  it('shows converted registration documents on the participant without a second row', async () => {
+  it('shows only the converted participant once', async () => {
     installFetchMock({
       trip: makeTrip({ participants: [{ id: 555, fullName: 'AlreadyConverted' }] }),
       pendingRegs: [
@@ -1946,11 +1497,10 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    await screen.findByText('StillPending');
     expect(screen.getByText('AlreadyConverted')).toBeInTheDocument();
     expect(screen.queryByTestId('pending-reg-row-9002')).not.toBeInTheDocument();
-    expect(screen.getByTestId('view-participant-registration-passport-555')).toBeInTheDocument();
-    expect(screen.getByTestId('pending-regs-count')).toHaveTextContent('1 pending registration');
+    expect(screen.queryByText('StillPending')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
   });
 
   it('does not show a later draft for someone already in the participant list', async () => {
@@ -1972,7 +1522,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
   });
 
-  it('does not count rejected duplicates or converted records as pending', async () => {
+  it('does not render rejected or converted registration staging rows', async () => {
     installFetchMock({
       trip: makeTrip({ participants: [{ id: 14, fullName: 'Jas' }] }),
       pendingRegs: [
@@ -1985,7 +1535,6 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Jas');
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/trips/101/registrations'));
     expect(screen.getAllByText('Jas')).toHaveLength(1);
     expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
     expect(screen.queryByTestId('pending-registrations-list')).not.toBeInTheDocument();
@@ -2077,12 +1626,13 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(fetchApiMock.mock.calls.find(([u]) => /\/registrations\/9001\/reject/.test(u))).toBeFalsy();
   });
 
-  it('no pending registrations → pending list is not rendered, participants list still shows', async () => {
+  it('shows the registered list without a pending registrations section', async () => {
     installFetchMock({ pendingRegs: [] });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma'); // existing participant still shows
+    expect(screen.getByTestId('registered-participants-list')).toBeInTheDocument();
     expect(screen.queryByTestId('pending-registrations-list')).not.toBeInTheDocument();
     expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
   });
@@ -2163,192 +1713,3 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
   });
 });
 
-// ─── Pending-registration document view buttons ───────────────────────────
-describe('<TripDetail /> — pending registration document view buttons', () => {
-  const regWithPassport = {
-    id: 99,
-    studentName: 'Doc Student',
-    parentPhone: '+911234567890',
-    parentEmail: null,
-    isOtpVerified: true,
-    isApproved: false,
-    isRejected: false,
-    reviewNotes: null,
-    extrasJson: JSON.stringify({
-      documents: {
-        passport: { storage: 'disk', key: 'passport-99.jpg', url: '/api/uploads/visa-docs/passport-99.jpg' },
-        // aadhaar intentionally absent
-        // consentLetter intentionally absent
-      },
-    }),
-  };
-
-  it('renders "View" passport button when passport uploaded, "not uploaded" for aadhaar and consent letter', async () => {
-    installFetchMock({ pendingRegs: [regWithPassport] });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    expect(await screen.findByTestId('view-passport-99')).toBeInTheDocument();
-    expect(screen.getByTestId('aadhaar-missing-99')).toBeInTheDocument();
-    expect(screen.getByTestId('parent-consent-missing-99')).toBeInTheDocument();
-  });
-
-  it('renders all three "not uploaded" placeholders when extrasJson is null', async () => {
-    const regNoDocs = { ...regWithPassport, id: 100, extrasJson: null };
-    installFetchMock({ pendingRegs: [regNoDocs] });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    expect(await screen.findByTestId('passport-missing-100')).toBeInTheDocument();
-    expect(screen.getByTestId('aadhaar-missing-100')).toBeInTheDocument();
-    expect(screen.getByTestId('parent-consent-missing-100')).toBeInTheDocument();
-  });
-
-  it('renders "View" consent letter button when consent letter uploaded', async () => {
-    const regWithAll = {
-      ...regWithPassport,
-      id: 101,
-      extrasJson: JSON.stringify({
-        documents: {
-          passport: { storage: 'disk', key: 'passport-101.jpg', url: '/api/uploads/visa-docs/passport-101.jpg' },
-          aadhaar: { storage: 'disk', key: 'aadhaar-101.jpg', url: '/api/uploads/visa-docs/aadhaar-101.jpg' },
-          consentLetter: { storage: 'disk', key: 'consent-101.pdf', url: '/api/uploads/visa-docs/consent-101.pdf' },
-        },
-      }),
-    };
-    installFetchMock({ pendingRegs: [regWithAll] });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    expect(await screen.findByTestId('view-passport-101')).toBeInTheDocument();
-    expect(screen.getByTestId('view-aadhaar-101')).toBeInTheDocument();
-    expect(screen.getByTestId('view-parent-consent-101')).toBeInTheDocument();
-  });
-
-  it('shows one parent-portal consent form and opens it for the matching participant', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:participant-consent');
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-    rawFetchMock.mockResolvedValue({
-      ok: true,
-      blob: () => Promise.resolve(new Blob(['signed consent'], { type: 'image/png' })),
-    });
-    const trip = makeTrip({
-      participants: [{ id: 901, fullName: 'Anaya Sharma', parentName: 'Riya Sharma', parentEmail: 'parent@example.com' }],
-      parentConsentDocuments: [{
-        parentEmail: 'parent@example.com',
-        document: { id: 501, filename: 'signed-consent.png', mimeType: 'image/png', status: 'in_review' },
-      }],
-    });
-    installFetchMock({ trip });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-
-    expect(await screen.findByTestId('view-participant-consent-901')).toHaveTextContent('Consent form - View');
-    expect(screen.queryByText('Medical consent - View')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('view-participant-consent-901'));
-    await waitFor(() => expect(rawFetchMock).toHaveBeenCalledWith(
-      '/api/travel/trips/101/participants/901/consent-form/file',
-      expect.objectContaining({ headers: { Authorization: 'Bearer test-token' } }),
-    ));
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(
-      'blob:participant-consent',
-      '_blank',
-      'noopener,noreferrer',
-    ));
-  });
-
-  it('clicking passport View calls the view-url API and opens the signed URL', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-    installFetchMock({ pendingRegs: [regWithPassport] });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    const viewBtn = await screen.findByTestId('view-passport-99');
-    fireEvent.click(viewBtn);
-    await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(
-        ([u]) => /\/registrations\/99\/documents\/passport\/view-url/.test(u),
-      );
-      expect(call).toBeTruthy();
-    });
-    await waitFor(() => {
-      expect(openSpy).toHaveBeenCalledWith(
-        'https://signed.example.com/doc.pdf',
-        '_blank',
-        'noopener,noreferrer',
-      );
-    });
-    openSpy.mockRestore();
-  });
-});
-
-// ─── Sync from registration (PassportCell) ────────────────────────────────
-describe('<TripDetail /> — Sync from registration button', () => {
-  it('renders "Sync from registration" button for a participant without a passport', async () => {
-    // Anaya Sharma has no passportExtractionJson in the default fixture →
-    // PassportCell renders the no-passport upload area + the Sync button.
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    expect(
-      await screen.findByRole('button', {
-        name: /Sync passport from registration for Anaya Sharma/i,
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it('clicking Sync fires POST /requeue-registration-docs + notify.success', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    const syncBtn = await screen.findByRole('button', {
-      name: /Sync passport from registration for Anaya Sharma/i,
-    });
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(syncBtn);
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) =>
-          u === '/api/travel/passport/participants/901/requeue-registration-docs' &&
-          o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/queued for verification/i),
-    );
-  });
-
-  it('NO_REGISTRATION error from requeue surfaces notify.error', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'POST' && /requeue-registration-docs/.test(url)) {
-        return Promise.reject({ data: { code: 'NO_REGISTRATION' } });
-      }
-      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) return Promise.resolve(makeTrip());
-      if (method === 'GET' && /rooming$/.test(url)) return Promise.resolve({ rooming: [] });
-      if (method === 'GET' && /registrations$/.test(url)) return Promise.resolve([]);
-      if (method === 'GET' && /landing-page$/.test(url)) {
-        const e = new Error('NOT_LINKED'); e.status = 404; e.body = { code: 'NOT_LINKED' }; return Promise.reject(e);
-      }
-      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
-      if (method === 'GET' && /instalments$/.test(url)) return Promise.resolve({ instalments: [] });
-      return Promise.resolve(null);
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    const syncBtn = await screen.findByRole('button', {
-      name: /Sync passport from registration for Anaya Sharma/i,
-    });
-    fireEvent.click(syncBtn);
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/no registration document found/i),
-      );
-    });
-  });
-});

@@ -127,6 +127,7 @@ model Tenant {
   activities               Activity[]
   deals                    Deal[]
   tickets                  Ticket[]
+  genericChatConversations GenericChatConversation[]
   campaigns                Campaign[]
   automationRules          AutomationRule[]
   workflowExecutions       WorkflowExecution[]
@@ -697,6 +698,7 @@ model User {
   webhooks           Webhook[]
   webhookCredentials WebhookCredential[] @relation("UserWebhookCredentials")
   tasks              Task[]
+  createdTasks       Task[]              @relation("TaskCreators")
   expenses           Expense[]
   approvedExpenses   Expense[]           @relation("ExpenseApprover")
   projects           Project[]           @relation("ProjectOwner")
@@ -713,7 +715,7 @@ model User {
   pushSubscriptions  PushSubscription[]
   landingPages       LandingPage[]
   teamMemberships    SalesTeamMember[]
-  salesTeamsManaged   SalesTeam[]         @relation("SalesTeamManager")
+  salesTeamsManaged  SalesTeam[]         @relation("SalesTeamManager")
   salesTeamsCreated  SalesTeam[]         @relation("SalesTeamCreator")
   salesTeamsUpdated  SalesTeam[]         @relation("SalesTeamUpdater")
 
@@ -1211,13 +1213,13 @@ model LeadCustomFieldValue {
 // JSON so the CRM can support arbitrary field order, hidden fields, choice
 // options, and style settings without a migration for every new control.
 model WebForm {
-  id          Int     @id @default(autoincrement())
+  id          Int            @id @default(autoincrement())
   name        String
   // Vertical/module boundary. Existing records and callers remain Generic.
-  scope       String  @default("generic")
+  scope       String         @default("generic")
   slug        String
-  description String? @db.Text
-  isActive    Boolean @default(true)
+  description String?        @db.Text
+  isActive    Boolean        @default(true)
   folderId    Int?
   folder      WebFormFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
@@ -1247,14 +1249,14 @@ model WebForm {
 }
 
 model WebFormFolder {
-  id        Int      @id @default(autoincrement())
+  id        Int       @id @default(autoincrement())
   tenantId  Int
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  scope     String   @default("generic")
-  name      String   @db.VarChar(100)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scope     String    @default("generic")
+  name      String    @db.VarChar(100)
   forms     WebForm[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@unique([tenantId, scope, name])
   @@index([tenantId, scope])
@@ -1385,9 +1387,9 @@ model Deal {
   probability     Int       @default(50)
   stage           String    @default("lead") // lead, contacted, proposal, won, lost
   dealType        String?
-  contactType     String?   // lead or customer; informational snapshot of the selected contact category
-  dealKind        String?   // one-time or recurring
-  billingPeriod   String?   // monthly, quarterly, half-yearly, yearly
+  contactType     String? // lead or customer; informational snapshot of the selected contact category
+  dealKind        String? // one-time or recurring
+  billingPeriod   String? // monthly, quarterly, half-yearly, yearly
   paymentInfo     String?   @db.Text
   notes           String?   @db.Text
   pipelineId      Int? // links to Pipeline.id
@@ -1428,19 +1430,24 @@ model Deal {
 }
 
 model Ticket {
-  id              Int       @id @default(autoincrement())
-  subject         String
-  description     String?
-  status          String    @default("Open") // Open, Pending, Resolved, Closed
-  priority        String    @default("Low") // Low, Medium, High, Urgent
-  slaResponseDue  DateTime?
-  slaResolveDue   DateTime?
-  firstResponseAt DateTime?
-  resolvedAt      DateTime?
-  breached        Boolean   @default(false)
-  breachedAt      DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                   Int       @id @default(autoincrement())
+  subject              String
+  description          String?   @db.LongText
+  status               String    @default("Open") // Open, Pending, Resolved, Closed
+  priority             String    @default("Low") // Low, Medium, High, Urgent
+  slaResponseDue       DateTime?
+  slaResolveDue        DateTime?
+  firstResponseAt      DateTime?
+  resolvedAt           DateTime?
+  breached             Boolean   @default(false)
+  breachedAt           DateTime?
+  resolutionNotes      String?   @db.Text
+  requesterName        String?
+  requesterEmail       String?
+  sourceConversationId String?
+  sourceQuestionKey    String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1450,6 +1457,7 @@ model Ticket {
 
   @@index([tenantId, status])
   @@index([tenantId, priority])
+  @@index([tenantId, sourceConversationId, sourceQuestionKey])
 }
 
 model Campaign {
@@ -1982,24 +1990,24 @@ model Sequence {
 }
 
 model SequenceEnrollment {
-  automationEventKey String? @unique @db.VarChar(191)
-  id          Int       @id @default(autoincrement())
-  sequenceId  Int
-  sequence    Sequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
-  contactId   Int
-  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  automationEventKey String?   @unique @db.VarChar(191)
+  id                 Int       @id @default(autoincrement())
+  sequenceId         Int
+  sequence           Sequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  contactId          Int
+  contact            Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   // Legacy ReactFlow cursor (string node id). Kept for back-compat.
-  currentNode String?
+  currentNode        String?
   // #9 — step-list cursor. Position within Sequence.steps (0-based). Null
   // before first tick → engine starts at position 0.
-  currentStep Int?      @default(0)
-  emailDelayStep Int? // cursor whose pre-send delay has already been scheduled
-  nextRun     DateTime?
-  status      String    @default("Active") // Active, Completed, Paused, Unenrolled
+  currentStep        Int?      @default(0)
+  emailDelayStep     Int? // cursor whose pre-send delay has already been scheduled
+  nextRun            DateTime?
+  status             String    @default("Active") // Active, Completed, Paused, Unenrolled
   // Pessimistic locking — mirrors waOutboundJob lockedAt/lockedBy pattern.
-  lockedAt    DateTime?
-  lockedBy    String?
-  createdAt   DateTime  @default(now())
+  lockedAt           DateTime?
+  lockedBy           String?
+  createdAt          DateTime  @default(now())
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2107,33 +2115,33 @@ model Product {
 }
 
 model Quote {
-  id          Int             @id @default(autoincrement())
-  quoteNumber String?
-  title       String
-  totalAmount Float           @default(0.0)
-  mrr         Float           @default(0.0)
-  status      String          @default("Draft") // Draft, Sent, Accepted, Rejected
-  quoteOwnerName String?
-  validUntil  DateTime?
-  currency    String          @default("USD")
-  accountName String?
-  customerName String?
-  customerEmail String?
-  billingAddress String?       @db.Text
-  shippingAddress String?      @db.Text
-  discountTotal Float          @default(0.0)
-  taxTotal     Float           @default(0.0)
-  adjustment   Float           @default(0.0)
-  terms        String?         @db.Text
-  notes        String?         @db.Text
-  description  String?         @db.Text
-  contactId    Int?
-  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  dealId      Int?
-  deal        Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  lineItems   QuoteLineItem[]
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              Int             @id @default(autoincrement())
+  quoteNumber     String?
+  title           String
+  totalAmount     Float           @default(0.0)
+  mrr             Float           @default(0.0)
+  status          String          @default("Draft") // Draft, Sent, Accepted, Rejected
+  quoteOwnerName  String?
+  validUntil      DateTime?
+  currency        String          @default("USD")
+  accountName     String?
+  customerName    String?
+  customerEmail   String?
+  billingAddress  String?         @db.Text
+  shippingAddress String?         @db.Text
+  discountTotal   Float           @default(0.0)
+  taxTotal        Float           @default(0.0)
+  adjustment      Float           @default(0.0)
+  terms           String?         @db.Text
+  notes           String?         @db.Text
+  description     String?         @db.Text
+  contactId       Int?
+  contact         Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId          Int?
+  deal            Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  lineItems       QuoteLineItem[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2142,23 +2150,23 @@ model Quote {
 }
 
 model QuoteLineItem {
-  id          Int      @id @default(autoincrement())
-  quantity    Int      @default(1)
-  description String?  @db.Text
-  cost        Float    @default(0.0)
-  unitPrice   Float
-  discountPercent Float @default(0.0)
-  discountAmount  Float @default(0.0)
-  gstRate     Float    @default(0.0)
-  gstAmount   Float    @default(0.0)
-  amount      Float    @default(0.0)
-  total       Float    @default(0.0)
-  quoteId     Int
-  quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  productId   Int?
-  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  productName String
-  isRecurring Boolean  @default(true)
+  id              Int      @id @default(autoincrement())
+  quantity        Int      @default(1)
+  description     String?  @db.Text
+  cost            Float    @default(0.0)
+  unitPrice       Float
+  discountPercent Float    @default(0.0)
+  discountAmount  Float    @default(0.0)
+  gstRate         Float    @default(0.0)
+  gstAmount       Float    @default(0.0)
+  amount          Float    @default(0.0)
+  total           Float    @default(0.0)
+  quoteId         Int
+  quote           Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId       Int?
+  product         Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName     String
+  isRecurring     Boolean  @default(true)
 }
 
 model Task {
@@ -2192,11 +2200,17 @@ model Task {
   userId Int?
   user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  // Generic CRM assignment attribution. This is nullable for legacy and
+  // non-generic tasks, while allowing managers to see tasks they assigned.
+  createdById Int?
+  createdBy   User? @relation("TaskCreators", fields: [createdById], references: [id], onDelete: SetNull)
+
   projectId Int?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, status])
   @@index([tenantId, userId])
+  @@index([tenantId, createdById])
   @@index([tenantId, contactId])
   @@index([tenantId, deletedAt])
 }
@@ -2800,27 +2814,27 @@ model WhatsAppWebSession {
 }
 
 model WhatsAppTemplate {
-  id             Int       @id @default(autoincrement())
-  name           String
-  language       String    @default("en")
-  category       String    @default("MARKETING") // MARKETING, UTILITY, AUTHENTICATION
-  headerType     String? // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
-  headerContent  String?
-  body           String    @db.Text
+  id              Int       @id @default(autoincrement())
+  name            String
+  language        String    @default("en")
+  category        String    @default("MARKETING") // MARKETING, UTILITY, AUTHENTICATION
+  headerType      String? // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
+  headerContent   String?
+  body            String    @db.Text
   variableMapping String?   @db.Text // JSON mapping Meta {{n}} parameters to Generic CRM personalization field keys
-  footer         String?
-  buttons        String?   @db.Text // JSON
-  status         String    @default("PENDING") // PENDING, APPROVED, REJECTED
-  metaTemplateId String?
+  footer          String?
+  buttons         String?   @db.Text // JSON
+  status          String    @default("PENDING") // PENDING, APPROVED, REJECTED
+  metaTemplateId  String?
   // WhatsApp SaaS P4: template-quality + sync tracking.
   // qualityScore — driven by `message_template_quality_update` webhook.
   // lastSyncedAt — bumped by /api/whatsapp/templates/sync (P4) and by the
   //   nightly whatsappTemplateSyncEngine safety net for tenants whose webhook
   //   delivery silently broke.
-  qualityScore   String? // 'HIGH' | 'MEDIUM' | 'LOW' | null
-  lastSyncedAt   DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  qualityScore    String? // 'HIGH' | 'MEDIUM' | 'LOW' | null
+  lastSyncedAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2841,9 +2855,9 @@ model WhatsAppConfig {
   // forbids — one phone_number_id belongs to one WABA at a time).
   phoneNumberId      String?   @unique
   businessAccountId  String?
-  appId               String?
+  appId              String?
   // Tenant-owned Meta App Secret; encrypted before persistence.
-  appSecret           String?   @db.Text
+  appSecret          String?   @db.Text
   // #651 — accessToken widened to @db.Text for AES-256-GCM ciphertext.
   accessToken        String?   @db.Text
   webhookVerifyToken String?
@@ -3582,32 +3596,32 @@ model PickupLocation {
 }
 
 model PlotSite {
-  id               Int             @id @default(autoincrement())
-  name             String
-  plotNumber       String?
-  block            String?
-  address          String?         @db.Text
-  referenceCode    String?
-  area             String?
-  areaUnit         String?
-  roadWidth        String?
-  facing           String?
-  propertyType     String?
-  boundaryJson     String?         @db.Text
-  boundaryAreaSqFt Float?
-  price            Decimal?        @db.Decimal(15, 2)
-  availability     String          @default("AVAILABLE") // AVAILABLE, HOLD, BOOKED, REGISTERED, RESERVED, SOLD
-  notes            String?         @db.Text
-  isActive         Boolean         @default(true)
-  pickupLocationIdsJson String?          @db.Text
+  id                    Int             @id @default(autoincrement())
+  name                  String
+  plotNumber            String?
+  block                 String?
+  address               String?         @db.Text
+  referenceCode         String?
+  area                  String?
+  areaUnit              String?
+  roadWidth             String?
+  facing                String?
+  propertyType          String?
+  boundaryJson          String?         @db.Text
+  boundaryAreaSqFt      Float?
+  price                 Decimal?        @db.Decimal(15, 2)
+  availability          String          @default("AVAILABLE") // AVAILABLE, HOLD, BOOKED, REGISTERED, RESERVED, SOLD
+  notes                 String?         @db.Text
+  isActive              Boolean         @default(true)
+  pickupLocationIdsJson String?         @db.Text
   pickupLocationId      Int?
-  pickupLocation        PickupLocation?  @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
-  tenantId              Int              @default(1)
-  tenant                Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pickupLocation        PickupLocation? @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
+  tenantId              Int             @default(1)
+  tenant                Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   brokers               PlotBroker[]
   commissionPlan        PlotCommissionPlan?
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   @@index([tenantId, availability, isActive])
   @@index([tenantId, pickupLocationId])
@@ -3693,27 +3707,27 @@ model TransportPerson {
 }
 
 model PlotBroker {
-  id                Int       @id @default(autoincrement())
-  name              String
-  phone             String
-  email             String?
-  agency            String?
-  commissionPercent Decimal?  @db.Decimal(5, 2)
-  customerIdsJson   String?   @db.Text
-  pickupLocationIdsJson String? @db.Text
-  assignmentPairsJson String? @db.Text
-  workflowStatusJson String?  @db.Text
-  notes             String?   @db.Text
-  isActive          Boolean   @default(true)
-  userId            Int?      @unique
-  user              User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  plotSiteId        Int?
-  plotSiteIdsJson   String?   @db.Text
-  plotSite          PlotSite? @relation(fields: [plotSiteId], references: [id], onDelete: SetNull)
-  tenantId          Int       @default(1)
-  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                    Int       @id @default(autoincrement())
+  name                  String
+  phone                 String
+  email                 String?
+  agency                String?
+  commissionPercent     Decimal?  @db.Decimal(5, 2)
+  customerIdsJson       String?   @db.Text
+  pickupLocationIdsJson String?   @db.Text
+  assignmentPairsJson   String?   @db.Text
+  workflowStatusJson    String?   @db.Text
+  notes                 String?   @db.Text
+  isActive              Boolean   @default(true)
+  userId                Int?      @unique
+  user                  User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  plotSiteId            Int?
+  plotSiteIdsJson       String?   @db.Text
+  plotSite              PlotSite? @relation(fields: [plotSiteId], references: [id], onDelete: SetNull)
+  tenantId              Int       @default(1)
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   @@index([tenantId, isActive])
   @@index([tenantId, name])
@@ -3721,22 +3735,22 @@ model PlotBroker {
 }
 
 model BillingPerson {
-  id              Int      @id @default(autoincrement())
-  name            String
-  phone           String
-  email           String?
-  customerIdsJson String?  @db.Text
-  plotSiteIdsJson String?  @db.Text
-  pickupLocationIdsJson String? @db.Text
-  assignmentPairsJson String? @db.Text
-  notes           String?  @db.Text
-  isActive        Boolean  @default(true)
-  userId          Int?     @unique
-  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  tenantId        Int      @default(1)
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                    Int      @id @default(autoincrement())
+  name                  String
+  phone                 String
+  email                 String?
+  customerIdsJson       String?  @db.Text
+  plotSiteIdsJson       String?  @db.Text
+  pickupLocationIdsJson String?  @db.Text
+  assignmentPairsJson   String?  @db.Text
+  notes                 String?  @db.Text
+  isActive              Boolean  @default(true)
+  userId                Int?     @unique
+  user                  User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenantId              Int      @default(1)
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   @@index([tenantId, isActive])
   @@index([tenantId, name])
@@ -3746,8 +3760,8 @@ model BillingPerson {
 // -> payment lifecycle. Operational modules retain their own records; this row
 // provides the stable transaction id used by the admin status view.
 model PlotBooking {
-  id                Int      @id @default(autoincrement())
-  bookingNumber     String   @unique
+  id                Int                 @id @default(autoincrement())
+  bookingNumber     String              @unique
   tenantId          Int
   contactId         Int
   customerPickupId  Int?
@@ -3756,16 +3770,16 @@ model PlotBooking {
   plotBrokerId      Int?
   billingPersonId   Int?
   invoiceId         Int?
-  status            String   @default("PLOT_RESERVED")
-  paymentStatus     String   @default("UNPAID")
-  totalAmount       Decimal  @default(0) @db.Decimal(15, 2)
-  amountPaid        Decimal  @default(0) @db.Decimal(15, 2)
-  balance           Decimal  @default(0) @db.Decimal(15, 2)
-  reservedAt        DateTime @default(now())
+  status            String              @default("PLOT_RESERVED")
+  paymentStatus     String              @default("UNPAID")
+  totalAmount       Decimal             @default(0) @db.Decimal(15, 2)
+  amountPaid        Decimal             @default(0) @db.Decimal(15, 2)
+  balance           Decimal             @default(0) @db.Decimal(15, 2)
+  reservedAt        DateTime            @default(now())
   soldAt            DateTime?
   completedAt       DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
   invoiceItems      PlotInvoiceItem[]
   workflowEvents    PlotWorkflowEvent[]
 
@@ -3779,24 +3793,24 @@ model PlotBooking {
 // percentage of the full booking total; successful payments absorb that
 // amount in chronological order until the commission has been collected.
 model PlotCommission {
-  id                  Int      @id @default(autoincrement())
-  tenantId            Int
-  plotBookingId       Int
-  paymentId           Int
-  plotBrokerId        Int
-  contactId           Int
-  currency            String   @default("INR")
-  commissionPercent   Decimal  @db.Decimal(5, 2)
-  eligibleAmount      Decimal  @db.Decimal(15, 2)
-  commissionAmount    Decimal  @db.Decimal(15, 2)
-  status              String   @default("EARNED")
-  approvedByUserId    Int?
-  approvedAt          DateTime?
-  paidByUserId        Int?
-  paidAt              DateTime?
-  reversedAt          DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                Int       @id @default(autoincrement())
+  tenantId          Int
+  plotBookingId     Int
+  paymentId         Int
+  plotBrokerId      Int
+  contactId         Int
+  currency          String    @default("INR")
+  commissionPercent Decimal   @db.Decimal(5, 2)
+  eligibleAmount    Decimal   @db.Decimal(15, 2)
+  commissionAmount  Decimal   @db.Decimal(15, 2)
+  status            String    @default("EARNED")
+  approvedByUserId  Int?
+  approvedAt        DateTime?
+  paidByUserId      Int?
+  paidAt            DateTime?
+  reversedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@unique([tenantId, plotBookingId])
   @@index([tenantId, plotBookingId, createdAt])
@@ -4098,18 +4112,18 @@ model PayoutConfirmation {
 }
 
 model PlotInstallment {
-  id              Int      @id @default(autoincrement())
-  tenantId        Int
-  plotBookingId   Int
-  contactId       Int
-  sequenceNumber  Int
-  frequency       String
-  dueDate         DateTime
-  amount          Decimal  @db.Decimal(15, 2)
-  status          String   @default("PLANNED")
-  paymentId       Int?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  plotBookingId  Int
+  contactId      Int
+  sequenceNumber Int
+  frequency      String
+  dueDate        DateTime
+  amount         Decimal  @db.Decimal(15, 2)
+  status         String   @default("PLANNED")
+  paymentId      Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@unique([tenantId, plotBookingId, sequenceNumber])
   @@index([tenantId, contactId, status])
@@ -4117,19 +4131,19 @@ model PlotInstallment {
 }
 
 model PlotInvoiceItem {
-  id          Int      @id @default(autoincrement())
-  tenantId    Int
-  invoiceId   Int
+  id            Int          @id @default(autoincrement())
+  tenantId      Int
+  invoiceId     Int
   plotBookingId Int?
-  itemType    String   @default("PLOT")
-  itemId      Int?
-  description String
-  quantity    Decimal  @default(1) @db.Decimal(12, 2)
-  unitPrice   Decimal  @db.Decimal(15, 2)
-  amount      Decimal  @db.Decimal(15, 2)
-  createdAt   DateTime @default(now())
-  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  plotBooking PlotBooking? @relation(fields: [plotBookingId], references: [id], onDelete: SetNull)
+  itemType      String       @default("PLOT")
+  itemId        Int?
+  description   String
+  quantity      Decimal      @default(1) @db.Decimal(12, 2)
+  unitPrice     Decimal      @db.Decimal(15, 2)
+  amount        Decimal      @db.Decimal(15, 2)
+  createdAt     DateTime     @default(now())
+  invoice       Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  plotBooking   PlotBooking? @relation(fields: [plotBookingId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, invoiceId])
   @@index([tenantId, plotBookingId])
@@ -4138,7 +4152,7 @@ model PlotInvoiceItem {
 // Append-only domain history. Unlike the JSON status snapshots, rows are never
 // replaced, which makes the timeline suitable for audit and reporting.
 model PlotWorkflowEvent {
-  id            Int      @id @default(autoincrement())
+  id            Int          @id @default(autoincrement())
   tenantId      Int
   plotBookingId Int?
   contactId     Int
@@ -4149,8 +4163,8 @@ model PlotWorkflowEvent {
   fromStatus    String?
   toStatus      String?
   actorUserId   Int?
-  metadataJson  String?  @db.Text
-  occurredAt    DateTime @default(now())
+  metadataJson  String?      @db.Text
+  occurredAt    DateTime     @default(now())
   plotBooking   PlotBooking? @relation(fields: [plotBookingId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, contactId, occurredAt])
@@ -4305,6 +4319,28 @@ model ChatbotConversation {
   updatedAt DateTime @updatedAt
 
   @@index([tenantId])
+}
+
+// Generic CRM public landing-page AI conversations. Kept separate from the
+// configurable flow chatbot so existing chatbot builders and conversations
+// remain unchanged.
+model GenericChatConversation {
+  id                  Int      @id @default(autoincrement())
+  visitorId           String
+  messages            String   @db.LongText
+  requesterName       String?
+  requesterEmail      String?
+  unresolvedQuestion  String?  @db.Text
+  unresolvedQuestions String?  @db.LongText
+  ticketId            Int?
+  status              String   @default("ACTIVE")
+  tenantId            Int      @default(1)
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([tenantId, visitorId])
+  @@index([tenantId, ticketId])
 }
 
 // ── Knowledge Base ───────────────────────────────────────────────
@@ -4604,43 +4640,43 @@ model Booking {
 // travel workflow can add atomic slot locking, API/embed credentials and
 // integration state without changing generic or wellness booking behaviour.
 model TravelMeetingForm {
-  id                  Int       @id @default(autoincrement())
-  tenantId            Int
-  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  subBrand            String    @default("tmc")
-  name                String
-  slug                String
-  publicKey           String    @unique
-  apiKeyHash          String
-  hostUserId          Int
-  durationMins        Int       @default(30)
-  timezone            String    @default("Asia/Kolkata")
-  slotIntervalMins    Int       @default(30)
-  bufferBeforeMins    Int       @default(0)
-  bufferAfterMins     Int       @default(0)
-  minimumNoticeMins   Int       @default(120)
-  bookingHorizonDays  Int       @default(60)
-  maxBookingsPerDay   Int?
-  allowedStartDate    DateTime?
-  allowedEndDate      DateTime?
-  weeklyHoursJson     String    @db.Text
-  dateOverridesJson   String?   @db.Text
-  blackoutDatesJson   String?   @db.Text
-  fieldsJson          String    @db.Text
-  allowedOriginsJson  String?   @db.Text
-  calendarProvider    String    @default("google") // google | outlook
-  createZoom          Boolean   @default(true)
-  createCalendarEvent Boolean?
-  sendConfirmationEmail Boolean @default(true)
-  embedFontFamily     String    @default("Inter")
-  emailSubject        String    @default("Your Conversation with TMC is Confirmed")
-  emailBody           String    @db.LongText
-  emailCcJson         String?   @db.Text
-  emailLogoUrl        String?   @db.Text
-  confirmationMessage String?   @db.Text
-  isActive            Boolean   @default(false)
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  id                    Int       @id @default(autoincrement())
+  tenantId              Int
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subBrand              String    @default("tmc")
+  name                  String
+  slug                  String
+  publicKey             String    @unique
+  apiKeyHash            String
+  hostUserId            Int
+  durationMins          Int       @default(30)
+  timezone              String    @default("Asia/Kolkata")
+  slotIntervalMins      Int       @default(30)
+  bufferBeforeMins      Int       @default(0)
+  bufferAfterMins       Int       @default(0)
+  minimumNoticeMins     Int       @default(120)
+  bookingHorizonDays    Int       @default(60)
+  maxBookingsPerDay     Int?
+  allowedStartDate      DateTime?
+  allowedEndDate        DateTime?
+  weeklyHoursJson       String    @db.Text
+  dateOverridesJson     String?   @db.Text
+  blackoutDatesJson     String?   @db.Text
+  fieldsJson            String    @db.Text
+  allowedOriginsJson    String?   @db.Text
+  calendarProvider      String    @default("google") // google | outlook
+  createZoom            Boolean   @default(true)
+  createCalendarEvent   Boolean?
+  sendConfirmationEmail Boolean   @default(true)
+  embedFontFamily       String    @default("Inter")
+  emailSubject          String    @default("Your Conversation with TMC is Confirmed")
+  emailBody             String    @db.LongText
+  emailCcJson           String?   @db.Text
+  emailLogoUrl          String?   @db.Text
+  confirmationMessage   String?   @db.Text
+  isActive              Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   bookings TravelMeetingBooking[]
   slots    TravelMeetingSlot[]
@@ -4834,33 +4870,33 @@ model FieldPermission {
 // ── Payments (Stripe + Razorpay) ─────────────────────────────────
 
 model Payment {
-  id          Int       @id @default(autoincrement())
-  invoiceId   Int?
+  id                   Int       @id @default(autoincrement())
+  invoiceId            Int?
   // Nullable — identifies the customer who made this payment. No FK so it
   // works across all verticals (Contact, Patient, etc.) without coupling.
-  contactId   Int?
+  contactId            Int?
   // Human-readable summary of what was paid for (e.g. "Travel to Makkah Madina").
-  description String?   @db.VarChar(255)
-  amount      Float
-  currency    String    @default("USD")
-  gateway     String // stripe, razorpay
-  gatewayId   String? // their charge/payment ID
+  description          String?   @db.VarChar(255)
+  amount               Float
+  currency             String    @default("USD")
+  gateway              String // stripe, razorpay
+  gatewayId            String? // their charge/payment ID
   // Only Generic plot payments set this key; other gateways/verticals remain unchanged.
-  plotPaymentReference String? @db.VarChar(128)
-  status      String    @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
-  paidAt      DateTime?
-  metadata    String?   @db.Text
+  plotPaymentReference String?   @db.VarChar(128)
+  status               String    @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
+  paidAt               DateTime?
+  metadata             String?   @db.Text
   // #413 — Restrict (not Cascade) on Tenant deletion. Payments are
   // financial records-of-record (Stripe/Razorpay charges, refunds, gateway
   // IDs). A misclick on tenant.delete() must NOT silently nuke payment
   // history. Operator must explicitly drain Payment rows first.
-  tenantId    Int       @default(1)
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt   DateTime  @default(now())
+  tenantId             Int       @default(1)
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt            DateTime  @default(now())
 
+  @@unique([tenantId, plotPaymentReference], map: "Payment_tenantId_plotPaymentReference_key")
   @@index([tenantId, status])
   @@index([tenantId, contactId])
-  @@unique([tenantId, plotPaymentReference], map: "Payment_tenantId_plotPaymentReference_key")
 }
 
 // ── Accounting Sync ──────────────────────────────────────────────
@@ -10526,7 +10562,7 @@ model TravelSupplierPayable {
   supplier            TravelSupplier                     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   tenant              Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   itinerary           Itinerary?                         @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
-  trip                TmcTrip?                            @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  trip                TmcTrip?                           @relation(fields: [tripId], references: [id], onDelete: SetNull)
   purchaseOrder       TravelPurchaseOrder?               @relation(fields: [purchaseOrderId], references: [id])
   invoiceLine         TravelInvoiceLine?                 @relation(fields: [invoiceLineId], references: [id], onDelete: SetNull)
   payableBatch        TravelSupplierPayableBatch?        @relation(fields: [payableBatchId], references: [id], onDelete: SetNull)
@@ -12049,6 +12085,7 @@ model GenericImportHistory {
   skipped     Int      @default(0)
   errors      Int      @default(0)
   contacts    Json?
+  errorRows   Json?
   completedAt DateTime @default(now())
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

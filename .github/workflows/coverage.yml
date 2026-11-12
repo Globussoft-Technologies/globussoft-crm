@@ -69,16 +69,23 @@ jobs:
             backend/package-lock.json
             e2e/package-lock.json
 
-      - name: Install mysql-client (for G-15 backup-engine-api.spec.js)
-        # ubuntu-latest ships mysqladmin (used by the wait loop below)
-        # but NOT mysqldump — mysqldump lives in the mysql-client
-        # package. cron/backupEngine.js shells `mysqldump` from PATH.
-        # Mirrors the deploy.yml api_tests gate.
+      - name: Provide mysqldump client (for G-15 backup-engine-api.spec.js)
+        # Keep coverage independent of the runner's apt/mysql-server state.
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends mysql-client
-          mysqldump --version
+          if command -v mysqldump >/dev/null 2>&1; then
+            mysqldump --version
+            exit 0
+          fi
+          shim="$RUNNER_TEMP/mysqldump"
+          cat > "$shim" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec docker run --rm --network host mysql:8.0 mysqldump "$@"
+          EOF
+          chmod +x "$shim"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$shim" --version
 
       - name: Wait for MySQL ready
         run: |

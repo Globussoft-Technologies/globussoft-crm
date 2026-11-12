@@ -897,6 +897,7 @@ const inventoryRoutes = require("./routes/inventory");
 // /api/wellness/ai-provider-config.
 const supportChatRoutes = require("./routes/support_chat");
 const genericLeadsAssistantRoutes = require("./routes/generic_leads_assistant");
+const { router: genericLandingChatRoutes } = require("./routes/generic_landing_chat");
 const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
 // Wellness ↔ Callified calling — AI dial + human browser (agent bridge) calls
 // from the Appointments page. Thin wellness-shaped entry point over the SAME
@@ -1036,6 +1037,7 @@ app.use("/api", (req, res, next) => {
     "/surveys/respond",
     "/surveys/public",
     "/chatbots/chat",
+    "/generic-landing-chat",
     "/web-visitors/track",
     "/payments/webhook",
     "/accounting/webhook",
@@ -1286,6 +1288,9 @@ app.use("/api/billing", billingRoutes);
 app.use("/api/v1/invoices", v1InvoicesRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/ai", aiRoutes);
+// Public generic landing assistant. It resolves only the configured public
+// Generic tenant; travel and wellness never enter this route.
+app.use("/api/generic-landing-chat", genericLandingChatRoutes);
 app.use("/api/tickets", ticketsRoutes);
 app.use("/api/integrations", integrationsRoutes);
 app.use("/api/custom_objects", customObjectsRoutes);

@@ -12,6 +12,7 @@ const { sendEmail } = require("../lib/emailSender");
 const { isSendGridConfigured } = require("../services/travelSendGrid");
 const { toE164 } = require("../utils/deduplication");
 const { isVisitTask } = require("../lib/leadReportMetrics");
+const { KEYS, DEFAULTS } = require("../lib/tenantSettings");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -79,6 +80,118 @@ const ALLOWED_TASK_OUTCOMES = new Set([
 const VALID_EXTENSION_SOURCES = new Set(["gmail", "whatsapp"]);
 function canViewAllTasks(req) {
   return ["ADMIN", "MANAGER", "OWNER"].includes(String(req.user?.role || "").toUpperCase());
+}
+
+function genericTaskRole(req) {
+  return String(req.user?.role || "").toUpperCase();
+}
+
+function canAssignGenericTasks(req) {
+  return ["ADMIN", "MANAGER"].includes(genericTaskRole(req));
+}
+
+function requireTaskWrite(req, res, next) {
+  const role = genericTaskRole(req);
+  if (req.user?.vertical === "generic" && role === "USER") return next();
+  return requirePermission("tasks", "write")(req, res, next);
+}
+
+async function getGenericTaskAssignmentRules(req) {
+  if (req.user?.vertical !== "generic") return [];
+  let row;
+  try {
+    row = await prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId: req.user.tenantId, key: KEYS.GENERIC_TASK_ASSIGNMENT_RULES } },
+      select: { value: true },
+    });
+  } catch {
+    return [];
+  }
+  let rules;
+  try {
+    rules = JSON.parse(row?.value || DEFAULTS[KEYS.GENERIC_TASK_ASSIGNMENT_RULES] || "[]");
+  } catch {
+    return [];
+  }
+  return Array.isArray(rules) ? rules : [];
+}
+
+async function genericAssignmentRuleAllows(req, assigneeId) {
+  const rules = (await getGenericTaskAssignmentRules(req)).filter((rule) => rule && rule.assigneeRole);
+  if (!rules.length) return true;
+  const target = await prisma.user.findFirst({
+    where: { id: Number(assigneeId), tenantId: req.user.tenantId, userType: "STAFF", deactivatedAt: null },
+    select: { role: true },
+  });
+  if (!target) return false;
+  const role = genericTaskRole(req);
+  return rules.some((rule) => {
+    if (rule?.isActive !== true) return false;
+    const mappings = Array.isArray(rule.mappings)
+      ? rule.mappings
+      : [{ assignerRole: rule.assignerRole, assigneeRole: rule.assigneeRole }];
+    return mappings.some((mapping) => String(mapping?.assignerRole || "").toUpperCase() === role
+      && String(mapping?.assigneeRole || "").toUpperCase() === String(target.role || "").toUpperCase());
+  });
+}
+
+function canViewGenericTask(req, task) {
+  const role = genericTaskRole(req);
+  if (role === "ADMIN") {
+    return task.userId === req.user.userId || task.createdById === req.user.userId;
+  }
+  if (role === "MANAGER") {
+    return task.userId === req.user.userId || task.createdById === req.user.userId;
+  }
+  return task.userId === req.user.userId;
+}
+
+async function validateGenericAssignee(req, assigneeRaw) {
+  const role = genericTaskRole(req);
+  if (assigneeRaw === null || assigneeRaw === "") return null;
+  const assigneeId = Number(assigneeRaw);
+  if (!Number.isInteger(assigneeId) || assigneeId <= 0) {
+    return { status: 400, error: "Invalid task assignee.", code: "INVALID_TASK_ASSIGNEE" };
+  }
+  if (assigneeId === Number(req.user.userId)) {
+    return { status: 400, error: "You cannot assign a task to yourself.", code: "SELF_ASSIGNMENT_FORBIDDEN" };
+  }
+  if (role === "USER") {
+    const assignee = await prisma.user.findFirst({
+      where: {
+        id: assigneeId,
+        tenantId: req.user.tenantId,
+        userType: "STAFF",
+        role: "USER",
+        deactivatedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!assignee) {
+      return { status: 400, error: "Users can only assign tasks to active Users.", code: "INVALID_TASK_ASSIGNEE" };
+    }
+  } else {
+    const assignee = await prisma.user.findFirst({
+      where: {
+        id: assigneeId,
+        tenantId: req.user.tenantId,
+        userType: "STAFF",
+        role: { not: "ADMIN" },
+        deactivatedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!assignee) {
+      return { status: 400, error: "Tasks can only be assigned to active non-admin staff.", code: "INVALID_TASK_ASSIGNEE" };
+    }
+  }
+  if (!canAssignGenericTasks(req)) {
+    if (role !== "USER") return { status: 403, error: "Only Admins and Managers can assign tasks.", code: "TASK_ASSIGNMENT_FORBIDDEN" };
+  }
+  if (!(await genericAssignmentRuleAllows(req, assigneeId))) {
+    return { status: 403, error: "This assignment is not allowed by the active task assignment rules.", code: "TASK_ASSIGNMENT_RULE_DENIED" };
+  }
+  return null;
 }
 
 async function isTravelTenant(req) {
@@ -420,12 +533,22 @@ router.get("/", verifyToken, async (req, res) => {
   try {
     const { status, priority, contactId, overdue, mine } = req.query;
     const travelTenant = await isTravelTenant(req);
+    const genericTenant = !travelTenant && req.user.vertical === "generic";
 
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = normalizeStatusFilter(status);
     if (priority) where.priority = priority;
     if (contactId) where.contactId = parseInt(contactId);
-    if (travelTenant || !canViewAllTasks(req)) where.userId = req.user.userId;
+    if (genericTenant) {
+      const role = genericTaskRole(req);
+      if (role === "ADMIN" || role === "MANAGER") {
+        where.OR = [{ userId: req.user.userId }, { createdById: req.user.userId }];
+      } else if (role !== "ADMIN") {
+        where.userId = req.user.userId;
+      }
+    } else if (travelTenant || !canViewAllTasks(req)) {
+      where.userId = req.user.userId;
+    }
     if (overdue === "true") {
       where.dueDate = { lt: new Date() };
       where.status = "Pending";
@@ -440,10 +563,14 @@ router.get("/", verifyToken, async (req, res) => {
     // assignee field on the create path (see POST handler comment).
     if (!travelTenant && mine === "true") {
       const me = req.user.userId;
-      const isOrgRole = req.user.role === "ADMIN" || req.user.role === "MANAGER";
-      where.OR = isOrgRole
-        ? [{ userId: me }, { userId: null }]
-        : [{ userId: me }];
+      if (genericTenant && ["ADMIN", "MANAGER"].includes(genericTaskRole(req))) {
+        where.OR = [{ userId: me }, { createdById: me }];
+      } else {
+        const isOrgRole = req.user.role === "ADMIN" || req.user.role === "MANAGER";
+        where.OR = isOrgRole
+          ? [{ userId: me }, { userId: null }]
+          : [{ userId: me }];
+      }
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
@@ -507,6 +634,7 @@ router.get("/", verifyToken, async (req, res) => {
 router.get("/assignment-readiness", verifyToken, async (req, res) => {
   try {
     const travelTenant = await isTravelTenant(req);
+    const genericTenant = !travelTenant && req.user.vertical === "generic";
     if (!travelTenant) {
       return res.json({
         travel: false,
@@ -563,7 +691,7 @@ router.post("/extension-summary", verifyToken, requirePermission("tasks", "write
   }
 });
 // POST /api/tasks
-router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, res) => {
+router.post("/", verifyToken, requireTaskWrite, async (req, res) => {
   try {
     // #436: the global `stripDangerous` middleware (server.js:299, applied to
     // every route) deletes `userId` from req.body — that's the right thing
@@ -575,8 +703,9 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     // and fall through to req.strippedFields.userId for back-compat with old
     // clients that still POST `userId`.
     const travelTenant = await isTravelTenant(req);
+    const genericTenant = !travelTenant && req.user.vertical === "generic";
     const { title, dueDate, contactId, targetUserId, notes, priority, type, outcome } = req.body;
-    const assigneeRaw = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
+    let assigneeRaw = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
       ? targetUserId
       : (req.strippedFields && req.strippedFields.userId);
     if (!title) return res.status(400).json({ error: "title is required" });
@@ -584,6 +713,10 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     const normalizedStatus = normalizeTaskStatusForTenant(req.body.status, travelTenant);
     const inputErr = validateTaskInput({ ...req.body, status: normalizedStatus }, { travelTenant });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    if (genericTenant && assigneeRaw !== undefined) {
+      const assignmentErr = await validateGenericAssignee(req, assigneeRaw);
+      if (assignmentErr) return res.status(assignmentErr.status).json(assignmentErr);
+    }
 
     const task = await prisma.task.create({
       data: {
@@ -598,6 +731,7 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
         userId: assigneeRaw !== undefined && assigneeRaw !== null && assigneeRaw !== ""
           ? parseInt(assigneeRaw)
           : null,
+        ...(genericTenant ? { createdById: req.user.userId } : {}),
         notes: notes || null,
         // Lead Reports cluster — nullable when omitted, so the pre-existing
         // create shape is byte-for-byte unchanged for callers that don't send
@@ -658,6 +792,10 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     const travelTenant = await isTravelTenant(req);
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
+    const genericTenant = !travelTenant && req.user.vertical === "generic";
+    if (genericTenant && !canViewGenericTask(req, existing)) {
+      return res.status(403).json({ error: "You can only access tasks assigned to you or created by you.", code: "TASK_ACCESS_FORBIDDEN" });
+    }
 
     // #168: same validation on update path.
     const normalizedStatus = normalizeTaskStatusForTenant(req.body.status, travelTenant);
@@ -677,6 +815,10 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     if (type !== undefined) data.type = type || null;
     if (outcome !== undefined) data.outcome = outcome || null;
     if (targetUserId !== undefined) {
+      if (genericTenant) {
+        const assignmentErr = await validateGenericAssignee(req, targetUserId);
+        if (assignmentErr) return res.status(assignmentErr.status).json(assignmentErr);
+      }
       data.userId = targetUserId !== null && targetUserId !== "" ? parseInt(targetUserId) : null;
     }
 
@@ -748,6 +890,10 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
 
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
+    const travelTenant = await isTravelTenant(req);
+    if (!travelTenant && req.user.vertical === "generic" && !canViewGenericTask(req, existing)) {
+      return res.status(403).json({ error: "You can only resolve tasks assigned to you or created by you.", code: "TASK_ACCESS_FORBIDDEN" });
+    }
 
     const isAssignedUser = existing.userId === req.user.userId;
     const canCompleteAny = canViewAllTasks(req) || await userHasPermission(req.user, "tasks", "update");

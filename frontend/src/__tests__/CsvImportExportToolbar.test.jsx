@@ -232,6 +232,38 @@ describe("CsvImportExportToolbar", () => {
     expect(screen.getByRole("option", { name: "Customer department" })).toBeInTheDocument();
   });
 
+  it("reuses an existing custom field whose key matches an automatic tracking key", async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/lead-custom-fields") {
+        return Promise.resolve([
+          { id: 17, fieldKey: "utm_term", label: "UTM Term", fieldType: "text" },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        mappingFields={[]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+
+    const file = new File(["UTM Term\nkeyword\n"], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue("UTM Term\nkeyword\n") });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByText("Review the mapping of your fields")).toBeInTheDocument();
+    expect(screen.queryByText("＋ UTM Term (new field)")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "CRM field for UTM Term" })).toHaveValue("utm_term");
+  });
+
   it("opens the existing-field list from the proposed field dropdown without opening the editor", async () => {
     render(
       <CsvImportExportToolbar

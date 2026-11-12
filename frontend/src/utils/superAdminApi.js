@@ -65,3 +65,22 @@ export async function superAdminFetch(path, options = {}) {
 
   return body;
 }
+
+export async function superAdminUpload(path, file) {
+  const token = getSuperAdminToken();
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/super-admin${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 401 && token) {
+    clearSuperAdminSession();
+    window.location.href = "/super-admin/login";
+    throw new Error("Super Admin session expired");
+  }
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error || `Request failed (${res.status})`);
+  return body;
+}

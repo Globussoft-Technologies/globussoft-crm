@@ -1440,9 +1440,11 @@ router.get("/", async (req, res) => {
       req.query.includeCrmStatuses === "true" &&
       (req.user.vertical || "generic") === "generic";
     if (req.query.status && !includeCrmStatuses) where.status = req.query.status;
-    if (includeCrmStatuses) {
-      where.status = { in: ["Lead", "Prospect", "Customer", "Churned", "Junk"] };
-    }
+    // Generic CRM's Leads page is an all-contacts view. The legacy request
+    // still includes ?status=Lead for compatibility with existing callers,
+    // but includeCrmStatuses explicitly means that the status must not limit
+    // the result set. Do not replace this with a hard-coded status list:
+    // custom/new statuses would otherwise disappear from the Leads page.
     if (req.query.assignedToId)
       where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === "true") where.assignedToId = null;
@@ -3233,7 +3235,12 @@ router.get("/:id/activities", async (req, res) => {
       tenantId: req.user.tenantId,
       provider: "callified",
     };
-    const [activityRows, activityTotal, callLogs, callLogTotal] = await Promise.all([
+    const taskWhere = {
+      contactId: id,
+      tenantId: req.user.tenantId,
+      deletedAt: null,
+    };
+    const [activityRows, activityTotal, callLogs, callLogTotal, taskRows, taskTotal] = await Promise.all([
       prisma.activity.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -3249,6 +3256,14 @@ router.get("/:id/activities", async (req, res) => {
           })
         : Promise.resolve([]),
       isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
+      isGeneric
+        ? prisma.task.findMany({
+            where: taskWhere,
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: mergeWindow,
+          })
+        : Promise.resolve([]),
+      isGeneric ? prisma.task.count({ where: taskWhere }) : Promise.resolve(0),
     ]);
     let merged = activityRows;
     if (isGeneric) {
@@ -3270,13 +3285,24 @@ router.get("/:id/activities", async (req, res) => {
         });
         return rows;
       }, []);
-      merged = [...activityRows, ...callActivities].sort((a, b) => {
+      const taskActivities = taskRows.map((task) => ({
+        id: `task-${task.id}`,
+        type: "Task",
+        description: `Task created: ${task.title}`,
+        createdAt: task.createdAt,
+        contactId: task.contactId,
+        userId: task.userId,
+        status: task.status,
+        dueDate: task.dueDate,
+        taskId: task.id,
+      }));
+      merged = [...activityRows, ...callActivities, ...taskActivities].sort((a, b) => {
         const createdDifference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         if (createdDifference !== 0) return createdDifference;
         return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
       });
     }
-    const total = isGeneric ? activityTotal + callLogTotal : activityTotal;
+    const total = isGeneric ? activityTotal + callLogTotal + taskTotal : activityTotal;
     const data = isGeneric
       ? merged.slice(offset, offset + limit)
       : merged;

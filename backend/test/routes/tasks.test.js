@@ -104,6 +104,10 @@ prisma.task = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.user = {
+  findFirst: vi.fn().mockResolvedValue({ id: 42 }),
+  findUnique: vi.fn().mockResolvedValue({ deactivatedAt: null, sessionVersion: 0, userType: 'STAFF' }),
+};
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({});
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
@@ -123,8 +127,8 @@ import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 
 const { JWT_SECRET } = requireCJS('../../config/secrets');
-function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
-  return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
+function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN', vertical } = {}) {
+  return 'Bearer ' + jwt.sign({ userId, tenantId, role, ...(vertical ? { vertical } : {}) }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 // CJS self-mocking seam: the route does `require('../lib/eventBus').emitEvent(...)`
@@ -247,13 +251,22 @@ describe('GET / — list', () => {
     expect(args.where.OR).toEqual([{ userId: 7 }]);
   });
 
-  test('?mine=true for ADMIN includes userId=caller OR userId=null (orchestrator fan-out, #436)', async () => {
+  test('Generic manager sees tasks assigned to self and tasks assigned by self', async () => {
+    prisma.task.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/tasks')
+      .set('Authorization', makeBearer({ userId: 7, role: 'MANAGER' }));
+    const args = prisma.task.findMany.mock.calls[0][0];
+    expect(args.where.OR).toEqual([{ userId: 7 }, { createdById: 7 }]);
+  });
+
+  test('?mine=true for Generic ADMIN includes tasks assigned to or created by caller', async () => {
     prisma.task.findMany.mockResolvedValue([]);
     await request(makeApp())
       .get('/api/tasks?mine=true')
       .set('Authorization', makeBearer({ userId: 7, role: 'ADMIN' }));
     const args = prisma.task.findMany.mock.calls[0][0];
-    expect(args.where.OR).toEqual([{ userId: 7 }, { userId: null }]);
+    expect(args.where.OR).toEqual([{ userId: 7 }, { createdById: 7 }]);
   });
 
   test('?includeDeleted=true omits the deletedAt=null filter (#167)', async () => {
@@ -456,6 +469,46 @@ describe('POST / — create', () => {
     expect(args.data.tenantId).toBe(1);
   });
 
+  test('Generic Admin cannot assign a task to themselves', async () => {
+    const res = await request(makeApp())
+      .post('/api/tasks')
+      .set('Authorization', makeBearer({ userId: 7, role: 'ADMIN' }))
+      .send({ title: 'x', targetUserId: 7 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SELF_ASSIGNMENT_FORBIDDEN');
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+
+  test('Generic USER cannot assign a task to another staff member', async () => {
+    const res = await request(makeApp())
+      .post('/api/tasks')
+      .set('Authorization', makeBearer({ userId: 7, role: 'USER' }))
+      .send({ title: 'x', targetUserId: 42 });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RBAC_DENIED');
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+
+  test('Generic USER can create a task without assigning it to themselves', async () => {
+    prisma.task.create.mockResolvedValue({ id: 103, title: 'x', tenantId: 1, userId: null });
+    const res = await request(makeApp())
+      .post('/api/tasks')
+      .set('Authorization', makeBearer({ userId: 7, role: 'USER', vertical: 'generic' }))
+      .send({ title: 'x' });
+    expect(res.status).toBe(201);
+    expect(prisma.task.create.mock.calls[0][0].data.createdById).toBe(7);
+  });
+
+  test('Generic USER cannot assign a task to themselves', async () => {
+    const res = await request(makeApp())
+      .post('/api/tasks')
+      .set('Authorization', makeBearer({ userId: 7, role: 'USER', vertical: 'generic' }))
+      .send({ title: 'x', targetUserId: 7 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SELF_ASSIGNMENT_FORBIDDEN');
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+
   test('falls back to req.strippedFields.userId (back-compat with old clients posting userId, #436)', async () => {
     prisma.task.create.mockResolvedValue({
       id: 101, title: 'x', tenantId: 1, userId: 99,
@@ -546,7 +599,7 @@ describe('PUT /:id — update', () => {
 
   test('updates only the keys provided, audits the diff', async () => {
     prisma.task.findFirst.mockResolvedValue({
-      id: 5, title: 'old', notes: 'n', status: 'Pending', priority: 'Medium', tenantId: 1,
+      id: 5, title: 'old', notes: 'n', status: 'Pending', priority: 'Medium', tenantId: 1, userId: 7,
     });
     prisma.task.update.mockResolvedValue({
       id: 5, title: 'new', notes: 'n', status: 'Pending', priority: 'Medium', tenantId: 1,

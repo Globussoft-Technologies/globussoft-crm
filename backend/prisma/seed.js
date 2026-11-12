@@ -1264,12 +1264,13 @@ async function main() {
     },
   });
 
-  // Grant USER basic READ permissions
+  // Grant USER basic CRM permissions plus task creation
   const userPermissions = [
     'contacts.read',
     'deals.read',
     'leads.read',
     'tasks.read',
+    'tasks.write',
     'projects.read',
     'pipeline.read',
     'quotes.read',

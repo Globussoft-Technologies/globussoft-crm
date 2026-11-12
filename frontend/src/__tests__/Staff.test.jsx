@@ -379,16 +379,11 @@ describe('<Staff /> — list rendering + stats bar', () => {
   });
 
   it('filtering by USER hides the lone ADMIN row', async () => {
-    renderStaff('ADMIN');
+    renderStaff('ADMIN', {}, 'generic');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
-    // "USER" appears in MANY surfaces — filter pill, role <select> options,
-    // visible <RoleBadge> values. getAllByText is the right primitive per
-    // the 2026-05-23 standing rule. The filter pill is the first element
-    // matching with role="button"-shaped semantics.
-    const userPills = screen.getAllByText(/3 Users/);
-    expect(userPills.length).toBeGreaterThanOrEqual(1);
-    fireEvent.click(userPills[0]);
+    fireEvent.click(screen.getByTestId('staff-filter-button'));
+    fireEvent.change(screen.getByTestId('staff-role-filter'), { target: { value: 'USER' } });
 
     // After filtering, the ADMIN row (Rishu) is hidden; user rows remain.
     await waitFor(() => expect(screen.queryByText('Rishu Agarwal')).not.toBeInTheDocument());
@@ -782,13 +777,11 @@ describe('<Staff /> — Empty filter result copy', () => {
   });
 
   it('filtering by MANAGER (no manager rows) shows "No staff members with that role."', async () => {
-    renderStaff('ADMIN');
+    renderStaff('ADMIN', {}, 'generic');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
-    // Click the Managers filter pill — STAFF_ROWS has 0 managers, so this
-    // exercises the "filteredStaff.length === 0 && staff.length > 0" branch.
-    const managerPill = screen.getByText(/0 Managers/);
-    fireEvent.click(managerPill);
+    fireEvent.click(screen.getByTestId('staff-filter-button'));
+    fireEvent.change(screen.getByTestId('staff-role-filter'), { target: { value: 'MANAGER' } });
 
     await waitFor(() => expect(
       screen.getByText(/No staff members match the current search or filters\./i)
@@ -864,24 +857,24 @@ describe('<Staff /> — Invite modal: cancel without submit', () => {
   });
 });
 
-describe('<Staff /> — filter toggle clears the filter when re-clicked', () => {
+describe('<Staff /> — role filter clears from the filter panel', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
 
-  it('clicking the active filter pill a second time clears the filter', async () => {
-    renderStaff('ADMIN');
+  it('selecting All roles clears the active role filter', async () => {
+    renderStaff('ADMIN', {}, 'generic');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
-    const adminPill = screen.getByText(/1 Admins/);
-    fireEvent.click(adminPill);
+    fireEvent.click(screen.getByTestId('staff-filter-button'));
+    const roleFilter = screen.getByTestId('staff-role-filter');
+    fireEvent.change(roleFilter, { target: { value: 'ADMIN' } });
 
     // After filtering by ADMIN, the 3 user rows are hidden.
     await waitFor(() => expect(screen.queryByText('Dr. Harsh Kumar')).not.toBeInTheDocument());
     expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument();
 
-    // Click the SAME pill again — should clear the filter (setFilter(null)).
-    fireEvent.click(adminPill);
+    fireEvent.change(roleFilter, { target: { value: '' } });
 
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
     expect(screen.getByText('Priya Pro')).toBeInTheDocument();

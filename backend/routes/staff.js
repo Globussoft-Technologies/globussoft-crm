@@ -347,6 +347,7 @@ router.get("/", async (req, res) => {
       email: true,
       name: true,
       role: true,
+      ...(isGeneric ? { userType: true } : {}),
       // #221: include wellnessRole so the wellness UI can filter for doctors,
       // professionals, telecallers, helpers. The Log Visit form's Doctor
       // dropdown was empty because this field wasn't returned and the

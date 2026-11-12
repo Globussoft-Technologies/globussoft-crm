@@ -6,7 +6,7 @@ import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
-import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound, Mail, MessageCircle } from 'lucide-react';
+import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound, Mail, MessageCircle, RefreshCw, History, Settings2 } from 'lucide-react';
 import TagPickerPopover from './wellness/patients/TagPickerPopover';
 import { tagChipStyle, chipRemoveStyle, modalInputStyle, filterLabelStyle } from './wellness/patients/styles';
 import { tagColour } from './wellness/patients/constants';
@@ -116,6 +116,7 @@ const TASK_OUTCOMES = [
   { value: 'no_show', label: 'No show' },
 ];
 const VISIT_TYPES = ['Meeting', 'Site Visit'];
+const TASK_ASSIGNMENT_RULES_KEY = 'generic.taskAssignmentRules';
 
 // Queue filters. All client-side: GET /api/tasks already returns the tenant's
 // queue in one payload, so filtering here is instant and costs no round-trip.
@@ -144,6 +145,7 @@ const EMPTY_FORM = {
   dueDate: '',
   completedAt: '',
   assignedToId: '',
+  contactId: '',
   tagIds: [],
   description: '',
   resolutionNote: '',
@@ -158,6 +160,7 @@ export default function Tasks() {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const [tasks, setTasks] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [taskContacts, setTaskContacts] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
   const travelTaskReturnToRef = useRef('');
@@ -171,18 +174,43 @@ export default function Tasks() {
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const isGeneric = !isTravel && !isWellness;
   const role = String(user?.role || '').toUpperCase();
   const currentUserId = user?.userId || user?.id || null;
   const roleFallbackCanManage = ['ADMIN', 'MANAGER', 'OWNER'].includes(role);
+  const canAssignGenericTasks = isGeneric && ['ADMIN', 'MANAGER'].includes(role);
+  const canCreateGenericTaskForSelf = isGeneric && role === 'USER';
   const canCreateTasks = roleFallbackCanManage || !permsReady || hasPermission('tasks', 'write');
   const canUpdateTasks = roleFallbackCanManage || !permsReady || hasPermission('tasks', 'update') || hasPermission('tasks', 'write');
   const canDeleteTasks = roleFallbackCanManage || (permsReady && hasPermission('tasks', 'delete'));
   const { activeSubBrand } = useActiveSubBrand();
-  const assignableStaff = !isTravel
-    ? staff
-    : (activeSubBrand
-        ? staff.filter((s) => accessibleSubBrands(s).includes(activeSubBrand))
-        : staff);
+  const genericAssignableStaff = staff.filter((s) =>
+    String(s.role || '').toUpperCase() !== 'ADMIN'
+    && String(s.role || '').toUpperCase() !== 'CUSTOMER'
+    && !s.deactivatedAt
+    && (!s.userType || s.userType === 'STAFF')
+    && !(role === 'ADMIN' && String(s.id) === String(currentUserId))
+    && !(role === 'USER' && String(s.role || '').toUpperCase() !== 'USER')
+    && !(role === 'USER' && String(s.id) === String(currentUserId))
+  );
+  const assignableStaff = isGeneric
+    ? genericAssignableStaff
+    : !isTravel
+      ? staff
+      : (activeSubBrand
+          ? staff.filter((s) => accessibleSubBrands(s).includes(activeSubBrand))
+          : staff);
+  const genericRoleOptions = Array.from(new Set(
+    staff
+      .filter((member) => !member.deactivatedAt && String(member.userType || 'STAFF').toUpperCase() === 'STAFF' && String(member.role || '').toUpperCase() !== 'CUSTOMER')
+      .map((member) => String(member.role || '').toUpperCase())
+      .filter(Boolean)
+      .concat(['ADMIN', 'MANAGER', 'USER'])
+  )).sort();
+  const genericTargetRoleOptions = genericRoleOptions.filter((option) => option !== 'ADMIN');
+  const genericDefaultAssignmentRules = [
+    { name: 'Default role assignments', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }, { assignerRole: 'ADMIN', assigneeRole: 'USER' }, { assignerRole: 'MANAGER', assigneeRole: 'USER' }, { assignerRole: 'USER', assigneeRole: 'USER' }] },
+  ];
   // #893: the Enqueue Activity form used to sit inline above the queue,
   // eating vertical real-estate and inviting accidental typing. Mirror the
   // c031ba0 pattern: header "+ Create Task" CTA opens this drawer; close on
@@ -194,6 +222,13 @@ export default function Tasks() {
   const [editTask, setEditTask] = useState(EMPTY_FORM);
   const [notificationReadiness, setNotificationReadiness] = useState(null);
   const [lastAssignmentNotice, setLastAssignmentNotice] = useState(null);
+  const [showTaskHistory, setShowTaskHistory] = useState(false);
+  const [showTaskRules, setShowTaskRules] = useState(false);
+  const [taskRules, setTaskRules] = useState([]);
+  const [taskRuleDraft, setTaskRuleDraft] = useState({
+    id: '', name: '', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }], isActive: true, isDefault: false,
+  });
+  const [taskRulesSaving, setTaskRulesSaving] = useState(false);
 
   useEffect(() => { loadData(); }, []);
 
@@ -245,6 +280,16 @@ export default function Tasks() {
       .catch(() => {});
   }, []);
 
+  // Generic task-queue tasks can be linked to a lead/contact so the same task
+  // appears in that lead's Activities timeline. Travel and wellness keep
+  // their existing task creation flow unchanged.
+  useEffect(() => {
+    if (!isGeneric) return;
+    fetchApi('/api/contacts?fields=summary&limit=500&sortBy=name&sortDirection=asc')
+      .then((d) => setTaskContacts(Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : [])))
+      .catch(() => setTaskContacts([]));
+  }, [isGeneric]);
+
   useEffect(() => {
     if (!isTravel) return;
     fetchApi('/api/tasks/assignment-readiness')
@@ -277,6 +322,96 @@ export default function Tasks() {
     }
   };
 
+  const openTaskRules = async () => {
+    setShowTaskRules(true);
+    try {
+      const setting = await fetchApi(`/api/tenant-settings/${encodeURIComponent(TASK_ASSIGNMENT_RULES_KEY)}`, { silent: true });
+      const raw = setting?.value || setting?.defaultValue || '[]';
+      const parsed = JSON.parse(raw);
+      setTaskRules(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setTaskRules([]);
+    }
+    setTaskRuleDraft({
+      id: `task-rule-${Date.now()}`,
+      name: '', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }], isActive: true, isDefault: false,
+    });
+  };
+
+  const saveTaskRules = async () => {
+    setTaskRulesSaving(true);
+    try {
+      let rulesToSave = taskRules;
+      const hasDraftContent = Boolean(
+        taskRuleDraft.name.trim()
+        || taskRules.some((rule) => rule.id === taskRuleDraft.id)
+        || taskRuleDraft.mappings.some((mapping) => mapping.assignerRole !== 'ADMIN' || mapping.assigneeRole !== 'MANAGER'),
+      );
+      if (hasDraftContent) {
+        if (!taskRuleDraft.name.trim() || !taskRuleDraft.mappings.length || taskRuleDraft.mappings.some((mapping) => !mapping.assignerRole || !mapping.assigneeRole)) {
+          notify.error('Complete the current rule before saving.');
+          setTaskRulesSaving(false);
+          return;
+        }
+        const nextRule = { ...taskRuleDraft, name: taskRuleDraft.name.trim() };
+        rulesToSave = taskRules.some((rule) => rule.id === nextRule.id)
+          ? taskRules.map((rule) => rule.id === nextRule.id ? nextRule : rule)
+          : [...taskRules, nextRule];
+        setTaskRules(rulesToSave);
+      }
+      await fetchApi(`/api/tenant-settings/${encodeURIComponent(TASK_ASSIGNMENT_RULES_KEY)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ value: JSON.stringify(rulesToSave), category: 'task-assignment' }),
+      });
+      notify.success('Task assignment rules saved.');
+      setShowTaskRules(false);
+    } catch (error) {
+      notify.error(error?.message || 'Failed to save task assignment rules.');
+    } finally {
+      setTaskRulesSaving(false);
+    }
+  };
+
+  const addTaskRule = () => {
+    if (!taskRuleDraft.name.trim() || !Array.isArray(taskRuleDraft.mappings) || taskRuleDraft.mappings.length === 0 || taskRuleDraft.mappings.some((mapping) => !mapping.assignerRole || !mapping.assigneeRole)) {
+      notify.error('Enter a rule name and complete each role mapping.');
+      return;
+    }
+    setTaskRules((current) => {
+      const nextRule = { ...taskRuleDraft, name: taskRuleDraft.name.trim() };
+      if (current.some((rule) => rule.id === nextRule.id)) return current.map((rule) => rule.id === nextRule.id ? nextRule : rule);
+      return [...current, nextRule];
+    });
+    setTaskRuleDraft({
+      id: `task-rule-${Date.now()}`,
+      name: '', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }], isActive: true, isDefault: false,
+    });
+  };
+
+  const editTaskRule = (rule) => setTaskRuleDraft({
+    id: rule.id,
+    name: rule.name || '',
+    mappings: Array.isArray(rule.mappings) ? rule.mappings : [{ assignerRole: rule.assignerRole || 'ADMIN', assigneeRole: rule.assigneeRole || 'MANAGER' }],
+    isActive: rule.isActive !== false,
+    isDefault: rule.isDefault === true,
+  });
+
+  const setTaskRuleDefault = (ruleId, isDefault) => {
+    setTaskRules((current) => current.map((rule) => ({ ...rule, isDefault: isDefault ? rule.id === ruleId : rule.id === ruleId ? false : rule.isDefault === true })));
+  };
+
+  const updateTaskRuleMapping = (index, key, value) => {
+    setTaskRuleDraft((current) => ({ ...current, mappings: current.mappings.map((mapping, mappingIndex) => mappingIndex === index ? { ...mapping, [key]: value } : mapping) }));
+  };
+
+  const addTaskRuleMapping = () => {
+    setTaskRuleDraft((current) => ({ ...current, mappings: [...current.mappings, { assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }] }));
+  };
+
+  const removeTaskRuleMapping = (index) => {
+    setTaskRuleDraft((current) => ({ ...current, mappings: current.mappings.filter((_, mappingIndex) => mappingIndex !== index) }));
+  };
+
   const openCreate = () => {
     setNewTask(EMPTY_FORM);
     setShowTagPicker(false);
@@ -306,7 +441,7 @@ export default function Tasks() {
         // Optional — omitted entirely when blank so the POST body matches the
         // pre-existing shape for anyone who doesn't use the new fields.
         type: newTask.type || undefined,
-        outcome: newTask.outcome || undefined,
+        outcome: isGeneric ? undefined : (newTask.outcome || undefined),
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
         // Tags + description are packed into the notes field using a sentinel
         // prefix so no schema migration is needed.
@@ -468,7 +603,9 @@ export default function Tasks() {
         outcome: editTask.outcome || null,
         dueDate: editTask.dueDate ? new Date(editTask.dueDate).toISOString() : null,
         notes: encodeNotes(editTask.tagIds, editTask.description, editTask.resolutionNote),
-        targetUserId: editTask.assignedToId || '',
+        ...(isGeneric
+          ? (canAssignGenericTasks ? { targetUserId: editTask.assignedToId || '' } : {})
+          : { targetUserId: editTask.assignedToId || '' }),
       };
       const updated = await fetchApi(`/api/tasks/${selectedTask.id}`, {
         method: 'PUT',
@@ -516,6 +653,9 @@ export default function Tasks() {
     .filter(t => isOpenStatus(t.status))
     .sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 99) - (PRIORITY_ORDER[b.priority] ?? 99));
   const allCompletedTasks = tasks.filter(t => t.status === 'Completed');
+  const pendingCount = tasks.filter((t) => t.status === 'Pending').length;
+  const pendingAndInProgressCount = tasks.filter((t) => ['Pending', 'In Progress'].includes(t.status)).length;
+  const inProgressCount = allActiveTasks.filter(t => t.status === 'In Progress').length;
 
   const criticalCount = allActiveTasks.filter(t => normalizePriority(t.priority) === 'Critical').length;
   const highCount = allActiveTasks.filter(t => normalizePriority(t.priority) === 'High').length;
@@ -630,24 +770,48 @@ export default function Tasks() {
             Prioritized daily follow-ups and outbound activity directives.
           </p>
         </div>
-        {canCreateTasks && (
-        <button
-          id="open-create-task-btn"
-          type="button"
-          onClick={openCreate}
-          aria-label="Create a new task"
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '0.65rem 1.1rem', borderRadius: 6, fontWeight: 600, fontSize: '0.875rem',
-            background: 'var(--primary-color, var(--accent-color))',
-            color: 'var(--accent-text, #fff)',
-            border: '1px solid var(--primary-color, var(--accent-color))',
-            cursor: 'pointer',
-          }}
-        >
-          <Plus size={14} /> Create Task
-        </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+          {isGeneric && (
+            <button
+              type="button"
+              onClick={() => setShowTaskHistory(true)}
+              className="btn-secondary"
+              aria-haspopup="dialog"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.65rem 1.1rem', fontWeight: 600, fontSize: '0.875rem' }}
+            >
+              <History size={14} /> Task History
+            </button>
+          )}
+          {isGeneric && role === 'ADMIN' && (
+            <button
+              type="button"
+              onClick={openTaskRules}
+              className="btn-secondary"
+              aria-haspopup="dialog"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.65rem 1.1rem', fontWeight: 600, fontSize: '0.875rem' }}
+            >
+              <Settings2 size={14} /> Task Rules
+            </button>
+          )}
+          {canCreateTasks && (
+          <button
+            id="open-create-task-btn"
+            type="button"
+            onClick={openCreate}
+            aria-label="Create a new task"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '0.65rem 1.1rem', borderRadius: 6, fontWeight: 600, fontSize: '0.875rem',
+              background: 'var(--primary-color, var(--accent-color))',
+              color: 'var(--accent-text, #fff)',
+              border: '1px solid var(--primary-color, var(--accent-color))',
+              cursor: 'pointer',
+            }}
+          >
+            <Plus size={14} /> Create Task
+          </button>
+          )}
+        </div>
       </header>
 
       {/* Counter chips double as one-click filters — the number you want to act
@@ -708,7 +872,45 @@ export default function Tasks() {
       )}
 
       {allActiveTasks.length > 0 && (
-        <div className="tasks-chips" role="group" aria-label="Filter the queue">
+        isGeneric ? (
+          <div className="tasks-summary-cards" aria-label="Task summary">
+            <div className="tasks-summary-card">
+              <span className="tasks-summary-card__label">TOTAL PENDING</span>
+              <strong>{pendingCount}</strong>
+              <span className="tasks-summary-card__hint">Pending tasks</span>
+            </div>
+            <div className="tasks-summary-card tasks-summary-card--all">
+              <span className="tasks-summary-card__label">ALL TASKS</span>
+              <strong>{pendingAndInProgressCount}</strong>
+              <span className="tasks-summary-card__hint">Pending and in progress</span>
+            </div>
+            <div className="tasks-summary-card tasks-summary-card--progress">
+              <span className="tasks-summary-card__label">IN PROGRESS</span>
+              <strong>{inProgressCount}</strong>
+              <span className="tasks-summary-card__hint">Currently underway</span>
+            </div>
+            <div className="tasks-summary-card tasks-summary-card--completed">
+              <span className="tasks-summary-card__label">COMPLETED TASKS</span>
+              <strong>{allCompletedTasks.length}</strong>
+              <span className="tasks-summary-card__hint">Finished tasks</span>
+            </div>
+            <div className="tasks-summary-card tasks-summary-card--critical">
+              <span className="tasks-summary-card__label">CRITICAL</span>
+              <strong>{criticalCount}</strong>
+              <span className="tasks-summary-card__hint">Highest priority</span>
+            </div>
+            <div className="tasks-summary-card tasks-summary-card--high">
+              <span className="tasks-summary-card__label">HIGH PRIORITY</span>
+              <strong>{highCount}</strong>
+              <span className="tasks-summary-card__hint">Needs attention</span>
+            </div>
+            <div className="tasks-summary-card tasks-summary-card--overdue">
+              <span className="tasks-summary-card__label">OVERDUE</span>
+              <strong>{overdueCount}</strong>
+              <span className="tasks-summary-card__hint">Past due tasks</span>
+            </div>
+          </div>
+        ) : <div className="tasks-chips" role="group" aria-label="Filter the queue">
           {criticalCount > 0 && (
             <button
               type="button"
@@ -753,7 +955,7 @@ export default function Tasks() {
       {/* Filter bar */}
       {tasks.length > 0 && (
         <div className="tasks-filterbar">
-          <label className="tasks-filterbar__search">
+          <label className={`tasks-filterbar__search${isGeneric && filters.q ? ' is-active' : ''}`}>
             <Search size={14} />
             <input
               type="search"
@@ -766,7 +968,7 @@ export default function Tasks() {
 
           <select
             aria-label="Filter by priority"
-            className="input-field"
+            className={`input-field${isGeneric && filters.priority ? ' tasks-filterbar__field--active' : ''}`}
             value={filters.priority}
             onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value }))}
           >
@@ -779,7 +981,7 @@ export default function Tasks() {
 
           <select
             aria-label="Filter by type"
-            className="input-field"
+            className={`input-field${isGeneric && filters.type ? ' tasks-filterbar__field--active' : ''}`}
             value={filters.type}
             onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
           >
@@ -790,7 +992,7 @@ export default function Tasks() {
 
           <select
             aria-label="Filter by due date"
-            className="input-field"
+            className={`input-field${isGeneric && filters.due ? ' tasks-filterbar__field--active' : ''}`}
             value={filters.due}
             onChange={(e) => setFilters((f) => ({ ...f, due: e.target.value }))}
           >
@@ -800,7 +1002,7 @@ export default function Tasks() {
           {assigneeOptions.length > 1 && (
             <select
               aria-label="Filter by assignee"
-              className="input-field"
+              className={`input-field${isGeneric && filters.assignee ? ' tasks-filterbar__field--active' : ''}`}
               value={filters.assignee}
               onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value }))}
             >
@@ -811,11 +1013,9 @@ export default function Tasks() {
 
           {filtersActive && (
             <>
-              <span className="tasks-filterbar__count">
-                {activeTasks.length} of {allActiveTasks.length} shown
-              </span>
-              <button type="button" className="tasks-filterbar__clear" onClick={clearFilters}>
-                <X size={13} /> Clear
+              {!isGeneric && <span className="tasks-filterbar__count">{activeTasks.length} of {allActiveTasks.length} shown</span>}
+              <button type="button" className={isGeneric ? 'tasks-filterbar__refresh' : 'tasks-filterbar__clear'} onClick={clearFilters} aria-label={isGeneric ? 'Clear filters' : undefined} title={isGeneric ? 'Clear filters' : undefined}>
+                {isGeneric ? <RefreshCw size={14} /> : <><X size={13} /> Clear</>}
               </button>
             </>
           )}
@@ -824,12 +1024,13 @@ export default function Tasks() {
 
       {/* #893: Queue + Completed are now the full width. The Enqueue Activity
          form lives in the drawer below, opened by the header CTA. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+      <div className="tasks-content-stack" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
 
         {/* Active Queue */}
         <div className="card tasks-active-queue-card" style={{ padding: '2rem' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Phone size={20} color="var(--danger-color)" /> Active Priority Queue
+          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}><Phone size={20} color="var(--danger-color)" /> Active Priority Queue</span>
+            {isGeneric && filtersActive && <span className="tasks-filterbar__count">{activeTasks.length} of {allActiveTasks.length} shown</span>}
           </h3>
           <div className="tasks-active-queue-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {activeTasks.length === 0 ? (
@@ -839,9 +1040,9 @@ export default function Tasks() {
               allActiveTasks.length > 0 ? (
                 <p id="empty-filtered-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
                   No tasks match these filters.{' '}
-                  <button type="button" className="tasks-filterbar__clear" onClick={clearFilters}>
+                  {!isGeneric && <button type="button" className="tasks-filterbar__clear" onClick={clearFilters}>
                     <X size={13} /> Clear filters
-                  </button>
+                  </button>}
                 </p>
               ) : (
                 <p id="empty-queue-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
@@ -864,6 +1065,8 @@ export default function Tasks() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
                       <h4 className="tasks-queue-item__title" style={{ fontWeight: '600', fontSize: '1rem', margin: 0 }}>{t.title}</h4>
                       <PriorityBadge priority={t.priority} />
+                      {isGeneric && <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.7rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>{t.status || 'Pending'}</span>}
+                      {isGeneric && t.type && <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.7rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>{t.type}</span>}
                       {overdue && (
                         <span style={{ padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(239,68,68,0.15)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                           <AlertTriangle size={10} /> OVERDUE
@@ -942,7 +1145,7 @@ export default function Tasks() {
         </div>
 
         {/* Completed Log */}
-        <div className="card" style={{ padding: '2rem', opacity: 0.75 }}>
+        {!isGeneric && <div className="card" style={{ padding: '2rem', opacity: 0.75 }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <CheckCircle2 size={20} color="var(--success-color)" /> Completed Log
           </h3>
@@ -973,7 +1176,104 @@ export default function Tasks() {
               );
             })}
           </div>
-        </div>
+        </div>}
+
+        {isGeneric && showTaskHistory && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-history-title"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowTaskHistory(false); }}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1000,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '1.25rem', background: 'rgba(15, 23, 42, 0.55)',
+            }}
+          >
+            <div className="card" style={{ width: 'min(900px, 100%)', maxHeight: 'min(720px, 90vh)', overflow: 'auto', padding: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
+                <h2 id="task-history-title" style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                  <CheckCircle2 size={20} color="var(--success-color)" /> Completed Log
+                </h2>
+                <button type="button" onClick={() => setShowTaskHistory(false)} className="btn-secondary" aria-label="Close task history" style={{ padding: '0.4rem' }}>
+                  <X size={16} />
+                </button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {completedTasks.length === 0 ? (
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No completed tasks yet.</p>
+                ) : completedTasks.slice(0, 8).map(t => {
+                  const decoded = decodeNotes(t.notes);
+                  return (
+                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
+                        {decoded.resolutionNote && (
+                          <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 720 }}>
+                            Note: {decoded.resolutionNote}
+                          </p>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <CheckCircle2 size={10} /> Resolved
+                        </span>
+                        <button type="button" onClick={() => { setShowTaskHistory(false); openTaskDetails(t); }} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}>
+                          <Eye size={12} /> Details
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isGeneric && role === 'ADMIN' && showTaskRules && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-rules-title"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowTaskRules(false); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(15, 23, 42, 0.55)' }}
+          >
+            <div className="card" style={{ width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <div>
+                  <h2 id="task-rules-title" style={{ margin: 0, fontSize: '1.2rem' }}>Task assignment rules</h2>
+                  <p style={{ margin: '0.3rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Rules control which role can assign tasks to which role.</p>
+                </div>
+                <button type="button" onClick={() => setShowTaskRules(false)} className="btn-secondary" aria-label="Close task rules" style={{ padding: '0.4rem' }}><X size={16} /></button>
+              </div>
+              <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '1rem' }}>
+                <strong style={{ display: 'block', marginBottom: '0.65rem', fontSize: '0.85rem' }}>{taskRules.some((rule) => rule.id === taskRuleDraft.id) ? 'Edit assignment rule' : 'Add assignment rule'}</strong>
+                <input value={taskRuleDraft.name} onChange={(e) => setTaskRuleDraft({ ...taskRuleDraft, name: e.target.value })} placeholder="Rule name" style={{ ...modalInputStyle, width: '100%', boxSizing: 'border-box', marginBottom: '0.6rem' }} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.35rem' }}><span>Who can assign</span><span>Whom can assign</span><span /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>{taskRuleDraft.mappings.map((mapping, index) => <div key={`draft-mapping-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', alignItems: 'center' }}><select value={mapping.assignerRole} onChange={(e) => updateTaskRuleMapping(index, 'assignerRole', e.target.value)} style={modalInputStyle}>{genericRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><select value={mapping.assigneeRole} onChange={(e) => updateTaskRuleMapping(index, 'assigneeRole', e.target.value)} style={modalInputStyle}>{genericTargetRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" onClick={() => removeTaskRuleMapping(index)} className="btn-secondary" aria-label="Remove role mapping" style={{ padding: '0.4rem', color: '#ef4444' }} disabled={taskRuleDraft.mappings.length === 1}><Trash2 size={13} /></button></div>)}</div>
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.6rem' }}><button type="button" onClick={addTaskRuleMapping} className="btn-secondary" style={{ whiteSpace: 'nowrap' }}><Plus size={14} /> Add mapping</button><button type="button" onClick={addTaskRule} className="btn-secondary" style={{ whiteSpace: 'nowrap' }}>{taskRules.some((rule) => rule.id === taskRuleDraft.id) ? <><Save size={14} /> Update rule mapping</> : <><Save size={14} /> Save rule mapping</>}</button></div>
+                {taskRules.some((rule) => rule.id === taskRuleDraft.id) && <button type="button" onClick={() => setTaskRuleDraft({ id: `task-rule-${Date.now()}`, name: '', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }], isActive: true, isDefault: false })} className="btn-secondary" style={{ marginTop: '0.55rem', fontSize: '0.75rem' }}>Cancel edit</button>}
+              </div>
+              <div style={{ padding: '0.8rem 1rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'rgba(99,102,241,0.06)', marginBottom: '1rem' }}>
+                <strong style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.55rem' }}>Default rule — current behavior</strong>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '0.5rem', fontSize: '0.75rem' }}>
+                  <span style={{ fontWeight: 700 }}>Rule name</span><span style={{ fontWeight: 700 }}>Who can assign</span><span style={{ fontWeight: 700 }}>Whom can assign</span>
+                  {genericDefaultAssignmentRules.flatMap((rule) => rule.mappings.map((mapping, mappingIndex) => <React.Fragment key={`${rule.name}-${mappingIndex}`}><span>{mappingIndex === 0 ? rule.name : ''}</span><span>{mapping.assignerRole}</span><span>{mapping.assigneeRole}</span></React.Fragment>))}
+                </div>
+                <p style={{ margin: '0.55rem 0 0', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>With no dynamic rules, this default keeps the current assignment behavior.</p>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                {taskRules.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>No dynamic rules created.</p> : taskRules.map((rule) => {
+                  return <div key={rule.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.7rem 0.8rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}><strong style={{ fontSize: '0.82rem' }}>{rule.name}</strong><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}><span>Who can assign</span><span>Whom can assign</span>{(Array.isArray(rule.mappings) ? rule.mappings : [{ assignerRole: rule.assignerRole, assigneeRole: rule.assigneeRole }]).map((mapping, mappingIndex) => <React.Fragment key={`${rule.id}-${mappingIndex}`}><span>{mapping.assignerRole}</span><span>{mapping.assigneeRole}</span></React.Fragment>)}</div></div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><button type="button" className="btn-secondary" onClick={() => setTaskRuleDefault(rule.id, !rule.isDefault)} style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>{rule.isDefault ? 'Default' : 'Set default'}</button><button type="button" className="btn-secondary" onClick={() => setTaskRules((current) => current.map((item) => item.id === rule.id ? { ...item, isActive: !item.isActive } : item))} style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>{rule.isActive ? 'Active' : 'Off'}</button><button type="button" className="btn-secondary" onClick={() => editTaskRule(rule)} aria-label={`Edit ${rule.name}`} style={{ padding: '0.35rem 0.55rem' }}><Edit3 size={13} /></button><button type="button" className="btn-secondary" onClick={() => setTaskRules((current) => current.filter((item) => item.id !== rule.id))} aria-label={`Remove ${rule.name}`} style={{ padding: '0.35rem 0.55rem', color: '#ef4444' }}><Trash2 size={13} /></button></div>
+                  </div>;
+                })}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '1.25rem' }}><button type="button" onClick={() => setShowTaskRules(false)} className="btn-secondary">Cancel</button><button type="button" onClick={saveTaskRules} className="btn-primary" disabled={taskRulesSaving}>{taskRulesSaving ? 'Saving…' : 'Save rule'}</button></div>
+            </div>
+          </div>
+        )}
 
       </div>
 
@@ -1053,7 +1353,7 @@ export default function Tasks() {
                     Meeting / Site Visit, matching the create form. Logging the
                     outcome here is what moves a client off the Lead Reports
                     "visited but did not book" recovery queue. */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isGeneric ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                     Type
                     <select value={editTask.type} onChange={(e) => setEditTask({ ...editTask, type: e.target.value })} style={modalInputStyle}>
@@ -1061,7 +1361,7 @@ export default function Tasks() {
                       {TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </label>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                  {!isGeneric && <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                     Outcome
                     <select
                       value={editTask.outcome}
@@ -1071,14 +1371,14 @@ export default function Tasks() {
                     >
                       {TASK_OUTCOMES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
-                  </label>
+                  </label>}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: isTravel ? '1fr 1fr' : '1fr', gap: '0.75rem' }}>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                     Due date
                     <input type="datetime-local" value={editTask.dueDate} onChange={(e) => setEditTask({ ...editTask, dueDate: e.target.value })} style={modalInputStyle} />
                   </label>
-                  {isTravel && (
+                  {(isTravel || (isGeneric && canAssignGenericTasks)) && (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                       Reassign to
                       <select value={editTask.assignedToId} onChange={(e) => setEditTask({ ...editTask, assignedToId: e.target.value })} style={modalInputStyle}>
@@ -1101,7 +1401,7 @@ export default function Tasks() {
                     style={{ ...modalInputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.45 }}
                   />
                 </label>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                {!isGeneric && <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                   Resolution note
                   <textarea
                     rows="4"
@@ -1110,13 +1410,15 @@ export default function Tasks() {
                     placeholder="Visible after the task is resolved"
                     style={{ ...modalInputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.45 }}
                   />
-                </label>
+                </label>}
               </>
             ) : (
               <>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
                   <PriorityBadge priority={selectedTask.priority} />
                   <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>{selectedTask.status}</span>
+                  {isGeneric && selectedTask.type && <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>{selectedTask.type}</span>}
+                  {isGeneric && selectedTask.outcome && <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>{TASK_OUTCOMES.find((item) => item.value === selectedTask.outcome)?.label || selectedTask.outcome}</span>}
                   <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <UserRound size={12} /> {assigneeName(selectedTask)}
                   </span>
@@ -1165,7 +1467,14 @@ export default function Tasks() {
                     {decodeNotes(selectedTask.notes).description || 'No description added.'}
                   </p>
                 </section>
-                {decodeNotes(selectedTask.notes).resolutionNote && (
+                {isGeneric && selectedTask.status === 'Completed' ? (
+                  <section style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                    <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Resolved message</h3>
+                    <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                      {decodeNotes(selectedTask.notes).resolutionNote || 'Task resolved.'}
+                    </p>
+                  </section>
+                ) : decodeNotes(selectedTask.notes).resolutionNote && (
                   <section style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
                     <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Resolution note</h3>
                     <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.55, color: 'var(--text-secondary)' }}>
@@ -1197,7 +1506,7 @@ export default function Tasks() {
                       <Save size={14} /> Save
                     </button>
                   </>
-                ) : canUpdateTasks ? (
+                ) : canUpdateTasks && (!isGeneric || selectedTask.status !== 'Completed') ? (
                   <button type="button" onClick={() => setEditingTask(true)} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <Edit3 size={14} /> Edit
                   </button>
@@ -1270,7 +1579,7 @@ export default function Tasks() {
             />
 
             {/* Status + Priority — two equal columns, label left of select */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isGeneric ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
               {/* Status */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
@@ -1355,7 +1664,7 @@ export default function Tasks() {
                 </select>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+              {!isGeneric && <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Outcome:</span>
                 <select
                   id="task-outcome-select"
@@ -1373,7 +1682,7 @@ export default function Tasks() {
                 >
                   {TASK_OUTCOMES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-              </div>
+              </div>}
             </div>
 
             {/* Due At + Completed At — stacked label above input, two columns */}
@@ -1438,7 +1747,7 @@ export default function Tasks() {
             )}
 
             {/* Assignees — label + full-width select */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            {(!isGeneric || canAssignGenericTasks || canCreateGenericTaskForSelf) && <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
@@ -1467,10 +1776,39 @@ export default function Tasks() {
                   return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
                 })}
               </select>
-            </div>
+            </div>}
 
             {/* Tags — only on wellness tenants; mirrors the BulkTagModal pattern exactly:
                 dropdown button → TagPickerPopover → chip strip below */}
+            {isGeneric && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <label htmlFor="task-contact-select" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  Related lead/contact:
+                </label>
+                <select
+                  id="task-contact-select"
+                  value={newTask.contactId}
+                  onChange={e => setNewTask({ ...newTask, contactId: e.target.value })}
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    padding: '0.5rem 0.75rem', fontSize: '0.875rem',
+                    border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                    borderRadius: 8,
+                    background: 'var(--surface-color, #fff)',
+                    color: 'var(--text-primary)',
+                    outline: 'none', cursor: 'pointer',
+                  }}
+                >
+                  <option value="">No related lead/contact</option>
+                  {taskContacts.map((contact) => (
+                    <option key={contact.id} value={contact.id}>
+                      {contact.name || contact.email || `Contact #${contact.id}`}{contact.email && contact.name ? ` — ${contact.email}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {isTravel && (
               <div
                 style={{

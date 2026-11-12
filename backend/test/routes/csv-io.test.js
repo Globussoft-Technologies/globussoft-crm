@@ -122,6 +122,9 @@ prisma.genericImportHistory = {
   findMany: vi.fn(),
   create: vi.fn(),
 };
+prisma.tenantSetting = {
+  findUnique: vi.fn(),
+};
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   findFirst: vi.fn().mockResolvedValue(null),
@@ -179,6 +182,7 @@ beforeEach(() => {
   prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.genericImportHistory.findMany.mockReset().mockResolvedValue([]);
   prisma.genericImportHistory.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   hardDeleteContactMock.mockReset().mockResolvedValue(1);
@@ -210,6 +214,18 @@ describe('GET /api/csv/contacts/import-history', () => {
       where: { tenantId: 1 },
       orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
       take: 20,
+      select: {
+        id: true,
+        tenantId: true,
+        fileName: true,
+        inserted: true,
+        updated: true,
+        skipped: true,
+        errors: true,
+        contacts: true,
+        errorRows: true,
+        completedAt: true,
+      },
     });
   });
 
@@ -340,7 +356,21 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
       .set('Content-Type', 'text/csv').send('name,phone\nShared Number,+919876543210\n');
     expect(res.body).toMatchObject({ imported: 0, updated: 0, skipped: 1 });
-    expect(res.body.errors[0].reason).toMatch(/ambiguous phone/);
+    expect(res.body.errors[0]).toMatchObject({
+      rowNumber: 2,
+      field: 'phone',
+      reason: expect.stringMatching(/ambiguous phone/),
+    });
+    expect(prisma.genericImportHistory.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        errorRows: [expect.objectContaining({
+          rowNumber: 2,
+          field: 'phone',
+          action: 'skipped',
+          reason: expect.stringMatching(/ambiguous phone/),
+        })],
+      }),
+    }));
     expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(hardDeleteContactMock).not.toHaveBeenCalled();
@@ -351,6 +381,10 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
       .set('Content-Type', 'text/csv').send('name,phone\nUpdated Name,+919876543210\n');
     expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0 });
+    expect(res.body.importedContacts[0]).toMatchObject({
+      action: 'updated',
+      reason: 'Existing contact matched and updated',
+    });
     expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 103 } }));
   });
   test('imports a lead with a name and phone but no email', async () => {
@@ -364,6 +398,10 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(res.body.importedContacts[0]).toMatchObject({
+      action: 'created',
+      reason: 'New contact created',
+    });
     expect(prisma.contact.findMany).toHaveBeenCalledWith({
       where: { phone: '+919876543210', tenantId: 1 },
       select: { id: true, deletedAt: true },
@@ -475,6 +513,67 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
         errors: 0,
       }),
     });
+  });
+
+  test('maps Generic lifecycle-stage labels to lifecycleStageKey instead of creating a custom field', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 100 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({ name: 'name', 'Lifecycle stage': 'lifecycleStageKey' }))
+      .attach('file', Buffer.from('name,Lifecycle stage\nAsha Patel,Lead\n'), {
+        filename: 'contacts.csv',
+        contentType: 'text/csv',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Asha Patel',
+        status: 'Lead',
+        lifecycleStageKey: 'new',
+      }),
+    }));
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
+  });
+
+  test('normalizes Freshsales Generic status values to CRM statuses', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 101 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,status\nNew Lead,New\nQualified Lead,Qualified\nLost Lead,Lost\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 3, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create.mock.calls.map(([call]) => call.data.status)).toEqual([
+      'Lead',
+      'Prospect',
+      'Junk',
+    ]);
+  });
+
+  test('recovers a stale Generic mapping that sends Status to lifecycleStageKey', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 102 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({ name: 'name', Status: 'lifecycleStageKey' }))
+      .attach('file', Buffer.from('name,Status\nMapped Lead,New\n'), {
+        filename: 'contacts.csv',
+        contentType: 'text/csv',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ name: 'Mapped Lead', status: 'Lead', lifecycleStageKey: 'new' }),
+    }));
   });
 
   test('imports a workbook uploaded as .xlsx and normalizes phone_number values', async () => {

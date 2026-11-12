@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
-import { Ticket, Plus, Trash2, AlertTriangle, X } from 'lucide-react';
+import { Ticket, Plus, Trash2, AlertTriangle, X, MessageCircle } from 'lucide-react';
 import './Tickets.css';
 
 const PRIORITY_CONFIG = {
@@ -50,6 +50,19 @@ export default function Tickets() {
   const [openCount, setOpenCount] = useState(0);
   const [urgentCount, setUrgentCount] = useState(0);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isTicketDetailOpen, setIsTicketDetailOpen] = useState(false);
+  const [ticketDetail, setTicketDetail] = useState(null);
+  const [ticketDetailLoading, setTicketDetailLoading] = useState(false);
+  const [ticketDetailSaving, setTicketDetailSaving] = useState(false);
+  const [detailResolutionNotes, setDetailResolutionNotes] = useState('');
+  const [resolutionEmailTemplate, setResolutionEmailTemplate] = useState('');
+  const [isResolutionTemplateGenerated, setIsResolutionTemplateGenerated] = useState(false);
+  const [isConversationModalOpen, setIsConversationModalOpen] = useState(false);
+  const isResolvedGenericTicketWithoutQuestions = Boolean(
+    ticketDetail?.sourceConversationId
+    && String(ticketDetail.status || '').toLowerCase() === 'resolved'
+    && !(ticketDetail.conversation?.unresolvedQuestions?.length)
+  );
 
   const loadData = useCallback(async (targetPage = 1, targetPageSize = pageSize) => {
     try {
@@ -115,10 +128,114 @@ export default function Tickets() {
 
   const updateStatus = async (id, status) => {
     try {
-      await fetchApi(`/api/tickets/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
+      const current = tickets.find((ticket) => ticket.id === id);
+      const payload = { status };
+      if (status === 'Resolved' && current?.sourceConversationId) {
+        const notes = window.prompt('Enter the answer to send to the visitor:', current.resolutionNotes || '');
+        if (notes === null) return;
+        payload.resolutionNotes = notes;
+      }
+      await fetchApi(`/api/tickets/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
       loadData(page);
     } catch (err) {
       console.error('Failed to update ticket status:', err);
+    }
+  };
+
+  const updateAssignee = async (id, assigneeId) => {
+    try {
+      await fetchApi(`/api/tickets/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ assigneeId: assigneeId ? parseInt(assigneeId, 10) : null }),
+      });
+      loadData(page);
+    } catch (err) {
+      console.error('Failed to update ticket assignee:', err);
+    }
+  };
+
+  const openTicketDetails = async (ticket) => {
+    setIsTicketDetailOpen(true);
+    setTicketDetail(null);
+    setTicketDetailLoading(true);
+    try {
+      const details = await fetchApi(`/api/tickets/${ticket.id}`);
+      setTicketDetail(details);
+      setDetailResolutionNotes(details.resolutionNotes || '');
+      setResolutionEmailTemplate('');
+      setIsResolutionTemplateGenerated(false);
+    } catch (err) {
+      console.error('Failed to load ticket details:', err);
+      setIsTicketDetailOpen(false);
+      notify.error('Failed to load ticket details.');
+    } finally {
+      setTicketDetailLoading(false);
+    }
+  };
+
+  const generateResolutionEmail = () => {
+    if (!ticketDetail) return;
+    if (ticketDetail.sourceConversationId && !detailResolutionNotes.trim()) {
+      notify.error('Enter the answer before resolving this ticket.');
+      return;
+    }
+    const greetingName = ticketDetail.requesterName || 'there';
+    setResolutionEmailTemplate([
+      `Hi ${greetingName},`,
+      '',
+      detailResolutionNotes.trim(),
+      '',
+      'Regards,',
+      'Globus CRM Support',
+    ].join('\n'));
+    setIsResolutionTemplateGenerated(true);
+  };
+
+  const sendResolutionEmail = async () => {
+    if (!ticketDetail || !resolutionEmailTemplate.trim()) return;
+    setTicketDetailSaving(true);
+    try {
+      const payload = { status: 'Resolved' };
+      if (ticketDetail.sourceConversationId) payload.resolutionNotes = detailResolutionNotes.trim();
+      if (ticketDetail.sourceConversationId) payload.resolutionEmailTemplate = resolutionEmailTemplate.trim();
+      await fetchApi(`/api/tickets/${ticketDetail.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+        silent: true,
+      });
+      await loadData(page);
+      setIsConversationModalOpen(false);
+      setIsTicketDetailOpen(false);
+    } catch (err) {
+      console.error('Failed to update ticket:', err);
+      notify.error(err?.message || 'The ticket could not be resolved or the email could not be sent.');
+      await loadData(page);
+      await openTicketDetails({ id: ticketDetail.id });
+    } finally {
+      setTicketDetailSaving(false);
+    }
+  };
+
+  const saveTicketAsPending = async () => {
+    if (!ticketDetail || !detailResolutionNotes.trim()) {
+      notify.error('Enter an answer before saving the ticket.');
+      return;
+    }
+    setTicketDetailSaving(true);
+    try {
+      await fetchApi(`/api/tickets/${ticketDetail.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Pending', resolutionNotes: detailResolutionNotes.trim() }),
+        silent: true,
+      });
+      await loadData(page);
+      setIsConversationModalOpen(false);
+      setIsTicketDetailOpen(false);
+    } catch (err) {
+      console.error('Failed to save ticket:', err);
+      notify.error(err?.message || 'The ticket could not be saved.');
+    } finally {
+      setTicketDetailSaving(false);
     }
   };
 
@@ -187,28 +304,22 @@ export default function Tickets() {
 
       {/* Stats bar */}
       {totalTickets > 0 && (
-        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
-          {urgentCount > 0 && (
-            <span style={{
-              padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(239,68,68,0.1)',
-              color: '#ef4444', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(239,68,68,0.3)',
-              display: 'flex', alignItems: 'center', gap: '0.3rem',
-            }}>
-              <AlertTriangle size={12} /> {urgentCount} Urgent
-            </span>
-          )}
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(59,130,246,0.1)',
-            color: '#3b82f6', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(59,130,246,0.3)',
-          }}>
-            {openCount} Open
-          </span>
-          <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', background: 'var(--subtle-bg-4)',
-            color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)',
-          }}>
-            {totalTickets} total
-          </span>
+        <div className="tickets-summary-cards" role="group" aria-label="Ticket summary">
+          <div className="tickets-summary-card">
+            <span className="tickets-summary-card__label">TOTAL TICKETS</span>
+            <strong>{totalTickets}</strong>
+            <span className="tickets-summary-card__hint">All support tickets</span>
+          </div>
+          <div className="tickets-summary-card tickets-summary-card--open">
+            <span className="tickets-summary-card__label">OPEN TICKETS</span>
+            <strong>{openCount}</strong>
+            <span className="tickets-summary-card__hint">Awaiting resolution</span>
+          </div>
+          <div className="tickets-summary-card tickets-summary-card--urgent">
+            <span className="tickets-summary-card__label">URGENT TICKETS</span>
+            <strong>{urgentCount}</strong>
+            <span className="tickets-summary-card__hint">Needs immediate attention</span>
+          </div>
         </div>
       )}
 
@@ -283,10 +394,138 @@ export default function Tickets() {
         </div>
       )}
 
-      <div className="tickets-grid" style={{ display: 'block' }}>
+      {isTicketDetailOpen && (
+        <div className="tickets-modal-backdrop tickets-detail-backdrop" role="presentation" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setIsTicketDetailOpen(false);
+        }}>
+          <div className="card tickets-detail-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-detail-title">
+            <div className="tickets-modal-header">
+              <h2 id="ticket-detail-title">
+                <Ticket size={20} color="var(--accent-color)" /> Ticket details
+              </h2>
+              <button
+                type="button"
+                className="tickets-modal-close"
+                aria-label="Close ticket details"
+                onClick={() => { setIsConversationModalOpen(false); setIsTicketDetailOpen(false); }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {ticketDetailLoading ? (
+              <p className="tickets-detail-empty">Loading ticket details...</p>
+            ) : ticketDetail ? (
+              <div className="tickets-detail-content">
+                <div className="tickets-detail-summary">
+                  <h3>Ticket #{ticketDetail.id}</h3>
+                  <div className="tickets-detail-row"><span>Subject</span><strong>{ticketDetail.subject}</strong></div>
+                  <div className="tickets-detail-row"><span>Lead name</span><strong>{ticketDetail.requesterName || '—'}</strong></div>
+                  <div className="tickets-detail-row"><span>Lead email</span><strong>{ticketDetail.requesterEmail || '—'}</strong></div>
+                  <div className="tickets-detail-row"><span>Status</span><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}><Badge label={ticketDetail.status} config={STATUS_CONFIG} />{ticketDetail.sourceConversationId && String(ticketDetail.status || '').toLowerCase() === 'resolved' && ticketDetail.requesterEmail && <small style={{ color: '#059669', fontWeight: 600 }}>Resolution email sent</small>}</div></div>
+                  <div className="tickets-detail-row"><span>Priority</span><Badge label={ticketDetail.priority} config={PRIORITY_CONFIG} /></div>
+                  <div className="tickets-detail-row"><span>Assignee</span><strong>{ticketDetail.assignee?.name || ticketDetail.assignee?.email || 'Unassigned'}</strong></div>
+                  <div className="tickets-detail-row"><span>Created</span><strong>{formatDate(ticketDetail.createdAt)}</strong></div>
+                  <div className="tickets-detail-row"><span>Last updated</span><strong>{formatDate(ticketDetail.updatedAt)}</strong></div>
+                </div>
+
+                <section className="tickets-detail-section">
+                  <div className="tickets-detail-section-heading">
+                    <h3>Unresolved questions</h3>
+                    {ticketDetail.conversation?.messages?.length > 0 && (
+                      <button type="button" className="tickets-view-conversation-button" onClick={() => setIsConversationModalOpen(true)}>
+                        <MessageCircle size={14} /> View full conversation
+                      </button>
+                    )}
+                  </div>
+                  {ticketDetail.conversation?.unresolvedQuestions?.length ? (
+                    <ul className="tickets-unresolved-list">
+                      {ticketDetail.conversation.unresolvedQuestions.map((question, index) => (
+                        <li key={`${question}-${index}`}>{question}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="tickets-detail-empty">No unresolved questions recorded.</p>
+                  )}
+                </section>
+
+                {!isResolvedGenericTicketWithoutQuestions && <section className="tickets-detail-resolution">
+                  {ticketDetail.sourceConversationId && (
+                    <>
+                      <label htmlFor="ticket-resolution-notes">Answer for unresolved questions</label>
+                      <textarea
+                        id="ticket-resolution-notes"
+                        rows="4"
+                        value={detailResolutionNotes}
+                        onChange={e => setDetailResolutionNotes(e.target.value)}
+                        placeholder="Write the answer that should be sent to the lead when the ticket is resolved..."
+                      />
+                      {isResolutionTemplateGenerated && (
+                        <>
+                          <label htmlFor="ticket-resolution-email-template">Email template</label>
+                          <textarea
+                            id="ticket-resolution-email-template"
+                            rows="7"
+                            value={resolutionEmailTemplate}
+                            onChange={e => setResolutionEmailTemplate(e.target.value)}
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
+                  <div className="tickets-detail-action-row">
+                    <button type="button" className="tickets-detail-save-button" onClick={saveTicketAsPending} disabled={ticketDetailSaving}>
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={ticketDetail.sourceConversationId
+                        ? (isResolutionTemplateGenerated ? sendResolutionEmail : generateResolutionEmail)
+                        : sendResolutionEmail}
+                      disabled={ticketDetailSaving}
+                    >
+                      {ticketDetailSaving ? 'Processing...' : (ticketDetail.sourceConversationId && isResolutionTemplateGenerated ? 'Send email' : 'Resolve')}
+                    </button>
+                  </div>
+                </section>}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {isConversationModalOpen && ticketDetail?.conversation?.messages?.length > 0 && (
+        <div className="tickets-conversation-modal-backdrop" role="presentation" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setIsConversationModalOpen(false);
+        }}>
+          <section className="tickets-conversation-modal" role="dialog" aria-modal="true" aria-labelledby="full-conversation-title">
+            <header className="tickets-conversation-modal-header">
+              <div>
+                <strong id="full-conversation-title">Globus CRM assistant</strong>
+                <span>Full conversation for Ticket #{ticketDetail.id}</span>
+              </div>
+              <button type="button" aria-label="Close full conversation" onClick={() => setIsConversationModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="tickets-conversation-modal-messages">
+              {ticketDetail.conversation.messages.map((item, index) => (
+                <div className={`tickets-chat-message tickets-chat-message--${item.role === 'user' ? 'lead' : 'assistant'}`} key={`${item.at || 'message'}-${index}`}>
+                  <strong>{item.role === 'user' ? 'Lead' : 'Globus CRM assistant'}</strong>
+                  <p>{item.content}</p>
+                  {item.at && <time>{formatDate(item.at)}</time>}
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      <div className="tickets-grid" style={{ display: 'block', marginTop: '1.5rem' }}>
 
         {/* Tickets Table */}
-        <div className="card" style={{ padding: '2rem', overflow: 'hidden' }}>
+        <div className="card tickets-list-card" style={{ padding: '2rem', overflow: 'hidden' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Ticket size={20} color="var(--accent-color)" /> All Tickets
           </h3>
@@ -302,17 +541,22 @@ export default function Tickets() {
               {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
               <table className="stable-table tickets-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <colgroup>
-                  <col style={{ width: '6%' }} />
-                  <col style={{ width: '25%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '14%' }} />
+                  {/* Keep the fixed table widths within 100% so the card does
+                      not create an avoidable horizontal overflow. */}
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '20%' }} />
+                  <col style={{ width: '10%' }} />
                   <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
                 </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    {['ID', 'Subject', 'Status', 'Priority', 'Assignee', 'Created', 'Actions'].map(h => (
+                    {['ID', 'Subject', 'Lead Name', 'Lead Email', 'Status', 'Priority', 'Assignee', 'Created', 'Last Updated', 'Actions'].map(h => (
                       <th key={h} style={{
                         padding: '0.75rem 0.5rem', textAlign: 'left', color: 'var(--text-secondary)',
                         fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em',
@@ -322,15 +566,18 @@ export default function Tickets() {
                 </thead>
                 <tbody>
                   {tickets.map(ticket => (
-                    <tr key={ticket.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
+                    <tr key={ticket.id} onClick={() => openTicketDetails(ticket)} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s', cursor: 'pointer' }}
                       onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>#{ticket.id}</td>
                       <td title={ticket.subject} style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{ticket.subject}</td>
+                      <td style={{ padding: '0.75rem 0.5rem' }}>{ticket.requesterName || ''}</td>
+                      <td style={{ padding: '0.75rem 0.5rem' }}>{ticket.requesterEmail || ''}</td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <select
                           value={ticket.status}
+                          onClick={e => e.stopPropagation()}
                           onChange={e => updateStatus(ticket.id, e.target.value)}
                           style={{
                             background: STATUS_CONFIG[ticket.status]?.bg || 'transparent',
@@ -350,14 +597,32 @@ export default function Tickets() {
                         <Badge label={ticket.priority} config={PRIORITY_CONFIG} />
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
-                        {ticket.assignee ? (ticket.assignee.name || ticket.assignee.email) : '—'}
+                        <select
+                          aria-label={`Assignee for ticket ${ticket.id}`}
+                          value={ticket.assigneeId || ''}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => updateAssignee(ticket.id, e.target.value)}
+                          style={{
+                            maxWidth: '100%', background: 'transparent', color: 'inherit',
+                            border: '1px solid var(--border-color)', borderRadius: '6px',
+                            padding: '0.25rem 0.35rem', fontSize: '0.75rem', cursor: 'pointer',
+                          }}
+                        >
+                          <option value="">Unassigned</option>
+                          {users.map(user => (
+                            <option key={user.id} value={user.id}>{user.name || user.email}</option>
+                          ))}
+                        </select>
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                         {formatDate(ticket.createdAt)}
                       </td>
+                      <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                        {formatDate(ticket.updatedAt)}
+                      </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <button
-                          onClick={() => deleteTicket(ticket.id)}
+                          onClick={e => { e.stopPropagation(); deleteTicket(ticket.id); }}
                           title="Delete ticket"
                           style={{
                             background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)',

@@ -30,24 +30,35 @@ export default function LiveChat() {
   // Load list + stats
   const loadSessions = useCallback(async () => {
     try {
-      const [list, st] = await Promise.all([
+      const [list, st, genericList] = await Promise.all([
         fetchApi('/api/live-chat'),
         fetchApi('/api/live-chat/stats').catch(() => ({ open: 0, assigned: 0, closedToday: 0 })),
+        tenant?.vertical === 'generic'
+          ? fetchApi('/api/generic-landing-chat/agent/conversations').catch(() => [])
+          : Promise.resolve([]),
       ]);
-      setSessions(Array.isArray(list) ? list : []);
+      const liveSessions = Array.isArray(list) ? list : [];
+      const chatbotSessions = Array.isArray(genericList) ? genericList : [];
+      setSessions([...liveSessions, ...chatbotSessions].sort((a, b) => (
+        new Date(b.updatedAt || b.startedAt || 0).getTime() - new Date(a.updatedAt || a.startedAt || 0).getTime()
+      )));
       setStats(st || { open: 0, assigned: 0, closedToday: 0 });
     } catch (err) {
       console.error('[LiveChat] load error:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tenant?.vertical]);
 
   // Load thread
   const loadThread = useCallback(async (id) => {
     if (!id) return;
     try {
-      const data = await fetchApi(`/api/live-chat/${id}`);
+      const isGenericChatbot = String(id).startsWith('generic-');
+      const endpoint = isGenericChatbot
+        ? `/api/generic-landing-chat/agent/conversations/${String(id).slice('generic-'.length)}`
+        : `/api/live-chat/${id}`;
+      const data = await fetchApi(endpoint);
       setActiveSession(data.session);
       setMessages(Array.isArray(data.messages) ? data.messages : []);
     } catch (err) {
@@ -116,6 +127,14 @@ export default function LiveChat() {
     setRating(0);
   }, [activeId, loadThread]);
 
+  // Generic chatbot conversations do not use the live-chat socket, so refresh
+  // the selected thread periodically to show visitor messages and replies.
+  useEffect(() => {
+    if (!activeId || !String(activeId).startsWith('generic-')) return undefined;
+    const timer = window.setInterval(() => loadThread(activeId), 5000);
+    return () => window.clearInterval(timer);
+  }, [activeId, loadThread]);
+
   // Auto-scroll
   useEffect(() => {
     if (messageBoxRef.current) {
@@ -129,10 +148,15 @@ export default function LiveChat() {
     const body = draft.trim();
     setDraft('');
     try {
-      await fetchApi(`/api/live-chat/${activeId}/messages`, {
+      const isGenericChatbot = activeSession?.source === 'generic-chatbot';
+      const endpoint = isGenericChatbot
+        ? `/api/generic-landing-chat/agent/conversations/${activeSession.sourceId}/messages`
+        : `/api/live-chat/${activeId}/messages`;
+      await fetchApi(endpoint, {
         method: 'POST',
         body: JSON.stringify({ body }),
       });
+      if (isGenericChatbot) loadThread(activeId);
     } catch (err) {
       console.error('[LiveChat] send error:', err);
       notify.error('Failed to send message');
@@ -140,7 +164,7 @@ export default function LiveChat() {
   };
 
   const handleAssign = async () => {
-    if (!activeId) return;
+    if (!activeId || activeSession?.source === 'generic-chatbot') return;
     try {
       await fetchApi(`/api/live-chat/${activeId}/assign`, {
         method: 'POST',
@@ -155,14 +179,18 @@ export default function LiveChat() {
 
   const handleClose = async () => {
     if (!activeId) return;
-    if (!showRating) {
+    const isGenericChatbot = activeSession?.source === 'generic-chatbot';
+    if (!isGenericChatbot && !showRating) {
       setShowRating(true);
       return;
     }
     try {
-      await fetchApi(`/api/live-chat/${activeId}/close`, {
+      const endpoint = isGenericChatbot
+        ? `/api/generic-landing-chat/agent/conversations/${activeSession.sourceId}/close`
+        : `/api/live-chat/${activeId}/close`;
+      await fetchApi(endpoint, {
         method: 'POST',
-        body: JSON.stringify({ rating: rating || undefined }),
+        body: JSON.stringify(isGenericChatbot ? {} : { rating: rating || undefined }),
       });
       setActiveId(null);
       setShowRating(false);
@@ -195,7 +223,17 @@ export default function LiveChat() {
   };
 
   return (
-    <div style={{ padding: '1.5rem', color: 'var(--text-primary)', height: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column' }}>
+    <div style={{
+      padding: tenant?.vertical === 'generic' ? '2rem' : '1.5rem',
+      color: 'var(--text-primary)',
+      height: tenant?.vertical === 'generic' ? '100%' : 'calc(100vh - 80px)',
+      maxHeight: tenant?.vertical === 'generic' ? '100%' : undefined,
+      minHeight: tenant?.vertical === 'generic' ? 0 : undefined,
+      overflow: tenant?.vertical === 'generic' ? 'hidden' : undefined,
+      boxSizing: tenant?.vertical === 'generic' ? 'border-box' : undefined,
+      display: 'flex',
+      flexDirection: 'column',
+    }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -245,7 +283,7 @@ export default function LiveChat() {
           display: 'flex', flexDirection: 'column',
         }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', fontWeight: 600 }}>
-            {sessions.length} open session{sessions.length === 1 ? '' : 's'}
+            {sessions.length} conversation{sessions.length === 1 ? '' : 's'}
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loading && <div style={{ padding: 16, color: 'var(--text-secondary)' }}>Loading...</div>}
@@ -274,6 +312,11 @@ export default function LiveChat() {
                     </div>
                     {statusBadge(s.status)}
                   </div>
+                  {s.source === 'generic-chatbot' && (
+                    <div style={{ fontSize: 10, color: '#7c3aed', fontWeight: 600, marginBottom: 3 }}>
+                      CRM chatbot
+                    </div>
+                  )}
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {s.lastMessage?.body || 'No messages yet'}
                   </div>
@@ -314,12 +357,12 @@ export default function LiveChat() {
                     {activeSession.visitorName || 'Anonymous Visitor'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    {activeSession.visitorEmail || `Visitor #${activeSession.visitorId}`}
+                    {activeSession.source === 'generic-chatbot' ? 'CRM chatbot' : (activeSession.visitorEmail || `Visitor #${activeSession.visitorId}`)}
                     &nbsp;&middot;&nbsp; Started {formatTime(activeSession.startedAt)}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  {activeSession.status !== 'ASSIGNED' && activeSession.status !== 'CLOSED' && (
+                  {activeSession.source !== 'generic-chatbot' && activeSession.status !== 'ASSIGNED' && activeSession.status !== 'CLOSED' && (
                     <button
                       onClick={handleAssign}
                       style={{
@@ -387,7 +430,11 @@ export default function LiveChat() {
                       </div>
                     );
                   }
-                  const isAgent = m.sender === 'agent';
+                  const isGenericChatbot = activeSession?.source === 'generic-chatbot';
+                  // Generic CRM keeps AI replies and human support replies
+                  // distinct. AI replies retain the chatbot bubble; human
+                  // support replies render as staff messages on the left.
+                  const isAgent = isGenericChatbot ? m.sender === 'assistant' : m.sender === 'agent';
                   return (
                     <div
                       key={m.id}

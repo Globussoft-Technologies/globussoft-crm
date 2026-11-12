@@ -2754,18 +2754,6 @@ function renderGenericNav({
           wellness sidebar; keep both branches in sync. */}
       {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
       {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
-      {renderGroup("Sales", <>
-        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
-        <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
-        <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
-        <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
-        <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
-        <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
-      </>)}
-
       {renderGroup("Leads", <>
         <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
@@ -2808,6 +2796,31 @@ function renderGenericNav({
         <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
         <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
         <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
+      </>)}
+
+      {renderGroup("Sales", <>
+        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
+        <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
+        <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
+        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
+        <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
+        <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
+      </>)}
+
+      {renderGroup("Work Management", <>
+        <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
+        <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+      </>)}
+
+      {renderGroup("Customer Support", <>
+        <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} requiredPermission={{ module: "tickets", action: "read" }} />
+        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
+        <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
       </>)}
 
       {renderGroup("Documents & Delivery", <>

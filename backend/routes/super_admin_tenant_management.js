@@ -1,6 +1,20 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const multer = require("multer");
 const router = express.Router();
+
+const GENERIC_CHAT_KNOWLEDGE_KEY = "generic.landing.ai.knowledge";
+const GENERIC_CHAT_SETTINGS_KEY = "generic.landing.ai.settings";
+const DEFAULT_GENERIC_CHAT_SETTINGS = {
+  generalResponsesEnabled: true,
+  businessFallback: "I'm sorry, but I couldn't find relevant information in our available knowledge base. Would you like me to connect you with our support team?",
+  unrelatedFallback: "I can help with questions about our CRM products, services, pricing, policies, and support. What would you like to know?",
+  aiUnavailableFallback: "I couldn't verify that answer right now. Would you like me to connect you with our support team?",
+};
+const genericChatKnowledgeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+});
 
 // requireSuperAdmin is applied at the app.use() mount point in server.js
 // (same pattern as the sibling /api/super-admin/* routers), not here.
@@ -237,6 +251,70 @@ router.put("/landing-form/emails", async (req, res) => {
     await landingFormConfig.writePublicConfig(prisma, { tenantId, activeWebFormId, emails });
     res.json({ emails });
   } catch (err) { res.status(500).json({ error: err.message || "Failed to update landing form permissions", code: "LANDING_FORM_EMAILS_UPDATE_FAILED" }); }
+});
+
+// Generic CRM landing assistant knowledge. This is deliberately global and
+// platform-managed so the public generic landing page can use the same
+// approved material without exposing any tenant API key in the browser.
+router.get("/generic-chat-knowledge", async (_req, res) => {
+  try {
+    const row = await prisma.systemSetting.findUnique({ where: { key: GENERIC_CHAT_KNOWLEDGE_KEY } });
+    res.json({ content: row?.value || "", updatedAt: row?.updatedAt || null });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load generic chatbot knowledge" });
+  }
+});
+
+router.post("/generic-chat-knowledge", genericChatKnowledgeUpload.single("file"), async (req, res) => {
+  try {
+    const typedContent = String(req.body?.content || "").trim();
+    const file = req.file;
+    const extension = file ? String(file.originalname || "").toLowerCase().split(".").pop() : "";
+    if (file && !["txt", "md", "csv", "json"].includes(extension)) {
+      return res.status(400).json({ error: "Upload a TXT, MD, CSV, or JSON file", code: "UNSUPPORTED_KNOWLEDGE_FILE" });
+    }
+    const content = file ? file.buffer.toString("utf8").trim() : typedContent;
+    if (!content) return res.status(400).json({ error: "Knowledge content or a file is required", code: "KNOWLEDGE_REQUIRED" });
+    if (content.length > 120000) return res.status(400).json({ error: "Knowledge is too large (maximum 120,000 characters)", code: "KNOWLEDGE_TOO_LARGE" });
+    const row = await prisma.systemSetting.upsert({
+      where: { key: GENERIC_CHAT_KNOWLEDGE_KEY },
+      create: { key: GENERIC_CHAT_KNOWLEDGE_KEY, value: content, category: "generic_chatbot", updatedBy: req.superAdmin?.username || null },
+      update: { value: content, category: "generic_chatbot", updatedBy: req.superAdmin?.username || null },
+    });
+    res.json({ saved: true, characters: content.length, updatedAt: row.updatedAt });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save generic chatbot knowledge", code: "KNOWLEDGE_SAVE_FAILED" });
+  }
+});
+
+router.get("/generic-chat-settings", async (_req, res) => {
+  try {
+    const row = await prisma.systemSetting.findUnique({ where: { key: GENERIC_CHAT_SETTINGS_KEY } });
+    let parsed = {};
+    try { parsed = JSON.parse(String(row?.value || "{}")); } catch { parsed = {}; }
+    res.json({ settings: { ...DEFAULT_GENERIC_CHAT_SETTINGS, ...(parsed || {}) }, updatedAt: row?.updatedAt || null });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load generic chatbot settings" });
+  }
+});
+
+router.post("/generic-chat-settings", async (req, res) => {
+  try {
+    const settings = {
+      generalResponsesEnabled: req.body?.generalResponsesEnabled !== false,
+      businessFallback: String(req.body?.businessFallback || DEFAULT_GENERIC_CHAT_SETTINGS.businessFallback).trim().slice(0, 1000),
+      unrelatedFallback: String(req.body?.unrelatedFallback || DEFAULT_GENERIC_CHAT_SETTINGS.unrelatedFallback).trim().slice(0, 1000),
+      aiUnavailableFallback: String(req.body?.aiUnavailableFallback || DEFAULT_GENERIC_CHAT_SETTINGS.aiUnavailableFallback).trim().slice(0, 1000),
+    };
+    const row = await prisma.systemSetting.upsert({
+      where: { key: GENERIC_CHAT_SETTINGS_KEY },
+      create: { key: GENERIC_CHAT_SETTINGS_KEY, value: JSON.stringify(settings), category: "generic_chatbot", updatedBy: req.superAdmin?.username || null },
+      update: { value: JSON.stringify(settings), category: "generic_chatbot", updatedBy: req.superAdmin?.username || null },
+    });
+    res.json({ saved: true, settings, updatedAt: row.updatedAt });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save generic chatbot settings", code: "CHAT_SETTINGS_SAVE_FAILED" });
+  }
 });
 
 // ── Custom role limits ───────────────────────────────────────────────────

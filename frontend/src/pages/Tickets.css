@@ -40,14 +40,14 @@
 
 .tickets-create-modal {
   box-sizing: border-box;
-  width: min(100%, 540px);
+  width: min(100%, 720px);
   height: auto !important;
   min-height: 0 !important;
   max-height: calc(100dvh - 2rem) !important;
   overflow-y: auto;
   overscroll-behavior: contain;
   margin: 1rem auto;
-  padding: 1.25rem !important;
+  padding: clamp(1.25rem, 2.5vw, 1.75rem) !important;
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
 }
 
@@ -55,6 +55,328 @@
   max-height: none;
   overflow: hidden;
   padding-right: 0;
+}
+
+body[data-vertical="generic"] .tickets-detail-modal {
+  box-sizing: border-box;
+  width: min(100%, 920px);
+  display: flex !important;
+  flex-direction: column;
+  flex: 0 0 auto !important;
+  height: min(760px, calc(100dvh - 2rem)) !important;
+  min-height: 0 !important;
+  max-height: calc(100dvh - 2rem) !important;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  margin: 1rem auto;
+  align-self: flex-start;
+  background: var(--modal-bg) !important;
+  padding: clamp(1.25rem, 2.5vw, 2rem) !important;
+}
+
+body[data-vertical="generic"] .tickets-detail-modal > .tickets-modal-header {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .tickets-detail-backdrop {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.tickets-detail-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.35rem;
+  gap: 1rem;
+}
+
+.tickets-detail-summary {
+  display: flex;
+  flex-direction: column;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--subtle-bg-2);
+}
+
+.tickets-detail-summary h3 {
+  margin: 0 0 0.45rem;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.tickets-detail-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.tickets-detail-row > * {
+  min-width: 0;
+}
+
+.tickets-detail-row > strong {
+  text-align: right;
+}
+
+.tickets-detail-row > span:last-child {
+  justify-self: end;
+}
+
+.tickets-detail-summary span,
+.tickets-detail-resolution label {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.tickets-detail-summary strong {
+  overflow-wrap: anywhere;
+}
+
+.tickets-detail-section,
+.tickets-detail-resolution {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.tickets-detail-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.tickets-detail-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.tickets-unresolved-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.75rem 1rem 0.75rem 1.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--subtle-bg-2);
+}
+
+.tickets-view-conversation-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--subtle-bg-2);
+  color: var(--accent-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tickets-view-conversation-button:hover {
+  background: var(--subtle-bg-3);
+}
+
+.tickets-detail-section ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.tickets-detail-resolution {
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--subtle-bg-2);
+}
+
+.tickets-detail-empty,
+.tickets-detail-description {
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.tickets-conversation-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.tickets-conversation-message {
+  max-width: 85%;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  background: var(--subtle-bg-2);
+}
+
+.tickets-conversation-message--user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+
+.tickets-conversation-message p {
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tickets-conversation-message time {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+body[data-vertical="generic"] .tickets-conversation-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 1.5rem;
+  pointer-events: none;
+}
+
+body[data-vertical="generic"] .tickets-conversation-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 2rem));
+  max-height: min(680px, calc(100dvh - 2rem));
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--modal-bg);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+  pointer-events: auto;
+}
+
+.tickets-conversation-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem;
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.tickets-conversation-modal-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.tickets-conversation-modal-header span {
+  font-size: 0.72rem;
+  opacity: 0.85;
+}
+
+.tickets-conversation-modal-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  cursor: pointer;
+}
+
+.tickets-conversation-modal-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.tickets-chat-message {
+  max-width: 86%;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--subtle-bg-2);
+}
+
+.tickets-chat-message--lead {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+}
+
+.tickets-chat-message p {
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tickets-chat-message time {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.tickets-detail-resolution select,
+.tickets-detail-resolution textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+}
+
+.tickets-detail-resolution .btn-primary {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+.tickets-detail-action-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  gap: 0.65rem;
+  margin-top: 0.25rem;
+}
+
+.tickets-detail-save-button {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--subtle-bg-2);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tickets-detail-save-button:hover:not(:disabled) {
+  background: var(--subtle-bg-3);
+}
+
+.tickets-detail-save-button:disabled,
+.tickets-detail-action-row .btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .tickets-modal-header {
@@ -102,6 +424,17 @@
   width: 100%;
   max-width: none;
   box-sizing: border-box;
+}
+
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tickets-page) {
+  overflow-y: hidden !important;
+}
+
+body[data-vertical="generic"] .tickets-list-card {
+  display: flex;
+  flex-direction: column;
+  height: clamp(500px, calc(100dvh - 390px), 720px);
+  min-height: 0;
 }
 
 /* The ticket list is the page's primary content surface. Keep both the
@@ -153,10 +486,58 @@ body[data-vertical="generic"] main.generic-page-content .tickets-page .tickets-t
 /* Keep the generic CRM ticket panel stable when the selected page size changes.
    The table heading stays in place while only the ticket rows scroll. */
 body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
-  height: 320px;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  scrollbar-width: auto;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+/* Match the Generic invoice workspace: the page frame stays fixed while the
+   table owns the available vertical scrolling area. */
+body[data-vertical="generic"] .tickets-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .tickets-page > .tickets-page-header,
+body[data-vertical="generic"] .tickets-page > .tickets-stats,
+body[data-vertical="generic"] .tickets-page > .tickets-summary-cards {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .tickets-page > .tickets-grid {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+body[data-vertical="generic"] .tickets-list-card {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+body[data-vertical="generic"] .tickets-list-card > div:last-child {
+  flex: 0 0 auto;
+}
+
+@media (min-width: 769px) {
+  body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tickets-page) {
+    overflow-y: hidden !important;
+  }
 }
 
 body[data-vertical="generic"] .tickets-page .tickets-table thead th {
@@ -298,5 +679,101 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
     min-width: 640px;
     display: table;
     overflow: visible;
+  }
+
+  body[data-vertical="generic"] .tickets-list-card {
+    height: calc(100dvh - 260px);
+    min-height: 420px;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    flex: 1 1 auto;
+    height: auto;
+  }
+
+  body[data-vertical="generic"] .tickets-detail-modal {
+    height: min(760px, calc(100dvh - 1rem)) !important;
+    max-height: calc(100dvh - 2rem);
+    overflow: hidden;
+    margin: 0.5rem auto;
+  }
+
+  body[data-vertical="generic"] .tickets-detail-content {
+    max-height: calc(100dvh - 6rem);
+  }
+
+  .tickets-detail-row {
+    grid-template-columns: minmax(90px, 1fr) minmax(0, 1.3fr);
+  }
+
+  .tickets-conversation-message {
+    max-width: 100%;
+  }
+
+  body[data-vertical="generic"] .tickets-conversation-modal-backdrop {
+    padding: 0.5rem;
+  }
+
+  body[data-vertical="generic"] .tickets-conversation-modal {
+    width: 100%;
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .tickets-detail-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+.tickets-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 1.75rem;
+}
+
+.tickets-summary-card {
+  min-width: 0;
+  min-height: 112px;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-color, #fff);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.tickets-summary-card__label {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.tickets-summary-card strong {
+  color: var(--text-primary);
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.tickets-summary-card__hint {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.tickets-summary-card--open {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.07), var(--surface-color, #fff));
+}
+
+.tickets-summary-card--urgent {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.07), var(--surface-color, #fff));
+}
+
+@media (max-width: 720px) {
+  .tickets-summary-cards {
+    grid-template-columns: 1fr;
   }
 }

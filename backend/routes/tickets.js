@@ -2,6 +2,8 @@ const express = require("express");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { sendEmail } = require("../lib/emailSender");
+const { getQuestionGroupKey } = require("../lib/genericChatTicketGrouping");
 
 const VALID_STATUSES = ["Open", "Pending", "Resolved", "Closed"];
 const VALID_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
@@ -11,6 +13,15 @@ const VALID_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
 // Match is case-insensitive.
 const RESPONSIVE_STATUSES = ["in progress", "pending", "replied"];
 const TERMINAL_STATUSES = ["resolved", "closed", "cancelled"];
+const parseJsonValue = (value, fallback) => {
+  try { return JSON.parse(String(value || "")); } catch { return fallback; }
+};
+const escapeHtml = (value) => String(value || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
 
 // GET / — list all tickets in current tenant
 //
@@ -40,8 +51,11 @@ router.get("/", async (req, res) => {
         status: true,
         priority: true,
         assigneeId: true,
+        requesterName: true,
+        requesterEmail: true,
         tenantId: true,
         createdAt: true,
+        updatedAt: true,
       };
     } else {
       findManyArgs.include = {
@@ -276,7 +290,46 @@ router.get("/:id", async (req, res) => {
     if (!ticket) {
       return res.status(404).json({ error: "Ticket not found." });
     }
-    res.json(ticket);
+    let conversation = null;
+    if (ticket.sourceConversationId) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { vertical: true },
+      });
+      if (tenant?.vertical === "generic") {
+        const conversationId = parseInt(ticket.sourceConversationId, 10);
+        if (Number.isFinite(conversationId)) {
+          const savedConversation = await prisma.genericChatConversation.findFirst({
+            where: { id: conversationId, tenantId: req.user.tenantId },
+            select: {
+              id: true,
+              visitorId: true,
+              messages: true,
+              unresolvedQuestion: true,
+              unresolvedQuestions: true,
+              requesterName: true,
+              requesterEmail: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          });
+          if (savedConversation) {
+            const allUnresolvedQuestions = Array.isArray(parseJsonValue(savedConversation.unresolvedQuestions, null))
+              ? parseJsonValue(savedConversation.unresolvedQuestions, [])
+              : (savedConversation.unresolvedQuestion ? [savedConversation.unresolvedQuestion] : []);
+            conversation = {
+              ...savedConversation,
+              messages: parseJsonValue(savedConversation.messages, []),
+              unresolvedQuestions: ticket.sourceQuestionKey
+                ? allUnresolvedQuestions.filter((question) => getQuestionGroupKey(question) === ticket.sourceQuestionKey)
+                : allUnresolvedQuestions,
+            };
+          }
+        }
+      }
+    }
+    res.json({ ...ticket, conversation });
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch ticket." });
   }
@@ -343,7 +396,7 @@ router.put("/:id", async (req, res) => {
     const existing = await prisma.ticket.findFirst({ where: { id: parseInt(req.params.id, 10), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Ticket not found." });
 
-    const { status, priority, assigneeId } = req.body;
+    const { status, priority, assigneeId, resolutionNotes, resolutionEmailTemplate } = req.body;
     const updateData = {};
 
     if (status) {
@@ -361,6 +414,7 @@ router.put("/:id", async (req, res) => {
     if (assigneeId !== undefined) {
       updateData.assigneeId = assigneeId ? parseInt(assigneeId, 10) : null;
     }
+    if (resolutionNotes !== undefined) updateData.resolutionNotes = String(resolutionNotes || "").trim() || null;
 
     // Stamp resolvedAt on first transition to Resolved (mirrors support.js).
     const incomingStatus = typeof status === "string" ? status.trim().toLowerCase() : null;
@@ -372,6 +426,7 @@ router.put("/:id", async (req, res) => {
 
     // Stamp firstResponseAt only on Open → (In Progress | Pending | Replied).
     // Skip terminal transitions; they are not a "response". (Mirrors support.js.)
+    let resolvedChatAnswer = null;
     if (
       !existing.firstResponseAt &&
       existingStatus === "open" &&
@@ -389,6 +444,85 @@ router.put("/:id", async (req, res) => {
         assignee: { select: { id: true, name: true, email: true } },
       },
     });
+
+    // Generic landing-assistant tickets send the staff resolution back to the
+    // visitor. Existing manually-created tickets and travel/wellness tickets
+    // keep their current behaviour because they have no source conversation.
+    if (
+      incomingStatus === "resolved" &&
+      existingStatus !== "resolved" &&
+      existing.sourceConversationId
+    ) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true, name: true } });
+      if (tenant?.vertical === "generic") {
+        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!existing.requesterEmail || !emailPattern.test(existing.requesterEmail)) {
+          await prisma.ticket.update({ where: { id: existing.id }, data: { status: "Pending" } });
+          return res.status(422).json({
+            error: "The lead email address is invalid, so the resolution email was not sent.",
+            code: "INVALID_RESOLUTION_EMAIL",
+          });
+        }
+        const answer = updateData.resolutionNotes || ticket.resolutionNotes || "Your support question has been resolved by our team.";
+        resolvedChatAnswer = answer;
+        const finalEmailText = String(resolutionEmailTemplate || [
+          `Hi ${existing.requesterName || "there"},`,
+          "",
+          answer,
+          "",
+          "Regards,",
+          tenant.name || "Globus CRM Support",
+        ].join("\n")).trim();
+        const emailResult = await sendEmail({
+          tenantId: req.user.tenantId,
+          to: existing.requesterEmail,
+          subject: `Answer to your Globus CRM question: ${ticket.subject}`,
+          text: finalEmailText,
+          html: `<p>${escapeHtml(finalEmailText).replace(/\n/g, "<br>")}</p>`,
+        });
+        if (!emailResult.sent) {
+          const reasonMessages = {
+            no_api_key: "Email delivery is not configured for this organization.",
+            tenant_sendgrid_config_invalid: "The organization email configuration is invalid.",
+            missing_to_or_subject: "The lead email or email subject is missing.",
+          };
+          await prisma.ticket.update({ where: { id: existing.id }, data: { status: "Pending" } });
+          return res.status(502).json({
+            error: `The ticket was not resolved because the answer email could not be sent. ${reasonMessages[emailResult.reason] || "Please verify the email configuration and try again."}`,
+            code: "RESOLUTION_EMAIL_NOT_SENT",
+          });
+        }
+      }
+    }
+    if (resolvedChatAnswer && existing.sourceConversationId) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+      if (tenant?.vertical === "generic") {
+        const conversationId = parseInt(existing.sourceConversationId, 10);
+        if (Number.isFinite(conversationId)) {
+          const conversation = await prisma.genericChatConversation.findFirst({
+            where: { id: conversationId, tenantId: req.user.tenantId },
+            select: { id: true, messages: true, unresolvedQuestions: true, unresolvedQuestion: true },
+          });
+          if (conversation) {
+            const unresolved = Array.isArray(parseJsonValue(conversation.unresolvedQuestions, null))
+              ? parseJsonValue(conversation.unresolvedQuestions, [])
+              : (conversation.unresolvedQuestion ? [conversation.unresolvedQuestion] : []);
+            const groupKey = existing.sourceQuestionKey;
+            const remaining = unresolved.filter((question) => !groupKey || getQuestionGroupKey(question) !== groupKey);
+            const messages = parseJsonValue(conversation.messages, []);
+            messages.push({ role: "agent", content: resolvedChatAnswer, ticketId: existing.id, at: new Date().toISOString() });
+            await prisma.genericChatConversation.update({
+              where: { id: conversation.id },
+              data: {
+                messages: JSON.stringify(messages),
+                unresolvedQuestion: remaining[0] || null,
+                unresolvedQuestions: JSON.stringify(remaining),
+              },
+            });
+          }
+        }
+      }
+    }
     res.json(ticket);
   } catch (err) {
     if (err.code === "P2025") {

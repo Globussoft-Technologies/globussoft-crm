@@ -8378,6 +8378,17 @@ body[data-vertical="generic"]
   min-width: 0;
 }
 
+body[data-vertical="generic"] .tasks-filterbar__search.is-active {
+  border-color: var(--accent-color, #4f46e5);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
+}
+
+body[data-vertical="generic"] .tasks-filterbar__field--active {
+  border-color: var(--accent-color, #4f46e5);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
+  background: var(--input-bg, #fff);
+}
+
 .tasks-filterbar__count {
   font-size: 0.78rem;
   color: var(--text-secondary);
@@ -8402,6 +8413,150 @@ body[data-vertical="generic"]
 .tasks-filterbar__clear:hover {
   color: var(--text-primary);
   background: var(--subtle-bg);
+}
+
+body[data-vertical="generic"] .tasks-filterbar__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
+  color: var(--text-primary);
+  background: var(--subtle-bg);
+}
+
+.tasks-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 1.75rem;
+}
+
+.tasks-summary-card {
+  min-width: 0;
+  min-height: 112px;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-color, #fff);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.tasks-summary-card__label {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.tasks-summary-card strong {
+  color: var(--text-primary);
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.tasks-summary-card__hint {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.tasks-summary-card--critical {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.07), var(--surface-color, #fff));
+}
+
+.tasks-summary-card--all {
+  border-color: rgba(99, 102, 241, 0.35);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), var(--surface-color, #fff));
+}
+
+.tasks-summary-card--all strong {
+  color: #4f46e5;
+}
+
+.tasks-summary-card--progress {
+  border-color: rgba(14, 165, 233, 0.35);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.07), var(--surface-color, #fff));
+}
+
+.tasks-summary-card--progress strong {
+  color: #0284c7;
+}
+
+.tasks-summary-card--completed {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.07), var(--surface-color, #fff));
+}
+
+.tasks-summary-card--completed strong {
+  color: #059669;
+}
+
+.tasks-summary-card--critical strong {
+  color: #dc2626;
+}
+
+.tasks-summary-card--high {
+  border-color: rgba(249, 115, 22, 0.35);
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.07), var(--surface-color, #fff));
+}
+
+.tasks-summary-card--high strong {
+  color: #ea580c;
+}
+
+.tasks-summary-card--overdue {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.06), var(--surface-color, #fff));
+}
+
+.tasks-summary-card--overdue strong {
+  color: #ef4444;
+}
+
+/* Generic CRM owns the only vertical scroll area on the task page. Keep the
+   page frame fixed to the app viewport and let the active queue consume the
+   remaining height instead of creating a page-level scrollbar. */
+body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tasks-page) {
+  overflow-y: hidden !important;
+}
+
+body[data-vertical="generic"] .tasks-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] .tasks-page > header,
+body[data-vertical="generic"] .tasks-summary-cards,
+body[data-vertical="generic"] .tasks-filterbar {
+  flex: 0 0 auto;
+}
+
+body[data-vertical="generic"] .tasks-content-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+body[data-vertical="generic"] .tasks-content-stack .tasks-active-queue-card {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
 }
 
 /* Generic CRM only: keep the Active Priority Queue at a stable height and
@@ -8617,6 +8772,10 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
 }
 
 @media (max-width: 700px) {
+  .tasks-summary-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .tasks-filterbar__search {
     max-width: none;
     flex: 1 1 100%;
@@ -8624,6 +8783,12 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
 
   .tasks-filterbar .input-field {
     flex: 1 1 8rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .tasks-summary-cards {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -158,6 +158,7 @@ const SuperAdminPageVisibility = lazy(
   () => import("./pages/superadmin/SuperAdminPageVisibility"),
 );
 const SuperAdminLandingForm = lazy(() => import("./pages/superadmin/SuperAdminLandingForm"));
+const SuperAdminGenericChatKnowledge = lazy(() => import("./pages/superadmin/SuperAdminGenericChatKnowledge"));
 const SuperAdminRevenue = lazy(
   () => import("./pages/superadmin/SuperAdminRevenue"),
 );
@@ -1683,6 +1684,7 @@ export default function App() {
                     <Route path="role-management" element={<SuperAdminRoleManagement />} />
                     <Route path="page-visibility" element={<SuperAdminPageVisibility />} />
                     <Route path="landing-form" element={<SuperAdminLandingForm />} />
+                    <Route path="generic-chat-knowledge" element={<SuperAdminGenericChatKnowledge />} />
                     <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>
                   {/* Travel customer portal — end-user (Contact) login + dashboard

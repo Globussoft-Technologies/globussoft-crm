@@ -485,12 +485,12 @@ describe('Sidebar — load-bearing render surface', () => {
         (button) => button.textContent.trim(),
       );
       expect(groups).toEqual([
-        'Sales',
         'Leads',
+        'Marketing & Automation',
         'Communication',
+        'Sales',
         'Work Management',
         'Customer Support',
-        'Marketing & Automation',
         'Documents & Delivery',
         'Finance',
         'Analytics & Reports',

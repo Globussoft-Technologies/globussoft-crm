@@ -155,6 +155,41 @@ function validateTenantSettingValue(key, rawValue) {
       }
     }
   }
+  if (key === KEYS.GENERIC_TASK_ASSIGNMENT_RULES) {
+    let rules;
+    try {
+      rules = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_TASK_ASSIGNMENT_RULES", error: "Task assignment rules must be valid JSON." };
+    }
+    if (!Array.isArray(rules) || rules.length > 50) {
+      return { ok: false, code: "INVALID_TASK_ASSIGNMENT_RULES", error: "Task assignment rules must contain at most 50 rules." };
+    }
+    const ids = new Set();
+    let defaultRuleCount = 0;
+    for (const rule of rules) {
+      const id = String(rule?.id || "").trim();
+      const name = String(rule?.name || "").trim();
+      const mappings = Array.isArray(rule?.mappings)
+        ? rule.mappings
+        : (rule?.assignerRole && rule?.assigneeRole ? [{ assignerRole: rule.assignerRole, assigneeRole: rule.assigneeRole }] : []);
+      if (!id || id.length > 80 || ids.has(id) || !name || name.length > 100 || mappings.length < 1 || mappings.length > 50 || typeof rule?.isActive !== "boolean" || (rule?.isDefault !== undefined && typeof rule.isDefault !== "boolean")) {
+        return { ok: false, code: "INVALID_TASK_ASSIGNMENT_RULES", error: "Each rule needs a unique name, active state, and at least one role mapping." };
+      }
+      for (const mapping of mappings) {
+        const assignerRole = String(mapping?.assignerRole || "").trim();
+        const assigneeRole = String(mapping?.assigneeRole || "").trim();
+        if (!assignerRole || assignerRole === "Any" || assignerRole.length > 80 || !assigneeRole || assigneeRole === "Any" || assigneeRole.length > 80) {
+          return { ok: false, code: "INVALID_TASK_ASSIGNMENT_RULES", error: "Each role mapping needs one assigner role and one target role." };
+        }
+      }
+      ids.add(id);
+      if (rule.isDefault === true) defaultRuleCount += 1;
+    }
+    if (defaultRuleCount > 1) {
+      return { ok: false, code: "INVALID_TASK_ASSIGNMENT_RULES", error: "Only one task assignment rule can be default." };
+    }
+  }
   if (key === KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES) {
     const n = Number(rawValue);
     if (!Number.isInteger(n) || n < 1 || n > 10) {
@@ -391,7 +426,7 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       });
     }
 
-    if ([KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES, KEYS.GENERIC_FIELD_CONFIG].includes(key)) {
+    if ([KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES, KEYS.GENERIC_FIELD_CONFIG, KEYS.GENERIC_TASK_ASSIGNMENT_RULES].includes(key)) {
       const tenant = await prisma.tenant.findUnique({
         where: { id: tenantId },
         select: { vertical: true },

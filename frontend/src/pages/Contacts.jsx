@@ -3,7 +3,7 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
-import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, ArrowLeft } from 'lucide-react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, UserPlus } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
@@ -1508,15 +1508,15 @@ const Contacts = () => {
   );
 
   return (
-    <div className="contacts-page" style={{ padding: 'clamp(1rem, 3vw, 2rem)' }}>
+    <div className="contacts-page" style={{ padding: isGeneric ? '2rem' : 'clamp(1rem, 3vw, 2rem)' }}>
       {/* Renders only when this page was opened as a drill-down from a report. */}
       <ReturnToBanner />
       {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
           on narrow viewports instead of stacking awkwardly over the description. */}
-      <header className="contacts-page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: isGeneric ? 'flex-start' : 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <div style={{ minWidth: 0, flex: '1 1 240px', display: isGeneric ? 'flex' : undefined, flexDirection: isGeneric ? 'column' : undefined, alignItems: isGeneric ? 'flex-start' : undefined, gap: isGeneric ? '0.75rem' : undefined }}>
-          {isGeneric && <button type="button" onClick={() => window.history.back()} aria-label="Go back" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--surface-color)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}><ArrowLeft size={16} /> Back</button>}
-          <div>
+      <header className="contacts-page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: isGeneric ? 'flex-start' : 'center', marginBottom: isGeneric ? '1rem' : '2rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div style={{ minWidth: 0, flex: '1 1 240px', display: 'flex', alignItems: isGeneric ? 'flex-start' : 'center', gap: '0.75rem' }}>
+          {isGeneric && <UserPlus size={24} color="var(--text-primary)" />}
+          <div style={{ minWidth: 0 }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Contacts</h2>
           {/* #143: surface the total count so the user knows what they're looking at,
               matching the parity that /wellness/patients already has. */}
@@ -1726,7 +1726,7 @@ const Contacts = () => {
         </div>
       </header>
 
-      <div className="card contacts-page-card" style={{ overflow: 'hidden' }}>
+      <div className="card contacts-page-card" style={{ overflow: isGeneric ? 'visible' : 'hidden' }}>
         <div className="contacts-filters-bar" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div className="search-with-leading-icon" style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
             <Search size={18} aria-hidden style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
@@ -1868,8 +1868,19 @@ const Contacts = () => {
                   />
                 ))}
               </colgroup>
-              <thead>
-                <tr style={{ backgroundColor: 'var(--table-header-bg)' }}>
+              <thead
+                style={isGeneric ? {
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 30,
+                  background: 'var(--modal-bg)',
+                  isolation: 'isolate',
+                } : undefined}
+              >
+                <tr style={{
+                  backgroundColor: isGeneric ? 'var(--modal-bg)' : 'var(--table-header-bg)',
+                  ...(isGeneric ? { position: 'sticky', top: 0, zIndex: 30 } : {}),
+                }}>
                   {contactsFrozenColumnDefs.map((column) =>
                     column.key === 'select'
                       ? renderContactsHeaderCell(
@@ -1935,6 +1946,7 @@ const Contacts = () => {
               scrollWidth={contactsScrollableTableMinWidth}
               stickyTop
               stickyTopOffset={0}
+              hideTopBar={isGeneric}
               hideBottomScrollbar
               stickyBottom={isGeneric}
               verticalOverflow="visible"
@@ -1963,8 +1975,19 @@ const Contacts = () => {
                     />
                   ))}
                 </colgroup>
-                <thead>
-                  <tr style={{ backgroundColor: 'var(--table-header-bg)' }}>
+                <thead
+                  style={isGeneric ? {
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 30,
+                    background: 'var(--modal-bg)',
+                    isolation: 'isolate',
+                  } : undefined}
+                >
+                  <tr style={{
+                    backgroundColor: isGeneric ? 'var(--modal-bg)' : 'var(--table-header-bg)',
+                    ...(isGeneric ? { position: 'sticky', top: 0, zIndex: 30 } : {}),
+                  }}>
                     {contactsScrollableColumnDefs.map((column) =>
                       renderContactsHeaderCell(
                         column,

@@ -65,6 +65,20 @@ describe('Landing (public marketing page)', () => {
     expect(seeHowItWorks).toHaveAttribute('href', '#features');
   });
 
+  it('renders the frontend-only lead conversation widget', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ available: true, intent: 'business', reply: 'I can help with that.' }),
+    });
+    const user = (await import('@testing-library/user-event')).default.setup();
+    renderLanding();
+    await user.click(await screen.findByRole('button', { name: 'Open chat' }));
+    expect(screen.getByRole('region', { name: 'Globus CRM assistant' })).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Chat message' }), 'I want a demo');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(screen.getByText(/May I get your name/i)).toBeInTheDocument();
+  });
+
   it('renders the hero stats row (4 tiles)', () => {
     renderLanding();
     expect(screen.getByText('25+')).toBeInTheDocument();

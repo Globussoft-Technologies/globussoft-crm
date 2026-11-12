@@ -206,14 +206,16 @@ describe('<Tasks /> — page surface', () => {
     expect(
       screen.getByRole('button', { name: /Create a new task/i }),
     ).toBeInTheDocument();
-    // Stats chip: "4 total pending" (sampleTasks has 4 non-Completed).
-    expect(await screen.findByText(/4 total pending/i)).toBeInTheDocument();
+    // Summary card: 4 total pending (sampleTasks has 4 non-Completed).
+    expect(await screen.findByText('TOTAL PENDING')).toBeInTheDocument();
     expect(screen.getByText('Active Priority Queue').closest('.tasks-active-queue-card')).toBeTruthy();
     expect(document.querySelector('.tasks-active-queue-list')).toBeTruthy();
-    // Critical + High + Overdue chips render (one of each in the seed).
-    expect(screen.getByText(/1 Critical/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 High/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 Overdue/i)).toBeInTheDocument();
+    // Summary cards render the priority and overdue totals.
+    expect(screen.getByText('CRITICAL').closest('.tasks-summary-card')).toHaveTextContent('1');
+    expect(screen.getByText('HIGH PRIORITY').closest('.tasks-summary-card')).toHaveTextContent('1');
+    expect(document.querySelector('.tasks-summary-card--overdue')).toHaveTextContent('1');
+    expect(screen.getByText('HIGH PRIORITY').closest('.tasks-summary-card')).toHaveTextContent('1');
+    expect(document.querySelector('.tasks-summary-card--overdue')).toHaveTextContent('1');
   });
 
   it('initial mount fires GET /api/tasks AND GET /api/staff', async () => {
@@ -258,6 +260,7 @@ describe('<Tasks /> — page surface', () => {
 
   it('Completed log lists Completed tasks only (with line-through styling)', async () => {
     renderTasks();
+    fireEvent.click(screen.getByRole('button', { name: 'Task History' }));
     await waitFor(() => {
       expect(screen.getByText('Completed onboarding')).toBeInTheDocument();
     });
@@ -285,9 +288,9 @@ describe('<Tasks /> — page surface', () => {
     renderTasks();
     // The OVERDUE inline badge renders for "Overdue check-in" only (exact
     // all-caps match — distinct from the "1 Overdue" counter chip).
-    expect(await screen.findByText('OVERDUE')).toBeInTheDocument();
-    // The counter chip reports exactly 1 overdue.
-    expect(screen.getByText(/1 Overdue/i)).toBeInTheDocument();
+    expect((await screen.findAllByText('OVERDUE')).length).toBeGreaterThanOrEqual(2);
+    // The summary card reports exactly 1 overdue.
+    expect(document.querySelector('.tasks-summary-card--overdue')).toHaveTextContent('1');
   });
 
   it('clicking Resolve fires PUT /api/tasks/<id>/complete and dispatches sidebar:counts-changed', async () => {
@@ -562,7 +565,7 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
     const staffOption = await screen.findByRole('option', { name: /Asha Agent/ });
     expect(staffOption).toBeInTheDocument();
     const staffSelect = staffOption.closest('select');
-    expect(within(staffSelect).getByRole('option', { name: /Vikram Agent/ })).toBeInTheDocument();
+    expect(within(staffSelect).queryByRole('option', { name: /Vikram Agent/ })).not.toBeInTheDocument();
     expect(within(staffSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
   });
 
@@ -646,51 +649,54 @@ describe('<Tasks /> — queue filters', () => {
     fetchApiMock.mockImplementation(defaultFetchMock);
   });
 
-  it('clicking the Critical chip narrows the queue to Critical tasks', async () => {
+  it('the priority filter narrows the queue to Critical tasks', async () => {
     renderTasks();
     await screen.findByText('Q3 Renewal Call');
     expect(screen.getByText('High priority follow-up')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+    fireEvent.change(screen.getByLabelText('Filter by priority'), { target: { value: 'Critical' } });
 
     expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
     expect(screen.queryByText('High priority follow-up')).not.toBeInTheDocument();
     expect(screen.queryByText('Low priority cleanup')).not.toBeInTheDocument();
   });
 
-  it('the chip toggles off on a second click', async () => {
+  it('clearing the priority filter restores the queue', async () => {
     renderTasks();
     await screen.findByText('Q3 Renewal Call');
-    const chip = screen.getByRole('button', { name: /1 Critical/ });
-    fireEvent.click(chip);
+    const priorityFilter = screen.getByLabelText('Filter by priority');
+    fireEvent.change(priorityFilter, { target: { value: 'Critical' } });
     expect(screen.queryByText('High priority follow-up')).not.toBeInTheDocument();
-    fireEvent.click(chip);
+    fireEvent.change(priorityFilter, { target: { value: '' } });
     expect(screen.getByText('High priority follow-up')).toBeInTheDocument();
   });
 
-  it('chip counts stay unfiltered while a filter is applied', async () => {
+  it('summary cards stay unfiltered while a filter is applied', async () => {
     renderTasks();
     await screen.findByText('Q3 Renewal Call');
-    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
-    // Still reports the whole queue, not the 2-row slice on screen.
-    expect(screen.getByRole('button', { name: /1 High/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /4 total pending/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Filter by priority'), { target: { value: 'Critical' } });
+    // Still reports the whole queue, not the filtered slice on screen.
+    expect(screen.getByText('HIGH PRIORITY').closest('.tasks-summary-card')).toHaveTextContent('1');
+    expect(screen.getByText('TOTAL PENDING').closest('.tasks-summary-card')).toHaveTextContent('4');
+    expect(screen.getByText('ALL TASKS').closest('.tasks-summary-card')).toHaveTextContent('4');
+    expect(screen.getByText('IN PROGRESS').closest('.tasks-summary-card')).toHaveTextContent('0');
+    expect(screen.getByText('COMPLETED TASKS').closest('.tasks-summary-card')).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: 'Task History' })).toBeInTheDocument();
   });
 
-  it('the Overdue chip filters to past-due tasks only', async () => {
+  it('the overdue summary card reports past-due tasks', async () => {
     renderTasks();
     await screen.findByText('Q3 Renewal Call');
-    fireEvent.click(screen.getByRole('button', { name: /1 Overdue/ }));
+    expect(document.querySelector('.tasks-summary-card--overdue')).toHaveTextContent('1');
     expect(screen.getByText('Overdue check-in')).toBeInTheDocument();
-    expect(screen.queryByText('Q3 Renewal Call')).not.toBeInTheDocument();
   });
 
-  it('the total-pending chip clears every active filter', async () => {
+  it('the refresh button clears every active filter', async () => {
     renderTasks();
     await screen.findByText('Q3 Renewal Call');
-    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+    fireEvent.change(screen.getByLabelText('Filter by priority'), { target: { value: 'Critical' } });
     expect(screen.queryByText('Low priority cleanup')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /total pending/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(screen.getByText('Low priority cleanup')).toBeInTheDocument();
   });
 
@@ -741,9 +747,9 @@ describe('<Tasks /> — queue filters', () => {
     renderTasks();
     await screen.findByText('Q3 Renewal Call');
     expect(screen.queryByText(/of 4 shown/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+    fireEvent.change(screen.getByLabelText('Filter by priority'), { target: { value: 'Critical' } });
     expect(screen.getByText('1 of 4 shown')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Clear$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(screen.getByText('Low priority cleanup')).toBeInTheDocument();
   });
 });
@@ -763,16 +769,14 @@ describe('<Tasks /> — ?create deep link from Lead Reports', () => {
     // Drawer is open without the user clicking the header CTA.
     expect(document.getElementById('task-title-input')).toBeTruthy();
     expect(document.getElementById('task-type-select').value).toBe('Site Visit');
-    // Outcome unlocks because the type is a visit.
-    expect(document.getElementById('task-outcome-select').disabled).toBe(false);
+    expect(document.getElementById('task-outcome-select')).toBeNull();
   });
 
   it('ignores a type outside the allowlist rather than pre-filling an unsaveable value', async () => {
     renderTasks('/tasks?create=1&type=Teleportation');
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
     expect(document.getElementById('task-type-select').value).toBe('');
-    // A non-visit type keeps Outcome locked.
-    expect(document.getElementById('task-outcome-select').disabled).toBe(true);
+    expect(document.getElementById('task-outcome-select')).toBeNull();
   });
 
   it('leaves the drawer closed on a normal visit', async () => {
@@ -781,20 +785,19 @@ describe('<Tasks /> — ?create deep link from Lead Reports', () => {
     expect(document.getElementById('task-title-input')).toBeNull();
   });
 
-  it('sends the selected type and outcome on the create POST', async () => {
+  it('sends the selected type without an outcome on the generic create POST', async () => {
     renderTasks('/tasks?create=1&type=Site%20Visit');
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
     fireEvent.change(document.getElementById('task-title-input'), {
       target: { value: 'Whitefield plot walkthrough' },
     });
-    fireEvent.change(document.getElementById('task-outcome-select'), { target: { value: 'booked' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(([u, o]) => u === '/api/tasks' && o?.method === 'POST');
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
       expect(body.type).toBe('Site Visit');
-      expect(body.outcome).toBe('booked');
+      expect('outcome' in body).toBe(false);
     });
   });
 

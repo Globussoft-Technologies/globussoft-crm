@@ -515,12 +515,28 @@ export function CallModal({ contact, onClose, onDone }) {
   );
 }
 
-export function TaskModal({ contact, onClose, onDone }) {
+export function TaskModal({ contact, staff = [], onClose, onDone }) {
   const notify = useNotify();
+  const { tenant, user } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
+  const currentRole = String(user?.role || '').toUpperCase();
+  const canAssignGenericTask = !isGeneric || ['ADMIN', 'MANAGER'].includes(currentRole);
+  const canCreateGenericTaskForSelf = isGeneric && currentRole === 'USER';
+  const genericAssignableStaff = staff.filter((member) =>
+    String(member.role || '').toUpperCase() !== 'ADMIN'
+    && String(member.role || '').toUpperCase() !== 'CUSTOMER'
+    && !member.deactivatedAt
+    && !(currentRole === 'ADMIN' && String(member.id) === String(user?.userId || user?.id))
+    && !(currentRole === 'USER' && String(member.role || '').toUpperCase() !== 'USER')
+    && !(currentRole === 'USER' && String(member.id) === String(user?.userId || user?.id))
+    && (!member.userType || member.userType === 'STAFF')
+  );
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [completed, setCompleted] = useState(false);
   const [taskType, setTaskType] = useState('');
+  const [priority, setPriority] = useState('Medium');
+  const [assigneeId, setAssigneeId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [time, setTime] = useState('');
   const [outcome, setOutcome] = useState('');
@@ -530,7 +546,9 @@ export function TaskModal({ contact, onClose, onDone }) {
     if (!title.trim() || !dueDate || saving) return;
     setSaving(true);
     try {
-      const type = taskType === 'Follow up' ? 'Follow Up' : taskType === 'Call reminder' ? 'Call' : undefined;
+      const type = isGeneric
+        ? (taskType === 'General task' ? 'Task' : (taskType || undefined))
+        : (taskType === 'Follow up' ? 'Follow Up' : taskType === 'Call reminder' ? 'Call' : undefined);
       const outcomeValue = {
         Interested: 'interested',
         'Left message': 'pending',
@@ -542,9 +560,11 @@ export function TaskModal({ contact, onClose, onDone }) {
         title: title.trim(),
         notes: description.trim() || undefined,
         dueDate: `${dueDate}T${time || '00:00'}`,
-        status: completed ? 'Completed' : 'Pending',
+        status: !isGeneric && completed ? 'Completed' : 'Pending',
+        ...(isGeneric ? { priority } : {}),
+        ...(isGeneric && canAssignGenericTask && assigneeId ? { targetUserId: assigneeId } : {}),
         type,
-        outcome: outcomeValue,
+        outcome: isGeneric ? undefined : outcomeValue,
         contactId: contact?.id,
       });
       notify.success('Task created.');
@@ -562,22 +582,25 @@ export function TaskModal({ contact, onClose, onDone }) {
         <header className="cp-task-head"><h3>Add task</h3><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close"><X size={18} /></button></header>
         <form onSubmit={submit}>
         <div className="cp-task-body">
-          <label className="cp-task-check"><input type="checkbox" checked={completed} onChange={(e) => setCompleted(e.target.checked)} /> Mark as completed</label>
+          {!isGeneric && <label className="cp-task-check"><input type="checkbox" checked={completed} onChange={(e) => setCompleted(e.target.checked)} /> Mark as completed</label>}
           <div className="cp-task-columns">
             <div className="cp-task-main">
               <label className="cp-task-field"><span>Title <b>*</b></span><input className="cp-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Enter title of task" /></label>
               <label className="cp-task-field"><span>Description</span><textarea className="cp-textarea cp-task-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Start typing the details about the task..." /></label>
-              <label className="cp-task-field"><span>Task type</span><select className="cp-input" value={taskType} onChange={(e) => setTaskType(e.target.value)}><option value="">Select a type</option><option>Follow up</option><option>Call reminder</option></select></label>
+              <label className="cp-task-field"><span>Task type</span><select className="cp-input" value={taskType} onChange={(e) => setTaskType(e.target.value)}><option value="">Select a type</option>{isGeneric ? <><option value="General task">General task</option><option value="Task">Task</option><option value="Call">Call</option><option value="Meeting">Meeting</option><option value="Site Visit">Site Visit</option><option value="Follow Up">Follow Up</option></> : <><option>Follow up</option><option>Call reminder</option></>}</select></label>
+              {isGeneric && <label className="cp-task-field"><span>Priority</span><select className="cp-input" value={priority} onChange={(e) => setPriority(e.target.value)}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>}
               <div className="cp-task-date-row">
                 <label className="cp-task-field"><span>Due date <b>*</b></span><input className="cp-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
                 <label className="cp-task-field"><span>Time</span><input className="cp-input" type="time" value={time} onChange={(e) => setTime(e.target.value)} /></label>
               </div>
-              <label className="cp-task-field"><span>Outcome</span><select className="cp-input" value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="">Select an outcome</option><option>Interested</option><option>Left message</option><option>No response</option><option>Not interested</option><option>Not able to reach</option></select></label>
+              {!isGeneric && <label className="cp-task-field"><span>Outcome</span><select className="cp-input" value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="">Select an outcome</option><option>Interested</option><option>Left message</option><option>No response</option><option>Not interested</option><option>Not able to reach</option></select></label>}
             </div>
             <div className="cp-task-side">
-              <label className="cp-task-field"><span>Owner</span><select className="cp-input" defaultValue=""><option value="">Select owner</option>{contact?.assignedTo?.name && <option value={contact.assignedTo.name}>{contact.assignedTo.name}</option>}</select></label>
-              <label className="cp-task-field"><span>Related to (1)</span><select className="cp-input" defaultValue="contact"><option value="contact">Click to select records</option></select><span className="cp-task-chip">{contact?.name} <X size={12} /></span></label>
-              <label className="cp-task-field"><span>Collaborators (0)</span><select className="cp-input" defaultValue=""><option value="">Select collaborators</option></select></label>
+              {isGeneric && (canAssignGenericTask || canCreateGenericTaskForSelf) ? <label className="cp-task-field"><span>Assignee</span><select className="cp-input" value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}><option value="">Select assignee</option>{genericAssignableStaff.map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label> : !isGeneric ? <>
+                <label className="cp-task-field"><span>Owner</span><select className="cp-input" defaultValue=""><option value="">Select owner</option>{contact?.assignedTo?.name && <option value={contact.assignedTo.name}>{contact.assignedTo.name}</option>}</select></label>
+                <label className="cp-task-field"><span>Related to (1)</span><select className="cp-input" defaultValue="contact"><option value="contact">Click to select records</option></select><span className="cp-task-chip">{contact?.name} <X size={12} /></span></label>
+                <label className="cp-task-field"><span>Collaborators (0)</span><select className="cp-input" defaultValue=""><option value="">Select collaborators</option></select></label>
+              </> : null}
             </div>
           </div>
         </div>

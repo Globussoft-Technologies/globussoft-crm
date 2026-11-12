@@ -728,6 +728,9 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     if (userCreated && isWellness) {
       await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
     }
+    if (vertical === 'generic') {
+      await grantPermissionList(stats, userRole.id, ['tasks.read', 'tasks.write']);
+    }
 
     // Generic pickup/plot workflow role. Billing staff use a dedicated
     // /home workspace and the route itself verifies this role, so no broad

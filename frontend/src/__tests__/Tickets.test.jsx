@@ -233,23 +233,26 @@ describe('<Tickets /> — page surface', () => {
     expect(screen.getByText('Medium')).toBeInTheDocument();
     expect(screen.getByText('High')).toBeInTheDocument();
     // Assignee cell: named for assigned rows, "—" for unassigned.
-    expect(screen.getByText('Anita Sharma')).toBeInTheDocument();
-    expect(screen.getByText('Rohit Verma')).toBeInTheDocument();
-    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.getAllByText('Anita Sharma').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Rohit Verma').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
     // Delete buttons render — three rows.
     const deleteButtons = screen.getAllByRole('button', { name: /Delete/i });
     expect(deleteButtons.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('stats bar renders Open + total counters; Urgent pill renders only when applicable', async () => {
+  it('summary cards render Open + total counters; Urgent count renders when applicable', async () => {
     renderTickets();
     // With sampleTickets: 1 Open, 3 total, 1 Urgent (which is not Closed).
-    expect(await screen.findByText(/1 Open/)).toBeInTheDocument();
-    expect(screen.getByText(/3 total/)).toBeInTheDocument();
-    expect(screen.getByText(/1 Urgent/)).toBeInTheDocument();
+    const summary = await screen.findByRole('group', { name: 'Ticket summary' });
+    expect(summary).toHaveTextContent('OPEN TICKETS');
+    expect(summary).toHaveTextContent('1');
+    expect(summary).toHaveTextContent('TOTAL TICKETS');
+    expect(summary).toHaveTextContent('3');
+    expect(summary).toHaveTextContent('URGENT TICKETS');
   });
 
-  it('stats bar hides Urgent pill when no urgent-and-not-closed tickets exist', async () => {
+  it('summary cards show zero urgent tickets when no urgent-and-not-closed tickets exist', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (typeof url === 'string' && url.startsWith('/api/tickets')) {
         return Promise.resolve([
@@ -268,11 +271,10 @@ describe('<Tickets /> — page surface', () => {
       return Promise.resolve({});
     });
     renderTickets();
-    expect(await screen.findByText(/1 Open/)).toBeInTheDocument();
-    // No Urgent pill — assert via the "<N> Urgent" pill text shape so we
-    // don't collide with the always-present `<option value="Urgent">Urgent`
-    // in the Create-form Priority dropdown.
-    expect(screen.queryByText(/\d+\s+Urgent/)).not.toBeInTheDocument();
+    const summary = await screen.findByRole('group', { name: 'Ticket summary' });
+    expect(summary).toHaveTextContent('OPEN TICKETS');
+    expect(summary).toHaveTextContent('URGENT TICKETS');
+    expect(summary).toHaveTextContent('0');
   });
 
   it('paginates the ticket list and fetches the next slice when navigating pages', async () => {

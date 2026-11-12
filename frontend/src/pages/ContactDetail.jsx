@@ -2217,7 +2217,15 @@ export default function ContactDetail() {
       )}
       {modal === 'sms' && <SmsModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'whatsapp' && <WhatsappModal contact={contact} onClose={() => setModal(null)} onDone={() => { setConversationRefreshKey((current) => current + 1); refresh(); }} />}
-      {modal === 'task' && <TaskModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
+      {modal === 'task' && <TaskModal
+        contact={contact}
+        staff={staff}
+        onClose={() => setModal(null)}
+        onDone={() => {
+          if (isGeneric) setActivitiesRefreshKey((current) => current + 1);
+          refresh();
+        }}
+      />}
       {modal === 'meeting' && <MeetingModal contact={contact} onClose={() => setModal(null)} onDone={refresh} />}
       {modal === 'activity' && <ActivityModal contact={contact} presetType={activityPreset} onClose={() => setModal(null)} onDone={refresh} />}
       {lifecycleHistoryOpen && (

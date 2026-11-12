@@ -67,8 +67,15 @@ export default function LandingChatbotWidget() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/generic-landing-chat/availability')
-      .then((response) => (response.ok ? response.json() : { available: false }))
+    // Some embedders/tests provide a fetch-like function that does not return
+    // a Promise. Normalize that result so the optional chatbot cannot take
+    // down the public landing page when availability is unavailable.
+    Promise.resolve(typeof fetch === 'function'
+      ? fetch('/api/generic-landing-chat/availability')
+      : null)
+      .then((response) => (response?.ok && typeof response.json === 'function'
+        ? response.json()
+        : { available: false }))
       .then((data) => {
         if (!cancelled) setAiAvailable(data?.available === true);
       })

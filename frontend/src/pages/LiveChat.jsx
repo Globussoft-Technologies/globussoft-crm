@@ -283,7 +283,7 @@ export default function LiveChat() {
           display: 'flex', flexDirection: 'column',
         }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', fontWeight: 600 }}>
-            {sessions.length} conversation{sessions.length === 1 ? '' : 's'}
+            {sessions.length} open session{sessions.length === 1 ? '' : 's'}
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loading && <div style={{ padding: 16, color: 'var(--text-secondary)' }}>Loading...</div>}

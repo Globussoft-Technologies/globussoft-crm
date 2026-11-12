@@ -974,12 +974,12 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Privacy')).toBeTruthy();
       // Settings is admin-only here.
       expect(screen.getByText('Settings')).toBeTruthy();
-      expect(screen.queryByText('Workflows')).toBeNull();
+      expect(screen.getByText('Workflows')).toBeTruthy();
     });
 
-    it('hides standalone Workflows even when the Generic CRM role has workflows.read', () => {
+    it('shows Workflows when the Generic CRM role has workflows.read', () => {
       renderSidebar({ vertical: 'generic', role: 'USER', permissions: [...GENERIC_USER_PERMS, 'workflows.read'] });
-      expect(screen.queryByText('Workflows')).toBeNull();
+      expect(screen.getByText('Workflows')).toBeTruthy();
     });
 
     it('hides standalone Workflows when the Generic CRM role lacks workflows.read', () => {
@@ -1019,7 +1019,7 @@ describe('Sidebar — load-bearing render surface', () => {
           expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
         }
         expect(screen.getByText('Landing Sites')).toBeTruthy();
-        expect(screen.queryByText('Workflows')).toBeNull();
+        expect(screen.getByText('Workflows')).toBeTruthy();
         unmount();
       }
     });

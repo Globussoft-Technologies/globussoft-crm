@@ -2766,26 +2766,6 @@ function renderGenericNav({
         <Link to="/field-config" icon={SlidersHorizontal} label="Field Config" adminOnly />
       </>, "leads-group")}
 
-      {renderGroup("Communication", <>
-        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
-        <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
-        <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
-        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
-      </>)}
-
-      {renderGroup("Work Management", <>
-        <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
-        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
-        {/* Generic CRM: hide the standalone Workflows page without touching
-            the embedded Marketing Sequences webhook workflow feature. */}
-        {/* <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} /> */}
-      </>)}
-
-      {renderGroup("Customer Support", <>
-        <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} requiredPermission={{ module: "tickets", action: "read" }} />
-        <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
-        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
-      </>)}
       {renderGroup("Marketing & Automation", <>
         <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
         <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
@@ -2796,6 +2776,12 @@ function renderGenericNav({
         <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
         <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
         <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
+      </>)}
+
+      {renderGroup("Communication", <>
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+        <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
       </>)}
 
       {renderGroup("Sales", <>

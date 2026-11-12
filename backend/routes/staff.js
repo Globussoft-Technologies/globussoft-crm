@@ -396,7 +396,6 @@ router.get("/", async (req, res) => {
       email: true,
       name: true,
       role: true,
-      ...(isGeneric ? { userType: true } : {}),
       ...(isTravel ? {} : { wellnessRole: true }),
       tenantId: true,
       createdAt: true,

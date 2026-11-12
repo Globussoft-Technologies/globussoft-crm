@@ -51,11 +51,8 @@ router.get("/", async (req, res) => {
         status: true,
         priority: true,
         assigneeId: true,
-        requesterName: true,
-        requesterEmail: true,
         tenantId: true,
         createdAt: true,
-        updatedAt: true,
       };
     } else {
       findManyArgs.include = {

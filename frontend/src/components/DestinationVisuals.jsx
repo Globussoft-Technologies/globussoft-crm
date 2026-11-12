@@ -1,5 +1,5 @@
 // Shared destination-aware visuals for the public travel pages (itinerary
-// share, trip microsite). The real photo comes from Wikipedia (keyless, via
+// share, public travel page). The real photo comes from Wikipedia (keyless, via
 // utils/destinationPhotos); the cultural motif, accent colour and gradient
 // come from utils/destinationTheme. The themed gradient + motif always render,
 // so a missing/slow photo never leaves a broken or empty block.

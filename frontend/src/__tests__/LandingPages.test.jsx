@@ -101,7 +101,7 @@ const samplePages = [
 const TRIP_PAGE_STATE = {
   returnTo: { label: 'TMC Trips', path: '/travel/trips/101?tab=overview' },
   currentLabel: 'Public experience',
-  currentPath: '/travel/trips/101?tab=microsite',
+  currentPath: '/travel/trips/101?tab=overview',
   backTo: '/travel/trips',
   backLabel: 'Trips',
   tripContext: {
@@ -331,7 +331,7 @@ describe('<LandingPages /> — index page surface', () => {
       state: {
         returnTo: { label: 'TMC Trips', path: '/travel/trips/101?tab=overview' },
         currentLabel: 'Public experience',
-        currentPath: '/travel/trips/101?tab=microsite',
+        currentPath: '/travel/trips/101?tab=overview',
         backTo: '/travel/trips',
         backLabel: 'Trips',
         tripContext: {
@@ -348,7 +348,7 @@ describe('<LandingPages /> — index page surface', () => {
 
     expect(screen.getByRole('navigation', { name: /breadcrumb/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'TMC Trips' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
-    expect(screen.getByRole('link', { name: 'Public experience' })).toHaveAttribute('href', '/travel/trips/101?tab=microsite');
+    expect(screen.getByRole('link', { name: 'Public experience' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
   });
 
   it('does NOT render a "View" link any more (button was removed); each row has an Edit link to /landing-pages/builder/:id', async () => {

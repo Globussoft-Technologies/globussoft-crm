@@ -40,6 +40,7 @@ const {
 const ROLES_LIST_OR_RECOVERY = [
   { module: "roles", action: "read" },
   { module: "settings", action: "manage" },
+  { module: "staff", action: "write" },
 ];
 const ROLES_VERSION_READ_OR_RECOVERY = [
   { module: "roles", action: "read" },
@@ -58,6 +59,7 @@ const {
   getGroupedCatalogForVertical,
 } = require("../lib/permissionCatalog");
 const { resolveTenantVertical } = require("../lib/tenantVertical");
+const { getSetting, setSetting, KEYS } = require("../lib/tenantSettings");
 const { validateRoleKey } = require("../lib/roleKey");
 const { writeAudit } = require("../lib/audit");
 const {
@@ -94,6 +96,22 @@ function filterPermissionsForVertical(permissions, vertical) {
     const actions = catalog[permission?.module];
     return Boolean(actions && actions.includes(permission?.action));
   });
+}
+
+const LEAD_VISIBILITY_MODES = new Set(["open", "closed"]);
+const LEAD_VISIBILITY_READ = [
+  { module: "roles", action: "read" },
+  { module: "settings", action: "manage" },
+];
+const LEAD_VISIBILITY_WRITE = [
+  { module: "roles", action: "manage" },
+  { module: "settings", action: "manage" },
+];
+
+function normalizeLeadVisibility(value) {
+  return String(value || "closed").trim().toLowerCase() === "open"
+    ? "open"
+    : "closed";
 }
 
 function coerceRoleSubBrandScope(input) {
@@ -518,6 +536,88 @@ router.get(
     } catch (err) {
       console.error("[roles] list error:", err);
       res.status(500).json({ error: "Failed to list roles" });
+    }
+  },
+);
+
+// GET /api/roles/lead-visibility — tenant-wide Generic CRM lead bucket.
+// This is intentionally separate from a role's action grants: leads.read
+// controls whether a user can use Leads, while this tenant policy controls
+// which records a non-admin/non-manager staff member can see.
+router.get(
+  "/lead-visibility",
+  verifyToken,
+  requireAnyPermission(LEAD_VISIBILITY_READ),
+  async (req, res) => {
+    try {
+      const vertical = await getTenantVertical(req.user.tenantId);
+      if (vertical !== "generic") {
+        return res.status(404).json({
+          error: "Lead visibility settings are available only for Generic CRM",
+          code: "GENERIC_ONLY",
+        });
+      }
+      const visibility = await getSetting(
+        req.user.tenantId,
+        KEYS.GENERIC_LEAD_VISIBILITY,
+        { coerce: normalizeLeadVisibility, fallback: "closed" },
+      );
+      return res.json({ visibility: normalizeLeadVisibility(visibility) });
+    } catch (err) {
+      console.error("[roles] lead visibility read error:", err);
+      return res.status(500).json({ error: "Failed to load lead visibility" });
+    }
+  },
+);
+
+// PUT /api/roles/lead-visibility — update the tenant-wide Generic CRM lead bucket.
+router.put(
+  "/lead-visibility",
+  verifyToken,
+  requireAnyPermission(LEAD_VISIBILITY_WRITE),
+  async (req, res) => {
+    try {
+      const vertical = await getTenantVertical(req.user.tenantId);
+      if (vertical !== "generic") {
+        return res.status(404).json({
+          error: "Lead visibility settings are available only for Generic CRM",
+          code: "GENERIC_ONLY",
+        });
+      }
+      const visibility = String(req.body?.visibility || "").trim().toLowerCase();
+      if (!LEAD_VISIBILITY_MODES.has(visibility)) {
+        return res.status(400).json({
+          error: "visibility must be open or closed",
+          code: "INVALID_LEAD_VISIBILITY",
+        });
+      }
+      const previous = await getSetting(
+        req.user.tenantId,
+        KEYS.GENERIC_LEAD_VISIBILITY,
+        { coerce: normalizeLeadVisibility, fallback: "closed" },
+      );
+      const updated = await setSetting(
+        req.user.tenantId,
+        KEYS.GENERIC_LEAD_VISIBILITY,
+        visibility,
+        { category: "leads" },
+      );
+      await writeAudit(
+        "TenantSetting",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          key: KEYS.GENERIC_LEAD_VISIBILITY,
+          oldValue: normalizeLeadVisibility(previous),
+          newValue: visibility,
+        },
+      );
+      return res.json({ visibility });
+    } catch (err) {
+      console.error("[roles] lead visibility update error:", err);
+      return res.status(500).json({ error: "Failed to save lead visibility" });
     }
   },
 );

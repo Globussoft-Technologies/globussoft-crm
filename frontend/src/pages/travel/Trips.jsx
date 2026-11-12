@@ -3,7 +3,7 @@
 // Lands at /travel/trips. Operator-facing list showing destination,
 // dates, school, participant count, status. Click → /travel/trips/:id
 // for the full operational view (participants, rooming, payment plan,
-// instalments, microsite link).
+// instalments, documents, and landing-page registration).
 //
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
@@ -506,7 +506,7 @@ export default function Trips() {
 
   // DELETE /api/travel/trips/:id is ADMIN-only on the server
   // (requirePermission("trips","delete")). The route cascades through
-  // participants, rooming, payment plan, microsite, document
+  // participants, rooming, payment plan, document
   // requirements, AND PendingTripRegistration drafts via the schema's
   // onDelete:Cascade — so the confirmation copy MUST flag that. A
   // wrongly-deleted trip cannot be recovered without restoring the
@@ -517,7 +517,7 @@ export default function Trips() {
       message:
         `Permanently delete "${t.tripCode}" — ${t.destination}?\n\n` +
         "This will also delete every participant, room assignment, payment-plan row, " +
-        "instalment payment, document requirement, microsite, landing page, and " +
+        "instalment payment, document requirement, landing page, and " +
         "pending registration linked to this trip.\n\n" +
         "This cannot be undone.",
       confirmText: "Delete trip",
@@ -579,7 +579,7 @@ export default function Trips() {
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
             School educational trips. Operational view per trip — participants,
-            rooming, payment plan, microsite — lives on the detail page.
+            rooming, payment plan, documents, and landing page — lives on the detail page.
           </p>
         </div>
         <button

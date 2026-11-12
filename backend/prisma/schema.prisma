@@ -3188,7 +3188,7 @@ model LandingPage {
 
   // 1:1 trip ownership. A TmcTrip owns at most one LandingPage; setting
   // this field links the page to a trip for the hybrid registration flow
-  // (landing-page wizard → PendingTripRegistration → microsite OTP →
+  // (landing-page wizard → PendingTripRegistration → parent portal →
   // operator approval → TripParticipant). Pages with tripId=null remain
   // generic marketing pages and keep the existing /submit Contact+Deal
   // behaviour. @unique enforces 1:1 at the DB level — a second page
@@ -8555,7 +8555,9 @@ model TmcParentDocument {
   tenantId        Int      @default(1)
   parentContactId Int
   tripId          Int?
-  documentType    String // passport | aadhaar | consent-form | visa
+  documentType    String // Admin-defined document requirement label
+  documentRequirementId Int?
+  captureMode     String   @default("file") // file | digital_consent
   filename        String
   fileUrl         String?  @db.Text
   fileBlob        Bytes?   @db.MediumBlob
@@ -8565,14 +8567,20 @@ model TmcParentDocument {
   storageKey      String?
   status          String   @default("in_review") // in_review | approved | rejected
   notes           String?  @db.Text
+  answersJson     String?  @db.LongText // immutable digital-consent answers snapshot
+  termsSnapshot   String?  @db.LongText // exact terms shown at submission time
+  signatureName   String?  @db.VarChar(255)
+  agreedAt        DateTime?
   uploadedAt      DateTime @default(now())
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  documentRequirement TripDocumentRequirement? @relation(fields: [documentRequirementId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, parentContactId, createdAt])
   @@index([tenantId, tripId])
+  @@index([documentRequirementId])
 }
 
 // Trip-type-specific consent terms uploaded from the operator's source
@@ -8656,7 +8664,7 @@ model TripParticipant {
   passportIdentity       PassportIdentity?        @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
   aadhaarLast4           String?
   aadhaarTokenId         String? // DigiLocker token, encrypted
-  // Physical Aadhaar scan uploaded via the public microsite (fallback when
+  // Physical Aadhaar scan uploaded via the parent portal (fallback when
   // DigiLocker is not used). Key + storage backend mirror the visaDocStore
   // descriptor so resolveViewUrl / readDocBuffer work without re-parsing.
   aadhaarDocKey          String?
@@ -8683,7 +8691,7 @@ model TripParticipant {
   visaLetterDocuments    VisaLetterDocument[]
   digilockerSessions     DigilockerSession[]
   // Back-reference to the staging row that produced this participant
-  // (hybrid landing-page → microsite OTP → operator-approve flow).
+  // (hybrid landing-page → parent portal → operator-approve flow).
   // Nullable because admin-added participants (POST /trips/:id/participants
   // with direct staff input) skip the draft path entirely. 1:1 — a draft
   // produces at most one participant, enforced via @unique on the
@@ -8697,7 +8705,7 @@ model TripParticipant {
   @@index([passportIdentityId])
 }
 
-// ── Hybrid landing-page → microsite registration staging ────────────────
+// ── Hybrid landing-page → parent portal registration staging ──────────────
 //
 // PendingTripRegistration is the staging entity between the landing-page
 // registration wizard (Student → Parent → Passport) and the operator-
@@ -8706,10 +8714,9 @@ model TripParticipant {
 //   1. Landing-page wizard submits → /api/pages/:slug/submit with
 //      mode=registration-draft → row created with status=DRAFT,
 //      otpVerified=false, draftToken generated (72h TTL).
-//   2. User is redirected to the trip microsite with ?draftToken=<token>.
-//      Microsite's RegistrationConfirmPanel requests OTP for the parent
-//      phone, user enters code, /verify-otp succeeds AND links the draft
-//      → status=OTP_VERIFIED, otpVerified=true.
+//   2. User continues to parent registration with an opaque draft token.
+//      The parent portal requests OTP for the parent phone, user enters
+//      code, and the draft is linked → status=OTP_VERIFIED, otpVerified=true.
 //   3. CRM Participants tab surfaces OTP_VERIFIED rows alongside actual
 //      participants. Operator clicks Approve → in one transaction:
 //      TripParticipant{applicationStatus: "approved"} is created and the
@@ -8749,7 +8756,7 @@ model PendingTripRegistration {
   parentRelation String?
 
   // Passport info (step 3, all optional — operator may want passport
-  // capture later via microsite re-upload)
+  // capture later via the parent portal document flow)
   passportNumber       String?
   passportExpiry       DateTime?
   passportNationality  String?
@@ -8762,7 +8769,7 @@ model PendingTripRegistration {
 
   // Lifecycle
   // DRAFT          → submitted from landing page, no OTP yet
-  // OTP_VERIFIED   → parent phone OTP confirmed on microsite
+  // OTP_VERIFIED   → parent phone OTP confirmed in the parent portal
   // APPROVED       → reserved (currently unused — approve goes
   //                  straight to CONVERTED to avoid double approval)
   // REJECTED       → operator rejected; no participant created
@@ -8772,8 +8779,8 @@ model PendingTripRegistration {
   otpVerifiedAt DateTime?
   otpPhone      String?
 
-  // Opaque token used in microsite redirect URL. No PII in the URL —
-  // the microsite uses the token to identify the draft server-side.
+  // Opaque token used in the parent-registration redirect URL. No PII in
+  // the URL — the portal uses the token to identify the draft server-side.
   // @unique enables direct findUnique lookup; 72h TTL on the column
   // value (draftTokenExpiresAt) — enforced in the route layer.
   draftToken          String   @unique
@@ -8931,9 +8938,13 @@ model TripInstalmentPayment {
 model TripDocumentRequirement {
   id        Int      @id @default(autoincrement())
   tripId    Int
-  docType   String // passport | aadhaar | medical-form | consent-form | school-id
+  docType   String // Admin-defined document name shown to TMC parents
+  acceptedFileTypes String? @db.Text // JSON array: pdf, jpg, png, doc, docx
   required  Boolean  @default(true)
+  captureMode String  @default("file") // file | digital_consent
+  consentTerms String? @db.LongText // terms shown by the digital consent form
   trip      TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  parentDocuments TmcParentDocument[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -9561,7 +9572,9 @@ model ReligiousGuidancePacket {
   @@index([tenantId, subBrand, dayOffset])
 }
 
-// ── Trip microsite (TMC) — public, OTP-gated for sensitive views ─────
+// ── Legacy TripMicrosite records ──────────────────────────────────────
+// Retained for existing database rows and safe migrations. The model has no
+// active API, UI, seed, or route consumers.
 model TripMicrosite {
   id            Int                @id @default(autoincrement())
   tenantId      Int                @default(1)

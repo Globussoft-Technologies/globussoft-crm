@@ -100,7 +100,7 @@
  *     CLAUDE.md tick #108 cron-learning: sync getBy for data-dependent
  *     text is a CI race trap).
  *
- * Path: flat __tests__/ — sibling Agent B owns TmcMicrositePreview.test.jsx
+ * Path: flat __tests__/ — travel admin sibling page coverage.
  * in the same flat dir; no path collision.
  *
  * Slice 2 (#903) extension — payment terms + credit limit + GSTIN hint:

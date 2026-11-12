@@ -55,7 +55,7 @@ const aiImageFallbackProvider = require('./imageProviders/aiImageFallbackProvide
 //
 // Pexels is the primary source: it's the only stock provider with a
 // configured PEXELS_API_KEY on this demo + only one whose terms cover the
-// travel-microsite use case end-to-end. Unsplash + Pixabay stay in the
+// public travel-page use case end-to-end. Unsplash + Pixabay stay in the
 // chain as defensive fallbacks if those keys are ever added; they
 // self-skip via isAvailable() when their env vars are unset. The AI
 // fallback (Gemini Imagen → DALL-E → Pollinations) lands LAST so a query
@@ -199,7 +199,7 @@ async function fetchOne(query, opts = {}) {
  * Fetch UP TO `limit` DISTINCT images for a query — the gallery counterpart
  * to fetchOne(). Powers the public destination-photo proxy
  * (routes/travel_destination_photos.js) that feeds the customer-facing
- * quote / itinerary / microsite hero + side-rail images.
+ * quote / itinerary / landing-page hero + side-rail images.
  *
  * Walks the SAME provider cascade as fetchOne (Pexels → Unsplash → Pixabay),
  * collecting distinct URLs across providers until it has `limit` of them, and

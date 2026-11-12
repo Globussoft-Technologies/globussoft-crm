@@ -355,7 +355,7 @@ export default function TravelWhatsAppLog() {
                     <div>No WhatsApp messages yet.</div>
                     <div style={{ fontSize: "0.85rem", marginTop: 6 }}>
                       Messages appear here when you share an itinerary,
-                      request a microsite OTP, deliver a boarding pass, or
+                      deliver a boarding pass, or
                       when reminder crons fire.
                     </div>
                   </td>

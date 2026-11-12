@@ -667,7 +667,7 @@ function removeLeadTagFromList(rawTags, tagKey) {
   return nextTags.length === currentTags.length ? null : nextTags;
 }
 
-function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
+function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
   const tags = normalizeLeadTags(lead.tags);
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
@@ -781,7 +781,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
 
   const deleteSavedTag = async (tag) => {
     const normalizedTag = cleanLeadTagInput(tag);
-    if (!normalizedTag || !onDeleteTag) return false;
+    if (!canEdit || !normalizedTag || !onDeleteTag) return false;
     const tagKey = normalizedTag.toLowerCase();
     if (deletingTag === tagKey) return false;
     setDeletingTag(tagKey);
@@ -835,12 +835,12 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
       onMouseLeave={() => setHovered(false)}
       onClick={(e) => {
         e.stopPropagation();
-        setOpen(true);
+        if (canEdit) setOpen(true);
       }}
     >
-      <div className="lead-tags-display" title={tags.join(", ") || "Add tags"}>
+      <div className="lead-tags-display" title={tags.join(", ") || (canEdit ? "Add tags" : "No tags")}>
         {tags.length === 0 ? (
-          <span style={inlineBuiltinEmptyStyle}>+ Click to add</span>
+          <span style={{ ...inlineBuiltinEmptyStyle, color: canEdit ? undefined : "var(--text-secondary)" }}>{canEdit ? "+ Click to add" : "—"}</span>
         ) : (
           <>
             {tags.map((tag) => (
@@ -851,7 +851,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
           </>
         )}
       </div>
-      <button
+      {canEdit && <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
@@ -869,7 +869,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
         }}
       >
         <Pencil size={12} />
-      </button>
+      </button>}
       {open &&
         createPortal(
           <>
@@ -937,15 +937,15 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                       className="lead-tag-chip lead-tag-chip--selected"
                     >
                       <span className="lead-tag-chip__label">{tag}</span>
-                      <button
+                      {canEdit && <button
                         type="button"
                         onClick={() => removeDraftTag(tag)}
                         aria-label={`Remove ${tag} from this lead`}
                         className="lead-tag-chip-action lead-tag-chip-action--remove"
                       >
                         <X size={12} />
-                      </button>
-                      {optionKeySet.has(tag.toLowerCase()) && (
+                      </button>}
+                      {canEdit && optionKeySet.has(tag.toLowerCase()) && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1024,14 +1024,14 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                         const deletingThisTag = deletingTag === tagKey;
                         return (
                           <div key={tag} className="lead-tags-option-row">
-                            <button
+                            {canEdit && <button
                               type="button"
                               className="lead-tags-option"
                               onClick={() => applyExistingTag(tag)}
                             >
                               {tag}
-                            </button>
-                            <button
+                            </button>}
+                            {canEdit && <button
                               type="button"
                               className="lead-tags-option-delete"
                               onClick={(e) => {
@@ -1044,7 +1044,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                               disabled={saving || deletingThisTag}
                             >
                               <Trash2 size={11} />
-                            </button>
+                            </button>}
                           </div>
                         );
                       })
@@ -2565,9 +2565,16 @@ const Leads = () => {
   // standalone component usable for the existing unauthenticated test/demo
   // render, while authenticated sessions remain fully permission-driven.
   const hasLegacyRenderAccess = !auth?.user;
+  const canLeadRead =
+    hasLegacyRenderAccess ||
+    (permissionsReady && hasPermission("leads", "read"));
   const canLeadWrite =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "write"));
+  const canLeadExport =
+    hasLegacyRenderAccess ||
+    (permissionsReady &&
+      (hasPermission("leads", "export") || hasPermission("contacts", "export")));
   const canLeadUpdate =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "update"));
@@ -2579,9 +2586,11 @@ const Leads = () => {
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "delete"));
   const canLeadBulkActions = canLeadUpdate || canLeadDelete;
-  // The Callified settings API is still intentionally ADMIN-only, so do not
-  // expose a button that opens requests a Leads permission cannot authorize.
-  const canManageCallSettings = isAdmin;
+  // Tenant-wide Callified settings follow the effective settings.manage grant.
+  // Lead campaign data is separate and follows the effective leads grants.
+  const canManageCallSettings =
+    hasLegacyRenderAccess ||
+    (permissionsReady && hasPermission("settings", "manage"));
   const [leads, setLeads] = useState([]);
   const [genericLifecycleOptions, setGenericLifecycleOptions] = useState([]);
   useEffect(() => {
@@ -3642,7 +3651,7 @@ const Leads = () => {
   };
 
   const loadAutoCampaignRules = useCallback(async () => {
-    if (!isGeneric) return;
+    if (!isGeneric || !canLeadRead) return;
     setAutoCampaignRulesLoading(true);
     try {
       const d = await fetchApi("/api/callified/auto-campaign-rules", {
@@ -3665,11 +3674,11 @@ const Leads = () => {
     } finally {
       setAutoCampaignRulesLoading(false);
     }
-  }, [isGeneric]);
+  }, [isGeneric, canLeadRead]);
 
   const saveAutoCampaignRules = useCallback(
     async ({ enabled, rules, markSavedId } = {}) => {
-      if (!isGeneric) return;
+      if (!isGeneric || !canLeadWrite) return;
       setAutoCampaignRulesSaving(true);
       const nextEnabled =
         enabled !== undefined ? enabled : autoCampaignRulesEnabled;
@@ -3710,7 +3719,7 @@ const Leads = () => {
         setAutoCampaignRulesSaving(false);
       }
     },
-    [isGeneric, autoCampaignRulesEnabled, autoCampaignRules, notify],
+    [isGeneric, canLeadWrite, autoCampaignRulesEnabled, autoCampaignRules, notify],
   );
 
   const saveLeadPickupLocation = async (lead, pickupStatus, locationId) => {
@@ -4046,7 +4055,7 @@ const Leads = () => {
   // that were actually called, so a real call that just completed updates both
   // the Lead Score and the Call Status without a browser reload.
   const refreshAll = async () => {
-    if (isGeneric) {
+    if (isGeneric && canLeadUpdate) {
       await fetchApi("/api/callified/leads/sync-call-statuses", {
         method: "POST",
         silent: true,
@@ -4140,10 +4149,12 @@ const Leads = () => {
       }
       inFlight = true;
       try {
-        await fetchApi("/api/callified/leads/sync-call-statuses", {
-          method: "POST",
-          silent: true,
-        }).catch(() => null);
+        if (canLeadUpdate) {
+          await fetchApi("/api/callified/leads/sync-call-statuses", {
+            method: "POST",
+            silent: true,
+          }).catch(() => null);
+        }
         const freshLeads = await fetchLeadsRef.current?.({ background: true });
         const connectedLeads = Array.isArray(freshLeads)
           ? freshLeads.filter(
@@ -4179,7 +4190,7 @@ const Leads = () => {
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [isGeneric, savedAutoRefreshEnabled, callQueueActive, leads]);
+  }, [isGeneric, savedAutoRefreshEnabled, callQueueActive, canLeadUpdate, leads]);
 
   // Backfill assignment for qualified leads that slipped through without an owner.
   // Handles existing leads created before auto-assignment, transient backend
@@ -4303,7 +4314,6 @@ const Leads = () => {
       }
     });
     loadLeadTagCatalog();
-    loadAutoCampaignRules();
     if (isTravel) {
       fetchApi("/api/pipeline_stages", { silent: true })
         .then((data) => setPipelineStages(Array.isArray(data) ? data : []))
@@ -4362,6 +4372,13 @@ const Leads = () => {
         .catch(() => setTmcPaidByEmail({}));
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wait for the effective permission set before reading the optional
+  // Callified rules. This prevents a transient 403 while permissions load and
+  // avoids probing the endpoint for read-only users without leads.read.
+  useEffect(() => {
+    loadAutoCampaignRules();
+  }, [loadAutoCampaignRules]);
 
   // Refetch (server-side) whenever the FilterPanel's filter set changes.
   // Skips the very first render — the mount effect above already fetched
@@ -4450,17 +4467,36 @@ const Leads = () => {
     // request shape for them. Non-admin Leads users may legitimately lack
     // the separate Callified integration permission, so that probe must not
     // create a misleading global permission toast.
-    fetchApi(
-      "/api/integrations/callified/config",
-      isAdmin ? undefined : { silent: true },
-    )
-      .then((d) => setCallifiedConfigured(!!d?.isActive))
-      .catch(() => setCallifiedConfigured(false));
-  }, [isGeneric, isAdmin]);
+    if (!canLeadRead) {
+      setCallifiedConfigured(false);
+      return;
+    }
+    fetchApi("/api/callified/status")
+      .then(async (d) => {
+        if (typeof d?.isActive === "boolean") {
+          setCallifiedConfigured(d.isActive);
+          return;
+        }
+        // Keep compatibility with older tenants/backends that expose the
+        // integration status through the settings route. The status endpoint
+        // is preferred because it only needs leads.read; this fallback keeps
+        // the Leads surface usable during a rolling backend deployment.
+        const legacy = await fetchApi("/api/integrations/callified/config");
+        setCallifiedConfigured(!!legacy?.isActive);
+      })
+      .catch(async () => {
+        try {
+          const legacy = await fetchApi("/api/integrations/callified/config");
+          setCallifiedConfigured(!!legacy?.isActive);
+        } catch {
+          setCallifiedConfigured(false);
+        }
+      });
+  }, [isGeneric, canLeadRead]);
 
   // Load Callified campaigns for campaign assignment + bulk dial (generic only).
   const loadCallifiedCampaigns = useCallback(async () => {
-    if (!isGeneric || !callifiedConfigured) return;
+    if (!isGeneric || !callifiedConfigured || !canLeadWrite) return;
     try {
       const d = await fetchApi("/api/callified/campaigns/with-lead-counts");
       const list = Array.isArray(d?.campaigns) ? d.campaigns : [];
@@ -4468,7 +4504,7 @@ const Leads = () => {
     } catch {
       setCallifiedCampaigns([]);
     }
-  }, [isGeneric, callifiedConfigured]);
+  }, [isGeneric, callifiedConfigured, canLeadWrite]);
 
   useEffect(() => {
     loadCallifiedCampaigns();
@@ -4719,7 +4755,7 @@ const Leads = () => {
   }, [loadCallSettings]);
 
   const saveAllCallSettings = async () => {
-    if (!isAdmin || callSettingsSaving) return;
+    if (!canManageCallSettings || callSettingsSaving) return;
     const normalized = {
       dnpMaxRetries: Math.max(1, Math.min(Number(dnpMaxRetries) || 3, 10)),
       dnpIntervalMinutes: Math.max(
@@ -7710,6 +7746,8 @@ const Leads = () => {
         onSave={onSave}
         renderValue={renderValue}
         required={required}
+        editOnDisplayClick={canLeadUpdate}
+        showEditButton={canLeadUpdate}
         disableTruncation={disableTruncation}
       />
     </td>
@@ -7747,6 +7785,7 @@ const Leads = () => {
             contactId={lead.id}
             field={field}
             value={raw}
+            readOnly={!canLeadUpdate}
             onSaved={(newValue, updatedAt) => {
               setLeads((prev) =>
                 prev.map((l) =>
@@ -7977,6 +8016,7 @@ const Leads = () => {
               options={leadTagOptions}
               onSave={updateLeadInlineValue}
               onDeleteTag={handleDeleteLeadTag}
+              canEdit={canLeadUpdate}
             />
           </td>
         );
@@ -7987,7 +8027,7 @@ const Leads = () => {
             style={getBodyCellStyle("assignedTo")}
             onClick={(e) => e.stopPropagation()}
           >
-            {canAssignLead && (isAdmin || isTravel) ? (
+            {canAssignLead && (isAdmin || isTravel || isGeneric) ? (
               <div className="leads-assignee-control">
                 <select
                   className="input-field"
@@ -8687,7 +8727,9 @@ const Leads = () => {
               entity="contacts"
               label="Leads"
               formats={["csv", "xlsx"]}
-              genericLeadWizard={isGeneric}
+              genericLeadWizard={isGeneric && canLeadRead}
+              showExport={!isGeneric || canLeadExport}
+              allowImport={!isGeneric || canLeadWrite}
               onImported={isGeneric ? refreshAll : undefined}
               mappingFields={
                 isGeneric
@@ -8728,7 +8770,7 @@ const Leads = () => {
 
           <span aria-hidden="true" style={compactToolbarDividerStyle} />
 
-          {isGeneric && callifiedConfigured && (
+          {isGeneric && callifiedConfigured && canLeadWrite && (
             <>
               {/* Auto-assign campaign rules: dropdown shows a grid where each
                   rule maps a lead column + value to a Callified campaign. */}
@@ -8837,7 +8879,7 @@ const Leads = () => {
                             display: "inline-flex",
                             alignItems: "center",
                             gap: "0.4rem",
-                            cursor: isAdmin ? "pointer" : "not-allowed",
+                            cursor: canLeadWrite ? "pointer" : "not-allowed",
                             fontSize: "0.8rem",
                             color: "var(--text-secondary)",
                           }}
@@ -8845,7 +8887,7 @@ const Leads = () => {
                           <input
                             type="checkbox"
                             checked={autoCampaignRulesEnabled}
-                            disabled={autoCampaignRulesSaving || !isAdmin}
+                            disabled={autoCampaignRulesSaving || !canLeadWrite}
                             onChange={() => {
                               const next = !autoCampaignRulesEnabled;
                               setAutoCampaignRulesEnabled(next);
@@ -8972,7 +9014,7 @@ const Leads = () => {
                                   className="auto-campaign-rule-checkbox"
                                   type="checkbox"
                                   checked={!!rule.enabled}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
                                   onChange={() => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
@@ -8983,13 +9025,13 @@ const Leads = () => {
                                     removeSavedStatus();
                                   }}
                                   style={{
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
+                                    cursor: canLeadWrite ? "pointer" : "not-allowed",
                                   }}
                                 />
                                 <select
                                   className="input-field"
                                   value={rule.column || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
                                   onChange={(e) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
@@ -9015,7 +9057,7 @@ const Leads = () => {
                                 <input
                                   type="text"
                                   value={rule.value || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
                                   placeholder="e.g. web-form"
                                   onChange={(e) => {
                                     const next = autoCampaignRules.map((r) =>
@@ -9039,7 +9081,7 @@ const Leads = () => {
                                 <select
                                   className="input-field"
                                   value={rule.campaignId || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
                                   onChange={(e) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
@@ -9075,7 +9117,7 @@ const Leads = () => {
                                     disabled={
                                       !ruleIsValid ||
                                       autoCampaignRulesSaving ||
-                                      !isAdmin
+                                      !canLeadWrite
                                     }
                                     onClick={() => {
                                       saveAutoCampaignRules({
@@ -9092,7 +9134,7 @@ const Leads = () => {
                                       color: "var(--text-primary)",
                                       fontSize: "0.75rem",
                                       cursor:
-                                        isAdmin &&
+                                        canLeadWrite &&
                                         ruleIsValid &&
                                         !autoCampaignRulesSaving
                                           ? "pointer"
@@ -9119,7 +9161,7 @@ const Leads = () => {
                                 </div>
                                 <button
                                   type="button"
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
                                   onClick={() => {
                                     const next = autoCampaignRules.filter(
                                       (r) => r.id !== rule.id,
@@ -9139,7 +9181,7 @@ const Leads = () => {
                                     background: "none",
                                     border: "none",
                                     color: "var(--danger-color, #ef4444)",
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
+                                    cursor: canLeadWrite ? "pointer" : "not-allowed",
                                     display: "inline-flex",
                                     alignItems: "center",
                                     justifyContent: "center",
@@ -9155,7 +9197,7 @@ const Leads = () => {
 
                           <button
                             type="button"
-                            disabled={autoCampaignRulesSaving || !isAdmin}
+                            disabled={autoCampaignRulesSaving || !canLeadWrite}
                             onClick={() => {
                               const next = [
                                 ...autoCampaignRules,
@@ -9180,7 +9222,7 @@ const Leads = () => {
                               border: "1px dashed var(--border-color)",
                               background: "transparent",
                               color: "var(--text-secondary)",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canLeadWrite ? "pointer" : "not-allowed",
                               fontSize: "0.8rem",
                               alignSelf: "flex-start",
                             }}
@@ -9188,7 +9230,7 @@ const Leads = () => {
                             <Plus size={14} /> Add rule
                           </button>
 
-                          {!isAdmin && (
+                          {!canLeadWrite && (
                             <div
                               className="call-settings-admin-note"
                               style={{
@@ -9197,7 +9239,7 @@ const Leads = () => {
                                 marginTop: "0.5rem",
                               }}
                             >
-                              Only admins can change auto-assign rules.
+                              A role with leads.write can change auto-assign rules.
                             </div>
                           )}
                         </div>
@@ -10219,7 +10261,7 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings ? "pointer" : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                             }}
@@ -10227,7 +10269,7 @@ const Leads = () => {
                             <input
                               type="checkbox"
                               checked={autoDialNewLeadsEnabled}
-                              disabled={callSettingsSaving || !isAdmin}
+                              disabled={callSettingsSaving || !canManageCallSettings}
                               onChange={(e) => {
                                 saveAutoDialNewLeadsEnabled(e.target.checked);
                               }}
@@ -10267,7 +10309,7 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "flex-start",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings ? "pointer" : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                             }}
@@ -10331,7 +10373,7 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings ? "pointer" : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                               marginBottom: "0.75rem",
@@ -10343,7 +10385,7 @@ const Leads = () => {
                               disabled={
                                 dnpSettingsLoading ||
                                 callSettingsSaving ||
-                                !isAdmin
+                                !canManageCallSettings
                               }
                               onChange={(e) => {
                                 saveDnpRetryEnabled(e.target.checked);
@@ -10381,7 +10423,7 @@ const Leads = () => {
                                   disabled={
                                     dnpSettingsLoading ||
                                     callSettingsSaving ||
-                                    !isAdmin
+                                    !canManageCallSettings
                                   }
                                   onChange={(e) => {
                                     setDnpMaxRetries(Number(e.target.value));
@@ -10442,7 +10484,7 @@ const Leads = () => {
                                 disabled={
                                   dnpSettingsLoading ||
                                   callSettingsSaving ||
-                                  !isAdmin
+                                  !canManageCallSettings
                                 }
                               />
                             </div>
@@ -10480,7 +10522,7 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings ? "pointer" : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                               marginBottom: "0.75rem",
@@ -10492,7 +10534,7 @@ const Leads = () => {
                               disabled={
                                 pendingSettingsLoading ||
                                 callSettingsSaving ||
-                                !isAdmin
+                                !canManageCallSettings
                               }
                               onChange={(e) =>
                                 savePendingSetting(
@@ -10534,7 +10576,7 @@ const Leads = () => {
                                   disabled={
                                     pendingSettingsLoading ||
                                     callSettingsSaving ||
-                                    !isAdmin
+                                    !canManageCallSettings
                                   }
                                   onChange={(e) =>
                                     setPendingMaxRetries(Number(e.target.value))
@@ -10603,7 +10645,7 @@ const Leads = () => {
                                 disabled={
                                   pendingSettingsLoading ||
                                   callSettingsSaving ||
-                                  !isAdmin
+                                  !canManageCallSettings
                                 }
                               />
                             </div>
@@ -10641,7 +10683,7 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings ? "pointer" : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                               marginBottom: "0.75rem",
@@ -10653,7 +10695,7 @@ const Leads = () => {
                               disabled={
                                 assignSettingsLoading ||
                                 callSettingsSaving ||
-                                !isAdmin
+                                !canManageCallSettings
                               }
                               onChange={(e) => {
                                 saveAssignStaffEnabled(e.target.checked);
@@ -10689,7 +10731,7 @@ const Leads = () => {
                                   disabled={
                                     assignSettingsLoading ||
                                     callSettingsSaving ||
-                                    !isAdmin
+                                    !canManageCallSettings
                                   }
                                   onChange={(e) => {
                                     saveAssignStaffLogic(e.target.value);
@@ -10734,7 +10776,7 @@ const Leads = () => {
                                     disabled={
                                       assignSettingsLoading ||
                                       callSettingsSaving ||
-                                      !isAdmin
+                                      !canManageCallSettings
                                     }
                                     onChange={(e) => {
                                       setAssignStaffLeadsPerUser(
@@ -10797,7 +10839,7 @@ const Leads = () => {
                           </div>
                         </div>
 
-                        {!isAdmin && (
+                        {!canManageCallSettings && (
                           <div
                             style={{
                               fontSize: "0.75rem",
@@ -10805,7 +10847,7 @@ const Leads = () => {
                               marginTop: "0.75rem",
                             }}
                           >
-                            Only admins can change these settings.
+                            A role with settings.manage can change these settings.
                           </div>
                         )}
                         <div
@@ -10832,7 +10874,7 @@ const Leads = () => {
                             type="button"
                             className="btn-primary"
                             onClick={saveAllCallSettings}
-                            disabled={callSettingsSaving || !isAdmin}
+                            disabled={callSettingsSaving || !canManageCallSettings}
                           >
                             {callSettingsSaving ? "Saving…" : "Save changes"}
                           </button>
@@ -11136,6 +11178,7 @@ const Leads = () => {
                                 onSave={updateLeadInlineValue}
                                 required
                                 editOnDisplayClick={false}
+                                showEditButton={canLeadUpdate}
                                 disableTruncation
                                 renderValue={(name) => (
                                   <a
@@ -11427,6 +11470,7 @@ const Leads = () => {
                                   onSave={updateLeadInlineValue}
                                   required
                                   editOnDisplayClick={false}
+                                  showEditButton={canLeadUpdate}
                                   disableTruncation
                                   renderValue={(name) => (
                                     <a
@@ -11708,7 +11752,7 @@ const Leads = () => {
                               onChange={(campaignId) =>
                                 handleCampaignChange(lead, campaignId)
                               }
-                              disabled={!callifiedConfigured}
+                                disabled={!callifiedConfigured || !canLeadUpdate}
                               width={160}
                               maxVisibleRows={5}
                               ariaLabel={`Assign Callified campaign for ${lead.name || "lead"}`}
@@ -11809,7 +11853,7 @@ const Leads = () => {
                                         e.target.value,
                                       )
                                     }
-                                    disabled={!callifiedConfigured}
+                                      disabled={!callifiedConfigured || !canLeadUpdate}
                                     style={{
                                       padding: "0.25rem 0.6rem",
                                       borderRadius: "999px",
@@ -12127,36 +12171,42 @@ const Leads = () => {
                           >
                             <Eye size={15} />
                           </button>
-                          <button
-                            onClick={() => openEdit(lead)}
-                            title="Edit lead"
-                            style={{ ...actionIconBtn, marginLeft: 6 }}
-                          >
-                            <Pencil size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleConvert(lead.id)}
-                            title="Convert to Prospect"
-                            aria-label={`Convert ${lead.name || "lead"} to Prospect`}
-                            style={{
-                              ...actionIconBtn,
-                              color: "var(--success-color)",
-                              marginLeft: 6,
-                            }}
-                          >
-                            <ArrowRightCircle size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(lead)}
-                            title="Delete lead"
-                            style={{
-                              ...actionIconBtn,
-                              color: "var(--danger-color, #f43f5e)",
-                              marginLeft: 6,
-                            }}
-                          >
-                            <Trash2 size={15} />
-                          </button>
+                          {canLeadUpdate && (
+                            <>
+                              <button
+                                onClick={() => openEdit(lead)}
+                                title="Edit lead"
+                                style={{ ...actionIconBtn, marginLeft: 6 }}
+                              >
+                                <Pencil size={15} />
+                              </button>
+                              <button
+                                onClick={() => handleConvert(lead.id)}
+                                title="Convert to Prospect"
+                                aria-label={`Convert ${lead.name || "lead"} to Prospect`}
+                                style={{
+                                  ...actionIconBtn,
+                                  color: "var(--success-color)",
+                                  marginLeft: 6,
+                                }}
+                              >
+                                <ArrowRightCircle size={15} />
+                              </button>
+                            </>
+                          )}
+                          {canLeadDelete && (
+                            <button
+                              onClick={() => handleDelete(lead)}
+                              title="Delete lead"
+                              style={{
+                                ...actionIconBtn,
+                                color: "var(--danger-color, #f43f5e)",
+                                marginLeft: 6,
+                              }}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -13689,23 +13739,27 @@ const Leads = () => {
                   Open full detail
                 </button>
               </>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  openEdit(previewLeadCurrent);
-                  setPreviewLead(null);
-                }}
-              >
-                {isTravel ? "Edit contact" : "Edit lead"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => handleConvert(previewLeadCurrent.id)}
-              >
-                Convert to Prospect
-              </button>
+              {canLeadUpdate && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      openEdit(previewLeadCurrent);
+                      setPreviewLead(null);
+                    }}
+                  >
+                    {isTravel ? "Edit contact" : "Edit lead"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => handleConvert(previewLeadCurrent.id)}
+                  >
+                    Convert to Prospect
+                  </button>
+                </>
+              )}
             </div>
 
             <section style={{ marginTop: "1.25rem" }}>

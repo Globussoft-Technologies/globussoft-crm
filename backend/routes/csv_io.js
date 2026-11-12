@@ -31,7 +31,8 @@ const express = require("express");
 const multer = require("multer");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
-const { verifyToken, verifyRole } = require("../middleware/auth");
+const { verifyToken } = require("../middleware/auth");
+const { requireAnyPermission } = require("../middleware/requirePermission");
 const {
   serializeRows,
   parseCsv,
@@ -80,6 +81,49 @@ function contactImportUpload(req, res, next) {
 }
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
+
+// CSV is shared by several pages, so authorization is capability-based rather
+// than role-name-based. Leads and contacts intentionally share the contacts
+// CSV surface: a custom Leads role must be able to use the same import/history
+// endpoints without also needing an unrelated Contacts role.
+const CONTACT_READ = requireAnyPermission([
+  { module: "leads", action: "read" },
+  { module: "contacts", action: "read" },
+]);
+const CONTACT_EXPORT = requireAnyPermission([
+  { module: "leads", action: "export" },
+  { module: "contacts", action: "export" },
+]);
+const CONTACT_WRITE = requireAnyPermission([
+  { module: "leads", action: "write" },
+  { module: "contacts", action: "write" },
+]);
+const SERVICES_READ = requireAnyPermission([{ module: "services", action: "read" }]);
+const SERVICES_WRITE = requireAnyPermission([{ module: "services", action: "write" }]);
+const PRODUCTS_READ = requireAnyPermission([{ module: "products", action: "read" }]);
+const PRODUCTS_WRITE = requireAnyPermission([{ module: "products", action: "write" }]);
+const BOOKINGS_READ = requireAnyPermission([{ module: "booking_pages", action: "read" }]);
+
+const GENERIC_RESOURCE_PERMISSIONS = {
+  contacts: { read: CONTACT_READ },
+  services: { read: SERVICES_READ },
+  products: { read: PRODUCTS_READ },
+  "membership-plans": { read: PRODUCTS_READ },
+  bookings: { read: BOOKINGS_READ },
+};
+
+function requireGenericResourcePermission(action) {
+  return (req, res, next) => {
+    const middleware = GENERIC_RESOURCE_PERMISSIONS[req.params.entity]?.[action];
+    if (!middleware) {
+      return res.status(404).json({
+        error: `Unknown CSV resource '${req.params.entity}'`,
+        code: "UNKNOWN_CSV_RESOURCE",
+      });
+    }
+    return middleware(req, res, next);
+  };
+}
 
 async function writeImportedCustomFields(contactId, tenantId, customFields, definitions, { parallel = false } = {}) {
   const writes = Object.entries(customFields || {});
@@ -162,10 +206,12 @@ async function findContactByImportedExternalId(tenantId, customFields, definitio
 // other routes aren't affected.
 router.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
 
-// router-level guard so every endpoint inherits auth + RBAC.
-router.use(verifyToken, verifyRole(["ADMIN", "MANAGER"]));
+// Authentication is shared by every endpoint; authorization is attached to
+// each resource/action below so custom roles can receive exactly the grants
+// selected for them in the permissions matrix.
+router.use(verifyToken);
 
-router.get("/contacts/import-history", async (req, res) => {
+router.get("/contacts/import-history", CONTACT_READ, async (req, res) => {
   if (req.user.vertical !== "generic") {
     return res.status(404).json({ error: "Import history is not available", code: "IMPORT_HISTORY_NOT_AVAILABLE" });
   }
@@ -453,7 +499,7 @@ function matchesContactExportFilter(contact, req) {
   return true;
 }
 
-router.get("/contacts", async (req, res) => {
+router.get("/contacts", CONTACT_READ, async (req, res) => {
   const isGeneric = req.user.vertical === "generic";
   res.json({
     entity: "contacts",
@@ -471,7 +517,7 @@ router.get("/contacts", async (req, res) => {
   });
 });
 
-router.get("/contacts/export.csv", async (req, res) => {
+router.get("/contacts/export.csv", CONTACT_EXPORT, async (req, res) => {
   try {
     const contacts = await prisma.contact.findMany({
       where: tenantWhere(req, { deletedAt: null }),
@@ -498,7 +544,7 @@ router.get("/contacts/export.csv", async (req, res) => {
   }
 });
 
-router.get("/contacts/template.csv", async (req, res) => {
+router.get("/contacts/template.csv", CONTACT_READ, async (req, res) => {
   try {
     const format = resolveExportFormat(req);
     if (format === "xlsx") {
@@ -515,7 +561,7 @@ router.get("/contacts/template.csv", async (req, res) => {
   }
 });
 
-router.post("/contacts/import.csv", contactImportUpload, async (req, res) => {
+router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (req, res) => {
   try {
     const isGeneric = req.user.vertical === "generic";
     const parsed = readUploadedContactRows(req);
@@ -806,7 +852,7 @@ const SERVICE_COLS = [
   { key: "isActive", header: "isActive" },
 ];
 
-router.get("/services/export.csv", async (req, res) => {
+router.get("/services/export.csv", SERVICES_READ, async (req, res) => {
   try {
     const services = await prisma.service.findMany({
       where: tenantWhere(req),
@@ -821,7 +867,7 @@ router.get("/services/export.csv", async (req, res) => {
   }
 });
 
-router.post("/services/import.csv", upload.single("file"), async (req, res) => {
+router.post("/services/import.csv", SERVICES_WRITE, upload.single("file"), async (req, res) => {
   try {
     const csvText = readUploadedCsv(req);
     if (!csvText) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
@@ -898,7 +944,7 @@ const PRODUCT_COLS = [
   { key: "threshold", header: "threshold" },
 ];
 
-router.get("/products/export.csv", async (req, res) => {
+router.get("/products/export.csv", PRODUCTS_READ, async (req, res) => {
   try {
     const products = await prisma.product.findMany({
       where: tenantWhere(req),
@@ -913,7 +959,7 @@ router.get("/products/export.csv", async (req, res) => {
   }
 });
 
-router.post("/products/import.csv", upload.single("file"), async (req, res) => {
+router.post("/products/import.csv", PRODUCTS_WRITE, upload.single("file"), async (req, res) => {
   try {
     const csvText = readUploadedCsv(req);
     if (!csvText) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
@@ -1004,7 +1050,7 @@ const MEMBERSHIP_PLAN_COLS = [
   { key: "isActive", header: "isActive" },
 ];
 
-router.get("/membership-plans/export.csv", async (req, res) => {
+router.get("/membership-plans/export.csv", PRODUCTS_READ, async (req, res) => {
   try {
     const plans = await prisma.membershipPlan.findMany({
       where: tenantWhere(req),
@@ -1019,7 +1065,7 @@ router.get("/membership-plans/export.csv", async (req, res) => {
   }
 });
 
-router.post("/membership-plans/import.csv", upload.single("file"), async (req, res) => {
+router.post("/membership-plans/import.csv", PRODUCTS_WRITE, upload.single("file"), async (req, res) => {
   try {
     const csvText = readUploadedCsv(req);
     if (!csvText) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
@@ -1116,7 +1162,7 @@ const BOOKING_COLS = [
   { key: "createdAt", header: "createdAt", render: (r) => r.createdAt ? new Date(r.createdAt).toISOString() : "" },
 ];
 
-router.get("/bookings/export.csv", async (req, res) => {
+router.get("/bookings/export.csv", BOOKINGS_READ, async (req, res) => {
   try {
     const bookings = await prisma.booking.findMany({
       where: tenantWhere(req),
@@ -1215,7 +1261,7 @@ function genericResource(req, res) {
   return def;
 }
 
-router.get("/:entity/template.csv", (req, res) => {
+router.get("/:entity/template.csv", requireGenericResourcePermission("read"), (req, res) => {
   const def = genericResource(req, res);
   if (!def) return;
   const csv = serializeRows(def.columns, [def.sample]);
@@ -1223,7 +1269,7 @@ router.get("/:entity/template.csv", (req, res) => {
   res.send(csv);
 });
 
-router.get("/:entity", (req, res) => {
+router.get("/:entity", requireGenericResourcePermission("read"), (req, res) => {
   const def = genericResource(req, res);
   if (!def) return;
   res.json({

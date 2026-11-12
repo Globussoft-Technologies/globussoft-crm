@@ -29,11 +29,11 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const M = require("../lib/leadReportMetrics");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 
-router.use(verifyRole(["ADMIN", "MANAGER"]));
+router.use(requirePermission("reports", "read"));
 
 const STAGES_SETTING_KEY = "leads.funnel.stages";
 
@@ -360,7 +360,10 @@ router.get("/stages", async (req, res) => {
 });
 
 // PUT /stages — replace the lead-stage funnel definition (ADMIN only)
-router.put("/stages", verifyRole(["ADMIN"]), async (req, res) => {
+router.put(
+  "/stages",
+  requirePermission("reports", "write"),
+  async (req, res) => {
   try {
     let stages;
     try {
@@ -390,7 +393,8 @@ router.put("/stages", verifyRole(["ADMIN"]), async (req, res) => {
     console.error("[lead-reports/stages:put]", err);
     res.status(500).json({ error: "Failed to save lead stages", code: "STAGES_WRITE_FAILED" });
   }
-});
+  },
+);
 
 // ─── 1. Productivity report (daily / weekly / monthly) ───────────────
 

@@ -54,7 +54,6 @@ const { isValidPhoneOrEmpty } = require("../lib/validators");
 
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { buildTmcParentRegistrationUrl } = require("../lib/tmcRegistrationContext");
-const visaDocStore = require("../lib/visaDocStore");
 const { normalizeTripType, tripRequiresPassport } = require("../lib/travelDocumentPolicy");
 const { readConfig: readPromotionalWebsiteConfig } = require("./travel_promotional_website");
 const {
@@ -67,15 +66,6 @@ const {
 const router = express.Router();
 
 const publicRouter = express.Router();
-
-const landingRegistrationDocUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (/^(image\/(png|jpe?g)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/i.test(file.mimetype || "")) return cb(null, true);
-    return cb(new Error("Only JPEG, PNG, PDF, DOC or DOCX files are allowed"));
-  },
-});
 
 const prisma = require("../lib/prisma");
 const { hardDeleteContact } = require("../lib/contactHardDelete");
@@ -1550,7 +1540,6 @@ function decoratePublishedPublicPayload(
       submit: submitUrl,
       track: `${runtimeUrl}/track`,
       registrationDraft: `${runtimeUrl}/registration-draft`,
-      registrationDocuments: `${runtimeUrl}/registration-documents`,
       paymentOrder: paymentOrderUrl,
       paymentStatus: `${runtimeUrl}/payment-status`,
     };
@@ -2178,7 +2167,7 @@ const VALID_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
 
 //     template-editor mode and the public render uses the premium
 
-//     microsite template.
+//     premium travel template.
 
 //   - "legacy"            — LLM block array persisted as-is with
 
@@ -4909,7 +4898,7 @@ router.post("/:id/preview-token", verifyToken, async (req, res) => {
 
 //
 
-// Why: operators need to see the EXACT rendered microsite before they
+// Why: operators need to see the EXACT rendered landing page before they
 
 // publish. Existing `/p/:slug` only serves PUBLISHED pages (DRAFT pages
 
@@ -6181,64 +6170,6 @@ publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) 
   } catch (err) {
     console.error("[LandingPage] registration draft error:", err);
     return res.status(500).json({ error: "Could not start registration", code: "DRAFT_CREATE_FAILED" });
-  }
-});
-
-publicRouter.post("/:slug/registration-documents", (req, res, next) => {
-  landingRegistrationDocUpload.fields([
-    { name: "passport", maxCount: 1 },
-    { name: "aadhaar", maxCount: 1 },
-    { name: "parentConsent", maxCount: 1 },
-    { name: "medicalConsent", maxCount: 1 },
-  ])(req, res, (err) => {
-    if (!err) return next();
-    return res.status(400).json({ error: err.message || "Invalid document upload", code: "INVALID_FILE" });
-  });
-}, async (req, res) => {
-  try {
-    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" }, select: { id: true, tripId: true, tenantId: true, content: true, templateType: true, subBrand: true } });
-    if (!page || !isTravelPublicPage(page) || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
-    const tripType = await resolveLandingPageTripType(page);
-    const isDomesticTrip = !tripRequiresPassport(tripType);
-    const token = String(req.body?.draftToken || "").trim();
-    const fields = safeJsonParse(req.body?.fields, {});
-    let draft = token ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: token } }) : null;
-    if (!draft) {
-      const draftToken = crypto.randomBytes(24).toString("hex");
-      draft = await prisma.pendingTripRegistration.create({
-        data: {
-          tenantId: page.tenantId || 1, tripId: page.tripId, landingPageId: page.id,
-          studentName: String(fields.student_name || "").trim(), studentSchool: fields.school || null, studentClass: fields.grade || null,
-          parentName: String(fields.parent_name || "").trim(), parentEmail: String(fields.parent_email || "").trim(), parentPhone: String(fields.parent_phone || "").trim(),
-          extrasJson: JSON.stringify({ landingPage: true }), status: "DRAFT", draftToken,
-          draftTokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
-        },
-      });
-    }
-    if (!draft || draft.tripId !== page.tripId || draft.draftTokenExpiresAt < new Date()) return res.status(400).json({ error: "Registration draft is invalid or expired", code: "INVALID_DRAFT" });
-    const files = req.files || {};
-    const required = [
-      ...(isDomesticTrip ? [] : ["passport"]),
-      "aadhaar", "parentConsent", "medicalConsent",
-    ];
-    if (required.some((name) => !files[name]?.[0])) {
-      return res.status(400).json({
-        error: isDomesticTrip ? "All three documents are required" : "All four documents are required",
-        code: "MISSING_FILES",
-      });
-    }
-    const current = safeJsonParse(draft.extrasJson, {});
-    const documents = current.documents && typeof current.documents === "object" ? current.documents : {};
-    for (const name of required) {
-      const stored = await visaDocStore.storeDoc(files[name][0].buffer, files[name][0].mimetype);
-      documents[name] = { ...stored, uploadedAt: new Date().toISOString() };
-    }
-    documents.completedAt = new Date().toISOString();
-    await prisma.pendingTripRegistration.update({ where: { id: draft.id }, data: { extrasJson: JSON.stringify({ ...current, documents }) } });
-    return res.json({ ok: true, draftToken: draft.draftToken, documents: required.reduce((out, name) => ({ ...out, [name]: true }), {}) });
-  } catch (err) {
-    console.error("[LandingPage] registration document error:", err);
-    return res.status(500).json({ error: "Could not upload registration documents", code: "DOCUMENT_UPLOAD_FAILED" });
   }
 });
 
@@ -7725,7 +7656,7 @@ function resolveRegistrationMode(page, formProps) {
 
 
 
-// Hybrid landing-page ? microsite registration-draft branch (Phase 3).
+// Hybrid landing-page registration-draft branch (Phase 3).
 
 //
 
@@ -7733,15 +7664,15 @@ function resolveRegistrationMode(page, formProps) {
 
 // landing-page wizard submission creates a PendingTripRegistration
 
-// staging row and returns a redirect URL pointing at the trip's
+// staging row and returns a parent-registration redirect. No PII is
 
-// microsite with an opaque draftToken in the query string. No PII
+// placed in the URL. The draft continues through the CRM approval queue.
 
-// in the URL. Falls back to a thank-you response (no microsite
+//
 
-// redirect) when the trip has no published microsite yet — gives
+//
 
-// operators a graceful pre-publish state.
+//
 
 //
 
@@ -8040,19 +7971,19 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
 
 
-  // Resolve microsite redirect. If the trip has a published microsite,
+  // Continue directly to the customer registration flow. Documents are
 
-  // the URL carries the opaque draftToken plus a URL-encoded bridge to
-  // the customer registration page. The microsite path itself stays free
-  // of raw PII, and the bridge is only used after document submission. If the trip
+  // collected later in the parent portal from the trip's dynamic requirements.
+  //
+  //
 
-  // hasn't published a microsite yet, fall back to a thank-you
+  //
 
-  // response — the operator can ship the microsite later and the
+  //
 
-  // PendingTripRegistration row will still flow through the CRM
+  //
 
-  // approval queue.
+  //
 
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
   const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
@@ -8642,9 +8573,9 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     // mode=registration-draft, create a PendingTripRegistration
 
-    // instead of a Contact+Deal lead. The microsite OTP step
+    // instead of a Contact+Deal lead. The parent portal handles
 
-    // (Phase 4) then attaches phone verification to the draft, and
+    // phone verification and document collection for the draft, and
 
     // the CRM approval step (Phase 5) converts an OTP_VERIFIED draft
 

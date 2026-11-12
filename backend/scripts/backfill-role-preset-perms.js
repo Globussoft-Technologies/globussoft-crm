@@ -139,7 +139,6 @@ const USER_PERMISSIONS = [
   'projects.read',
   'pipeline.read',
   'quotes.read',
-  'reports.read',
   'dashboards.read',
   'analytics.read',
   'communications.read',
@@ -312,10 +311,10 @@ const ROLE_GRANTS = {
 
 // Permissions that should be EXPLICITLY removed from system roles during
 // backfill. The default backfill pass is purely additive (preserves admin
-// customisations) but a small set of renamed/replaced permissions need
-// to be cleared on existing tenants. Each entry below is paired with a
-// matching ADD in the role's PERMISSIONS list, so the net effect on a
-// backfilled tenant is a rename, not a removal of capability.
+// customisations) but a small set of renamed/replaced or over-broad legacy
+// permissions need to be cleared on existing tenants. Most entries below
+// are paired with a matching ADD in the role's PERMISSIONS list; explicit
+// security corrections are intentionally removal-only.
 //
 //   CUSTOMER: prescriptions.read → my_prescriptions.read
 //     The tenant-wide `prescriptions.read` was always a no-op for
@@ -341,7 +340,9 @@ const BILLING_LEGACY = [
 const ROLE_REMOVALS = {
   ADMIN: BILLING_LEGACY,
   MANAGER: BILLING_LEGACY,
-  USER: BILLING_LEGACY,
+  // Lead reports are a manager/admin oversight surface. Remove the legacy
+  // USER grant from existing tenants as well as omitting it from new presets.
+  USER: ['reports.read', ...BILLING_LEGACY],
   CUSTOMER: ['prescriptions.read', ...BILLING_LEGACY],
   DOCTOR: BILLING_LEGACY,
   NURSE: BILLING_LEGACY,

@@ -235,7 +235,7 @@ describe('originCheck — PUBLIC_PATH_PREFIXES unconditionally pass', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  test.each(['submit', 'registration-draft', 'registration-documents', 'payment-order'])(
+test.each(['submit', 'registration-draft', 'payment-order'])(
     'customer-hosted landing page %s passes from its external origin',
     (action) => {
       const { req, res, next } = makeReqRes({

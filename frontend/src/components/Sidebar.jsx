@@ -2195,8 +2195,8 @@ function TravelSubBrandSwitcher({ activeSubBrand, visibleSubBrands, onChange }) 
 //
 // Slim placeholder nav for the travel vertical. Phase 1 (docs/TRAVEL_CRM_PRD.md
 // 7) will fill out the full surface: Diagnostics, Itineraries, Trips (per
-// sub-brand: TMC trips / RFU pilgrims), Visa Applications, Suppliers,
-// Microsites. For Day 1, only Dashboard is wired  everything else is
+// sub-brand: TMC trips / RFU pilgrims), Visa Applications, Suppliers.
+// For Day 1, only Dashboard is wired  everything else is
 // "Coming in Phase 1" so the user can see the planned navigation map
 // without dead links.
 // Travel "Travel" section label + Q25 sub-brand switcher. Rendered in the

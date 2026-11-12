@@ -152,4 +152,58 @@ describe('hydrateWellnessLandingImages', () => {
     expect(parsed.some((block) => block.props?.variant === 'wellness-campaign-page')).toBe(true);
     expect(service._collectBlocks(parsed).filter((block) => block.type === 'image' && block.props?.src).length).toBe(5);
   });
+
+  test('builds and hydrates an empty current wellness-site scaffold', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    const fetchOne = vi.spyOn(imageProvider, 'fetchOne').mockImplementation(async (_query, options) => ({
+      url: `https://images.pexels.com/${options.aspectRatio.replace(':', '-')}-${Math.random()}.jpg`,
+      attribution: { providerId: 'pexels', photographer: 'Test Photographer' },
+    }));
+    const page = {
+      id: 44,
+      slug: 'current-wellness-event',
+      templateType: 'wellness-site-wellness-v1',
+      title: 'Untitled Wellness Event Landing Site',
+      content: '[]',
+    };
+
+    const result = await service.hydrateWellnessLandingImages(page);
+    const parsed = JSON.parse(result.content);
+
+    expect(fetchOne).toHaveBeenCalledTimes(5);
+    expect(parsed.some((block) => block.props?.variant === 'wellness-campaign-page')).toBe(true);
+    expect(service._collectBlocks(parsed).filter((block) => block.type === 'image' && block.props?.src).length).toBe(5);
+  });
+
+  test('retries unmatched campaign slots with the broad wellness query', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    let imageNumber = 0;
+    const fetchOne = vi.spyOn(imageProvider, 'fetchOne').mockImplementation(async (query) => {
+      if (query.includes('hair loss')) return null;
+      imageNumber += 1;
+      return {
+        url: `https://images.pexels.com/fallback-${imageNumber}.jpg`,
+        attribution: { providerId: 'pexels', photographer: 'Test Photographer' },
+      };
+    });
+    const page = {
+      id: 45,
+      slug: 'hair-loss-event',
+      tenantId: 7,
+      templateType: 'wellness-site-wellness-v1',
+      title: 'Hair Loss Treatment Event',
+      content: '[]',
+    };
+
+    const result = await service.hydrateWellnessLandingImages(page, {
+      db: { landingPage: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) } },
+    });
+    const parsed = JSON.parse(result.content);
+    const slots = service._collectBlocks(parsed).filter((block) => block.type === 'image');
+
+    expect(fetchOne).toHaveBeenCalledTimes(10);
+    expect(slots).toHaveLength(5);
+    expect(slots.every((block) => block.props.src)).toBe(true);
+    expect(new Set(slots.map((block) => block.props.src)).size).toBe(5);
+  });
 });

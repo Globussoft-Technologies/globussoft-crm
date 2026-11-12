@@ -35,7 +35,7 @@
  *     past scheduledAt → 400; non-matching slot → 409 (slot validation
  *     against buildSlotsForDate).
  *
- * Test pattern mirrors backend/test/routes/travel-microsites.test.js +
+ * Test pattern mirrors the public travel-page route tests +
  * communications.test.js — patch the prisma singleton with vi.fn() shapes
  * BEFORE requiring the router. verifyToken stays in the chain so the auth
  * guard is exercised end-to-end (no bypass). HS256 JWTs signed with the

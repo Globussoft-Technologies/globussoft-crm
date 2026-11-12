@@ -1441,9 +1441,9 @@ function renderComponent(component, slug, options = {}) {
               body:JSON.stringify(body)
             }).then(function(r){return r.json().then(function(j){return{status:r.status,body:j};});}).then(function(resp){
               if(resp.body && resp.body.error){alert(resp.body.error);return;}
-              // Phase 6 - when the backend returns a microsite redirect
-              // (registration-draft path), navigate there. The URL
-              // carries only the opaque draftToken; no PII leaks via
+              // Phase 6 - when the backend returns a customer-registration
+              // redirect (registration-draft path), navigate there. The URL
+              // carries no raw PII via
               // Query string. Fallback when no redirect is present: show the
               // thank-you panel.
               var redirect=resp.body && resp.body.redirect;
@@ -1554,7 +1554,7 @@ function isTravelDestinationPage(landingPage, components) {
 }
 
 function renderPage(landingPage, options = {}) {
-  // ?? ?? ?? ?? ?? ?? ?? ??  Phase D1 ?? ?? ?? ??  template-driven travel microsite dispatch ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 
+  // Phase D1 — template-driven travel landing-page dispatch.
   //
   // If the page's templateType matches a registered template id, the
   // semantic-payload template renderer takes over. The content for

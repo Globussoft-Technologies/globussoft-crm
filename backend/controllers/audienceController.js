@@ -3,6 +3,7 @@
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 const { normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 // Get Contacts By Status
 /**
@@ -148,12 +149,24 @@ async function attachLeadCustomFieldsBatch(contacts, tenantId) {
 exports.getContactsByStatus = async (req, res) => {
     try {
         const status = req.query.status || "Customer";
+        let canViewAll = ["ADMIN", "MANAGER"].includes(req.user.role);
+        if (!canViewAll && (req.user.vertical || "generic") === "generic") {
+            const visibility = await getSetting(
+                req.user.tenantId,
+                KEYS.GENERIC_LEAD_VISIBILITY,
+                {
+                    coerce: (value) => String(value || "closed").trim().toLowerCase(),
+                    fallback: "closed",
+                },
+            ).catch(() => "closed");
+            canViewAll = visibility === "open";
+        }
 
         const contacts = await prisma.contact.findMany({
             where: {
                 status: status,
                 tenantId: req.user.tenantId,
-                ...(!["ADMIN", "MANAGER"].includes(req.user.role) ? { assignedToId: req.user.userId } : {}),
+                ...(!canViewAll ? { assignedToId: req.user.userId } : {}),
             },
             orderBy: {
                 createdAt: "desc",

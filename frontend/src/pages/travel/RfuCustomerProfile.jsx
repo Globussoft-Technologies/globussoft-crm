@@ -12,7 +12,7 @@
 // Phase 1: paint-by-numbers form. Visa history / frequent-flyer /
 // past complaints are free-form JSON textareas; the Phase 1.5 visual
 // builders for those will land per the same trajectory as the
-// diagnostic Q-set + microsite editor flows.
+// diagnostic Q-set + portal flows.
 
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";

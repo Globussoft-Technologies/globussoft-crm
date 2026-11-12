@@ -20,6 +20,7 @@ const {
   loadUserPermissions,
   getUserPermissions,
   clearAllCache,
+  requirePermission,
 } = require('../../middleware/requirePermission');
 
 const originalUserRoleFindMany = prisma.userRole.findMany;
@@ -259,6 +260,37 @@ describe('loadUserPermissions — matrix is authoritative', () => {
     const perms = await loadUserPermissions(1, 100);
     expect(perms).toBeInstanceOf(Set);
     expect(perms.size).toBe(0);
+  });
+});
+
+describe('requirePermission', () => {
+  test('allows a custom role when its assigned permission is present', async () => {
+    prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([
+      {
+        role: {
+          key: 'LEAD_OPERATOR',
+          permissions: [{ module: 'leads', action: 'read' }],
+        },
+      },
+    ]);
+
+    const next = vi.fn();
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    };
+
+    await requirePermission('leads', 'read')(
+      {
+        user: { userId: 7, tenantId: 12, role: 'LEAD_OPERATOR' },
+      },
+      res,
+      next,
+    );
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
   });
 });
 

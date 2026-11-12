@@ -198,32 +198,25 @@ jobs:
             backend/package-lock.json
             e2e/package-lock.json
 
-      - name: Install mysql-client (for G-15 backup-engine-api.spec.js)
-        # ubuntu-latest ships mysqladmin (used by the wait loop below)
-        # but NOT mysqldump  mysqldump lives in the mysql-client
-        # package. cron/backupEngine.js shells `mysqldump` from PATH;
-        # without this step the G-15 spec would skip its file-creation
-        # tests with a "mysqldump unreachable" warning. Adds ~5s install.
-        # Wrapped with timeout+retry because apt mirrors occasionally hang
-        # and the default 20m job timeout wastes the whole api_tests gate.
+      - name: Provide mysqldump client (for G-15 backup-engine-api.spec.js)
+        # Avoid apt/mysql-server package state on ubuntu-latest. The MySQL
+        # service image already contains a compatible client binary, so use a
+        # Docker-backed shim when the runner does not provide mysqldump.
         run: |
           set -euo pipefail
-          export DEBIAN_FRONTEND=noninteractive
-          for attempt in 1 2 3; do
-            echo "::notice::apt-get update attempt $attempt"
-            if timeout 90 sudo apt-get update -qq; then
-              echo "::notice::apt-get install mysql-client attempt $attempt"
-              if timeout 180 sudo apt-get install -y --no-install-recommends mysql-client; then
-                mysqldump --version
-                echo "::notice::mysql-client installed successfully on attempt $attempt"
-                exit 0
-              fi
-            fi
-            echo "::warning::mysql-client install attempt $attempt failed; waiting 5s before retry"
-            sleep 5
-          done
-          echo "::error::Failed to install mysql-client after 3 attempts"
-          exit 1
+          if command -v mysqldump >/dev/null 2>&1; then
+            mysqldump --version
+            exit 0
+          fi
+          shim="$RUNNER_TEMP/mysqldump"
+          cat > "$shim" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec docker run --rm --network host mysql:8.0 mysqldump "$@"
+          EOF
+          chmod +x "$shim"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$shim" --version
 
       - name: Wait for MySQL ready
         run: |

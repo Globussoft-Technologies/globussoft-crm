@@ -4496,7 +4496,7 @@ const Leads = () => {
 
   // Load Callified campaigns for campaign assignment + bulk dial (generic only).
   const loadCallifiedCampaigns = useCallback(async () => {
-    if (!isGeneric || !callifiedConfigured) return;
+    if (!isGeneric || !callifiedConfigured || !canLeadWrite) return;
     try {
       const d = await fetchApi("/api/callified/campaigns/with-lead-counts");
       const list = Array.isArray(d?.campaigns) ? d.campaigns : [];
@@ -4504,7 +4504,7 @@ const Leads = () => {
     } catch {
       setCallifiedCampaigns([]);
     }
-  }, [isGeneric, callifiedConfigured]);
+  }, [isGeneric, callifiedConfigured, canLeadWrite]);
 
   useEffect(() => {
     loadCallifiedCampaigns();

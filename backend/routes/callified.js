@@ -1335,7 +1335,10 @@ router.put(
 router.get(
   "/campaigns/with-lead-counts",
   verifyToken,
-  requirePermission("leads", "read"),
+  // Campaign counts power assignment and bulk-dial controls, so keep this
+  // integration surface behind the same write capability as those actions.
+  // Read-only lead users must not reach the external Callified client.
+  requirePermission("leads", "write"),
   async (req, res) => {
     try {
       const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);

@@ -177,7 +177,6 @@ const USER_PERMISSIONS = [
   'projects.read',
   'pipeline.read',
   'quotes.read',
-  'reports.read',
   'dashboards.read',
   'analytics.read',
   'communications.read',

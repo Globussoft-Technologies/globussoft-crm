@@ -261,7 +261,7 @@ test.describe("Travel trips API — participants", () => {
     expect(csv.headers()["content-type"]).toMatch(/text\/csv/);
     expect(csv.headers()["content-disposition"]).toContain("travel-participants-template.csv");
     expect((await csv.text()).replace(/^\uFEFF/, "").trim()).toBe(
-      "fullName,parentName,parentPhone,parentEmail",
+      "fullName,parentName,parentPhone,parentEmail,applicationStatus,passportNumber,passportExpiry,aadhaarLast4,medicalNotes,reviewNotes",
     );
 
     const xlsx = await get(request, token, `/api/travel/trips/${tripId}/participants/import-template?format=xlsx`);

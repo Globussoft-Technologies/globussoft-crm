@@ -1274,7 +1274,6 @@ async function main() {
     'projects.read',
     'pipeline.read',
     'quotes.read',
-    'reports.read',
     'dashboards.read',
     'analytics.read',
     'communications.read',

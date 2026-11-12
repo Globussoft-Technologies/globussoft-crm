@@ -356,7 +356,21 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
       .set('Content-Type', 'text/csv').send('name,phone\nShared Number,+919876543210\n');
     expect(res.body).toMatchObject({ imported: 0, updated: 0, skipped: 1 });
-    expect(res.body.errors[0].reason).toMatch(/ambiguous phone/);
+    expect(res.body.errors[0]).toMatchObject({
+      rowNumber: 2,
+      field: 'phone',
+      reason: expect.stringMatching(/ambiguous phone/),
+    });
+    expect(prisma.genericImportHistory.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        errorRows: [expect.objectContaining({
+          rowNumber: 2,
+          field: 'phone',
+          action: 'skipped',
+          reason: expect.stringMatching(/ambiguous phone/),
+        })],
+      }),
+    }));
     expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(hardDeleteContactMock).not.toHaveBeenCalled();
@@ -367,6 +381,10 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
       .set('Content-Type', 'text/csv').send('name,phone\nUpdated Name,+919876543210\n');
     expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0 });
+    expect(res.body.importedContacts[0]).toMatchObject({
+      action: 'updated',
+      reason: 'Existing contact matched and updated',
+    });
     expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 103 } }));
   });
   test('imports a lead with a name and phone but no email', async () => {
@@ -380,6 +398,10 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(res.body.importedContacts[0]).toMatchObject({
+      action: 'created',
+      reason: 'New contact created',
+    });
     expect(prisma.contact.findMany).toHaveBeenCalledWith({
       where: { phone: '+919876543210', tenantId: 1 },
       select: { id: true, deletedAt: true },

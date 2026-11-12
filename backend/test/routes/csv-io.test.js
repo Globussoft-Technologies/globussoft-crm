@@ -122,6 +122,9 @@ prisma.genericImportHistory = {
   findMany: vi.fn(),
   create: vi.fn(),
 };
+prisma.tenantSetting = {
+  findUnique: vi.fn(),
+};
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   findFirst: vi.fn().mockResolvedValue(null),
@@ -179,6 +182,7 @@ beforeEach(() => {
   prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.genericImportHistory.findMany.mockReset().mockResolvedValue([]);
   prisma.genericImportHistory.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   hardDeleteContactMock.mockReset().mockResolvedValue(1);
@@ -210,6 +214,18 @@ describe('GET /api/csv/contacts/import-history', () => {
       where: { tenantId: 1 },
       orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
       take: 20,
+      select: {
+        id: true,
+        tenantId: true,
+        fileName: true,
+        inserted: true,
+        updated: true,
+        skipped: true,
+        errors: true,
+        contacts: true,
+        errorRows: true,
+        completedAt: true,
+      },
     });
   });
 
@@ -475,6 +491,67 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
         errors: 0,
       }),
     });
+  });
+
+  test('maps Generic lifecycle-stage labels to lifecycleStageKey instead of creating a custom field', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 100 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({ name: 'name', 'Lifecycle stage': 'lifecycleStageKey' }))
+      .attach('file', Buffer.from('name,Lifecycle stage\nAsha Patel,Lead\n'), {
+        filename: 'contacts.csv',
+        contentType: 'text/csv',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'Asha Patel',
+        status: 'Lead',
+        lifecycleStageKey: 'new',
+      }),
+    }));
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
+  });
+
+  test('normalizes Freshsales Generic status values to CRM statuses', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 101 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,status\nNew Lead,New\nQualified Lead,Qualified\nLost Lead,Lost\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 3, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create.mock.calls.map(([call]) => call.data.status)).toEqual([
+      'Lead',
+      'Prospect',
+      'Junk',
+    ]);
+  });
+
+  test('recovers a stale Generic mapping that sends Status to lifecycleStageKey', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 102 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({ name: 'name', Status: 'lifecycleStageKey' }))
+      .attach('file', Buffer.from('name,Status\nMapped Lead,New\n'), {
+        filename: 'contacts.csv',
+        contentType: 'text/csv',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ name: 'Mapped Lead', status: 'Lead', lifecycleStageKey: 'new' }),
+    }));
   });
 
   test('imports a workbook uploaded as .xlsx and normalizes phone_number values', async () => {

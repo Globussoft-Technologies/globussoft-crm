@@ -457,6 +457,7 @@ const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
 const CSV_IMPORT_FIELD_TYPES = {
   aiScore: "number",
   status: "dropdown",
+  lifecycleStage: "dropdown",
   birthDate: "date",
   anniversary: "date",
   website: "url",
@@ -8693,14 +8694,15 @@ const Leads = () => {
                   ? leadColumnCatalog
                       .filter(
                         (field) =>
-                          !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key),
+                          !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key) ||
+                          field.key === "lifecycleStage",
                       )
                       .map((catalogField) => {
                         const key = catalogField.key;
                         const customField = customFieldByKey.get(key);
                         return {
                           key,
-                          fieldKey: key,
+                          fieldKey: key === "lifecycleStage" ? "lifecycleStageKey" : key,
                           label:
                             catalogField.label ||
                             customField?.label ||

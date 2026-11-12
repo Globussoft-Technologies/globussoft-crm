@@ -637,6 +637,7 @@ export default function Staff() {
   // Travel-only: the sub-brand access picker (Q25) appears only for travel
   // tenants. Generic/wellness never render it and never send the field.
   const isTravel = tenant?.vertical === "travel";
+  const isGeneric = !isWellness && !isTravel;
   // #618 + RBAC: the Permissions button is gated on the granular roles.read
   // permission (not the legacy ADMIN role), so a custom non-ADMIN role with
   // roles.read granted can still view permission sheets. Falls through to
@@ -1302,6 +1303,22 @@ export default function Staff() {
   };
   const managerCount = staff.filter((s) => s.role === "MANAGER").length;
   const userCount = staff.filter((s) => s.role === "USER").length;
+  const genericStatCardStyle = isGeneric ? {
+    flex: "1 1 0",
+    minWidth: "150px",
+    minHeight: "112px",
+    padding: "1rem 1.1rem",
+    borderRadius: "12px",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    flexDirection: "column",
+    boxShadow: "0 6px 18px rgba(15, 23, 42, 0.05)",
+    textAlign: "left",
+    fontSize: "1rem",
+    fontWeight: 400,
+    cursor: "default",
+    opacity: 1,
+  } : {};
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredStaff = staff.filter((s) => {
@@ -1369,10 +1386,12 @@ export default function Staff() {
   };
   // Counts ONLY the filters that live inside the dropdown panel — drives the
   // numeric badge on the Filter button. Search lives outside the dropdown and
-  // role-pill filter lives in the stats bar above, so they're surfaced visibly
-  // elsewhere already.
+  // Generic CRM role filtering lives in this panel; non-generic role controls
+  // remain in the stats bar above.
   const activeFilterCount =
-    (statusFilter !== "all" ? 1 : 0) + (wellnessRoleFilter ? 1 : 0);
+    (filter ? 1 : 0) +
+    (statusFilter !== "all" ? 1 : 0) +
+    (wellnessRoleFilter ? 1 : 0);
   const hasActiveFilters =
     Boolean(filter) || activeFilterCount > 0 || Boolean(normalizedQuery);
   const clearFilters = () => {
@@ -1421,6 +1440,28 @@ export default function Staff() {
             Manage team members, roles, and access levels.
           </p>
         </div>
+        {isGeneric && canManageStaff && (
+          <div className="staff-directory-availability-toggle" style={{ marginLeft: "auto", marginRight: "0.25rem" }}>
+            <button
+              onClick={() => setShowAvailability(!showAvailability)}
+              style={{
+                padding: "0.4rem 1rem",
+                borderRadius: "999px",
+                background: showAvailability
+                  ? "rgba(34,197,94,0.2)"
+                  : "rgba(34,197,94,0.1)",
+                color: "#22c55e",
+                fontSize: "0.8rem",
+                fontWeight: "600",
+                border: "1px solid rgba(34,197,94,0.3)",
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              {showAvailability ? "✓ Availability" : "Availability"}
+            </button>
+          </div>
+        )}
         {/* Admin-only Add Staff CTA. Uses the wellness teal token first and
             falls back to the generic accent color — matches the standing
             rule for primary CTAs (CLAUDE.md). Non-admins never see it. */}
@@ -1460,94 +1501,151 @@ export default function Staff() {
       {/* Stats bar */}
       {staff.length > 0 && (
         <div
-          className={isTravel ? "travel-staff-stats" : "staff-directory-stats"}
+          className={isGeneric ? "tasks-summary-cards staff-directory-stats" : isTravel ? "travel-staff-stats" : "staff-directory-stats"}
           style={{
-            display: "flex",
+            display: isGeneric ? "grid" : "flex",
+            gridTemplateColumns: isGeneric ? "repeat(4, minmax(0, 1fr))" : undefined,
             gap: "0.75rem",
             marginBottom: "1.75rem",
-            flexWrap: "wrap",
-            alignItems: "center",
+            flexWrap: isGeneric ? undefined : "wrap",
+            alignItems: isGeneric ? undefined : "center",
           }}
         >
           <button
-            onClick={() => setFilter(filter === "ADMIN" ? null : "ADMIN")}
+            className={isGeneric ? "tasks-summary-card tasks-summary-card--all" : undefined}
+            onClick={!isGeneric ? () => setFilter(filter === "ADMIN" ? null : "ADMIN") : undefined}
+            disabled={isGeneric}
+            aria-disabled={isGeneric}
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
-              background:
-                filter === "ADMIN"
+              background: isGeneric
+                ? "linear-gradient(135deg, rgba(99,102,241,0.07), var(--surface-color, #fff))"
+                : filter === "ADMIN"
                   ? "rgba(168,85,247,0.2)"
                   : "rgba(168,85,247,0.1)",
               color: "#a855f7",
               fontSize: "0.8rem",
               fontWeight: "600",
-              border: "1px solid rgba(168,85,247,0.3)",
+              border: isGeneric ? "1px solid rgba(99,102,241,0.35)" : "1px solid rgba(168,85,247,0.3)",
               display: "flex",
               alignItems: "center",
               gap: "0.3rem",
               cursor: "pointer",
               transition: "all 0.2s",
+              ...genericStatCardStyle,
             }}
           >
-            <Shield size={12} /> {adminCount} Admins
+            {isGeneric ? (
+              <>
+                <span className="tasks-summary-card__label">ADMINS</span>
+                <strong style={{ fontSize: "1.65rem", lineHeight: 1 }}>{adminCount}</strong>
+                <span className="tasks-summary-card__hint">Team administrators</span>
+              </>
+            ) : (
+              <><Shield size={12} /> {adminCount} Admins</>
+            )}
           </button>
           <button
-            onClick={() => setFilter(filter === "MANAGER" ? null : "MANAGER")}
+            className={isGeneric ? "tasks-summary-card tasks-summary-card--progress" : undefined}
+            onClick={!isGeneric ? () => setFilter(filter === "MANAGER" ? null : "MANAGER") : undefined}
+            disabled={isGeneric}
+            aria-disabled={isGeneric}
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
-              background:
-                filter === "MANAGER"
+              background: isGeneric
+                ? "linear-gradient(135deg, rgba(14,165,233,0.07), var(--surface-color, #fff))"
+                : filter === "MANAGER"
                   ? "rgba(59,130,246,0.2)"
                   : "rgba(59,130,246,0.1)",
               color: "#3b82f6",
               fontSize: "0.8rem",
               fontWeight: "600",
-              border: "1px solid rgba(59,130,246,0.3)",
+              border: isGeneric ? "1px solid rgba(14,165,233,0.35)" : "1px solid rgba(59,130,246,0.3)",
               cursor: "pointer",
               transition: "all 0.2s",
+              display: "flex",
+              ...genericStatCardStyle,
             }}
           >
-            {managerCount} Managers
+            {isGeneric ? (
+              <>
+                <span className="tasks-summary-card__label">MANAGERS</span>
+                <strong style={{ fontSize: "1.65rem", lineHeight: 1 }}>{managerCount}</strong>
+                <span className="tasks-summary-card__hint">Team managers</span>
+              </>
+            ) : (
+              <>{managerCount} Managers</>
+            )}
           </button>
           <button
-            onClick={() => setFilter(filter === "USER" ? null : "USER")}
+            className={isGeneric ? "tasks-summary-card tasks-summary-card--completed" : undefined}
+            onClick={!isGeneric ? () => setFilter(filter === "USER" ? null : "USER") : undefined}
+            disabled={isGeneric}
+            aria-disabled={isGeneric}
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
-              background:
-                filter === "USER" ? "var(--subtle-bg-3)" : "var(--subtle-bg-4)",
+              background: isGeneric
+                ? "linear-gradient(135deg, rgba(16,185,129,0.07), var(--surface-color, #fff))"
+                : filter === "USER" ? "var(--subtle-bg-3)" : "var(--subtle-bg-4)",
               color:
                 filter === "USER"
                   ? "var(--text-primary)"
                   : "var(--text-secondary)",
               fontSize: "0.8rem",
               fontWeight: "600",
-              border: "1px solid var(--border-color)",
+              border: isGeneric ? "1px solid rgba(16,185,129,0.35)" : "1px solid var(--border-color)",
               cursor: "pointer",
               transition: "all 0.2s",
+              display: "flex",
+              ...genericStatCardStyle,
             }}
           >
-            {userCount} Users
+            {isGeneric ? (
+              <>
+                <span className="tasks-summary-card__label">USERS</span>
+                <strong style={{ fontSize: "1.65rem", lineHeight: 1 }}>{userCount}</strong>
+                <span className="tasks-summary-card__hint">Team members</span>
+              </>
+            ) : (
+              <>{userCount} Users</>
+            )}
           </button>
           <button
-            onClick={() => setFilter(null)}
+            className={isGeneric ? "tasks-summary-card" : undefined}
+            onClick={!isGeneric ? () => setFilter(null) : undefined}
+            disabled={isGeneric}
+            aria-disabled={isGeneric}
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
-              background: !filter ? "var(--subtle-bg-3)" : "var(--subtle-bg-4)",
+              background: isGeneric
+                ? "var(--surface-color, #fff)"
+                : !filter ? "var(--subtle-bg-3)" : "var(--subtle-bg-4)",
               color: !filter ? "var(--text-primary)" : "var(--text-secondary)",
               fontSize: "0.8rem",
               fontWeight: "600",
               border: "1px solid var(--border-color)",
               cursor: "pointer",
               transition: "all 0.2s",
+              display: "flex",
+              ...genericStatCardStyle,
             }}
           >
-            {staff.length} total
+            {isGeneric ? (
+              <>
+                <span className="tasks-summary-card__label">TOTAL STAFF</span>
+                <strong style={{ fontSize: "1.65rem", lineHeight: 1 }}>{staff.length}</strong>
+                <span className="tasks-summary-card__hint">All team members</span>
+              </>
+            ) : (
+              <>{staff.length} total</>
+            )}
           </button>
           {/* Availability toggle - only for ADMIN/MANAGER */}
-          {canManageStaff && (
+          {canManageStaff && !isGeneric && (
             <div
               className={isTravel ? "travel-staff-availability-toggle" : "staff-directory-availability-toggle"}
               style={{ marginLeft: "auto" }}
@@ -1973,6 +2071,35 @@ export default function Staff() {
                       gap: "0.85rem",
                     }}
                   >
+                    {!isWellness && !isTravel && (
+                      <label
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "var(--text-secondary)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Role
+                        <select
+                          value={filter || ""}
+                          onChange={(e) => setFilter(e.target.value || null)}
+                          aria-label="Filter by role"
+                          data-testid="staff-role-filter"
+                          className="input-field"
+                          style={{
+                            width: "100%",
+                            padding: "0.4rem 0.6rem",
+                            fontSize: "0.85rem",
+                            marginTop: "0.3rem",
+                          }}
+                        >
+                          <option value="">All roles</option>
+                          <option value="ADMIN">Admin</option>
+                          <option value="MANAGER">Manager</option>
+                          <option value="USER">User</option>
+                        </select>
+                      </label>
+                    )}
                     <label
                       style={{
                         fontSize: "0.75rem",

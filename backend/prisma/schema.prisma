@@ -12085,6 +12085,7 @@ model GenericImportHistory {
   skipped     Int      @default(0)
   errors      Int      @default(0)
   contacts    Json?
+  errorRows   Json?
   completedAt DateTime @default(now())
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

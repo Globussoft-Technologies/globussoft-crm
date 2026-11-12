@@ -1440,9 +1440,11 @@ router.get("/", async (req, res) => {
       req.query.includeCrmStatuses === "true" &&
       (req.user.vertical || "generic") === "generic";
     if (req.query.status && !includeCrmStatuses) where.status = req.query.status;
-    if (includeCrmStatuses) {
-      where.status = { in: ["Lead", "Prospect", "Customer", "Churned", "Junk"] };
-    }
+    // Generic CRM's Leads page is an all-contacts view. The legacy request
+    // still includes ?status=Lead for compatibility with existing callers,
+    // but includeCrmStatuses explicitly means that the status must not limit
+    // the result set. Do not replace this with a hard-coded status list:
+    // custom/new statuses would otherwise disappear from the Leads page.
     if (req.query.assignedToId)
       where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === "true") where.assignedToId = null;

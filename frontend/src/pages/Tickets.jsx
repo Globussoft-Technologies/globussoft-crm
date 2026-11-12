@@ -522,7 +522,7 @@ export default function Tickets() {
         </div>
       )}
 
-      <div className="tickets-grid" style={{ display: 'block' }}>
+      <div className="tickets-grid" style={{ display: 'block', marginTop: '1.5rem' }}>
 
         {/* Tickets Table */}
         <div className="card tickets-list-card" style={{ padding: '2rem', overflow: 'hidden' }}>
@@ -541,16 +541,18 @@ export default function Tickets() {
               {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
               <table className="stable-table tickets-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <colgroup>
-                  <col style={{ width: '6%' }} />
-                  <col style={{ width: '21%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '14%' }} />
+                  {/* Keep the fixed table widths within 100% so the card does
+                      not create an avoidable horizontal overflow. */}
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '20%' }} />
                   <col style={{ width: '10%' }} />
                   <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
                 </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>

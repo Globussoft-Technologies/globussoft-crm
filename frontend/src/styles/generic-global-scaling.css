@@ -1423,7 +1423,7 @@ body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):last-chil
    tenant attribute is being applied during route changes. The table stays a
    real table at handset widths; the viewport pans horizontally instead of
    shrinking columns until their contents overlap. */
-.tickets-table--generic {
+.tickets-table[data-generic-ticket-table="true"] {
   display: table !important;
   width: max-content !important;
   min-width: 100% !important;
@@ -1453,7 +1453,7 @@ body[data-vertical="generic"]
   .app-main
   > main.generic-page-content
   .tickets-page
-  .tickets-table--generic {
+  .tickets-table[data-generic-ticket-table="true"] {
   width: max-content !important;
   min-width: 100% !important;
   max-width: none !important;
@@ -1470,7 +1470,7 @@ body[data-vertical="generic"]
   > .tickets-grid
   > .tickets-list-card
   > .tickets-table-scroll
-  > table.tickets-table--generic {
+  > table.tickets-table[data-generic-ticket-table="true"] {
   display: table !important;
   width: max-content !important;
   min-width: 100% !important;
@@ -1478,7 +1478,7 @@ body[data-vertical="generic"]
   table-layout: auto !important;
 }
 
-.tickets-table--generic col { width: auto !important; }
+.tickets-table[data-generic-ticket-table="true"] col { width: auto !important; }
 
 .app-shell
   .app-main
@@ -1487,7 +1487,7 @@ body[data-vertical="generic"]
   > .tickets-grid
   > .tickets-list-card
   > .tickets-table-scroll
-  > table.tickets-table--generic
+  > table.tickets-table[data-generic-ticket-table="true"]
   col {
   width: auto !important;
 }
@@ -1499,14 +1499,14 @@ body[data-vertical="generic"]
   > .tickets-grid
   > .tickets-list-card
   > .tickets-table-scroll
-  > table.tickets-table--generic
+  > table.tickets-table[data-generic-ticket-table="true"]
   :is(th, td) {
   width: auto !important;
   min-width: 0 !important;
   white-space: nowrap !important;
 }
 
-.tickets-table--generic :is(th, td) {
+.tickets-table[data-generic-ticket-table="true"] :is(th, td) {
   box-sizing: border-box !important;
   white-space: nowrap !important;
   overflow: hidden !important;
@@ -1514,13 +1514,13 @@ body[data-vertical="generic"]
   vertical-align: middle !important;
 }
 
-.tickets-table--generic td:nth-child(2) {
+.tickets-table[data-generic-ticket-table="true"] td:nth-child(2) {
   white-space: normal !important;
   overflow-wrap: anywhere !important;
 }
 
 @media (max-width: 720px) {
-  .tickets-page:has(.tickets-table--generic) .tickets-table-scroll {
+  .tickets-page:has(.tickets-table[data-generic-ticket-table="true"]) .tickets-table-scroll {
     width: 100% !important;
     min-width: 0 !important;
     max-width: 100% !important;

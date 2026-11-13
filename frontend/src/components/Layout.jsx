@@ -209,17 +209,26 @@ const Layout = () => {
     // Touch tablets use the same drawer shell as phones so equivalent tablet
     // devices do not switch between a sidebar layout and a hamburger layout
     // solely because their CSS viewport widths differ.
-    const mql = window.matchMedia(`(max-width: ${DRAWER_BREAKPOINT_PX - 1}px), (hover: none) and (pointer: coarse) and (max-width: 1100px)`);
-    const update = () => setIsMobileViewport(mql.matches);
+    const mql = window.matchMedia(`(max-width: ${DRAWER_BREAKPOINT_PX - 1}px)`);
+    const touchMql = window.matchMedia('(hover: none) and (pointer: coarse) and (max-width: 1100px)');
+    const update = () => setIsMobileViewport(mql.matches || touchMql.matches);
     update();
     // matchMedia change events: addEventListener is the modern API; some
     // older Safari builds only have addListener. Try modern first.
     if (mql.addEventListener) {
       mql.addEventListener("change", update);
-      return () => mql.removeEventListener("change", update);
+      touchMql.addEventListener("change", update);
+      return () => {
+        mql.removeEventListener("change", update);
+        touchMql.removeEventListener("change", update);
+      };
     }
     mql.addListener(update);
-    return () => mql.removeListener(update);
+    touchMql.addListener(update);
+    return () => {
+      mql.removeListener(update);
+      touchMql.removeListener(update);
+    };
   }, []);
 
   useEffect(() => {

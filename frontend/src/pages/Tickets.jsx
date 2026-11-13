@@ -657,7 +657,7 @@ export default function Tickets() {
               }}
             >
               {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
-              <table className={`stable-table tickets-table${genericTicketLayout ? ' tickets-table--generic' : ''}`} style={{
+              <table className="stable-table tickets-table" data-generic-ticket-table={genericTicketLayout ? 'true' : undefined} style={{
                 borderCollapse: 'collapse',
                 fontSize: '0.875rem',
                 ...(genericTicketLayout ? { width: 'max-content', minWidth: '100%', maxWidth: 'none', tableLayout: 'auto' } : {}),

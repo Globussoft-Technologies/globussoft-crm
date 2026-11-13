@@ -417,6 +417,12 @@ app.post(
   forgotPasswordEmailLimiter,
   (req, res, next) => next(),
 );
+app.post(
+  "/api/portal/forgot",
+  forgotPasswordIpLimiter,
+  forgotPasswordEmailLimiter,
+  (req, res, next) => next(),
+);
 
 // Email-existence pre-check used by the marketing /get-started wizard.
 // Moderate limits: this is a normal onboarding step, but we still cap
@@ -848,7 +854,6 @@ const callifiedRoutes = require("./routes/callified");
 // 503 EXPEDIA_NOT_YET_ENABLED until DC-4 demand-threshold flips. FINAL
 // wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
 const bookingExpediaRoutes = require("./routes/booking_expedia");
-const travelMicrositesRoutes = require("./routes/travel_microsites");
 const travelMeetingFormsRoutes = require("./routes/travel_meeting_forms");
 // Brochure Engine — wraps the vendored agentic-orchcrm engine behind the
 // CRM's JWT + tenant guard. Subprocess-based bridge (see
@@ -897,6 +902,7 @@ const inventoryRoutes = require("./routes/inventory");
 // /api/wellness/ai-provider-config.
 const supportChatRoutes = require("./routes/support_chat");
 const genericLeadsAssistantRoutes = require("./routes/generic_leads_assistant");
+const { router: genericLandingChatRoutes } = require("./routes/generic_landing_chat");
 const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
 // Wellness ↔ Callified calling — AI dial + human browser (agent bridge) calls
 // from the Appointments page. Thin wellness-shaped entry point over the SAME
@@ -1036,6 +1042,7 @@ app.use("/api", (req, res, next) => {
     "/surveys/respond",
     "/surveys/public",
     "/chatbots/chat",
+    "/generic-landing-chat",
     "/web-visitors/track",
     "/payments/webhook",
     "/accounting/webhook",
@@ -1053,7 +1060,6 @@ app.use("/api", (req, res, next) => {
     "/wellness/public",
     "/wellness/portal",
     "/attendance/biometric/webhook",
-    "/travel/microsites/public",
     "/travel/meeting-forms/public",
     "/travel/diagnostics/public",
     "/diagnostic-pages/public",
@@ -1190,8 +1196,8 @@ app.use("/api", (req, res, next) => {
   // BEFORE the customer logs in (so the login screen itself can carry
   // the sub-brand chrome). We expose ONLY the public-safe fields (no
   // version history, no createdBy / audit metadata) — handler implements
-  // the field filter. Sub-path is also reachable by the public microsite
-  // and embed-widget consumers (G093 / G095) for the same reason. GET
+  // the field filter. Sub-path is also reachable by public landing-page and
+  // embed-widget consumers (G093 / G095) for the same reason. GET
   // only; mutations stay role-gated below.
   if (
     req.method === "GET" &&
@@ -1286,6 +1292,9 @@ app.use("/api/billing", billingRoutes);
 app.use("/api/v1/invoices", v1InvoicesRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/ai", aiRoutes);
+// Public generic landing assistant. It resolves only the configured public
+// Generic tenant; travel and wellness never enter this route.
+app.use("/api/generic-landing-chat", genericLandingChatRoutes);
 app.use("/api/tickets", ticketsRoutes);
 app.use("/api/integrations", integrationsRoutes);
 app.use("/api/custom_objects", customObjectsRoutes);
@@ -1461,7 +1470,7 @@ app.use("/api/travel", travelPurchaseOrdersRoutes);
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
 // Public destination-photo proxy (Pexels server-side, Wikipedia fallback on the
 // client). Mounted at the dedicated prefix; the /public sub-path is auth-exempt
-// via openPaths. Consumed by the customer-facing quote/itinerary/microsite pages.
+// via openPaths. Consumed by customer-facing quote, itinerary, and landing pages.
 app.use("/api/travel/destination-photos", require("./routes/travel_destination_photos"));
 app.use(
   "/api/travel/quote-templates",
@@ -1540,7 +1549,6 @@ app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
-app.use("/api/travel", travelMicrositesRoutes);
 app.use("/api/travel", travelMeetingFormsRoutes);
 // Brochure Engine — paths internally start with /brochures; route file owns
 // verifyToken + requireTravelTenant + requirePermission per endpoint.

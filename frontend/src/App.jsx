@@ -158,6 +158,7 @@ const SuperAdminPageVisibility = lazy(
   () => import("./pages/superadmin/SuperAdminPageVisibility"),
 );
 const SuperAdminLandingForm = lazy(() => import("./pages/superadmin/SuperAdminLandingForm"));
+const SuperAdminGenericChatKnowledge = lazy(() => import("./pages/superadmin/SuperAdminGenericChatKnowledge"));
 const SuperAdminRevenue = lazy(
   () => import("./pages/superadmin/SuperAdminRevenue"),
 );
@@ -172,9 +173,6 @@ const TmcTeacherPortal = lazy(
 );
 const TmcParentPortal = lazy(
   () => import("./pages/travel/TmcParentPortal"),
-);
-const PublicTripMicrosite = lazy(
-  () => import("./pages/travel/PublicTripMicrosite"),
 );
 const TravelPaymentPortal = lazy(() => import("./pages/travel/TravelPaymentPortal"));
 // Public itinerary share page (no auth)  the advisor's "Share link" opens
@@ -573,9 +571,6 @@ const TravelCommissionProfilesAdmin = lazy(
 );
 const TravelReligiousPackets = lazy(
   () => import("./pages/travel/ReligiousPackets"),
-);
-const TravelTmcMicrositePreview = lazy(
-  () => import("./pages/travel/TmcMicrositePreview"),
 );
 // Unified itinerary workspace — replaces the old ItineraryDetail (money /
 // status) + ItineraryEditor (days / map) two-page split, which forced an
@@ -1078,6 +1073,18 @@ function CalendarRedirect() {
     return <Navigate to="/wellness/calendar" replace />;
   }
   return <Navigate to="/calendar-sync" replace />;
+}
+
+function LeadsRouteLayout() {
+  return (
+    <RoleGuard
+      requiredPermission={{ module: "leads", action: "read" }}
+      feature="Leads"
+    >
+      <Leads />
+      <Outlet />
+    </RoleGuard>
+  );
 }
 
 export default function App() {
@@ -1683,6 +1690,7 @@ export default function App() {
                     <Route path="role-management" element={<SuperAdminRoleManagement />} />
                     <Route path="page-visibility" element={<SuperAdminPageVisibility />} />
                     <Route path="landing-form" element={<SuperAdminLandingForm />} />
+                    <Route path="generic-chat-knowledge" element={<SuperAdminGenericChatKnowledge />} />
                     <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>
                   {/* Travel customer portal — end-user (Contact) login + dashboard
@@ -1700,15 +1708,6 @@ export default function App() {
                     <Route
                       path="/travel/portal/*"
                       element={<TravelCustomerPortal />}
-                    />
-                    {/* Public TMC trip microsite (parent/teacher, no login) +
-                      the DigiLocker/Aadhaar OAuth callback landing pages.
-                      All three are public  server openPath allowlist covers
-                      the backend. The two callback routes catch DigiLocker's
-                      ?code&state redirect and complete verification. */}
-                    <Route
-                      path="/p/tripmicrosite/:publicUuid"
-                      element={<PublicTripMicrosite />}
                     />
                     <Route path="/pay/:token" element={<TravelPaymentPortal />} />
                     <Route path="/pay/trip/:tripId/installment/:installmentId" element={<TravelPaymentPortal />} />
@@ -1802,12 +1801,8 @@ export default function App() {
                       element={<Phase2ValidationSuite />}
                     />
                     <Route
-                      path="/travel/kyc/callback"
-                      element={<TravelKycCallback flow="microsite" />}
-                    />
-                    <Route
                       path="/travel/portal/kyc/callback"
-                      element={<TravelKycCallback flow="portal" />}
+                      element={<TravelKycCallback />}
                     />
                     <Route
                       path="/book/:slug"
@@ -2614,7 +2609,6 @@ export default function App() {
                         element={<Navigate to="/invoices" replace />}
                       />
                       <Route path="contacts" element={<Contacts />} />
-                      <Route path="leads/:id" element={<ContactDetail />} />
                       {/* Travel contact names use the preview drawer; this shared
                           route remains active for Generic and Wellness deep links. */}
                       <Route path="contacts/:id" element={<ContactDetail />} />
@@ -2859,15 +2853,13 @@ export default function App() {
                       <Route path="clients" element={<Clients />} />
                       <Route
                         path="leads"
-                        element={
-                          <RoleGuard
-                            requiredPermission={{ module: "leads", action: "read" }}
-                            feature="Leads"
-                          >
-                            <Leads />
-                          </RoleGuard>
-                        }
-                      />
+                        element={<LeadsRouteLayout />}
+                      >
+                        <Route
+                          path=":id"
+                          element={<ContactDetail renderBackdrop={false} />}
+                        />
+                      </Route>
                       <Route
                         path="sales-teams"
                         element={
@@ -3958,14 +3950,6 @@ export default function App() {
                         element={
                           <TravelOnly>
                             <TravelReligiousPackets />
-                          </TravelOnly>
-                        }
-                      />
-                      <Route
-                        path="travel/tmc/microsite-preview"
-                        element={
-                          <TravelOnly>
-                            <TravelTmcMicrositePreview />
                           </TravelOnly>
                         }
                       />

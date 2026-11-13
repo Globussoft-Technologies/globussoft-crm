@@ -125,3 +125,191 @@
     font-size: clamp(0.75rem, calc(0.5rem + 0.3vw), 0.8125rem);
   }
 }
+
+/* Generic Contacts uses the same records-viewport behavior as Generic Leads
+   at every desktop width, not only the laptop-density breakpoint. */
+body[data-vertical="generic"] .contacts-page .contacts-page-card {
+  overflow: visible !important;
+}
+
+/* Keep the Contacts page chrome stable while the records viewport moves. The
+   header sizing remains content-driven so the same rule works on phones,
+   tablets, and desktop screens. */
+body[data-vertical="generic"] .contacts-page > .contacts-page__header {
+  position: sticky;
+  top: 0;
+  z-index: 45;
+  box-sizing: border-box;
+  background: var(--bg-color);
+  padding-block: 0.25rem 0.75rem;
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-filters-bar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--surface-color);
+  box-shadow: 0 1px 0 var(--border-color);
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-table-frozen-spacer {
+  height: 0;
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-table-frozen-pane {
+  position: relative;
+  z-index: 2;
+  background: var(--modal-bg);
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-table-scroll-pane {
+  position: relative;
+  z-index: 1;
+  overflow-x: clip;
+  overflow-y: visible;
+  isolation: isolate;
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table thead,
+body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table thead tr {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 30;
+  display: table-header-group !important;
+  height: 42px !important;
+  background: var(--modal-bg);
+  isolation: isolate;
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table thead tr {
+  display: table-row !important;
+}
+
+body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table thead th {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 31 !important;
+  background: var(--modal-bg) !important;
+  background-color: var(--modal-bg) !important;
+}
+
+/* Generic Contacts responsive layout. Keep the existing controls and table
+   interactions, but let every surface fit narrow screens without horizontal
+   page overflow. */
+@media (max-width: 899px) {
+  body[data-vertical="generic"] .contacts-page {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    padding: clamp(0.75rem, 3vw, 1.25rem) !important;
+    overflow-x: hidden;
+  }
+
+  body[data-vertical="generic"] .contacts-page__header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: start !important;
+    gap: 0.75rem !important;
+  }
+
+  body[data-vertical="generic"] .contacts-page__header > :first-child {
+    min-width: 0;
+  }
+
+  body[data-vertical="generic"] .contacts-page__header-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch !important;
+    width: 100%;
+    min-width: 0;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] .contacts-page__header-actions > * {
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  body[data-vertical="generic"] .contacts-page__header-actions > :is(button, a, select),
+  body[data-vertical="generic"] .contacts-page__header-actions > div > button {
+    width: 100%;
+    min-width: 0 !important;
+    justify-content: center;
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="generic"] .contacts-page-card {
+    width: 100%;
+    max-width: 100%;
+    min-height: max(320px, calc(100dvh - 5rem));
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="generic"] .contacts-filters-bar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center !important;
+    width: 100%;
+    box-sizing: border-box;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] .contacts-filters-bar > :first-child {
+    grid-column: 1 / -1;
+    width: 100%;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  body[data-vertical="generic"] .contacts-filters-bar > :is(select, .scrollable-select, button, [role="button"]) {
+    width: 100%;
+    min-width: 0 !important;
+    max-width: none;
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="generic"] .contacts-split-table {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 240px;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  body[data-vertical="generic"] .contacts-table-scroll-pane {
+    min-width: 0;
+  }
+
+  body[data-vertical="generic"] .contacts-pagination-footer {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  /* The shared mobile rule turns stable tables into block scroll regions.
+     Generic Contacts already has a split table plus TopScrollSync; keeping
+     both halves as real tables is required for the sticky header row. */
+  body[data-vertical="generic"] .contacts-page .contacts-split-table table.stable-table {
+    display: table !important;
+    overflow: visible !important;
+  }
+}
+
+@media (max-width: 360px) {
+  body[data-vertical="generic"] .contacts-page__header-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-vertical="generic"] .contacts-filters-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-vertical="generic"] .contacts-filters-bar > :first-child {
+    grid-column: auto;
+  }
+}

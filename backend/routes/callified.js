@@ -19,8 +19,11 @@
 
 const express = require("express");
 const router = express.Router();
-const { verifyToken, verifyRole } = require("../middleware/auth");
-const { userHasPermission } = require("../middleware/requirePermission");
+const { verifyToken } = require("../middleware/auth");
+const {
+  requirePermission,
+  userHasPermission,
+} = require("../middleware/requirePermission");
 const callifiedClient = require("../services/callifiedClient");
 const { writeAudit } = require("../lib/audit");
 const { resolveSubBrand } = require("../lib/subBrandResolve");
@@ -86,8 +89,8 @@ function pickLatestReview(parsed) {
  *
  * Body: { subBrand?, toPhone (required), leadId?, intent?, persona? }
  *
- * ADMIN/MANAGER only — outbound AI calls cost real money + reach real
- * customers, so we gate behind elevated roles even for stub-mode.
+ * Requires the effective leads.write permission. Outbound AI calls cost real
+ * money and reach real customers, so this remains a write-capability action.
  * Delegates to callifiedClient.initiateCall. Two structured error paths:
  *   - AI_CALLING_BUDGET_EXCEEDED → 402 with spent/cap cents
  *   - AI_CALLING_DISABLED        → 403 (per-tenant featureFlag DC-7)
@@ -96,7 +99,7 @@ function pickLatestReview(parsed) {
 router.post(
   "/calls/initiate",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("leads", "write"),
   async (req, res) => {
     try {
       const {
@@ -190,7 +193,7 @@ router.get("/calls/:callId/result", verifyToken, async (req, res) => {
 });
 
 /**
- * GET /api/callified/cap-status — ADMIN-only operator surface.
+ * GET /api/callified/cap-status — integrations.read operator surface.
  *
  * Returns the current per-tenant cap utilisation so the operator UI can
  * render an "X% of monthly cap" indicator without firing a call.
@@ -199,7 +202,7 @@ router.get("/calls/:callId/result", verifyToken, async (req, res) => {
 router.get(
   "/cap-status",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("integrations", "read"),
   async (req, res) => {
     try {
       const status = await callifiedClient.checkBudgetCap(req.user.tenantId);
@@ -245,16 +248,44 @@ router.get("/enabled", verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/callified/status
+//
+// Safe, non-secret integration status for Leads users. The full integration
+// configuration remains ADMIN-only, but a custom role with leads.read must be
+// able to determine whether campaign data should be loaded.
+router.get(
+  "/status",
+  verifyToken,
+  requirePermission("leads", "read"),
+  async (req, res) => {
+    try {
+      const row = await prisma.integration.findUnique({
+        where: {
+          tenantId_provider: {
+            tenantId: req.user.tenantId,
+            provider: "callified",
+          },
+        },
+        select: { isActive: true },
+      });
+      res.json({ isActive: Boolean(row?.isActive) });
+    } catch (e) {
+      console.error("[callified] status error:", e.message);
+      res.status(500).json({ error: "Failed to read Callified status" });
+    }
+  },
+);
+
 /**
  * GET /api/callified/campaigns
  *
  * List active Callified campaigns so the CRM leads page can pick one before
- * dialing. Open to ADMIN/MANAGER — choosing a campaign costs real money.
+ * dialing. Requires the effective leads.read permission.
  */
 router.get(
   "/campaigns",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("leads", "read"),
   async (req, res) => {
     try {
       const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
@@ -283,7 +314,7 @@ router.get(
 router.post(
   "/leads/:leadId/call",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("leads", "write"),
   async (req, res) => {
     try {
       const { leadId } = req.params;
@@ -382,7 +413,7 @@ router.post(
 router.post(
   "/leads/:leadId/browser-call",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("leads", "write"),
   async (req, res) => {
     try {
       const { leadId } = req.params;
@@ -1105,7 +1136,11 @@ router.get("/leads/call-status-history", verifyToken, async (req, res) => {
  * Clears the Callified call status history for the tenant. Used by the
  * "Clear history" option in the Call Status button drawer.
  */
-router.delete("/leads/call-status-history", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.delete(
+  "/leads/call-status-history",
+  verifyToken,
+  requirePermission("leads", "delete"),
+  async (req, res) => {
   try {
     const { count } = await prisma.callLog.deleteMany({
       where: {
@@ -1118,7 +1153,8 @@ router.delete("/leads/call-status-history", verifyToken, verifyRole(["ADMIN", "M
     console.error("[callified] delete call-status-history error:", e.message);
     res.status(500).json({ error: "Failed to clear call status history" });
   }
-});
+  },
+);
 
 /**
  * POST /api/callified/leads/:leadId/ensure-hot-assigned
@@ -1127,7 +1163,11 @@ router.delete("/leads/call-status-history", verifyToken, verifyRole(["ADMIN", "M
  * active staff user, round-robin assign it. Used by the frontend on page load
  * for existing Hot leads and after manual status override.
  */
-router.post("/leads/:leadId/ensure-hot-assigned", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.post(
+  "/leads/:leadId/ensure-hot-assigned",
+  verifyToken,
+  requirePermission("leads", "update"),
+  async (req, res) => {
   try {
     const leadId = Number(req.params.leadId);
     if (!Number.isFinite(leadId) || leadId <= 0) {
@@ -1160,7 +1200,8 @@ router.post("/leads/:leadId/ensure-hot-assigned", verifyToken, verifyRole(["ADMI
     console.error("[callified] leads/:leadId/ensure-hot-assigned error:", e.message);
     res.status(500).json({ error: "Failed to ensure hot lead assignment" });
   }
-});
+  },
+);
 
 /**
  * POST /api/callified/leads/sync-call-statuses
@@ -1170,7 +1211,11 @@ router.post("/leads/:leadId/ensure-hot-assigned", verifyToken, verifyRole(["ADMI
  * Used by the Call Status drawer to keep statuses fluid and real-time without
  * requiring the user to open each lead's details panel.
  */
-router.post("/leads/sync-call-statuses", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.post(
+  "/leads/sync-call-statuses",
+  verifyToken,
+  requirePermission("leads", "update"),
+  async (req, res) => {
   try {
     const { updated, errors, pending } = await callifiedClient.syncPendingCallifiedStatuses(req.user.tenantId);
     res.json({ updated, errors, pending });
@@ -1178,7 +1223,8 @@ router.post("/leads/sync-call-statuses", verifyToken, verifyRole(["ADMIN", "MANA
     console.error("[callified] leads/sync-call-statuses error:", e.message);
     res.status(500).json({ error: "Failed to sync call statuses" });
   }
-});
+  },
+);
 
 /**
  * GET /api/callified/auto-campaign-rules
@@ -1186,7 +1232,11 @@ router.post("/leads/sync-call-statuses", verifyToken, verifyRole(["ADMIN", "MANA
  * Returns the tenant's auto-campaign assignment rules. The frontend renders
  * these as a grid: lead column + normalised value -> Callified campaign id.
  */
-router.get("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.get(
+  "/auto-campaign-rules",
+  verifyToken,
+  requirePermission("leads", "read"),
+  async (req, res) => {
   try {
     const config = await getSetting(req.user.tenantId, KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES, {
       coerce: (v) => {
@@ -1206,7 +1256,8 @@ router.get("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"])
     console.error("[callified] auto-campaign-rules GET error:", e.message);
     res.status(500).json({ error: "Failed to read auto-campaign rules" });
   }
-});
+  },
+);
 
 function validateAutoCampaignRules(body) {
   if (!body || typeof body !== "object") return { error: "Invalid body", code: "INVALID_BODY" };
@@ -1245,7 +1296,11 @@ function validateAutoCampaignRules(body) {
  * auto-assigned to the first matching campaign by POST /api/contacts and
  * POST /api/v1/external/leads when no explicit campaign is supplied.
  */
-router.put("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.put(
+  "/auto-campaign-rules",
+  verifyToken,
+  requirePermission("leads", "write"),
+  async (req, res) => {
   try {
     const validation = validateAutoCampaignRules(req.body || {});
     if (validation.error) {
@@ -1268,7 +1323,8 @@ router.put("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"])
     console.error("[callified] auto-campaign-rules PUT error:", e.message);
     res.status(500).json({ error: "Failed to save auto-campaign rules" });
   }
-});
+  },
+);
 
 /**
  * GET /api/callified/campaigns/with-lead-counts
@@ -1279,7 +1335,10 @@ router.put("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"])
 router.get(
   "/campaigns/with-lead-counts",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  // Campaign counts power assignment and bulk-dial controls, so keep this
+  // integration surface behind the same write capability as those actions.
+  // Read-only lead users must not reach the external Callified client.
+  requirePermission("leads", "write"),
   async (req, res) => {
     try {
       const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
@@ -1325,7 +1384,7 @@ router.get(
 router.post(
   "/campaigns/:campaignId/dial-all",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("leads", "write"),
   async (req, res) => {
     try {
       const campaignId = Number(req.params.campaignId);

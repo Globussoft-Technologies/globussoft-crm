@@ -229,6 +229,8 @@ prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.contact.updateMany = vi.fn();
+prisma.contactAttachment = prisma.contactAttachment || {};
+prisma.contactAttachment.findMany = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findMany = vi.fn();
 prisma.user.findFirst = vi.fn().mockResolvedValue(null);
@@ -317,6 +319,7 @@ beforeEach(() => {
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
   prisma.contact.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.contactAttachment.findMany.mockReset().mockResolvedValue([]);
   prisma.user.findFirst.mockReset().mockResolvedValue(null);
   prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
@@ -347,6 +350,24 @@ beforeEach(() => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+describe('GET /api/contacts/:id/attachments', () => {
+  test('rewrites legacy web-form upload URLs to the canonical API path', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contactAttachment.findMany.mockResolvedValueOnce([
+      { id: 1, filename: 'resume.pdf', fileUrl: '/uploads/web-forms/legacy.pdf' },
+      { id: 2, filename: 'external.pdf', fileUrl: 'https://files.example.com/external.pdf' },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts/9001/attachments');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({ fileUrl: '/api/uploads/web-forms/legacy.pdf' }),
+      expect.objectContaining({ fileUrl: 'https://files.example.com/external.pdf' }),
+    ]);
+  });
+});
+
 describe('GET /api/contacts — list', () => {
   test('returns array; where is tenant-scoped + deletedAt:null + defaults take=100 skip=0 orderBy id desc', async () => {
     const res = await request(makeApp()).get('/api/contacts');
@@ -605,6 +626,16 @@ describe('GET /api/contacts — list', () => {
     const args = prisma.contact.findMany.mock.calls[0][0];
     // USER role MUST win even when caller passes ?assignedToId=999.
     expect(args.where.assignedToId).toBe(42);
+  });
+
+  test('Generic CRM open bucket lets a non-manager read across the tenant', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'open' });
+    const res = await request(makeApp({ role: 'USER', userId: 42 }))
+      .get('/api/contacts?assignedToId=999');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.where.assignedToId).toBe(999);
   });
 
   test('travel MANAGER is scoped to their own assigned contacts — only travel ADMIN can view all', async () => {

@@ -84,7 +84,7 @@ const MANAGER_PERMISSIONS = [
   // route previously reachable by MANAGER; delete-tier and manage-tier
   // actions that were gated on verifyRole(['ADMIN']) stay admin-only
   // (e.g. trips.delete, suppliers.manage, tmc_catalogue.manage,
-  // visa.delete, microsites.manage).
+  // visa.delete).
   'trips.read', 'trips.write', 'trips.update', 'trips.export',
   'tmc_catalogue.read', 'tmc_catalogue.write', 'tmc_catalogue.update', 'tmc_catalogue.delete',
   'itineraries.read', 'itineraries.update',
@@ -103,7 +103,6 @@ const MANAGER_PERMISSIONS = [
   'web_checkins.write', 'web_checkins.update',
   'passport.read', 'passport.update',
   'visa.read', 'visa.write', 'visa.update',
-  'microsites.read', 'microsites.write', 'microsites.update',
   'diagnostics.read', 'diagnostics.update',
   'pois.read',
   'curriculum.read', 'curriculum.write',
@@ -178,7 +177,6 @@ const USER_PERMISSIONS = [
   'projects.read',
   'pipeline.read',
   'quotes.read',
-  'reports.read',
   'dashboards.read',
   'analytics.read',
   'communications.read',
@@ -727,6 +725,9 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     // empty containers — the tenant admin assigns perms.
     if (userCreated && isWellness) {
       await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
+    }
+    if (vertical === 'generic') {
+      await grantPermissionList(stats, userRole.id, ['tasks.read', 'tasks.write']);
     }
 
     // Generic pickup/plot workflow role. Billing staff use a dedicated

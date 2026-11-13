@@ -140,7 +140,7 @@ export default function SelfWorkProfile() {
             <Field label="Agency">
               <input className="input-field" value={form.agency} onChange={(event) => setForm({ ...form, agency: event.target.value })} />
             </Field>
-            <Field label="Commission">
+            <Field label="Commission (Finance rule)">
               <input className="input-field" value={data.profile?.commissionPercent == null ? 'Not set' : `${data.profile.commissionPercent}%`} disabled />
             </Field>
           </>}

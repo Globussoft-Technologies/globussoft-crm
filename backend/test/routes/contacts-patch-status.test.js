@@ -130,6 +130,9 @@ prisma.auditLog.findMany = vi.fn();
 prisma.callLog = prisma.callLog || {};
 prisma.callLog.findMany = vi.fn();
 prisma.callLog.count = vi.fn();
+prisma.task = prisma.task || {};
+prisma.task.findMany = vi.fn();
+prisma.task.count = vi.fn();
 prisma.$transaction = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
@@ -325,6 +328,8 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     prisma.contact.findFirst.mockResolvedValueOnce(prospect);
     prisma.activity.findMany.mockResolvedValueOnce([{ id: 12 }, { id: 11 }]);
     prisma.activity.count.mockResolvedValueOnce(12);
+    prisma.task.findMany.mockResolvedValueOnce([]);
+    prisma.task.count.mockResolvedValueOnce(0);
 
     const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=2&limit=5`);
 
@@ -359,6 +364,8 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     ]);
     prisma.activity.count.mockResolvedValueOnce(1);
     prisma.callLog.count.mockResolvedValueOnce(1);
+    prisma.task.findMany.mockResolvedValueOnce([]);
+    prisma.task.count.mockResolvedValueOnce(0);
 
     const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=1&limit=10`);
 
@@ -381,6 +388,45 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     });
   });
 
+  test('merges historical Generic CRM tasks into the activity timeline', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([]);
+    prisma.activity.count.mockResolvedValueOnce(0);
+    prisma.callLog.findMany.mockResolvedValueOnce([]);
+    prisma.callLog.count.mockResolvedValueOnce(0);
+    prisma.task.findMany.mockResolvedValueOnce([
+      {
+        id: 44,
+        title: 'Historical follow-up',
+        contactId: CONTACT_ID,
+        userId: USER_ID,
+        status: 'Pending',
+        dueDate: '2026-11-12T10:00:00.000Z',
+        createdAt: '2026-11-10T10:00:00.000Z',
+      },
+    ]);
+    prisma.task.count.mockResolvedValueOnce(1);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=1&limit=10`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data[0]).toMatchObject({
+      id: 'task-44',
+      type: 'Task',
+      description: 'Task created: Historical follow-up',
+      contactId: CONTACT_ID,
+      taskId: 44,
+      status: 'Pending',
+    });
+    expect(prisma.task.findMany).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, deletedAt: null },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 10,
+    });
+  });
+
   test('bounds Generic activity sources to the requested merge window', async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
     prisma.contact.findFirst.mockResolvedValueOnce(prospect);
@@ -388,6 +434,8 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     prisma.activity.count.mockResolvedValueOnce(250);
     prisma.callLog.findMany.mockResolvedValueOnce([]);
     prisma.callLog.count.mockResolvedValueOnce(150);
+    prisma.task.findMany.mockResolvedValueOnce([]);
+    prisma.task.count.mockResolvedValueOnce(0);
 
     const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=3&limit=10`);
 

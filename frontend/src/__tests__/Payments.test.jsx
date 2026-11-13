@@ -263,9 +263,9 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('keeps the existing tenant currency behavior outside Generic CRM', async () => {
+  it('uses INR for the travel payment summary even when the tenant default is USD', async () => {
     renderPayments(ADMIN_USER, { id: 2, vertical: 'travel', defaultCurrency: 'USD' });
-    await waitFor(() => expect(screen.getAllByText('$1500.00').length).toBeGreaterThanOrEqual(1));
+    await waitFor(() => expect(screen.getAllByText('₹1500.00').length).toBeGreaterThanOrEqual(1));
     expect(screen.getByText('$250.00')).toBeInTheDocument();
   });
 

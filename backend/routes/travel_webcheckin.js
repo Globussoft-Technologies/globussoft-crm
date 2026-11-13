@@ -73,7 +73,7 @@ const VALID_STATUSES = Object.freeze([
 // itineraries can stitch into one larger PDF.
 //
 // Storage: backend/uploads/boarding-passes/ — matches the existing
-// pdfRenderer outputs + microsites uploads pattern. Files are served
+// pdfRenderer outputs + travel upload pattern. Files are served
 // via the /uploads static mount in server.js.
 
 const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "boarding-passes");
@@ -99,7 +99,7 @@ const upload = multer({
 });
 
 // Wrap multer so its rejection paths land as structured 400 errors,
-// matching the travel_microsites.js pattern.
+// matching the travel portal upload pattern.
 function uploadBoardingPassOrReject(req, res, next) {
   upload.single("file")(req, res, (err) => {
     if (!err) return next();

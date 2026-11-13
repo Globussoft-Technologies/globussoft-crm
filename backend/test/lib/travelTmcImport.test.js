@@ -1,4 +1,5 @@
 const {
+  PARTICIPANT_IMPORT_HEADERS,
   PARTICIPANT_REQUIRED_HEADERS,
   buildParticipantImportTemplate,
   missingParticipantImportHeaders,
@@ -15,8 +16,9 @@ describe("TMC participant import template", () => {
       file,
     );
 
-    expect(parsed.headers).toEqual(PARTICIPANT_REQUIRED_HEADERS);
-    expect(parsed.headers).toEqual(["fullName", "parentName", "parentPhone", "parentEmail"]);
+    expect(parsed.headers).toEqual(PARTICIPANT_IMPORT_HEADERS);
+    expect(parsed.headers).toContain("fullName");
+    expect(parsed.headers).toContain("passportNumber");
     expect(parsed.rows).toEqual([]);
     expect(missingParticipantImportHeaders(parsed.headers)).toEqual([]);
   });

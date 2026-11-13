@@ -98,6 +98,19 @@ describe('<CustomerRegister /> organization autocomplete', () => {
     expect(screen.queryByText(/No matching organizations found/i)).not.toBeInTheDocument();
   });
 
+  it('does not rate a password as good before it reaches eight characters', async () => {
+    renderPage();
+
+    const password = await screen.findByLabelText(/^Password$/i);
+    fireEvent.change(password, { target: { value: 'Ab1!xy' } });
+
+    expect(screen.getByText('Too short')).toBeInTheDocument();
+    expect(screen.queryByText('Good')).not.toBeInTheDocument();
+
+    fireEvent.change(password, { target: { value: 'Ab1!xyza' } });
+    expect(screen.getByText('Strong')).toBeInTheDocument();
+  });
+
   afterEach(() => {
     global.fetch = originalFetch;
   });
@@ -120,6 +133,13 @@ describe('<CustomerRegister /> organization autocomplete', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('otp-box')).toBeInTheDocument();
+    });
+
+    const otpRequestCall = global.fetch.mock.calls.find(([url]) => String(url).startsWith('/api/auth/email-otp/request'));
+    expect(JSON.parse(otpRequestCall[1].body)).toMatchObject({
+      email: 'jane@example.com',
+      purpose: 'customer-register',
+      registrationTenantId: 11,
     });
 
     fireEvent.change(screen.getByTestId('otp-code'), { target: { value: '123456' } });

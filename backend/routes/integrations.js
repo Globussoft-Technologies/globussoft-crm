@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { clearTokenCache: clearCallifiedTokenCache } = require("../services/callifiedClient");
 
@@ -762,7 +763,7 @@ router.get("/adsgpt/sso-url", verifyToken, async (req, res) => {
 // email/password, base URL, webhook secret). Stored in Integration row
 // provider="callified" (token = apiKey, settings = JSON of the rest) so no
 // schema migration is needed.
-router.get("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.get("/callified/config", verifyToken, requirePermission("integrations", "read"), async (req, res) => {
   try {
     const row = await prisma.integration.findUnique({
       where: { tenantId_provider: { tenantId: req.user.tenantId, provider: "callified" } },
@@ -798,7 +799,7 @@ router.get("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
   }
 });
 
-router.put("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.put("/callified/config", verifyToken, requirePermission("integrations", "write"), async (req, res) => {
   try {
     const { apiKey, email, password, baseUrl, webhookSecret } = req.body || {};
 

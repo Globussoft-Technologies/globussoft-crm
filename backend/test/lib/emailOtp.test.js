@@ -3,6 +3,7 @@
 // registration. sendOtpEmail's no-key branch is covered; the SendGrid network
 // path isn't (no live key in tests).
 
+const emailSender = require("../../lib/emailSender");
 const emailOtp = require("../../lib/emailOtp");
 
 describe("emailOtp.generateOtpCode", () => {
@@ -43,6 +44,10 @@ describe("emailOtp verification token", () => {
 });
 
 describe("emailOtp.sendOtpEmail", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns { sent: false } (no throw) when SENDGRID_API_KEY is unset", async () => {
     const saved = process.env.SENDGRID_API_KEY;
     delete process.env.SENDGRID_API_KEY;
@@ -53,6 +58,30 @@ describe("emailOtp.sendOtpEmail", () => {
     } finally {
       if (saved !== undefined) process.env.SENDGRID_API_KEY = saved;
     }
+  });
+
+  it("uses the shared tenant sender when a Travel tenant is supplied", async () => {
+    vi.spyOn(emailSender, "sendEmail").mockResolvedValue({
+      sent: true,
+      source: "tenant",
+      from: "travel@example.com",
+    });
+
+    const result = await emailOtp.sendOtpEmail(
+      "customer@example.com",
+      "123456",
+      "customer-register",
+      { tenantId: 73 },
+    );
+
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 73,
+      to: "customer@example.com",
+      subject: "Your Globussoft verification code",
+      text: expect.stringContaining("123456"),
+      html: expect.stringContaining("123456"),
+    }));
+    expect(result).toMatchObject({ sent: true, source: "tenant" });
   });
 });
 

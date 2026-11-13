@@ -682,7 +682,7 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       endpoint: null, // route fills this on persist (post-save)
       // Phase 6 — hybrid registration-draft flow. Wizard submissions on
       // trip-linked Wanderlux pages create a PendingTripRegistration and
-      // redirect to the trip microsite for phone OTP verification instead
+      // continue through parent registration for phone verification instead
       // of falling back to the generic lead-capture path.
       mode: 'registration-draft',
       tripType,

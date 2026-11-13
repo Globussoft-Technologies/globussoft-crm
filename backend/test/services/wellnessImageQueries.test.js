@@ -35,4 +35,15 @@ describe('wellness image query planning', () => {
     expect(queries.queryForWellnessImageSlot(plan, 'gallery-image-1')).toContain('symptoms concerns');
     expect(queries.queryForWellnessImageSlot(plan, 'cta-image')).toContain('personalized care');
   });
+
+  test('uses broad wellness relevance terms when the campaign only has scaffold copy', () => {
+    const plan = queries.buildWellnessImagePlan({
+      title: 'Untitled Wellness Event Landing Site',
+      description: 'Wellness event landing site',
+      text: 'HOME SERVICES ABOUT US CONTACT. VISIT CALL WRITE invites your audience to learn more, submit an enquiry, and receive a prompt follow-up.',
+    });
+
+    expect(plan.subject).toBe('wellness consultation');
+    expect(plan.relevanceTerms).toEqual(expect.arrayContaining(['wellness', 'health', 'therapy', 'mindfulness', 'lifestyle']));
+  });
 });

@@ -39,7 +39,8 @@
     },
     {
       "pattern": "index-*.js",
-      "maxKB": 325,
+      "maxKB": 350,
+      "//pr-global-search-entry-bump": "325 -> 350 KB: expanded Generic CRM Omnibar search adds permission-aware result mappings for the visible sidebar catalogue. The Node 24 production build measures 334.5 KB; no runtime dependency was added, and the 350 KB cap retains 15.5 KB headroom.",
       "//pr1557-entry-bump": "315 → 325 KB: PR #1557 adds the always-mounted page-access guard, permission-catalog caching/invalidation, and permission-aware navigation. Run 38412233558 compiled successfully at 318.7 KB. No runtime dependency was added; retain about 6 KB of entry headroom.",
       "//2026-10-05-pickup-plot-pages": "The two admin-only lazy routes add only route declarations to the main shell. No dependency was added.",
       "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 300→315 on 2026-10-01: PR #1514 added tenant-wide subscription access resolution and richer notification-bell behavior to the always-loaded app shell, bringing the entry chunk to 308.8 KB. No runtime dependency was added and the cap retains about 6 KB headroom. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap. Bumped 260→270 on 2026-08-12: PR #1319 added the Omnibar global search component and sidebarSearch utility to the header, pushing the index chunk to 262.1 KB. Bumped 270→285 on 2026-08-21: concurrent uncommitted feature work (super-admin AI provider/managed-key management, multi-provider embeddings, travel diagnostic public-form + embed pages) pushed the chunk to 278.5 KB. Bumped 285→290 on 2026-09-04: PR #1401 added travel CRM sidebar collapsible sections and theme support (CSS in index.css), pushing the chunk to 285.4 KB. Bumped 290→295 on 2026-09-17: PR #1456 consolidated generic navigation access checks in the always-loaded sidebar and Omnibar, bringing the entry chunk to 291.3 KB. Bumped 295→300 on 2026-09-28: PR #1493 added session-bound permission-cache invalidation to the always-loaded App shell, bringing the entry chunk to 296.0 KB; no dependency was added and the cap retains 4.0 KB headroom."
@@ -67,7 +68,9 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 10100,
+    "all-js-maxKB": 10175,
+    "//pr1658-total-js-bump": "10150 -> 10175 KB: Generic landing chatbot, task/ticket workflows, and Workflows navigation add route-split UI chunks. The current production build measures 10166.5 KB JS; retain 8.5 KB headroom while preserving all per-chunk caps.",
+    "//pr-global-search-total-bump": "10100 -> 10150 KB: expanded Generic CRM Omnibar search and Lead Quick-add configuration bring the Node 24 production build to 10101.7 KB JS. No runtime dependency was added; retain 48.3 KB headroom while keeping vendor and feature-page caps unchanged.",
     "//commission-workspace-js-bump": "10060 -> 10100 KB on 2026-11-05: the lazy-loaded plot commissions workspace and payout confirmation flow add intentional UI code. The production build measures 10084.4 KB JS; retain 15.6 KB headroom while keeping all individual chunk caps unchanged.",
     "//pr1640-total-bump": "10025 -> 10060 KB: PR #1640 adds currency-aware billing/expense flows, richer Leads/deal/contact workflows, and Pickup/Plot table viewport fixes. The production build measures 10043.9 KB JS locally; retain 16.1 KB headroom while keeping all per-chunk caps unchanged.",
     "//pr1636-total-bump": "10000 -> 10025 KB: PR #1636 adds the Leads assistant conversation UI, typo normalization, and lead-table workflow affordances. The Node 24 production build measures 10014.8 KB JS; retain 10.2 KB headroom while preserving the per-chunk caps.",
@@ -99,7 +102,8 @@
     "//previous-total-bump-3": "7950→8150 on 2026-09-15: PR #1441 adds lazy-loaded contact/deal profile workflows and the standalone email composer, bringing total JS to 8027.5 KB. No new runtime dependency was added; this preserves 122.5 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-2": "7850→7950 on 2026-09-10: PR #1432 added the lazy-loaded TMC teacher and parent portal screens, bringing total JS to 7885.4 KB. The feature adds no new dependency; this restores 64.6 KB of total-budget headroom while retaining the existing per-chunk limits.",
     "//previous-total-bump": "7800→7850 on 2026-09-04: PR #1404 added the wellness patient-signature workflow and pushed total JS to 7803.4 KB. This small increase restored 46.6 KB headroom; no new dependency was introduced.",
-    "all-css-maxKB": 670,
+    "all-css-maxKB": 690,
+    "//pr1658-total-css-bump": "670 -> 690 KB: task/ticket and generic landing-chat surfaces add shared responsive styling. The current production build measures 681.4 KB CSS; retain 8.6 KB headroom while preserving all per-chunk caps.",
     "//commission-workspace-css-bump": "655 -> 670 KB on 2026-11-05: the commissions workspace adds scoped table, filter, dialog, and responsive styles. The production build measures 658.5 KB CSS; retain 11.5 KB headroom while keeping the total CSS gate enforced.",
     "//pr1643-total-css-bump": "645 -> 655 KB: PR #1643 adds the Lead Fields, travel lead-detail, and responsive travel styling. The production build measures 653.6 KB CSS; retain 1.4 KB headroom while keeping the total CSS gate enforced.",
     "//pr1636-total-css-bump": "635 -> 645 KB: PR #1636 adds the Leads assistant visual treatment and responsive generic CRM scaling rules. The Node 24 production build measures 637.2 KB CSS; retain 7.8 KB headroom while preserving the per-chunk caps.",

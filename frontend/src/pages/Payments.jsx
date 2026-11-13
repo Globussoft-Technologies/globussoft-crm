@@ -253,8 +253,11 @@ export default function Payments() {
   const { user, tenant } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
   const isCustomer = user?.role === "CUSTOMER" || user?.userType === "CUSTOMER";
-  const isGenericCrm = (tenant?.vertical || user?.tenant?.vertical) === "generic";
-  const displayCurrency = isGenericCrm ? tenant?.defaultCurrency || user?.tenant?.defaultCurrency : undefined;
+  const vertical = tenant?.vertical || user?.tenant?.vertical;
+  const isGenericCrm = vertical === "generic";
+  const displayCurrency = isGenericCrm
+    ? tenant?.defaultCurrency || user?.tenant?.defaultCurrency
+    : vertical === "travel" ? "INR" : undefined;
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);

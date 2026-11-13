@@ -106,7 +106,7 @@ async function initiateSession({ subjectId, subjectType, participantId, redirect
 // `redirectUri` (optional) overrides DIGILOCKER_REDIRECT_URI for the
 // token exchange. OAuth requires the redirect_uri at /token to match the
 // one used at /authorize exactly; callers that stored the authorize-time
-// value on their session (e.g. the public-microsite flow) pass it here so
+// value on their session (for example, a public registration flow) pass it here so
 // the two always agree even if the env var later changes.
 async function exchangeCallback({ state, code, redirectUri }) {
   if (!state) {

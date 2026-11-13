@@ -2,7 +2,10 @@
 
 const destinationImageProvider = require('./destinationImageProvider');
 const crypto = require('crypto');
-const { isWellnessLandingPage } = require('./wellnessLandingThemes');
+// Use the canonical vertical contract here. New landing-site records use
+// `wellness-site-*`; the theme helper intentionally only knows the legacy
+// generic-site wellness templates and the rendered root marker.
+const { isWellnessLandingPage } = require('../lib/landingPageVertical');
 const { buildWellnessCampaignPage } = require('./landingPageRenderer');
 const {
   IMAGE_QUERY_VERSION,
@@ -11,13 +14,6 @@ const {
 } = require('./wellnessImageQueries');
 
 const PEXELS_ONLY = ['unsplash', 'pixabay', 'ai-fallback'];
-const IMAGE_IDS = new Set([
-  'hero-image',
-  'gallery-image-1',
-  'gallery-image-2',
-  'gallery-image-3',
-  'cta-image',
-]);
 const inFlight = new Map();
 
 function clone(value) {
@@ -44,9 +40,9 @@ function findWellnessRoot(components) {
 }
 
 function isWellnessImage(block) {
-  if (!block || block.type !== 'image') return false;
-  const variant = String(block.props?.variant || '').toLowerCase();
-  return IMAGE_IDS.has(block.id) || variant.startsWith('wellness-');
+  // This service only walks the wellness campaign root, so every image block
+  // under it is a campaign slot, including custom/AI-generated card IDs.
+  return Boolean(block && block.type === 'image');
 }
 
 function queryForImage(block, context) {
@@ -65,7 +61,18 @@ function buildContext(page, blocks) {
     .filter((value) => typeof value === 'string' && value.trim())
     .join(' ');
   const plan = buildWellnessImagePlan({ ...page, text });
-  return { ...page, text, plan };
+  // Campaign-specific queries are preferred, but a single unmatched Pexels
+  // search must not leave an otherwise valid card blank.
+  const fallbackPlan = buildWellnessImagePlan({ title: 'Wellness consultation' });
+  return { ...page, text, plan, fallbackPlan };
+}
+
+function usableImage(image, usedUrls) {
+  return Boolean(
+    image?.url
+      && image?.attribution?.providerId === 'pexels'
+      && !usedUrls.has(image.url),
+  );
 }
 
 function isStaleGeneratedPexelsImage(block) {
@@ -92,7 +99,7 @@ async function hydrateWellnessLandingImages(page, { db, persist = true } = {}) {
     if (!isWellnessLandingPage(page, Array.isArray(parsed) ? parsed : [])) return page;
     const canBuildScaffold = !root
       && typeof page.templateType === 'string'
-      && page.templateType.startsWith('generic-site-');
+      && (page.templateType.startsWith('generic-site-') || page.templateType.startsWith('wellness-site-'));
     if (!root && !canBuildScaffold) return page;
 
     const next = clone(canBuildScaffold
@@ -128,18 +135,27 @@ async function hydrateWellnessLandingImages(page, { db, persist = true } = {}) {
       const currentSrc = String(block.props?.src || '').trim();
       if (currentSrc && !staleBlocks.has(block)) continue;
       const query = queryForImage(block, { ...context, imageIndex });
+      const fallbackQuery = queryForImage(block, { ...context, plan: context.fallbackPlan, imageIndex });
+      const fetchOptions = (relevanceTerms) => ({
+        tenantId: page.tenantId,
+        aspectRatio: imageAspectRatio(block),
+        stockOnly: true,
+        perPage: 8,
+        excludeUrls: usedUrls,
+        excludeProviders: PEXELS_ONLY,
+        relevanceTerms,
+        requireRelevance: true,
+      });
+      let image = null;
       try {
-        const image = await destinationImageProvider.fetchOne(query, {
-          tenantId: page.tenantId,
-          aspectRatio: imageAspectRatio(block),
-          stockOnly: true,
-          perPage: 8,
-          excludeUrls: usedUrls,
-          excludeProviders: PEXELS_ONLY,
-          relevanceTerms: context.plan.relevanceTerms,
-          requireRelevance: true,
-        });
-        if (!image?.url || image?.attribution?.providerId !== 'pexels' || usedUrls.has(image.url)) continue;
+        image = await destinationImageProvider.fetchOne(query, fetchOptions(context.plan.relevanceTerms));
+        if (!usableImage(image, usedUrls) && fallbackQuery !== query) {
+          image = await destinationImageProvider.fetchOne(
+            fallbackQuery,
+            fetchOptions(context.fallbackPlan.relevanceTerms),
+          );
+        }
+        if (!usableImage(image, usedUrls)) continue;
         block.props.src = image.url;
         block.props.imageProvider = 'pexels';
         block.props.imageQueryVersion = IMAGE_QUERY_VERSION;

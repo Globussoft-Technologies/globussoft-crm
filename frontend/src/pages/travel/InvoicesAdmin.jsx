@@ -40,7 +40,7 @@
 
 import { useEffect, useRef, useState, useContext } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
-import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, HandCoins, Link2, History, Upload, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
+import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, HandCoins, Link2, History, Upload, ArrowUpDown, ChevronUp, ChevronDown, Search } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -125,6 +125,148 @@ const EMPTY_FORM = {
 };
 
 const PAGE_SIZE = 20;
+
+function tripLabel(trip) {
+  if (!trip) return "";
+  return `${trip.tripCode || `Trip #${trip.id}`} · ${trip.destination || "Destination not set"}`;
+}
+
+function TripCombobox({
+  value,
+  onChange,
+  trips,
+  tripsById,
+  search,
+  onSearchChange,
+  loading,
+  total,
+  onLoadMore,
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const searchRef = useRef(null);
+  const selectedTrip = trips.find((trip) => String(trip.id) === String(value)) || tripsById[value];
+  const selectedLabel = selectedTrip ? tripLabel(selectedTrip) : value ? `Trip #${value}` : "No trip linked";
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleOutsideClick = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    const handleEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+    searchRef.current?.focus();
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  const selectTrip = (nextValue) => {
+    onChange(nextValue);
+    onSearchChange("");
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        aria-label="Trip"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        style={{
+          ...inputStyle,
+          width: "100%",
+          boxSizing: "border-box",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {selectedLabel}
+        </span>
+        <ChevronDown size={16} aria-hidden style={{ flex: "0 0 auto" }} />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Trips"
+          style={{
+            position: "absolute",
+            zIndex: 20,
+            top: "calc(100% + 6px)",
+            left: 0,
+            right: 0,
+            padding: 8,
+            border: "1px solid var(--border-color, rgba(148, 163, 184, .35))",
+            borderRadius: 10,
+            background: "var(--popover-bg, var(--modal-bg, #fff))",
+            opacity: 1,
+            backdropFilter: "none",
+            boxShadow: "0 14px 30px rgba(15, 23, 42, .18)",
+            maxHeight: "min(360px, calc(100vh - 180px))",
+            overflowY: "auto",
+          }}
+        >
+          <div style={{ position: "relative", marginBottom: 6 }}>
+            <Search size={15} aria-hidden style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)" }} />
+            <input
+              ref={searchRef}
+              type="text"
+              className="trip-search-input"
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="Search trip code or destination…"
+              aria-label="Search trips"
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", paddingLeft: 32 }}
+            />
+          </div>
+          <button
+            type="button"
+            role="option"
+            aria-selected={!value}
+            onClick={() => selectTrip("")}
+            style={{ ...tripOptionStyle, color: !value ? "var(--primary-color, var(--accent-color))" : undefined }}
+          >
+            No trip linked
+          </button>
+          {trips.map((trip) => {
+            const isSelected = String(trip.id) === String(value);
+            return (
+              <button
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                key={trip.id}
+                onClick={() => selectTrip(String(trip.id))}
+                style={{ ...tripOptionStyle, color: isSelected ? "var(--primary-color, var(--accent-color))" : undefined }}
+              >
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tripLabel(trip)}</span>
+                {isSelected && <span aria-hidden>✓</span>}
+              </button>
+            );
+          })}
+          {loading && <small style={{ display: "block", padding: "8px 10px", color: "var(--text-secondary)" }}>Loading trips…</small>}
+          {!loading && search.trim() && trips.length === 0 && <small style={{ display: "block", padding: "8px 10px", color: "var(--text-secondary)" }}>No matching trips</small>}
+          {!loading && trips.length < total && (
+            <button type="button" onClick={onLoadMore} style={{ ...secondaryBtn, width: "100%", justifyContent: "center", marginTop: 4 }}>
+              Load more trips
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Tomorrow as default for the dueDate date picker. Backend accepts any
 // parseable date (back-dated invoices are legitimate ops) so this is a
@@ -1311,6 +1453,8 @@ export default function InvoicesAdmin() {
             gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
             gap: 10,
             alignItems: "end",
+            position: "relative",
+            zIndex: 30,
           }}
         >
           <select
@@ -1338,44 +1482,17 @@ export default function InvoicesAdmin() {
             ))}
           </select>
           <div style={{ display: "grid", gap: 6 }}>
-            <input
-              type="search"
-              value={tripSearch}
-              onChange={(e) => setTripSearch(e.target.value)}
-              placeholder="Search trip code or destination"
-              aria-label="Search trips"
-              style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
-            />
-            <select
+            <TripCombobox
               value={form.tripId}
-              onChange={(e) => setForm({ ...form, tripId: e.target.value })}
-              style={{ ...inputStyle, width: "100%" }}
-              aria-label="Trip"
-            >
-              <option value="">No trip linked</option>
-              {form.tripId && !trips.some((trip) => String(trip.id) === String(form.tripId)) && (
-                <option value={form.tripId}>
-                  {tripsById[form.tripId]?.tripCode || `Trip #${form.tripId}`}
-                  {tripsById[form.tripId]?.destination ? ` · ${tripsById[form.tripId].destination}` : ""}
-                </option>
-              )}
-              {trips.map((trip) => (
-                <option key={trip.id} value={String(trip.id)}>
-                  {trip.tripCode || `Trip #${trip.id}`} · {trip.destination || "Destination not set"}
-                </option>
-              ))}
-            </select>
-            {tripLoading && (
-              <small style={{ color: "var(--text-secondary)" }}>Loading trips…</small>
-            )}
-            {!tripLoading && trips.length < tripTotal && (
-              <button type="button" onClick={loadMoreTrips} style={{ ...secondaryBtn, justifyContent: "center" }}>
-                Load more trips
-              </button>
-            )}
-            {!tripLoading && tripSearch.trim() && trips.length === 0 && (
-              <small style={{ color: "var(--text-secondary)" }}>No matching trips</small>
-            )}
+              onChange={(tripId) => setForm({ ...form, tripId })}
+              trips={trips}
+              tripsById={tripsById}
+              search={tripSearch}
+              onSearchChange={setTripSearch}
+              loading={tripLoading}
+              total={tripTotal}
+              onLoadMore={loadMoreTrips}
+            />
           </div>
           <input
             placeholder="Total amount *"
@@ -2274,6 +2391,22 @@ const secondaryBtn = {
   background: "var(--surface-color)",
   color: "var(--text-primary)",
   border: "1px solid var(--border-color)",
+  cursor: "pointer",
+};
+const tripOptionStyle = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "9px 10px",
+  border: "none",
+  borderRadius: 6,
+  background: "transparent",
+  color: "var(--text-primary)",
+  font: "inherit",
+  fontSize: 13,
+  textAlign: "left",
   cursor: "pointer",
 };
 const iconBtn = {

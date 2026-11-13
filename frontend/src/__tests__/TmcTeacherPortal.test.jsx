@@ -156,7 +156,9 @@ describe("TmcTeacherPortal", () => {
     expect(screen.getByText("Singapore")).toBeInTheDocument();
     expect(screen.getByText("Readiness report #12")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Parent portal links" })).not.toBeInTheDocument();
-    expect(document.querySelector('[data-tmc-teacher-sidebar="true"]')).toHaveStyle({
+    const sidebar = document.querySelector('[data-tmc-teacher-sidebar="true"]');
+    expect(sidebar).not.toHaveTextContent("aisha@example.com");
+    expect(sidebar).toHaveStyle({
       position: "fixed",
       top: "0px",
       left: "0px",
@@ -166,6 +168,17 @@ describe("TmcTeacherPortal", () => {
       overflowY: "auto",
     });
     expect(document.querySelector('[data-tmc-teacher-shell="true"]')).toHaveStyle({ marginLeft: "250px" });
+  });
+
+  it("clears the teacher session and redirects to the main login page on sign out", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(localStorage.getItem("tmcTeacherPortalToken")).toBeNull();
   });
 
   it.each([

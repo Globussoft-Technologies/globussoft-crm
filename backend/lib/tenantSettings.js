@@ -161,6 +161,10 @@ const KEYS = {
   GENERIC_CONTACT_LIFECYCLE_STAGES:      "generic.contactLifecycleStages",
   GENERIC_DEAL_TYPES:                    "generic.dealTypes",
   GENERIC_FIELD_CONFIG:                  "generic.fieldConfig",
+  GENERIC_TASK_ASSIGNMENT_RULES:         "generic.taskAssignmentRules",
+  // Generic CRM lead visibility policy. `open` lets staff with leads.read
+  // see every tenant lead; `closed` limits them to their assigned leads.
+  GENERIC_LEAD_VISIBILITY:               "generic.leads.visibility",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -187,6 +191,8 @@ const DEFAULTS = {
     customFieldGroups: {},
     fieldOrder: {},
   }),
+  [KEYS.GENERIC_TASK_ASSIGNMENT_RULES]: JSON.stringify([]),
+  [KEYS.GENERIC_LEAD_VISIBILITY]: "closed",
   [KEYS.GENERIC_RECAPTCHA_SITE_KEY]: process.env.RECAPTCHA_SITE_KEY || "",
   [KEYS.GENERIC_RECAPTCHA_SECRET_KEY]: process.env.RECAPTCHA_SECRET_KEY || "",
   [KEYS.TRAVEL_RECAPTCHA_SITE_KEY]: process.env.TRAVEL_RECAPTCHA_SITE_KEY || "",

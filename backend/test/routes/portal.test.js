@@ -84,6 +84,7 @@ import prisma from '../../lib/prisma.js';
 // The CJS route loader bypasses vi.mock() so we patch the singleton itself.
 prisma.contact = {
   findFirst: vi.fn(),
+  findMany: vi.fn(),
   findUnique: vi.fn(),
   update: vi.fn().mockResolvedValue({}),
   create: vi.fn(),
@@ -146,6 +147,9 @@ const landingPayments = requireCJS('../../lib/landingPagePayments');
 // for these contract tests. Mirrors the same helper patch in auth.test.js.
 const emailOtp = requireCJS('../../lib/emailOtp');
 emailOtp.enforceRegistrationOtp = vi.fn().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
+const emailSender = requireCJS('../../lib/emailSender');
+emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true, source: 'tenant' });
+const portalResetTokens = requireCJS('../../lib/portalResetTokens');
 
 const portalRouter = requireCJS('../../routes/portal');
 
@@ -180,6 +184,7 @@ function staffBearer({ userId = 7, tenantId = 1, role = 'USER' } = {}) {
 
 beforeEach(() => {
   prisma.contact.findFirst.mockReset();
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findUnique.mockReset();
   prisma.contact.update.mockReset().mockResolvedValue({});
   prisma.contact.create.mockReset();
@@ -204,6 +209,8 @@ beforeEach(() => {
   prisma.paymentGatewayConfig.findFirst.mockReset().mockResolvedValue(null);
   prisma.$queryRawUnsafe.mockReset().mockResolvedValue([]);
   prisma.$transaction.mockClear();
+  emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
+  portalResetTokens.resetTokens.clear();
 });
 
 // ── POST /api/portal/login ─────────────────────────────────────────────
@@ -372,15 +379,27 @@ describe('POST /set-password', () => {
 describe('POST /forgot — anti-enumeration', () => {
   test('always returns 200 ack — whether email matches or not (anti-enumeration)', async () => {
     // First call: matching contact
-    prisma.contact.findFirst.mockResolvedValueOnce({ id: 99, tenantId: 1 });
+    prisma.contact.findMany.mockResolvedValueOnce([{
+      id: 99,
+      tenantId: 73,
+      email: 'alice@x.com',
+      portalPasswordHash: 'existing-hash',
+    }]);
     const res1 = await request(makeApp())
       .post('/api/portal/forgot')
-      .send({ email: 'alice@x.com' });
+      .send({ email: ' Alice@X.com ' });
     expect(res1.status).toBe(200);
     expect(res1.body.code).toBe('RESET_LINK_REQUESTED');
+    await vi.waitFor(() => expect(emailSender.sendEmail).toHaveBeenCalledOnce());
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 73,
+      to: 'alice@x.com',
+      subject: 'Reset your Globussoft CRM password',
+      html: expect.stringContaining('&portal=1'),
+    }));
 
     // Second call: NO matching contact — MUST return same shape
-    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.findMany.mockResolvedValueOnce([]);
     const res2 = await request(makeApp())
       .post('/api/portal/forgot')
       .send({ email: 'noone@x.com' });
@@ -388,6 +407,52 @@ describe('POST /forgot — anti-enumeration', () => {
     expect(res2.body.code).toBe('RESET_LINK_REQUESTED');
     // Same response shape — attacker cannot distinguish.
     expect(res2.body).toEqual(res1.body);
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  test('scopes reset delivery to the selected active Travel tenant', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 99,
+      tenantId: 73,
+      email: 'alice@x.com',
+      portalPasswordHash: 'existing-hash',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/portal/forgot')
+      .send({ email: 'alice@x.com', resetTenantId: 73 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: {
+        email: 'alice@x.com',
+        tenantId: 73,
+        deletedAt: null,
+        portalPasswordHash: { not: null },
+        tenant: { isActive: true, vertical: 'travel' },
+      },
+    });
+    await vi.waitFor(() => expect(emailSender.sendEmail).toHaveBeenCalledOnce());
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 73,
+      to: 'alice@x.com',
+    }));
+  });
+
+  test('does not choose an arbitrary tenant when a portal email is ambiguous', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 99, tenantId: 73, email: 'shared@x.com', portalPasswordHash: 'hash-1' },
+      { id: 100, tenantId: 74, email: 'shared@x.com', portalPasswordHash: 'hash-2' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/portal/forgot')
+      .send({ email: 'shared@x.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ack', code: 'RESET_LINK_REQUESTED' });
+    expect(emailSender.sendEmail).not.toHaveBeenCalled();
+    expect(portalResetTokens.resetTokens.size).toBe(0);
   });
 });
 
@@ -401,6 +466,26 @@ describe('POST /reset', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid or expired token/i);
     expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('valid customer token updates the portal password and is single-use', async () => {
+    portalResetTokens.issuePortalResetToken(
+      'valid-customer-token',
+      99,
+      new Date(Date.now() + 60_000),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/portal/reset')
+      .send({ token: 'valid-customer-token', newPassword: 'NewPassword123' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.code).toBe('PASSWORD_RESET_OK');
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 99 },
+      data: { portalPasswordHash: expect.any(String) },
+    });
+    expect(portalResetTokens.resetTokens.size).toBe(0);
   });
 });
 

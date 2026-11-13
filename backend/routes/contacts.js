@@ -64,6 +64,11 @@ const CONTACT_TAG_CATALOG_KEY = 'generic.contactTagCatalog';
 const CONTACT_TAG_COLOR_RE = /^#[0-9a-f]{6}$/i;
 const CONTACT_TAG_DEFAULT_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#db2777', '#dc2626'];
 
+function canonicalAttachmentUrl(fileUrl) {
+  if (typeof fileUrl !== "string") return fileUrl;
+  return fileUrl.replace(/^\/uploads\/web-forms\//, "/api/uploads/web-forms/");
+}
+
 // Contacts pagination must be ordered in the database. Sorting a single page
 // in the browser produces a different order on every page and can hide the
 // actual first/last result. Keep this allowlist explicit so a query parameter
@@ -464,18 +469,30 @@ function validateContactInput(
   return null;
 }
 
-function canViewAllLeads(req) {
+async function canViewAllLeads(req) {
   if (!req || !req.user) return false;
   const vertical = req.user.vertical || "generic";
   // Travel keeps the stricter rule: only ADMIN can see the full tenant.
-  // Other verticals preserve the pre-existing ADMIN/MANAGER behavior.
+  // Generic CRM keeps ADMIN/MANAGER unrestricted, while the tenant's lead
+  // visibility setting controls every other staff role.
   if (vertical === "travel") {
     return req.user.role === "ADMIN";
   }
-  return ["ADMIN", "MANAGER"].includes(req.user.role);
+  if (["ADMIN", "MANAGER"].includes(req.user.role)) return true;
+  if (!req._leadVisibilityPromise) {
+    req._leadVisibilityPromise = getSetting(
+      req.user.tenantId,
+      KEYS.GENERIC_LEAD_VISIBILITY,
+      {
+        coerce: (value) => String(value || "closed").trim().toLowerCase(),
+        fallback: "closed",
+      },
+    ).catch(() => "closed");
+  }
+  return (await req._leadVisibilityPromise) === "open";
 }
 
-function canReassignLead(req, contact) {
+async function canReassignLead(req, contact) {
   if (!req || !req.user || !contact) return false;
   if (req.user.role === "ADMIN") return true;
   const vertical = req.user.vertical || "generic";
@@ -1023,11 +1040,24 @@ function buildTrackingFilterClause(field, operator, values) {
   return range ? { webFormSubmissions: { some: { submittedAt: range } } } : null;
 }
 
-function canAccessLead(req, contact) {
+async function canAccessLead(req, contact) {
   if (!req || !req.user || !contact) return false;
-  if (canViewAllLeads(req)) return true;
+  if (await canViewAllLeads(req)) return true;
   return Number(contact.assignedToId) === Number(req.user.userId);
 }
+
+const requireContactOrLeadWrite = requireAnyPermission([
+  { module: "contacts", action: "write" },
+  { module: "leads", action: "write" },
+]);
+const requireContactOrLeadUpdate = requireAnyPermission([
+  { module: "contacts", action: "update" },
+  { module: "leads", action: "update" },
+]);
+const requireContactOrLeadDelete = requireAnyPermission([
+  { module: "contacts", action: "delete" },
+  { module: "leads", action: "delete" },
+]);
 
 // PRD Gap §1.1e — walletBalance is a read-only computed surface. We strip
 // it from any incoming body BEFORE Prisma write so a caller can't poison
@@ -1435,14 +1465,17 @@ router.get("/assignees", requireAnyPermission([
 
 router.get("/", async (req, res) => {
   try {
+    const viewAllLeads = await canViewAllLeads(req);
     const where = { tenantId: req.user.tenantId };
     const includeCrmStatuses =
       req.query.includeCrmStatuses === "true" &&
       (req.user.vertical || "generic") === "generic";
     if (req.query.status && !includeCrmStatuses) where.status = req.query.status;
-    if (includeCrmStatuses) {
-      where.status = { in: ["Lead", "Prospect", "Customer", "Churned", "Junk"] };
-    }
+    // Generic CRM's Leads page is an all-contacts view. The legacy request
+    // still includes ?status=Lead for compatibility with existing callers,
+    // but includeCrmStatuses explicitly means that the status must not limit
+    // the result set. Do not replace this with a hard-coded status list:
+    // custom/new statuses would otherwise disappear from the Leads page.
     if (req.query.assignedToId)
       where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === "true") where.assignedToId = null;
@@ -1729,7 +1762,7 @@ router.get("/", async (req, res) => {
           if (f.field !== "submittedAt") {
             const ids = await matchingContactIds({
               tenantId: req.user.tenantId, status: where.status,
-              assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+              assignedToId: viewAllLeads ? undefined : req.user.userId,
               trackingField: f.field, operator: f.operator, values: rawValues,
             });
             if (ids !== null) clauses.push({ id: { in: ids } });
@@ -1750,7 +1783,7 @@ router.get("/", async (req, res) => {
         if (fieldDef.namePart) {
           const ids = await matchingContactIds({
             tenantId: req.user.tenantId, status: where.status,
-            assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+            assignedToId: viewAllLeads ? undefined : req.user.userId,
             namePart: fieldDef.namePart, operator: f.operator, values: rawValues,
           });
           if (ids !== null) clauses.push({ id: { in: ids } });
@@ -1768,7 +1801,7 @@ router.get("/", async (req, res) => {
     // explicit ?assignedToId from a restricted caller is overridden by their
     // own userId — a rep cannot probe a colleague's book of business by URL.
     // Total Contacts KPI on /dashboard now reflects own-book size for sales reps.
-    if (!canViewAllLeads(req)) where.assignedToId = req.user.userId;
+    if (!viewAllLeads) where.assignedToId = req.user.userId;
     if (req.query.from || req.query.to) {
       const from = req.query.from ? new Date(req.query.from) : null;
       const to = req.query.to ? new Date(req.query.to) : null;
@@ -2013,6 +2046,7 @@ router.get("/filter-fields", async (req, res) => {
 // date/checkbox) fall back to a DISTINCT scan since there's no fixed list.
 router.get("/filter-values/:field", async (req, res) => {
   try {
+    const viewAllLeads = await canViewAllLeads(req);
     const tenantId = req.user.tenantId;
     // Same ?status scoping as /filter-fields (see that route's comment) —
     // Leads.jsx passes ?status=Lead so the value list only shows values
@@ -2112,7 +2146,7 @@ router.get("/filter-values/:field", async (req, res) => {
               tenantId,
               deletedAt: null,
               ...(statusScope ? { status: statusScope } : {}),
-              ...(!canViewAllLeads(req)
+              ...(!viewAllLeads
                 ? { assignedToId: req.user.userId }
                 : {}),
             },
@@ -2157,7 +2191,7 @@ router.get("/filter-values/:field", async (req, res) => {
       }
       const values = await distinctValues({
         tenantId, status: statusScope,
-        assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+        assignedToId: viewAllLeads ? undefined : req.user.userId,
         trackingField: req.params.field, search: valueSearch,
       });
       return res.json({ values });
@@ -2188,7 +2222,7 @@ router.get("/filter-values/:field", async (req, res) => {
     if (fieldDef.namePart) {
       const values = await distinctValues({
         tenantId, status: statusScope,
-        assignedToId: canViewAllLeads(req) ? undefined : req.user.userId,
+        assignedToId: viewAllLeads ? undefined : req.user.userId,
         namePart: fieldDef.namePart, search: valueSearch,
       });
       return res.json({ values });
@@ -2543,7 +2577,7 @@ router.get('/:id/lifecycle-history', async (req, res) => {
       where: { id: contactId, tenantId: req.user.tenantId },
       select: { id: true, assignedToId: true },
     });
-    if (!contact || !canAccessLead(req, contact)) {
+    if (!contact || !(await canAccessLead(req, contact))) {
       return res.status(404).json({ error: 'Contact not found' });
     }
 
@@ -2647,7 +2681,7 @@ router.get("/:id", async (req, res) => {
       },
     });
     if (!contact) return res.status(404).json({ error: "Contact not found" });
-    if (!canAccessLead(req, contact))
+    if (!(await canAccessLead(req, contact)))
       return res.status(404).json({ error: "Contact not found" });
     // #167: 404 soft-deleted rows unless caller opts in.
     if (contact.deletedAt && !includeDeleted)
@@ -2696,7 +2730,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireContactOrLeadWrite, async (req, res) => {
   try {
     // #464: strip write-restricted fields BEFORE validation so a USER who has
     // canWrite=false on Contact.email can't push a value through. Validation
@@ -3030,6 +3064,7 @@ router.put(
   ]),
   async (req, res) => {
   try {
+    const viewAllLeads = await canViewAllLeads(req);
     const { contactIds, assignedToId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
       return res.status(400).json({ error: "No contact IDs provided" });
@@ -3041,19 +3076,25 @@ router.put(
       select: { id: true, name: true, subBrand: true, assignedToId: true },
     });
 
-    let assignableRows = rows;
-    let skippedRows = [];
+    const visibilitySkippedRows = viewAllLeads
+      ? []
+      : rows.filter((row) => Number(row.assignedToId) !== Number(req.user.userId));
+    let assignableRows = viewAllLeads
+      ? rows
+      : rows.filter((row) => Number(row.assignedToId) === Number(req.user.userId));
+    let skippedRows = visibilitySkippedRows;
     if (nextAssignedToId) {
       const {
         getSubBrandAccessSet,
         canAccessSubBrand,
       } = require("../middleware/travelGuards");
       const allowed = await getSubBrandAccessSet(nextAssignedToId);
-      assignableRows = rows.filter(
-        (r) => !r.subBrand || canAccessSubBrand(allowed, r.subBrand),
-      );
-      skippedRows = rows.filter(
+      const subBrandSkippedRows = assignableRows.filter(
         (r) => r.subBrand && !canAccessSubBrand(allowed, r.subBrand),
+      );
+      skippedRows = [...skippedRows, ...subBrandSkippedRows];
+      assignableRows = assignableRows.filter(
+        (r) => !r.subBrand || canAccessSubBrand(allowed, r.subBrand),
       );
     }
 
@@ -3104,7 +3145,9 @@ router.put(
         id: r.id,
         name: r.name,
         subBrand: r.subBrand,
-        reason: "ASSIGNEE_SUB_BRAND_ACCESS_MISMATCH",
+        reason: visibilitySkippedRows.includes(r)
+          ? "LEAD_VISIBILITY_DENIED"
+          : "ASSIGNEE_SUB_BRAND_ACCESS_MISMATCH",
       })),
     });
   } catch (_err) {
@@ -3117,6 +3160,7 @@ router.put(
   requirePermission("leads", "update"),
   async (req, res) => {
   try {
+    const viewAllLeads = await canViewAllLeads(req);
     const { contactIds, callifiedCampaignId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
       return res.status(400).json({ error: "No contact IDs provided" });
@@ -3136,7 +3180,11 @@ router.put(
     }
 
     const { count } = await prisma.contact.updateMany({
-      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      where: {
+        id: { in: ids },
+        tenantId: req.user.tenantId,
+        ...(!viewAllLeads ? { assignedToId: req.user.userId } : {}),
+      },
       data: { callifiedCampaignId: nextCampaignId },
     });
 
@@ -3155,6 +3203,7 @@ router.delete(
   ]),
   async (req, res) => {
   try {
+    const viewAllLeads = await canViewAllLeads(req);
     const { contactIds } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
       return res.status(400).json({ error: "No contact IDs provided" });
@@ -3171,7 +3220,11 @@ router.delete(
     }
 
     const contacts = await prisma.contact.findMany({
-      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      where: {
+        id: { in: ids },
+        tenantId: req.user.tenantId,
+        ...(!viewAllLeads ? { assignedToId: req.user.userId } : {}),
+      },
       // Keep a small immutable snapshot in the audit row. The Contact is
       // about to be permanently removed, so the viewer cannot resolve its
       // name/email after the delete from the live Contacts endpoint.
@@ -3215,7 +3268,7 @@ router.get("/:id/activities", async (req, res) => {
       where: { id, tenantId: req.user.tenantId },
       select: { id: true, status: true, assignedToId: true },
     });
-    if (!contact || !canAccessLead(req, contact))
+    if (!contact || !(await canAccessLead(req, contact)))
       return res.status(404).json({ error: "Contact not found" });
 
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
@@ -3233,7 +3286,12 @@ router.get("/:id/activities", async (req, res) => {
       tenantId: req.user.tenantId,
       provider: "callified",
     };
-    const [activityRows, activityTotal, callLogs, callLogTotal] = await Promise.all([
+    const taskWhere = {
+      contactId: id,
+      tenantId: req.user.tenantId,
+      deletedAt: null,
+    };
+    const [activityRows, activityTotal, callLogs, callLogTotal, taskRows, taskTotal] = await Promise.all([
       prisma.activity.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -3249,6 +3307,14 @@ router.get("/:id/activities", async (req, res) => {
           })
         : Promise.resolve([]),
       isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
+      isGeneric
+        ? prisma.task.findMany({
+            where: taskWhere,
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: mergeWindow,
+          })
+        : Promise.resolve([]),
+      isGeneric ? prisma.task.count({ where: taskWhere }) : Promise.resolve(0),
     ]);
     let merged = activityRows;
     if (isGeneric) {
@@ -3270,13 +3336,24 @@ router.get("/:id/activities", async (req, res) => {
         });
         return rows;
       }, []);
-      merged = [...activityRows, ...callActivities].sort((a, b) => {
+      const taskActivities = taskRows.map((task) => ({
+        id: `task-${task.id}`,
+        type: "Task",
+        description: `Task created: ${task.title}`,
+        createdAt: task.createdAt,
+        contactId: task.contactId,
+        userId: task.userId,
+        status: task.status,
+        dueDate: task.dueDate,
+        taskId: task.id,
+      }));
+      merged = [...activityRows, ...callActivities, ...taskActivities].sort((a, b) => {
         const createdDifference = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         if (createdDifference !== 0) return createdDifference;
         return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
       });
     }
-    const total = isGeneric ? activityTotal + callLogTotal : activityTotal;
+    const total = isGeneric ? activityTotal + callLogTotal + taskTotal : activityTotal;
     const data = isGeneric
       ? merged.slice(offset, offset + limit)
       : merged;
@@ -3298,7 +3375,7 @@ router.post("/:id/activities", async (req, res) => {
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!contact) return res.status(404).json({ error: "Contact not found" });
-    if (!canAccessLead(req, contact))
+    if (!(await canAccessLead(req, contact)))
       return res.status(404).json({ error: "Contact not found" });
     const { type, description } = req.body;
     const activity = await prisma.activity.create({
@@ -3340,7 +3417,7 @@ router.patch("/:id/activities/:activityId", async (req, res) => {
     const contact = await prisma.contact.findFirst({
       where: { id: contactId, tenantId: req.user.tenantId },
     });
-    if (!contact || !canAccessLead(req, contact)) {
+    if (!contact || !(await canAccessLead(req, contact))) {
       return res.status(404).json({ error: "Contact not found" });
     }
     const activity = await prisma.activity.findFirst({
@@ -3372,7 +3449,7 @@ router.delete("/:id/activities/:activityId", async (req, res) => {
       return res.status(400).json({ error: "Invalid contact or activity ID", code: "INVALID_ID" });
     }
     const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId: req.user.tenantId } });
-    if (!contact || !canAccessLead(req, contact)) return res.status(404).json({ error: "Contact not found" });
+    if (!contact || !(await canAccessLead(req, contact))) return res.status(404).json({ error: "Contact not found" });
     const activity = await prisma.activity.findFirst({
       where: { id: activityId, contactId, tenantId: req.user.tenantId, type: "Note" },
     });
@@ -3397,7 +3474,7 @@ router.post("/:id/summarize-chat", async (req, res) => {
       where: { id, tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Contact not found" });
-    if (!canAccessLead(req, existing))
+    if (!(await canAccessLead(req, existing)))
       return res.status(404).json({ error: "Contact not found" });
     const leadConversationSummary = require("../lib/leadConversationSummary");
     const result = await leadConversationSummary.narrativeSummarizeContact({
@@ -3471,7 +3548,7 @@ const updateContactById = async (req, res) => {
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Contact not found" });
-    if (!canAccessLead(req, existing))
+    if (!(await canAccessLead(req, existing)))
       return res.status(404).json({ error: "Contact not found" });
     // #464: strip write-restricted fields per the caller's role BEFORE
     // validation so blocked-field updates can't slip through.
@@ -3824,10 +3901,6 @@ const updateContactById = async (req, res) => {
   }
 };
 
-const requireContactOrLeadUpdate = requireAnyPermission([
-  { module: "contacts", action: "update" },
-  { module: "leads", action: "update" },
-]);
 router.put("/:id", requireContactOrLeadUpdate, updateContactById);
 router.patch("/:id", requireContactOrLeadUpdate, updateContactById);
 
@@ -3874,7 +3947,7 @@ function getSpreadsheetValue(row, aliases) {
   return "";
 }
 
-router.post("/import-csv", async (req, res) => {
+router.post("/import-csv", requireContactOrLeadWrite, async (req, res) => {
   try {
     const { contacts } = req.body;
     if (!Array.isArray(contacts) || contacts.length === 0) {
@@ -3992,7 +4065,7 @@ router.put("/:id/assign", requireContactOrLeadUpdate, async (req, res) => {
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Contact not found" });
-    if (!canReassignLead(req, existing)) {
+    if (!(await canReassignLead(req, existing))) {
       if (
         (req.user?.vertical || "generic") !== "travel" ||
         req.user?.role === "ADMIN"
@@ -4547,14 +4620,16 @@ router.get("/:id/attachments", async (req, res) => {
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!contact) return res.status(404).json({ error: "Contact not found" });
-    if (!canAccessLead(req, contact))
+    if (!(await canAccessLead(req, contact)))
       return res.status(404).json({ error: "Contact not found" });
-    res.json(
-      await prisma.contactAttachment.findMany({
-        where: { contactId: contact.id, tenantId: req.user.tenantId },
-        orderBy: { createdAt: "desc" },
-      }),
-    );
+    const attachments = await prisma.contactAttachment.findMany({
+      where: { contactId: contact.id, tenantId: req.user.tenantId },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(attachments.map((attachment) => ({
+      ...attachment,
+      fileUrl: canonicalAttachmentUrl(attachment.fileUrl),
+    })));
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch attachments" });
   }
@@ -4688,12 +4763,15 @@ router.delete("/attachments/:attachId", async (req, res) => {
 // Permanently delete a contact and its contact-owned records. Legacy rows
 // with deletedAt set are handled by this same path, so an old soft-deleted
 // account cannot block a future registration using the same email.
-router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
+router.delete("/:id", requireContactOrLeadDelete, async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Contact not found" });
+    if (!(await canAccessLead(req, existing))) {
+      return res.status(404).json({ error: "Contact not found" });
+    }
     await writeAudit(
       "Contact",
       "HARD_DELETE",

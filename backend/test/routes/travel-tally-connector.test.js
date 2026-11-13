@@ -10,6 +10,7 @@ const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 const tallyConnectorBridge = requireCJS("../../lib/tallyConnectorBridge");
 const originalConnectorPublicUrl = process.env.TALLY_CONNECTOR_PUBLIC_URL;
+const originalConnectorExePath = process.env.TALLY_CONNECTOR_EXE_PATH;
 const SAFE_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 const SAFE_COST_CENTRE_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><COSTCENTRE NAME="TRIP-1" ACTION="Create"><NAME>TRIP-1</NAME></COSTCENTRE></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 const REFERENCED_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>Travel Test</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER VCHTYPE="Sales" ACTION="Create"><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><REFERENCE>INV-1</REFERENCE><COSTCENTREALLOCATIONS.LIST><NAME>TRIP-1</NAME></COSTCENTREALLOCATIONS.LIST></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
@@ -61,6 +62,8 @@ beforeEach(() => {
 afterEach(() => {
   if (originalConnectorPublicUrl === undefined) delete process.env.TALLY_CONNECTOR_PUBLIC_URL;
   else process.env.TALLY_CONNECTOR_PUBLIC_URL = originalConnectorPublicUrl;
+  if (originalConnectorExePath === undefined) delete process.env.TALLY_CONNECTOR_EXE_PATH;
+  else process.env.TALLY_CONNECTOR_EXE_PATH = originalConnectorExePath;
 });
 
 describe("travel Tally connector routes", () => {
@@ -190,6 +193,20 @@ describe("travel Tally connector routes", () => {
       expect(unavailable.status).toBe(503);
       expect(unavailable.body.code).toBe("TALLY_CONNECTOR_BINARY_UNAVAILABLE");
       expect(prisma.integration.upsert).not.toHaveBeenCalled();
+    } finally {
+      existsSpy.mockRestore();
+    }
+  });
+
+  test("falls back to the packaged binary when a deployment override is stale", () => {
+    process.env.TALLY_CONNECTOR_EXE_PATH = "/obsolete/deployment/TallyConnector.exe";
+    const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => (
+      String(candidate).includes("tally-connector") && !String(candidate).includes("obsolete")
+    ));
+    try {
+      const resolved = connectorRouter.__testHooks.resolveConnectorBinaryPath();
+      expect(resolved).toMatch(/[\\/]tally-connector[\\/]dist[\\/]TallyConnector\.exe$/);
+      expect(resolved).not.toContain("obsolete");
     } finally {
       existsSpy.mockRestore();
     }

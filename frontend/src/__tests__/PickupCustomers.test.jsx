@@ -108,10 +108,12 @@ describe('<PickupCustomers />', () => {
     );
 
     const ledger = await screen.findByRole('table', { name: 'Plot commission ledger' });
+    expect(ledger).toHaveClass('pickup-commission-table');
     expect(ledger).toHaveTextContent('Sanjeev');
-    const rateInput = within(ledger).getByRole('spinbutton', { name: 'Commission percentage for Sanjeev' });
-    expect(rateInput).toHaveValue(10);
-    expect(within(ledger).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(within(ledger).getByText('10%')).toBeInTheDocument();
+    expect(within(ledger).getByText('Finance rule')).toBeInTheDocument();
+    expect(within(ledger).queryByRole('spinbutton', { name: 'Commission percentage for Sanjeev' })).toBeNull();
+    expect(within(ledger).queryByRole('button', { name: 'Save' })).toBeNull();
     expect(screen.queryByRole('table', { name: 'Commission history' })).toBeNull();
     expect(screen.queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
     expect(within(ledger).queryByRole('button', { name: 'Commission history' })).toBeNull();
@@ -122,14 +124,8 @@ describe('<PickupCustomers />', () => {
     expect(within(commissionDialog).queryByRole('table', { name: 'Future installment payment history' })).toBeNull();
     fireEvent.click(within(commissionDialog).getByRole('button', { name: 'Close commission history' }));
     expect(screen.queryByRole('dialog', { name: 'Commission history' })).toBeNull();
-    fireEvent.change(rateInput, { target: { value: '5' } });
-    expect(ledger).toHaveTextContent('₹2,25,000.00');
-    expect(ledger).toHaveTextContent('₹45,00,000.00 × 5%');
-    fireEvent.click(within(ledger).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
-      '/api/pickup-plot-inventory/commissions/801/rate',
-      { method: 'PATCH', body: JSON.stringify({ commissionPercent: 5 }) },
-    ));
+    expect(ledger).toHaveTextContent('₹4,50,000.00');
+    expect(ledger).toHaveTextContent('₹45,00,000.00 × 10%');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
@@ -157,7 +153,7 @@ describe('<PickupCustomers />', () => {
     );
 
     const ledger = await screen.findByRole('table', { name: 'Plot commission ledger' });
-    expect(within(ledger).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(within(ledger).queryByRole('button', { name: 'Save' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Commission history' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Payment history' })).toBeNull();
     expect(screen.queryByRole('table', { name: 'Commission history' })).toBeNull();
@@ -967,6 +963,9 @@ describe('<PickupCustomers />', () => {
     expect(responsiveCss).toMatch(/\.pickup-installment-table-wrap\s*\{[^}]*max-height:330px[^}]*overflow:auto/s);
     expect(responsiveCss).toMatch(/\.pickup-installment-table th\s*\{[^}]*position:sticky[^}]*top:0/s);
     expect(responsiveCss).toMatch(/\.pickup-payment-history-wrap\s*\{[^}]*max-height:260px[^}]*overflow:auto/s);
+    expect(responsiveCss).toMatch(/\.pickup-commission-table\s*\{[^}]*min-width:1235px[^}]*table-layout:fixed/s);
+    expect(responsiveCss).toMatch(/\.pickup-commission-rate-control\s*\{[^}]*min-width:198px[^}]*box-sizing:border-box[^}]*padding:2px 8px 2px 0/s);
+    expect(responsiveCss).toMatch(/\.pickup-commission-rate-control input\s*\{[^}]*flex:0 0 82px[^}]*box-sizing:border-box[^}]*padding:\.45rem \.7rem/s);
     expect(responsiveCss).toMatch(/\.pickup-history-dialog\s*\{[^}]*overflow-x:hidden;[^}]*overflow-y:auto;/s);
     expect(responsiveCss).toMatch(/\.pickup-history-dialog::before\s*\{[^}]*display:none;/s);
     expect(responsiveCss).toMatch(/\.pickup-history-dialog:hover\s*\{[^}]*transform:none;[^}]*border-color:var\(--border-color\)/s);

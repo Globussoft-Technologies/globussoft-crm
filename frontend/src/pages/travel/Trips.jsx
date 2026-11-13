@@ -3,7 +3,7 @@
 // Lands at /travel/trips. Operator-facing list showing destination,
 // dates, school, participant count, status. Click → /travel/trips/:id
 // for the full operational view (participants, rooming, payment plan,
-// instalments, microsite link).
+// instalments, documents, and landing-page registration).
 //
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
@@ -21,7 +21,11 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   ArrowUpDown,
+  Copy,
+  GitBranch,
+  Link2,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -83,6 +87,13 @@ function localDateKey(value = new Date()) {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
+function dateInputValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 const EMPTY_FORM = {
   contactId: "",
   tripCode: "",
@@ -92,6 +103,7 @@ const EMPTY_FORM = {
   returnDate: "",
   tripType: "international",
   status: "confirmed",
+  familyParentId: "",
 };
 
 const BRAND_LABEL = "TMC";
@@ -99,7 +111,7 @@ const SUB_BRAND_LABEL = "School trips";
 const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const MAX_PAGE_SIZE = 200;
-const TRIPS_TABLE_MIN_WIDTH = 1640;
+const TRIPS_TABLE_MIN_WIDTH = 1900;
 const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
 const TRIP_SORT_KEYS = new Set([
   "tripCode", "destination", "dates", "school",
@@ -151,6 +163,9 @@ export default function Trips() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [variantSource, setVariantSource] = useState(null);
+  const [expandedFamilyIds, setExpandedFamilyIds] = useState(() => new Set());
+  const [familyChildrenByParent, setFamilyChildrenByParent] = useState({});
   const reqIdRef = useRef(0);
   const fromReports = searchParams.get("from") === "reports";
   const tripsListPath = `${location.pathname}${location.search}`;
@@ -221,9 +236,75 @@ export default function Trips() {
     });
   }, [sortDirection, sortKey, trips]);
 
+  const visibleTripRows = useMemo(() => {
+    const loadedParentIds = new Set(sortedTrips.map((trip) => Number(trip.id)));
+    const childrenByParent = new Map();
+    const addChild = (child) => {
+      const parentId = Number(child.familyParent?.id);
+      if (!Number.isInteger(parentId)) return;
+      const children = childrenByParent.get(parentId) || new Map();
+      children.set(Number(child.id), child);
+      childrenByParent.set(parentId, children);
+    };
+
+    trips.forEach(addChild);
+    Object.values(familyChildrenByParent).flat().forEach(addChild);
+
+    const rows = [];
+    sortedTrips.forEach((trip) => {
+      const parentId = Number(trip.familyParent?.id);
+      if (Number.isInteger(parentId) && loadedParentIds.has(parentId)) return;
+      rows.push({ trip, isFamilyChild: false });
+      if (!expandedFamilyIds.has(Number(trip.id))) return;
+      const children = [...(childrenByParent.get(Number(trip.id))?.values() || [])]
+        .sort((left, right) => Number(left.id) - Number(right.id));
+      children.forEach((child) => rows.push({ trip: child, isFamilyChild: true }));
+    });
+    return rows;
+  }, [expandedFamilyIds, familyChildrenByParent, sortedTrips, trips]);
+
   const openCreate = () => {
     setForm(EMPTY_FORM);
+    setVariantSource(null);
     setCreating(true);
+  };
+
+  const openVariantCreate = (trip) => {
+    setVariantSource(trip);
+    setForm({
+      ...EMPTY_FORM,
+      destination: trip.destination || "",
+      departDate: dateInputValue(trip.departDate),
+      returnDate: dateInputValue(trip.returnDate),
+      tripType: trip.tripType || "international",
+      status: trip.status || "confirmed",
+      familyParentId: String(trip.familyParent?.id || trip.id),
+    });
+    setCreating(true);
+  };
+
+  const toggleFamily = async (trip) => {
+    const tripId = Number(trip.id);
+    const isExpanded = expandedFamilyIds.has(tripId);
+    setExpandedFamilyIds((current) => {
+      const next = new Set(current);
+      if (isExpanded) next.delete(tripId);
+      else next.add(tripId);
+      return next;
+    });
+    if (isExpanded || familyChildrenByParent[tripId]) return;
+
+    try {
+      const result = await fetchApi("/api/travel/trips?limit=200", { silent: true });
+      const rows = Array.isArray(result?.trips) ? result.trips : [];
+      setFamilyChildrenByParent((current) => ({
+        ...current,
+        [tripId]: rows.filter((candidate) => Number(candidate.familyParent?.id) === tripId),
+      }));
+    } catch {
+      setFamilyChildrenByParent((current) => ({ ...current, [tripId]: [] }));
+      notify.error("Could not load the trips in this group");
+    }
   };
 
   const submitCreate = async (e) => {
@@ -258,14 +339,16 @@ export default function Trips() {
         returnDate: form.returnDate,
         status: form.status,
         tripType: form.tripType,
+        ...(form.familyParentId ? { familyParentId: Number(form.familyParentId) } : {}),
         ...(form.contactId ? { schoolContactId: Number(form.contactId) } : {}),
       };
       await fetchApi("/api/travel/trips", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      notify.success("Trip created");
+      notify.success(variantSource ? "School trip variant created" : "Trip created");
       setCreating(false);
+      setVariantSource(null);
       setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create trip");
@@ -280,6 +363,8 @@ export default function Trips() {
       if (reset) {
         setLoading(true);
         setTrips([]);
+        setExpandedFamilyIds(new Set());
+        setFamilyChildrenByParent({});
       } else {
         setLoading(true);
       }
@@ -421,7 +506,7 @@ export default function Trips() {
 
   // DELETE /api/travel/trips/:id is ADMIN-only on the server
   // (requirePermission("trips","delete")). The route cascades through
-  // participants, rooming, payment plan, microsite, document
+  // participants, rooming, payment plan, document
   // requirements, AND PendingTripRegistration drafts via the schema's
   // onDelete:Cascade — so the confirmation copy MUST flag that. A
   // wrongly-deleted trip cannot be recovered without restoring the
@@ -432,7 +517,7 @@ export default function Trips() {
       message:
         `Permanently delete "${t.tripCode}" — ${t.destination}?\n\n` +
         "This will also delete every participant, room assignment, payment-plan row, " +
-        "instalment payment, document requirement, microsite, landing page, and " +
+        "instalment payment, document requirement, landing page, and " +
         "pending registration linked to this trip.\n\n" +
         "This cannot be undone.",
       confirmText: "Delete trip",
@@ -494,7 +579,7 @@ export default function Trips() {
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
             School educational trips. Operational view per trip — participants,
-            rooming, payment plan, microsite — lives on the detail page.
+            rooming, payment plan, documents, and landing page — lives on the detail page.
           </p>
         </div>
         <button
@@ -598,6 +683,7 @@ export default function Trips() {
           <>
             <TopScrollSync forceScrollbar>
               <table
+                className="travel-trips-table"
                 style={{
                   width: "100%",
                   minWidth: TRIPS_TABLE_MIN_WIDTH,
@@ -607,6 +693,7 @@ export default function Trips() {
               >
                 <colgroup>
                   <col style={{ width: 190 }} />
+                  <col style={{ width: 210 }} />
                   <col style={{ width: 280 }} />
                   <col style={{ width: 120 }} />
                   <col style={{ width: 150 }} />
@@ -616,11 +703,12 @@ export default function Trips() {
                   <col style={{ width: 145 }} />
                   <col style={{ width: 160 }} />
                   <col style={{ width: 120 }} />
-                  <col style={{ width: 80 }} />
+                  <col style={{ width: 140 }} />
                 </colgroup>
                 <thead>
                   <tr>
                     <th style={th}>{sortButton("tripCode", "Trip code")}</th>
+                    <th style={th}>Trip family</th>
                     <th style={th}>{sortButton("destination", "Destination")}</th>
                     <th style={th}>Brand</th>
                     <th style={th}>Sub-brand</th>
@@ -631,39 +719,122 @@ export default function Trips() {
                     <th style={th}>Trip type</th>
                     <th style={th}>{sortButton("status", "Status")}</th>
                     <th
-                      style={{ ...th, width: 60, textAlign: "right" }}
+                      style={{ ...th, width: 140, textAlign: "right" }}
                       aria-label="Actions"
                     ></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTrips.map((t) => {
+                  {visibleTripRows.map(({ trip: t, isFamilyChild }) => {
                     const sc = STATUS_COLORS[t.status] || {
                       bg: "var(--subtle-bg)",
                       color: "var(--text-secondary)",
                     };
+                    const familyVariantCount = Number(t._count?.familyVariants || 0)
+                      || familyChildrenByParent[t.id]?.length
+                      || 0;
+                    const canExpandFamily = !t.familyParent && familyVariantCount > 0;
+                    const familyIsExpanded = expandedFamilyIds.has(Number(t.id));
                     return (
                       <tr
-                        key={t.id}
-                        style={{ borderTop: "1px solid var(--border-light)" }}
+                        className={isFamilyChild
+                          ? "travel-trips-row travel-trips-row--family-child"
+                          : canExpandFamily
+                            ? "travel-trips-row travel-trips-row--family-parent"
+                            : "travel-trips-row"}
+                        key={`${isFamilyChild ? "family-child" : "trip"}-${t.id}`}
+                        style={{
+                          borderTop: "1px solid var(--border-light)",
+                          background: isFamilyChild
+                            ? "rgba(79,70,229,0.045)"
+                            : canExpandFamily
+                              ? "rgba(79,70,229,0.025)"
+                              : "transparent",
+                          boxShadow: isFamilyChild
+                            ? "inset 3px 0 0 rgba(79,70,229,0.32)"
+                            : canExpandFamily
+                              ? "inset 3px 0 0 rgba(47,122,77,0.72)"
+                              : "none",
+                        }}
                       >
-                        <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          <Link
-                            to={`/travel/trips/${t.id}`}
-                            state={{
-                              backTo: tripsListPath,
-                              backLabel: fromReports
-                                ? "Back to reports results"
-                                : "Back to trips",
-                            }}
-                            style={{
-                              color: "var(--primary-color)",
-                              textDecoration: "none",
-                              fontWeight: 600,
-                            }}
-                          >
-                            <SearchHighlight text={t.tripCode} query={search} />
-                          </Link>
+                        <td style={{ ...td, whiteSpace: "nowrap", paddingLeft: isFamilyChild ? 28 : 12 }}>
+                          <div style={familyCodeCell}>
+                            {canExpandFamily && (
+                              <button
+                                type="button"
+                                aria-label={`${familyIsExpanded ? "Collapse" : "Expand"} variants for ${t.tripCode}`}
+                                aria-expanded={familyIsExpanded}
+                                title={familyIsExpanded ? "Hide school variants" : "Show school variants"}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleFamily(t);
+                                }}
+                                style={{
+                                  ...familyExpandButton,
+                                  ...(familyIsExpanded ? familyExpandButtonActive : {}),
+                                }}
+                              >
+                                {familyIsExpanded
+                                  ? <ChevronDown size={13} aria-hidden />
+                                  : <ChevronRight size={13} aria-hidden />}
+                              </button>
+                            )}
+                            <Link
+                              to={`/travel/trips/${t.id}`}
+                              state={{
+                                backTo: tripsListPath,
+                                backLabel: fromReports
+                                  ? "Back to reports results"
+                                  : "Back to trips",
+                              }}
+                              style={{
+                                color: "var(--primary-color)",
+                                textDecoration: "none",
+                                fontWeight: 600,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 5,
+                                minWidth: 0,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {isFamilyChild && (
+                                <GitBranch size={14} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
+                              )}
+                              <SearchHighlight text={t.tripCode} query={search} />
+                            </Link>
+                          </div>
+                        </td>
+                        <td style={{ ...td, minWidth: 0 }}>
+                          {t.familyParent ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                              <span style={{ ...familyBadge, background: "rgba(79,70,229,0.12)", color: "var(--primary-color, #4f46e5)" }}>
+                                <Link2 size={12} aria-hidden /> Variant
+                              </span>
+                              <Link
+                                to={`/travel/trips/${t.familyParent.id}`}
+                                title={`Primary trip ${t.familyParent.tripCode}`}
+                                style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-secondary)", textDecoration: "none", fontSize: 12 }}
+                              >
+                                {t.familyParent.tripCode}
+                              </Link>
+                            </div>
+                          ) : Number(t._count?.familyVariants || 0) > 0 ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                              <span style={{ ...familyBadge, background: "rgba(47,122,77,0.14)", color: "#2F7A4D" }}>
+                                <Link2 size={12} aria-hidden /> Primary
+                              </span>
+                              <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                                {t._count.familyVariants} school variant{t._count.familyVariants === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={{ ...familyBadge, background: "var(--subtle-bg)", color: "var(--text-secondary)" }}>
+                              Standalone
+                            </span>
+                          )}
                         </td>
                         <td style={{ ...td, minWidth: 0 }}>
                           <SearchHighlight text={t.destination} query={search} />
@@ -738,28 +909,49 @@ export default function Trips() {
                             ...td,
                             textAlign: "right",
                             whiteSpace: "nowrap",
+                            overflow: "visible",
                           }}
                         >
-                          <button
-                            type="button"
-                            onClick={() => remove(t)}
-                            disabled={deletingId === t.id}
-                            aria-label={`Delete trip ${t.tripCode}`}
-                            title="Delete trip"
-                            style={{
-                              background: "transparent",
-                              border: "1px solid var(--border-color)",
-                              borderRadius: 6,
-                              padding: "4px 6px",
-                              color: "#A8323F",
-                              cursor: deletingId === t.id ? "wait" : "pointer",
-                              opacity: deletingId === t.id ? 0.5 : 1,
-                              display: "inline-flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <Trash2 size={14} aria-hidden />
-                          </button>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <button
+                              type="button"
+                              onClick={() => openVariantCreate(t)}
+                              aria-label={`Create school variant for ${t.tripCode}`}
+                              title="Create school variant"
+                              style={{
+                                background: "transparent",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: 6,
+                                padding: "4px 6px",
+                                color: "var(--primary-color, var(--accent-color))",
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <Copy size={14} aria-hidden />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => remove(t)}
+                              disabled={deletingId === t.id}
+                              aria-label={`Delete trip ${t.tripCode}`}
+                              title="Delete trip"
+                              style={{
+                                background: "transparent",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: 6,
+                                padding: "4px 6px",
+                                color: "#A8323F",
+                                cursor: deletingId === t.id ? "wait" : "pointer",
+                                opacity: deletingId === t.id ? 0.5 : 1,
+                                display: "inline-flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <Trash2 size={14} aria-hidden />
+                            </button>
+                          </span>
                         </td>
                       </tr>
                     );
@@ -787,7 +979,10 @@ export default function Trips() {
       {creating && (
         <div
           onClick={(e) => {
-            if (e.target === e.currentTarget) setCreating(false);
+            if (e.target === e.currentTarget) {
+              setCreating(false);
+              setVariantSource(null);
+            }
           }}
           style={{
             position: "fixed",
@@ -818,17 +1013,37 @@ export default function Trips() {
               }}
             >
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-                New Trip
+                {variantSource ? "Create school variant" : "New Trip"}
               </h2>
               <button
                 type="button"
-                onClick={() => setCreating(false)}
+                onClick={() => {
+                  setCreating(false);
+                  setVariantSource(null);
+                }}
                 aria-label="Close"
                 style={iconBtn}
               >
                 <X size={16} />
               </button>
             </div>
+            {variantSource && (
+              <div
+                style={{
+                  marginBottom: 14,
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  background: "var(--subtle-bg)",
+                  color: "var(--text-secondary)",
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                Itinerary copied from <strong>{variantSource.tripCode}</strong>.
+                This creates a separate school trip, so its school, teacher,
+                landing page, parent link, participants, and payments stay independent.
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <label style={fieldLabel}>
                 Trip code
@@ -939,13 +1154,16 @@ export default function Trips() {
             >
               <button
                 type="button"
-                onClick={() => setCreating(false)}
+                onClick={() => {
+                  setCreating(false);
+                  setVariantSource(null);
+                }}
                 style={refreshBtn}
               >
                 Cancel
               </button>
               <button type="submit" disabled={saving} style={primaryBtn}>
-                {saving ? "Creating…" : "Create Trip"}
+                {saving ? "Creating…" : variantSource ? "Create variant" : "Create Trip"}
               </button>
             </div>
           </form>
@@ -1067,6 +1285,44 @@ const brandBadge = {
   textTransform: "uppercase",
   background: "rgba(91,110,225,0.14)",
   color: "var(--primary-color)",
+};
+const familyBadge = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  flexShrink: 0,
+  padding: "3px 7px",
+  borderRadius: 999,
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: 0.2,
+  whiteSpace: "nowrap",
+};
+const familyExpandButton = {
+  appearance: "none",
+  border: "1px solid rgba(79,70,229,0.24)",
+  background: "rgba(79,70,229,0.07)",
+  color: "var(--primary-color, #4f46e5)",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 20,
+  height: 20,
+  borderRadius: 6,
+  flexShrink: 0,
+};
+const familyExpandButtonActive = {
+  borderColor: "var(--primary-color, #4f46e5)",
+  background: "var(--primary-color, #4f46e5)",
+  color: "var(--accent-text, #fff)",
+};
+const familyCodeCell = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+  width: "100%",
 };
 const th = {
   textAlign: "left",

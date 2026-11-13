@@ -9,7 +9,7 @@
  *   - auth gate (401/403 without token)
  *   - vertical gate (403 WRONG_VERTICAL for non-travel tenants)
  *   - response shape (all 6 KPI sections + recentTrips array)
- *   - landingPages tile replaced the legacy microsites tile (PR #1224)
+ *   - landingPages tile replaced the removed legacy trip-microsite tile (PR #1224)
  *   - shape stability under empty-state (no rows yet)
  *   - sub-brand scoping signal (subBrand keys appear in byStatus / bySubBrand)
  *
@@ -162,7 +162,7 @@ test.describe("Travel dashboard API — aggregate shape", () => {
     expect(typeof body.itineraries.total).toBe("number");
     expect(body.itineraries.byStatus).toBeTruthy();
 
-    // Landing pages shape (replaced microsites in PR #1224)
+    // Landing pages shape (replaced the removed trip-microsite tile in PR #1224)
     expect(typeof body.landingPages.total).toBe("number");
     expect(typeof body.landingPages.published).toBe("number");
 
@@ -270,7 +270,7 @@ test.describe("Travel dashboard API — ?subBrand= scoping", () => {
     }
   });
 
-  test("?subBrand=rfu zeroes TMC-only tiles (trips + microsites) and scopes costMaster to rfu", async ({ request }) => {
+  test("?subBrand=rfu zeroes TMC-only tiles (trips + legacy microsites) and scopes costMaster to rfu", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token) test.skip(true, "travel admin login unavailable");
     const r = await retryOn5xx(() =>

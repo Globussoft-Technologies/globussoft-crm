@@ -1088,26 +1088,6 @@ components:
           items: { type: object }
       allOf:
         - $ref: "#/components/schemas/AuditMeta"
-    TravelMicrosite:
-      type: object
-      description: "[TRAVEL] Multi-page public micro-site — brochures, religious-trip packets, school-trip packs."
-      properties:
-        id: { type: integer, readOnly: true }
-        slug: { type: string }
-        subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
-        title: { type: string }
-        pages:
-          type: array
-          items:
-            type: object
-            properties:
-              slug: { type: string }
-              title: { type: string }
-              bodyHtml: { type: string }
-        otpRequired: { type: boolean, default: false }
-        publishedAt: { type: string, format: date-time, nullable: true }
-      allOf:
-        - $ref: "#/components/schemas/AuditMeta"
     TravelDiagnosticSubmission:
       type: object
       description: "[TRAVEL][TMC] Submission to the public 12-question school-trip readiness form."
@@ -4923,29 +4903,7 @@ paths:
       tags: [Travel — Suppliers & Pricing]
       responses:
         "200": { description: Policies. }
-  # ── Microsites / Marketing ───────────────────────────────────────
-  /travel/microsites:
-    get:
-      summary: "[TRAVEL] List microsites"
-      tags: [Travel — Microsites & Marketing]
-      responses:
-        "200":
-          description: Microsites.
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/TravelMicrosite" }
-    post:
-      summary: "[TRAVEL] Create a microsite"
-      tags: [Travel — Microsites & Marketing]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TravelMicrosite" }
-      responses:
-        "201": { description: Created. }
+  # ── Marketing surfaces ───────────────────────────────────────────
   /v1/flyers/{slug}:
     parameters:
       - in: path
@@ -5426,7 +5384,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [contacts, leads, trips, quotes, suppliers, microsites]
+            enum: [contacts, leads, trips, quotes, suppliers]
       responses:
         "200":
           description: CSV.

@@ -25,6 +25,7 @@ export default function ResetPassword() {
   const navigate = useNavigate();
   const { setToken } = useContext(AuthContext);
   const token = new URLSearchParams(window.location.search).get('token') || '';
+  const isPortalReset = new URLSearchParams(window.location.search).get('portal') === '1';
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -47,7 +48,7 @@ export default function ResetPassword() {
     if (password !== confirm) { setError('Passwords do not match.'); return; }
     setSubmitting(true);
     try {
-      const resp = await fetch('/api/auth/reset-password', {
+      const resp = await fetch(isPortalReset ? '/api/portal/reset' : '/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, newPassword: password }),
@@ -62,6 +63,10 @@ export default function ResetPassword() {
         localStorage.removeItem('token');  // legacy storage path
         localStorage.removeItem('user');
         localStorage.removeItem('tenant');
+        if (isPortalReset) {
+          localStorage.removeItem('portalToken');
+          localStorage.removeItem('portalContact');
+        }
       } catch { /* ignore storage errors */ }
 
       setDone(true);

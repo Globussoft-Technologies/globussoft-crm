@@ -158,7 +158,10 @@ describe('Landing dynamic hero form', () => {
     await waitFor(() => {
       expect(container.querySelector('#hero-form-mount')).toBeTruthy();
     });
-    expect(global.fetch).not.toHaveBeenCalled();
+    // The landing chatbot may probe its optional availability/conversation
+    // endpoints, but the hero form document itself must still be injected
+    // without a client-side config request.
+    expect(global.fetch.mock.calls.some(([url]) => String(url).includes('/api/landing-form-config'))).toBe(false);
     expect(lightDomFrame(container)).toBeNull();
   });
 

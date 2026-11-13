@@ -330,10 +330,6 @@ const TRAVEL_MODULES = {
   // `visa` covers the Visa Sure sub-brand surfaces (dashboard, applications,
   // checklists, embassy rules). Phase 3 — most pages are scaffold shells.
   visa: ['read', 'write', 'update', 'delete', 'manage'],
-  // `microsites` covers travel microsite admin (per-sub-brand consumer
-  // landing pages, OTP-gated portals).
-  microsites: ['read', 'write', 'update', 'delete', 'manage'],
-
   // Sub-brand specific (TMC school trips / RFU Umrah)
   // TMC vertical school-trip planning surfaces
   curriculum: ['read', 'write', 'update', 'delete'],
@@ -474,7 +470,7 @@ const TRAVEL_DOMAINS_BODY = [
   },
   {
     domain: 'Travel Operations',
-    modules: ['web_checkins', 'passport', 'visa', 'microsites'],
+    modules: ['web_checkins', 'passport', 'visa'],
   },
   {
     domain: 'Travel Sub-brand',

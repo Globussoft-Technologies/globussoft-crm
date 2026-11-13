@@ -1,9 +1,5 @@
 const express = require("express");
 
-const fs = require("fs");
-
-const path = require("path");
-
 const multer = require("multer");
 
 const prisma = require("../lib/prisma");
@@ -26,16 +22,9 @@ const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 
 const router = express.Router();
 
-const uploadDir = path.join(__dirname, "..", "uploads", "web-forms");
 const MAX_UPLOAD_FILES = 5;
 const MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_TOTAL_BYTES = 20 * 1024 * 1024;
-
-try {
-  fs.mkdirSync(uploadDir, { recursive: true });
-} catch {
-  /* best effort */
-}
 
 const ALLOWED_FILE_MIMES = new Set([
   "image/png",
@@ -103,6 +92,25 @@ function storedUploadFilename(file) {
   const ext = MIME_TO_EXT[String(file?.mimetype || "").toLowerCase()] || ".bin";
   const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   return `${stamp}${ext}`;
+}
+
+function uploadContentDisposition(originalName) {
+  const safeName = String(originalName || "attachment")
+    .replace(/[^\w.-]/g, "_")
+    .slice(0, 80) || "attachment";
+  return `attachment; filename="${safeName}"`;
+}
+
+async function deleteStoredUpload(url) {
+  const key = s3Service.extractKeyFromUrl(url);
+  if (key) {
+    await s3Service.deleteFile(key);
+    return;
+  }
+
+  if (s3Service.isLocalUrl(url)) {
+    await s3Service.deleteFile(url);
+  }
 }
 
 function uploadAnyOrReject(req, res, next) {
@@ -1546,7 +1554,7 @@ router.get("/public/:slug", async (req, res) => {
 
 router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
   let submitStage = "start";
-  const persistedFilePaths = [];
+  const persistedUploadUrls = [];
 
   try {
     const scope = normalizeScope(req.query?.scope);
@@ -1723,8 +1731,6 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
             mimeType: file.mimetype,
 
             size: file.size,
-
-            url: `/uploads/web-forms/${filename}`,
 
             buffer: file.buffer,
           });
@@ -2166,9 +2172,17 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
     if (fileRecords.length) {
       for (const file of fileRecords) {
-        const filePath = path.join(uploadDir, path.basename(file.filename));
-        await fs.promises.writeFile(filePath, file.buffer, { flag: "wx" });
-        persistedFilePaths.push(filePath);
+        file.url = await s3Service.uploadFile(
+          file.buffer,
+          file.filename,
+          file.mimeType,
+          `web-forms/${formScope}/${form.tenantId}/attachments`,
+          { contentDisposition: uploadContentDisposition(file.originalName) },
+        );
+        if (!file.url || typeof file.url !== "string") {
+          throw new Error("Attachment storage returned an invalid URL");
+        }
+        persistedUploadUrls.push(file.url);
         await prisma.contactAttachment.create({
           data: {
             filename: file.originalName || file.filename,
@@ -2332,7 +2346,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     return res.status(201).json(response);
   } catch (err) {
     await Promise.allSettled(
-      persistedFilePaths.map((filePath) => fs.promises.unlink(filePath)),
+      persistedUploadUrls.map((url) => deleteStoredUpload(url)),
     );
     console.error("[web-forms/public] submit error:", {
       stage: submitStage,

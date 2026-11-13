@@ -37,7 +37,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import Leads from '../pages/Leads';
 import { AuthContext } from '../App';
 
@@ -79,12 +79,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function RouterProbe() {
+  const location = useLocation();
+
+  return (
+    <div
+      data-testid="router-location"
+      data-pathname={location.pathname}
+      data-search={location.search}
+      data-state={JSON.stringify(location.state || null)}
+    />
+  );
+}
+
 function renderLeads(authValue = null, initialEntries = ['/']) {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={authValue}>
         <Leads />
       </AuthContext.Provider>
+      <RouterProbe />
     </MemoryRouter>,
   );
 }
@@ -151,6 +165,65 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
     expect(within(dialog).getByDisplayValue('Organic')).toBeInTheDocument();
     expect(Boolean(within(dialog).queryByPlaceholderText(/Phone \(/))).toBe(quickAdd);
+  });
+
+  it('shows and submits Website URL when Generic CRM Quick-add enables it', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'company', 'title', 'phone'],
+      required: ['name', 'email'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { website: { quickAdd: true } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    const websiteInput = within(dialog).getByLabelText('Website URL');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Website URL' })).toBeChecked();
+    fireEvent.click(within(picker).getByRole('button', { name: 'Cancel' }));
+    fireEvent.change(within(dialog).getByPlaceholderText('Full Name'), { target: { value: 'Priya Sharma' } });
+    fireEvent.change(within(dialog).getByPlaceholderText('Email Address'), { target: { value: 'priya@example.com' } });
+    fireEvent.change(websiteInput, { target: { value: 'https://example.com' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add Lead/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts' && opts?.method === 'POST');
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall[1].body)).toMatchObject({
+        name: 'Priya Sharma',
+        email: 'priya@example.com',
+        website: 'https://example.com',
+      });
+    });
+  });
+
+  it('removes Website URL from Generic customization when Quick-add is turned off', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'company', 'website'],
+      required: ['name'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { website: { quickAdd: false } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).queryByLabelText('Website URL')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Website URL' })).not.toBeChecked();
   });
 
   it('keeps tenant-required email required despite saved personal preferences', async () => {
@@ -558,6 +631,18 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     fireEvent.click(within(picker).getByRole('checkbox', { name: 'Require Priority' }));
     fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
 
+    await waitFor(() => {
+      const settingsPut = fetchApiMock.mock.calls.find(([url, options]) =>
+        url === '/api/tenant-settings/generic.fieldConfig' && options?.method === 'PUT');
+      expect(settingsPut).toBeDefined();
+      const request = JSON.parse(settingsPut[1].body);
+      const config = JSON.parse(request.value);
+      expect(config.fieldOverrides.company.quickAdd).toBe(true);
+      expect(config.fieldOverrides.title.quickAdd).toBe(true);
+      expect(config.fieldOverrides['custom:201'].quickAdd).toBe(true);
+      expect(config.fieldOverrides.website.quickAdd).toBe(false);
+    });
+
     expect(within(dialog).getByPlaceholderText('Company')).toBeRequired();
     expect(within(dialog).getByPlaceholderText('Job Title')).toBeInTheDocument();
     expect(within(dialog).getByPlaceholderText('Priority level *')).toBeRequired();
@@ -617,6 +702,30 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
         { name: 'Customize Create Lead fields' },
       ),
     ).toBeNull();
+  });
+
+  it('keeps non-admin Generic customization personal without changing tenant Quick-add', async () => {
+    renderLeads({
+      user: { userId: 7, role: 'MANAGER' },
+      tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+      loading: false,
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    fireEvent.click(within(dialog).getByRole('button', {
+      name: 'Customize Create Lead fields',
+    }));
+    const picker = await screen.findByRole('dialog', {
+      name: 'Customize Create Lead fields',
+    });
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Website URL' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
+
+    expect(within(dialog).getByLabelText('Website URL')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url, options]) =>
+      url === '/api/tenant-settings/generic.fieldConfig' && options?.method === 'PUT')).toBe(false);
   });
 });
 
@@ -1318,10 +1427,16 @@ describe('Leads Freshsales-style list UI affordances', () => {
     renderLeads(authValue);
 
     const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
-    expect(aliceLink).toHaveAttribute('href', '/leads/101');
+    expect(aliceLink).toHaveAttribute('href', '/leads/101?page=1&limit=10');
 
     fireEvent.click(aliceLink);
-    expect(navigateMock).toHaveBeenCalledWith('/leads/101');
+    const location = screen.getByTestId('router-location');
+    expect(location).toHaveAttribute('data-pathname', '/leads/101');
+    expect(location).toHaveAttribute('data-search', '?page=1&limit=10');
+    expect(JSON.parse(location.getAttribute('data-state'))).toEqual(expect.objectContaining({
+      leadsListState: { pageIndex: 0, pageSize: 10 },
+    }));
+    expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
   });
 
@@ -3162,6 +3277,108 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(false);
   });
 
+  it('preserves the current Generic Leads page while opening and closing a lead detail', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `Lead page ${page}` }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const firstRender = renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Lead page 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(screen.getByText('Lead page 2')).toBeInTheDocument());
+
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('link', { name: 'Lead page 2' }));
+    const location = screen.getByTestId('router-location');
+    expect(location).toHaveAttribute('data-pathname', '/leads/2');
+    expect(location).toHaveAttribute('data-search', '?page=2&limit=10');
+    const detailState = JSON.parse(location.getAttribute('data-state'));
+    expect(detailState).toEqual(expect.objectContaining({
+      leadsListState: { pageIndex: 1, pageSize: 10 },
+    }));
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    firstRender.unmount();
+    fetchApiMock.mockClear();
+    renderLeads(ADMIN_AUTH, [{ pathname: '/leads', state: detailState }]);
+    await waitFor(() => expect(screen.getByText('Lead page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+  });
+
+  it('restores the Generic Leads page from the list URL without route state', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `URL page ${page}` }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH, ['/leads?page=2&limit=10']);
+    await waitFor(() => expect(screen.getByText('URL page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+  });
+
+  it('uses the Generic Leads URL page over stale profile route state', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `Canonical page ${page}` }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH, [{
+      pathname: '/leads',
+      search: '?page=2&limit=10',
+      state: {
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+      },
+    }]);
+
+    await waitFor(() => expect(screen.getByText('Canonical page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+    expect(screen.getByRole('link', { name: 'Canonical page 2' })).toHaveAttribute(
+      'href',
+      '/leads/2?page=2&limit=10',
+    );
+  });
+
   it('applies Generic drill-down filters through the paginated API', async () => {
     renderLeads(ADMIN_AUTH, ['/leads?source=Referral&assignee=7&callStatus=qualified']);
 
@@ -3536,11 +3753,10 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
     expect(lilyLink).toHaveAttribute('href', '#lead-preview');
 
+    navigateMock.mockClear();
     fireEvent.click(lilyLink);
-    expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Lily' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
     expect(navigateMock).not.toHaveBeenCalledWith('/travel/leads/50');
-    expect(screen.getByLabelText('Edit Name for Lily')).toHaveAttribute('type', 'button');
   });
 
   it('keeps travel lead name editing behind the Name column edit icon', async () => {

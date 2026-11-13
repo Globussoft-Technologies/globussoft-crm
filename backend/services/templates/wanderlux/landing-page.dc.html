@@ -81,13 +81,17 @@
     /* shippo-style geometric pattern (light + dark variants) */
     .lpg-pat-light{background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'80'%20height%3D'80'%20viewBox%3D'0%200%2080%2080'%3E%3Cg%20stroke%3D'%23c2a88f'%20stroke-width%3D'1'%20fill%3D'none'%3E%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'0'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'28'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'16'%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");background-size:80px 80px;background-repeat:repeat}
     .lpg-pat-dark{background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'80'%20height%3D'80'%20viewBox%3D'0%200%2080%2080'%3E%3Cg%20stroke%3D'%23ffffff'%20stroke-width%3D'1'%20fill%3D'none'%3E%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'0'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'28'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'16'%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");background-size:80px 80px;background-repeat:repeat}
+    .lpg-root[data-wlx-font-style]:not([data-wlx-font-style=""]) ,
+    .lpg-root[data-wlx-font-style]:not([data-wlx-font-style=""]) *,
+    .lpg-root [data-wlx-font-style]:not([data-wlx-font-style=""]),
+    .lpg-root [data-wlx-font-style]:not([data-wlx-font-style=""]) * { font-family:var(--c-sans) !important; }
   </style>
 </helmet>
 
 <!-- Theme root: config.theme is projected onto CSS custom properties here so
      every descendant can use var(--c-*) in static styles AND in style-hover
      (which the runtime does NOT interpolate). -->
-<div id="top" class="lpg-root" style="background:var(--c-light);color:var(--c-text);font-family:var(--c-sans);overflow-x:hidden;--c-brand:{{ brandColor }};--c-accent:{{ accentColor }};--c-dark:{{ darkColor }};--c-footer:{{ footerColor }};--c-light:{{ lightBg }};--c-panel:{{ panelBg }};--c-soft:{{ softBg }};--c-text:{{ textColor }};--c-text2:{{ textColor2 }};--c-border:{{ borderColor }};--c-serif:{{ serifFont }};--c-sans:{{ sansFont }}">
+<div id="top" class="lpg-root" data-wlx-font-style="{{ fontStyleId }}" style="background:var(--c-light);color:var(--c-text);font-family:var(--c-sans);overflow-x:hidden;--c-brand:{{ brandColor }};--c-accent:{{ accentColor }};--c-dark:{{ darkColor }};--c-footer:{{ footerColor }};--c-light:{{ lightBg }};--c-panel:{{ panelBg }};--c-soft:{{ softBg }};--c-text:{{ textColor }};--c-text2:{{ textColor2 }};--c-border:{{ borderColor }};--c-serif:{{ serifFont }};--c-sans:{{ sansFont }}">
 
   <a href="#register" class="lpg-hide">Skip to registration</a>
 
@@ -1351,9 +1355,9 @@ class Component extends DCLogic {
         /* Phase 6 — hybrid registration-draft branch. When the backend
            created a PendingTripRegistration (page is trip-linked +
            register.mode is 'registration-draft' in the stored config),
-           it returns { redirect: { type: 'microsite', url } }. The URL
-           carries only the opaque draftToken; navigate the user to the
-           microsite so they can verify their phone via OTP. Otherwise
+           it returns a customer-registration redirect. The URL carries
+           only a continuation token; navigate the parent to verify their
+           phone via OTP. Otherwise
            fall back to the toast + done-state (existing lead-capture
            behaviour). */
         const redirect = body && body.redirect;
@@ -1402,7 +1406,7 @@ class Component extends DCLogic {
     out.brandColor=t.brandColor; out.accentColor=t.accentColor; out.darkColor=t.darkColor;
     out.footerColor=t.footerColor; out.lightBg=t.lightBg; out.panelBg=t.panelBg; out.softBg=t.softBg;
     out.textColor=t.textColor; out.textColor2=t.textColor2; out.borderColor=t.borderColor;
-    out.serifFont=t.serifFont; out.sansFont=t.sansFont;
+    out.serifFont=t.serifFont; out.sansFont=t.sansFont; out.fontStyleId=t.fontStyleId || '';
     out.patternLightClass = t.pattern === 'shippo' ? 'lpg-pat-light' : '';
 
     /* ----- nav ----- */

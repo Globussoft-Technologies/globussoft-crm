@@ -6,6 +6,7 @@ import { isUploadedS3Url } from '../utils/uploadDisplay';
 import UploadedAssetChip from '../components/UploadedAssetChip';
 import { DEFAULT_WELLNESS_LANDING_LAYOUT, DEFAULT_WELLNESS_LANDING_THEME, WELLNESS_LANDING_LAYOUTS, WELLNESS_LANDING_THEMES, getWellnessColorOverrides, resolveWellnessLandingTheme } from '../utils/wellnessLandingThemes';
 import { DEFAULT_GENERIC_LANDING_LAYOUT, DEFAULT_GENERIC_LANDING_THEME, GENERIC_LANDING_LAYOUTS, GENERIC_LANDING_THEMES } from '../utils/genericLandingThemes';
+import { DEFAULT_LANDING_FONT_STYLE, LANDING_FONT_STYLES } from '../utils/landingFontStyles';
 import WellnessPaletteEditor from '../components/landing-pages/WellnessPaletteEditor';
 
 function clone(value) {
@@ -276,7 +277,7 @@ function buildWellnessScaffold(page = {}, content = [], mode = 'wellness') {
           ] },
         ], '8px'),
       ] },
-    ], '24px', { themeId: page?.wellnessTheme || page?.themeId || defaultThemeId, layoutId: page?.wellnessLayout || page?.layoutId || defaultLayoutId, customColors: page?.wellnessCustomColors || page?.customColors || undefined, customBaseThemeId: page?.wellnessCustomBaseThemeId || undefined }),
+    ], '24px', { themeId: page?.wellnessTheme || page?.themeId || defaultThemeId, layoutId: page?.wellnessLayout || page?.layoutId || defaultLayoutId, fontStyleId: page?.fontStyleId || page?.fontStyle || DEFAULT_LANDING_FONT_STYLE, customColors: page?.wellnessCustomColors || page?.customColors || undefined, customBaseThemeId: page?.wellnessCustomBaseThemeId || undefined }),
   ];
 }
 
@@ -628,6 +629,7 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
   const defaultThemeId = isGeneric ? DEFAULT_GENERIC_LANDING_THEME : DEFAULT_WELLNESS_LANDING_THEME;
   const defaultLayoutId = isGeneric ? DEFAULT_GENERIC_LANDING_LAYOUT : DEFAULT_WELLNESS_LANDING_LAYOUT;
   const selectedThemeId = root?.props?.themeId || defaultThemeId;
+  const selectedFontStyleId = root?.props?.fontStyleId || DEFAULT_LANDING_FONT_STYLE;
   const customBaseThemeId = root?.props?.customBaseThemeId || defaultThemeId;
   const selectedPreset = themeOptions.find((theme) => theme.id === selectedThemeId)
     || themeOptions.find((theme) => theme.id === customBaseThemeId)
@@ -643,6 +645,10 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
   const setCustomColors = (nextColors) => edit('wellness-page', (block) => ({
     ...block,
     props: { ...block.props, themeId: 'custom', customBaseThemeId: selectedPreset.id, customColors: getWellnessColorOverrides(nextColors) },
+  }));
+  const setFontStyle = (fontStyleId) => edit('wellness-page', (block) => ({
+    ...block,
+    props: { ...block.props, fontStyleId },
   }));
 
   const move = (index, delta) => {
@@ -731,8 +737,8 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: '1rem', alignItems: 'start', padding: '1.25rem' }}>
-      <div style={{ minWidth: 0 }}>
+    <div className="landing-page-editor" style={{ display: 'grid', gap: '1rem', alignItems: 'start', padding: '1.25rem', boxSizing: 'border-box', minWidth: 0 }}>
+      <div className="landing-page-editor__main" style={{ minWidth: 0 }}>
         <div style={{ marginBottom: '1rem' }}>
           <h2 style={{ margin: 0, fontSize: '1.35rem', color: 'var(--text-primary)' }}>{isGeneric ? 'Generic Landing Page Editor' : 'Wellness Landing Page Editor'}</h2>
           <p style={{ margin: '0.35rem 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -744,7 +750,7 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
           <p style={{ margin: '0 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
             Choose a palette for this {isGeneric ? 'generic campaign' : 'wellness campaign'}. It is saved with the page and does not affect other CRM verticals.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.6rem', minWidth: 0 }}>
             {themeOptions.map((theme) => {
               const selected = selectedThemeId === theme.id;
               return (
@@ -753,11 +759,11 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
                   type="button"
                   aria-pressed={selected}
                   onClick={() => selectPreset(theme.id)}
-                  style={{ border: `1px solid ${selected ? theme.colors[0] : 'var(--border-color)'}`, borderRadius: 12, padding: '0.65rem', background: selected ? `${theme.colors[2]}88` : 'var(--surface-color)', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', boxShadow: selected ? `0 0 0 2px ${theme.colors[0]}22` : 'none' }}
+                  style={{ border: `1px solid ${selected ? theme.colors[0] : 'var(--border-color)'}`, borderRadius: 12, padding: '0.65rem', background: selected ? `${theme.colors[2]}88` : 'var(--surface-color)', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', boxShadow: selected ? `0 0 0 2px ${theme.colors[0]}22` : 'none', width: '100%', minWidth: 0, boxSizing: 'border-box', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
                 >
                   <span style={{ display: 'block', height: 28, borderRadius: 8, marginBottom: 8, background: `linear-gradient(135deg, ${theme.colors[0]}, ${theme.colors[1]})` }} />
-                  <strong style={{ display: 'block', fontSize: '0.8rem' }}>{theme.label}</strong>
-                  <span style={{ display: 'block', marginTop: 3, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{theme.description}</span>
+                  <strong style={{ display: 'block', minWidth: 0, fontSize: '0.8rem', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{theme.label}</strong>
+                  <span style={{ display: 'block', minWidth: 0, marginTop: 3, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.35, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{theme.description}</span>
                 </button>
               );
             })}
@@ -790,10 +796,31 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
               </div>
             )}
           </div>
+          <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem', display: 'grid', gap: '0.55rem' }}>
+            <label htmlFor="landing-font-style" style={{ display: 'grid', gap: '0.35rem', fontSize: '0.84rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+              Font style
+              <select
+                id="landing-font-style"
+                value={selectedFontStyleId}
+                onChange={(event) => setFontStyle(event.target.value)}
+                style={{ width: '100%', minWidth: 0, padding: '0.65rem 0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', fontWeight: 500, boxSizing: 'border-box' }}
+              >
+                {LANDING_FONT_STYLES.map((fontStyle) => (
+                  <option key={fontStyle.id} value={fontStyle.id}>{fontStyle.label}</option>
+                ))}
+              </select>
+            </label>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', lineHeight: 1.45 }}>
+              {LANDING_FONT_STYLES.find((fontStyle) => fontStyle.id === selectedFontStyleId)?.description}
+            </span>
+            <span style={{ fontFamily: LANDING_FONT_STYLES.find((fontStyle) => fontStyle.id === selectedFontStyleId)?.family, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+              Sample campaign headline
+            </span>
+          </div>
           <p style={{ margin: '1rem 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
             Choose a composition for this campaign. Layout changes the rhythm and visual hierarchy; it does not affect your content or lead form.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.6rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.6rem', minWidth: 0 }}>
             {layoutOptions.map((layout) => {
               const selected = (root?.props?.layoutId || defaultLayoutId) === layout.id;
               return (
@@ -802,10 +829,10 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
                   type="button"
                   aria-pressed={selected}
                   onClick={() => edit('wellness-page', (block) => ({ ...block, props: { ...block.props, layoutId: layout.id } }))}
-                  style={{ border: `1px solid ${selected ? 'var(--accent-color)' : 'var(--border-color)'}`, borderRadius: 12, padding: '0.65rem', background: selected ? 'rgba(31,138,112,0.10)' : 'var(--surface-color)', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', boxShadow: selected ? '0 0 0 2px rgba(31,138,112,0.10)' : 'none' }}
+                  style={{ border: `1px solid ${selected ? 'var(--accent-color)' : 'var(--border-color)'}`, borderRadius: 12, padding: '0.65rem', background: selected ? 'rgba(31,138,112,0.10)' : 'var(--surface-color)', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', boxShadow: selected ? '0 0 0 2px rgba(31,138,112,0.10)' : 'none', width: '100%', minWidth: 0, boxSizing: 'border-box', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
                 >
-                  <strong style={{ display: 'block', fontSize: '0.8rem' }}>{layout.label}</strong>
-                  <span style={{ display: 'block', marginTop: 3, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{layout.description}</span>
+                  <strong style={{ display: 'block', minWidth: 0, fontSize: '0.8rem', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{layout.label}</strong>
+                  <span style={{ display: 'block', minWidth: 0, marginTop: 3, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.35, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{layout.description}</span>
                 </button>
               );
             })}
@@ -921,7 +948,7 @@ export default function LandingPageWellnessEditor({ content, onChange, page, mod
         </SectionEditor>
       </div>
 
-      <aside style={{ position: 'sticky', top: 16, minWidth: 0 }}>
+      <aside className="landing-page-editor__rail" style={{ position: 'sticky', top: 16, minWidth: 0 }}>
         <SectionOrder sections={sections} onMove={move} labels={isGeneric ? genericSectionLabels : sectionLabels} />
         <Card title="Page info" eyebrow="Status">
           <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>

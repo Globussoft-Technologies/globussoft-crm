@@ -30,6 +30,8 @@
 
 'use strict';
 
+const { sectionFontStyle, sectionFontStyleId, fontStyleVars } = require('./fontStyles');
+
 // Section marker → stable key. The marker text is the prose label inside
 // the `<!-- ===================== LABEL ===================== -->` line
 // in landing-page.dc.html. Keys mirror the top-level config keys
@@ -302,7 +304,10 @@ function composeLayout(templateHtml, config, slug) {
     if (item.kind === 'section') {
       const chunk = split.sections[item.key];
       if (chunk) {
-        bodyParts.push(`<div data-wlx-section="${item.key}">${chunk}</div>`);
+        const sectionStyleId = sectionFontStyleId(config, item.key);
+        const sectionStyle = fontStyleVars(sectionFontStyle(config, item.key));
+        const sectionFontAttribute = sectionStyleId ? ` data-wlx-font-style="${sectionStyleId}"` : '';
+        bodyParts.push(`<div data-wlx-section="${item.key}"${sectionFontAttribute}${sectionStyle}>${chunk}</div>`);
       }
       // Unknown section key → already filtered by normaliseLayoutItems.
     } else if (item.kind === 'block') {

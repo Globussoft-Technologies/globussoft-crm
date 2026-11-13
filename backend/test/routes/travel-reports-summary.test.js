@@ -79,6 +79,10 @@ prisma.payment = {
   ...(prisma.payment || {}),
   findMany: vi.fn(),
 };
+prisma.tripInstalmentPayment = {
+  ...(prisma.tripInstalmentPayment || {}),
+  findMany: vi.fn(),
+};
 prisma.itineraryItem = {
   ...(prisma.itineraryItem || {}),
   findMany: vi.fn(),
@@ -145,6 +149,7 @@ function installDefaults() {
   prisma.travelInvoice.groupBy.mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockResolvedValue([]);
   prisma.payment.findMany.mockResolvedValue([]);
+  prisma.tripInstalmentPayment.findMany.mockResolvedValue([]);
   prisma.itineraryItem.findMany.mockResolvedValue([]);
   prisma.visaApplication.groupBy.mockResolvedValue([]);
   prisma.webCheckin.groupBy.mockResolvedValue([]);
@@ -166,6 +171,7 @@ beforeEach(() => {
   prisma.travelInvoice.groupBy.mockReset();
   prisma.travelInvoice.findMany.mockReset();
   prisma.payment.findMany.mockReset();
+  prisma.tripInstalmentPayment.findMany.mockReset();
   prisma.itineraryItem.findMany.mockReset();
   prisma.visaApplication.groupBy.mockReset();
   prisma.webCheckin.groupBy.mockReset();
@@ -290,6 +296,24 @@ describe('GET /api/travel/reports/summary — happy path', () => {
     expect(res.body.tmc).not.toHaveProperty('deals');
     expect(res.body.rfu).not.toHaveProperty('diagnostics');
     expect(res.body.crossBrand).not.toHaveProperty('subBrands');
+  });
+
+  test('TMC summary includes paid instalment ledger totals', async () => {
+    prisma.tmcTrip.groupBy.mockResolvedValue([{ status: 'confirmed', _count: { _all: 1 } }]);
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 88, pricePerStudent: null, schoolContactId: 4 },
+    ]);
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { tripId: 88, paidAmount: 200000 },
+      { tripId: 88, paidAmount: 300000 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tmc.revenue.total).toBe(500000);
   });
 });
 

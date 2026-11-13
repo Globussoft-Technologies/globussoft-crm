@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CheckCircle2, ChevronDown, Coins, FileText, MessageSquare, Paperclip, Plus, RefreshCw, Save, Settings2, X } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -12,6 +13,7 @@ const EMPTY_RULE = () => ({
 });
 
 const RECORD_PAGE_SIZE_OPTIONS = [10, 15, 25, 50, 100];
+const RULE_PAGE_SIZE_OPTIONS = [10, 25, 50];
 const MAX_RECORD_PAGE_SIZE = 500;
 const RECORD_RENDER_BATCH_SIZE = 25;
 
@@ -35,9 +37,22 @@ function formatRupees(value) {
 }
 
 function statusTone(status) {
-  if (status === 'COMPLETED') return ['#dcfce7', '#166534'];
-  if (status === 'PENDING') return ['#fef3c7', '#92400e'];
-  return ['#eef2f7', '#475569'];
+  if (status === 'COMPLETED') return ['var(--status-success-bg, #dcfce7)', 'var(--status-success-text, #166534)'];
+  if (status === 'PENDING') return ['var(--status-warning-bg, #fef3c7)', 'var(--status-warning-text, #92400e)'];
+  return ['var(--status-neutral-bg, #eef2f7)', 'var(--status-neutral-text, #475569)'];
+}
+
+function displayStaffRole(member) {
+  if (member.primaryRole?.name) return member.primaryRole.name;
+  if (member.wellnessRole) {
+    return `${member.wellnessRole.charAt(0).toUpperCase()}${member.wellnessRole.slice(1)}`;
+  }
+  return member.role || '—';
+}
+
+function isAdminStaff(member) {
+  return String(member.role || '').toUpperCase() === 'ADMIN'
+    || String(member.primaryRole?.key || '').toUpperCase() === 'ADMIN';
 }
 
 function StatusBadge({ status, label }) {
@@ -58,12 +73,59 @@ function paginationItems(currentPage, totalPages) {
   }, []);
 }
 
+function getPopoverLayout(rect, { minWidth, maxHeight, rowHeight, itemCount }) {
+  const gap = 6;
+  const edge = 8;
+  const viewport = window.visualViewport;
+  const viewportWidth = viewport?.width || window.innerWidth;
+  const viewportHeight = viewport?.height || window.innerHeight;
+  const maxWidth = Math.max(1, viewportWidth - edge * 2);
+  const width = Math.min(Math.max(rect.width, minWidth), maxWidth);
+  const left = Math.min(Math.max(edge, rect.left), Math.max(edge, viewportWidth - width - edge));
+  const spaceBelow = Math.max(0, viewportHeight - rect.bottom - gap - edge);
+  const spaceAbove = Math.max(0, rect.top - gap - edge);
+  const estimatedHeight = Math.min(maxHeight, 52 + (itemCount + 1) * rowHeight);
+  const opensUp = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+  const availableSpace = Math.max(0, opensUp ? spaceAbove : spaceBelow);
+  const constrainedHeight = Math.min(maxHeight, availableSpace);
+  const top = opensUp ? rect.top - constrainedHeight - gap : rect.bottom + gap;
+
+  return {
+    top: Math.max(edge, Math.min(top, viewportHeight - edge - constrainedHeight)),
+    left,
+    width,
+    maxHeight: constrainedHeight,
+  };
+}
+
+function usePopoverDismiss(open, setOpen, pickerRef, menuRef) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (pickerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, setOpen, pickerRef, menuRef]);
+}
+
 function StaffPicker({ staff, selectedIds, allStaff, onChange }) {
   const [open, setOpen] = useState(false);
   const [menuLayout, setMenuLayout] = useState(null);
   const pickerRef = useRef(null);
+  const menuRef = useRef(null);
   const selected = new Set(selectedIds.map(Number));
   const label = allStaff ? 'All active staff' : selected.size ? `${selected.size} staff selected` : 'Select staff';
+  usePopoverDismiss(open, setOpen, pickerRef, menuRef);
   useEffect(() => {
     if (!open) {
       setMenuLayout(null);
@@ -73,45 +135,42 @@ function StaffPicker({ staff, selectedIds, allStaff, onChange }) {
       const picker = pickerRef.current;
       if (!picker) return;
       const rect = picker.getBoundingClientRect();
-      const gap = 6;
-      const width = Math.min(Math.max(rect.width, 240), Math.max(160, window.innerWidth - 16));
-      const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8));
-      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap);
-      const spaceAbove = Math.max(0, rect.top - gap);
-      const estimatedHeight = Math.min(320, 52 + (staff.length + 1) * 40);
-      const opensUp = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
-      const availableSpace = opensUp ? spaceAbove : spaceBelow;
-      const maxHeight = Math.max(80, Math.min(320, availableSpace));
-      setMenuLayout({ top: opensUp ? Math.max(8, rect.top - maxHeight - gap) : rect.bottom + gap, left, width, maxHeight });
+      setMenuLayout(getPopoverLayout(rect, { minWidth: 240, maxHeight: 320, rowHeight: 40, itemCount: staff.length }));
     };
     updateMenuLayout();
     window.addEventListener('resize', updateMenuLayout);
     window.addEventListener('scroll', updateMenuLayout, true);
+    window.visualViewport?.addEventListener('resize', updateMenuLayout);
+    window.visualViewport?.addEventListener('scroll', updateMenuLayout);
     return () => {
       window.removeEventListener('resize', updateMenuLayout);
       window.removeEventListener('scroll', updateMenuLayout, true);
+      window.visualViewport?.removeEventListener('resize', updateMenuLayout);
+      window.visualViewport?.removeEventListener('scroll', updateMenuLayout);
     };
   }, [open, staff.length]);
+  const menu = open && menuLayout ? <div ref={menuRef} style={{ position: 'fixed', zIndex: 1000, top: menuLayout.top, left: menuLayout.left, width: menuLayout.width, maxHeight: menuLayout.maxHeight, boxSizing: 'border-box', overflowY: 'auto', padding: 10, borderRadius: 12, background: 'var(--popover-bg, #fff)', border: '1px solid var(--border-color, #d9dee8)', boxShadow: '0 14px 30px rgba(15,23,42,.16)' }}>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', borderBottom: '1px solid var(--border-color, #e5e7eb)', fontWeight: 700 }}>
+      <input type="checkbox" checked={allStaff} onChange={(event) => { onChange({ allStaff: event.target.checked, ids: [] }); setOpen(false); }} /> All active staff
+    </label>
+    {!staff.length && <p style={{ ...muted, margin: '10px 6px', fontSize: 13 }}>No active staff found.</p>}
+    {staff.map((member) => <label key={member.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', fontSize: 13, opacity: allStaff ? 0.55 : 1 }}>
+      <input type="checkbox" disabled={allStaff} checked={allStaff || selected.has(member.id)} onChange={(event) => {
+        const next = new Set(selected);
+        if (event.target.checked) next.add(member.id); else next.delete(member.id);
+        onChange({ allStaff: false, ids: [...next] });
+        setOpen(false);
+      }} />
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{member.name}</span>
+      <small style={{ marginLeft: 'auto', color: 'var(--text-secondary)' }}>{displayStaffRole(member)}</small>
+    </label>)}
+  </div> : null;
   return (
     <div ref={pickerRef} style={{ position: 'relative' }}>
       <button type="button" className="btn-secondary" onClick={() => setOpen((value) => !value)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, minHeight: 40 }} aria-expanded={open}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span><ChevronDown size={16} />
       </button>
-      {open && menuLayout && <div style={{ position: 'fixed', zIndex: 1000, top: menuLayout.top, left: menuLayout.left, width: menuLayout.width, maxHeight: menuLayout.maxHeight, boxSizing: 'border-box', overflowY: 'auto', padding: 10, borderRadius: 12, background: 'var(--popover-bg, #fff)', border: '1px solid var(--border-color, #d9dee8)', boxShadow: '0 14px 30px rgba(15,23,42,.16)' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', borderBottom: '1px solid var(--border-color, #e5e7eb)', fontWeight: 700 }}>
-          <input type="checkbox" checked={allStaff} onChange={(event) => onChange({ allStaff: event.target.checked, ids: [] })} /> All active staff
-        </label>
-        {!staff.length && <p style={{ ...muted, margin: '10px 6px', fontSize: 13 }}>No active staff found.</p>}
-        {staff.map((member) => <label key={member.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', fontSize: 13, opacity: allStaff ? 0.55 : 1 }}>
-          <input type="checkbox" disabled={allStaff} checked={allStaff || selected.has(member.id)} onChange={(event) => {
-            const next = new Set(selected);
-            if (event.target.checked) next.add(member.id); else next.delete(member.id);
-            onChange({ allStaff: false, ids: [...next] });
-          }} />
-          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{member.name}</span>
-          <small style={{ marginLeft: 'auto', color: 'var(--text-secondary)' }}>{member.role}</small>
-        </label>)}
-      </div>}
+      {menu && typeof document !== 'undefined' && document.body ? createPortal(menu, document.body) : null}
     </div>
   );
 }
@@ -120,8 +179,10 @@ function PlotPicker({ plots, selectedIds, allPlots, onChange }) {
   const [open, setOpen] = useState(false);
   const [menuLayout, setMenuLayout] = useState(null);
   const pickerRef = useRef(null);
+  const menuRef = useRef(null);
   const selected = new Set(selectedIds.map(Number));
   const label = allPlots ? `All active plots (${plots.length})` : selected.size ? `${selected.size} plots selected` : 'Select plots';
+  usePopoverDismiss(open, setOpen, pickerRef, menuRef);
 
   useEffect(() => {
     if (!open) {
@@ -132,45 +193,42 @@ function PlotPicker({ plots, selectedIds, allPlots, onChange }) {
       const picker = pickerRef.current;
       if (!picker) return;
       const rect = picker.getBoundingClientRect();
-      const gap = 6;
-      const width = Math.min(Math.max(rect.width, 320), Math.max(180, window.innerWidth - 16));
-      const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8));
-      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap);
-      const spaceAbove = Math.max(0, rect.top - gap);
-      const estimatedHeight = Math.min(360, 52 + (plots.length + 1) * 38);
-      const opensUp = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
-      const availableSpace = opensUp ? spaceAbove : spaceBelow;
-      const maxHeight = Math.max(100, Math.min(360, availableSpace));
-      setMenuLayout({ top: opensUp ? Math.max(8, rect.top - maxHeight - gap) : rect.bottom + gap, left, width, maxHeight });
+      setMenuLayout(getPopoverLayout(rect, { minWidth: 320, maxHeight: 360, rowHeight: 38, itemCount: plots.length }));
     };
     updateMenuLayout();
     window.addEventListener('resize', updateMenuLayout);
     window.addEventListener('scroll', updateMenuLayout, true);
+    window.visualViewport?.addEventListener('resize', updateMenuLayout);
+    window.visualViewport?.addEventListener('scroll', updateMenuLayout);
     return () => {
       window.removeEventListener('resize', updateMenuLayout);
       window.removeEventListener('scroll', updateMenuLayout, true);
+      window.visualViewport?.removeEventListener('resize', updateMenuLayout);
+      window.visualViewport?.removeEventListener('scroll', updateMenuLayout);
     };
   }, [open, plots.length]);
 
+  const menu = open && menuLayout ? <div ref={menuRef} style={{ position: 'fixed', zIndex: 1000, top: menuLayout.top, left: menuLayout.left, width: menuLayout.width, maxHeight: menuLayout.maxHeight, boxSizing: 'border-box', overflowY: 'auto', padding: 10, borderRadius: 12, background: 'var(--popover-bg, #fff)', border: '1px solid var(--border-color, #d9dee8)', boxShadow: '0 14px 30px rgba(15,23,42,.16)' }}>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', borderBottom: '1px solid var(--border-color, #e5e7eb)', fontWeight: 700 }}>
+      <input type="checkbox" checked={allPlots} onChange={(event) => { onChange({ allPlots: event.target.checked, ids: [] }); setOpen(false); }} /> All active plots
+    </label>
+    {!plots.length && <p style={{ ...muted, margin: '10px 6px', fontSize: 13 }}>No active plots found.</p>}
+    {plots.map((plot) => <label key={plot.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 6px', fontSize: 13, opacity: allPlots ? 0.55 : 1 }}>
+      <input type="checkbox" disabled={allPlots} checked={allPlots || selected.has(plot.id)} onChange={(event) => {
+        const next = new Set(selected);
+        if (event.target.checked) next.add(plot.id); else next.delete(plot.id);
+        onChange({ allPlots: false, ids: [...next] });
+        setOpen(false);
+      }} />
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{plot.name}{plot.plotNumber ? ` · ${plot.plotNumber}` : ''}</span>
+      <small style={{ marginLeft: 'auto', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{plot.availability}</small>
+    </label>)}
+  </div> : null;
   return <div ref={pickerRef} style={{ position: 'relative' }}>
     <button type="button" data-testid="commission-plot-select" className="btn-secondary" onClick={() => setOpen((value) => !value)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, minHeight: 40 }} aria-expanded={open}>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span><ChevronDown size={16} />
     </button>
-    {open && menuLayout && <div style={{ position: 'fixed', zIndex: 1000, top: menuLayout.top, left: menuLayout.left, width: menuLayout.width, maxHeight: menuLayout.maxHeight, boxSizing: 'border-box', overflowY: 'auto', padding: 10, borderRadius: 12, background: 'var(--popover-bg, #fff)', border: '1px solid var(--border-color, #d9dee8)', boxShadow: '0 14px 30px rgba(15,23,42,.16)' }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', borderBottom: '1px solid var(--border-color, #e5e7eb)', fontWeight: 700 }}>
-        <input type="checkbox" checked={allPlots} onChange={(event) => onChange({ allPlots: event.target.checked, ids: [] })} /> All active plots
-      </label>
-      {!plots.length && <p style={{ ...muted, margin: '10px 6px', fontSize: 13 }}>No active plots found.</p>}
-      {plots.map((plot) => <label key={plot.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 6px', fontSize: 13, opacity: allPlots ? 0.55 : 1 }}>
-        <input type="checkbox" disabled={allPlots} checked={allPlots || selected.has(plot.id)} onChange={(event) => {
-          const next = new Set(selected);
-          if (event.target.checked) next.add(plot.id); else next.delete(plot.id);
-          onChange({ allPlots: false, ids: [...next] });
-        }} />
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{plot.name}{plot.plotNumber ? ` · ${plot.plotNumber}` : ''}</span>
-        <small style={{ marginLeft: 'auto', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{plot.availability}</small>
-      </label>)}
-    </div>}
+    {menu && typeof document !== 'undefined' && document.body ? createPortal(menu, document.body) : null}
   </div>;
 }
 
@@ -195,9 +253,9 @@ function StaffConflictDialog({ conflicts, onCancel, onOverride }) {
   if (!conflicts?.length) return null;
   const uniqueConflicts = [...new Map(conflicts.map((conflict) => [`${conflict.staffId}:${conflict.previousRule}`, conflict])).values()];
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }} style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="staff-conflict-title" style={{ width: 'min(520px, 100%)', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="staff-conflict-title" style={{ width: 'min(520px, 100%)', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><h2 id="staff-conflict-title" style={{ margin: 0, fontSize: '1.15rem' }}>Staff already assigned</h2><p style={{ ...muted, margin: '7px 0 0', fontSize: 13 }}>Each staff member can belong to only one commission rule for a plot.</p></div><button type="button" className="btn-secondary" aria-label="Close staff conflict dialog" onClick={onCancel} style={{ padding: 7 }}><X size={16} /></button></div>
-      <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: '#fff7ed', color: '#9a3412', fontSize: 13 }}>{uniqueConflicts.map((conflict) => <div key={`${conflict.staffId}:${conflict.previousRule}`} style={{ marginTop: 5 }}>{conflict.staffName} is already applied to <strong>{conflict.previousRule}</strong>.</div>)}</div>
+      <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: 'var(--warn-bg, #fff7ed)', color: 'var(--status-warning-text, #92400e)', fontSize: 13 }}>{uniqueConflicts.map((conflict) => <div key={`${conflict.staffId}:${conflict.previousRule}`} style={{ marginTop: 5 }}>{conflict.staffName} is already applied to <strong>{conflict.previousRule}</strong>.</div>)}</div>
       <p style={{ ...muted, margin: '16px 0 0', fontSize: 13 }}>Do you want to override those assignments? Override will remove those staff from their previous rules and apply them to this rule.</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 9, marginTop: 20 }}><button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button><button type="button" className="btn-primary" onClick={onOverride}>Override assignment</button></div>
     </section>
@@ -248,27 +306,57 @@ function CommissionRecordsPagination({
   </div>;
 }
 
+function CommissionRulesPagination({ ruleCount, currentPage, totalPages, pageStart, pageEnd, pageSize, onPageSizeChange, onPageChange }) {
+  if (!ruleCount) return null;
+  return <div className="commission-records-pagination" data-testid="commission-rules-pagination" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-color, #e5e7eb)' }}>
+    <span style={{ ...muted, fontSize: 13 }}>Showing {pageStart}-{pageEnd} of {ruleCount} rules</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <label style={{ ...muted, fontSize: 13 }} htmlFor="commission-rule-page-size">Rows</label>
+      <select id="commission-rule-page-size" className="input-field" aria-label="Rules per page" value={String(pageSize)} onChange={onPageSizeChange} style={{ width: 'auto', minWidth: 72, padding: '7px 8px' }}>
+        {RULE_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+      </select>
+      <button type="button" className="btn-secondary" aria-label="Previous rules page" disabled={currentPage === 1} onClick={() => onPageChange(Math.max(1, currentPage - 1))}>Previous</button>
+      {paginationItems(currentPage, totalPages).map((item) => typeof item === 'number' ? <button type="button" className={item === currentPage ? 'btn-primary' : 'btn-secondary'} aria-label={`Rules page ${item}`} aria-current={item === currentPage ? 'page' : undefined} onClick={() => onPageChange(item)} key={item}>{item}</button> : <span key={item} style={{ padding: '0 3px', color: 'var(--text-secondary)' }}>...</span>)}
+      <button type="button" className="btn-secondary" aria-label="Next rules page" disabled={currentPage === totalPages} onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}>Next</button>
+    </div>
+  </div>;
+}
+
 function ConfiguredRulesTable({ plans, plots, onManage }) {
-  const rows = plans.flatMap((plan) => {
+  const rows = useMemo(() => plans.flatMap((plan) => {
     const plot = plots.find((item) => String(item.id) === String(plan.plotSiteId));
     return (plan.rules || []).map((rule) => ({ plan, plot, rule }));
-  });
+  }), [plans, plots]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(RULE_PAGE_SIZE_OPTIONS[0]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => { setPage((current) => Math.min(current, totalPages)); }, [totalPages]);
+
   if (!rows.length) return <div style={{ padding: 28, borderRadius: 12, background: 'var(--surface-muted, #f6f8fb)', ...muted }}>No commission rules have been added yet. Click <strong>Create rule</strong> to configure the first rule.</div>;
-  return <div className="commission-rules-table-wrap"><table className="commission-records-table commission-rules-table" data-testid="commission-rules-table"><thead><tr>{['Rule ID', 'Plot', 'Rule name', 'Threshold', 'Calculated on', 'Rate', 'Applied to staff', 'Action'].map((heading) => <th key={heading} style={{ whiteSpace: 'nowrap' }}>{heading}</th>)}</tr></thead><tbody>{rows.map(({ plan, plot, rule }) => <tr key={rule.id}><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>#{rule.id}</td><td style={{ verticalAlign: 'top' }}><strong>{plot?.name || 'Plot unavailable'}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{plot?.plotNumber || `Plot ID ${plan.plotSiteId}`}</div></td><td style={{ verticalAlign: 'top' }}><strong>{rule.name}</strong></td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{plan.markupType === 'PERCENT' ? `${plan.markupValue}% of plot price` : `${formatRupees(plan.markupValue)} per plot`}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{rule.commissionBasis === 'ACTUAL_AMOUNT' ? 'Actual plot amount' : 'Collected amount'}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{rule.ratePercent}%</td><td style={{ verticalAlign: 'top', minWidth: 190 }}>{rule.applyToAllStaff ? 'All active staff' : rule.staff?.map((member) => member.name).join(', ') || 'No staff'}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}><button type="button" className="btn-secondary" onClick={() => onManage(plan.plotSiteId)} aria-label={`Manage rule ${rule.id}`}>Manage</button></td></tr>)}</tbody></table></div>;
+  return <>
+    <div className="commission-rules-table-wrap"><table className="commission-records-table commission-rules-table" data-testid="commission-rules-table"><thead><tr>{['Rule ID', 'Plot', 'Rule name', 'Threshold', 'Calculated on', 'Rate', 'Applied to staff', 'Action'].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{pageRows.map(({ plan, plot, rule }) => <tr key={rule.id}><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>#{rule.id}</td><td style={{ verticalAlign: 'top' }}><strong>{plot?.name || 'Plot unavailable'}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{plot?.plotNumber || `Plot ID ${plan.plotSiteId}`}</div></td><td style={{ verticalAlign: 'top' }}><strong>{rule.name}</strong></td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{plan.markupType === 'PERCENT' ? `${plan.markupValue}% of plot price` : `${formatRupees(plan.markupValue)} per plot`}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{rule.commissionBasis === 'ACTUAL_AMOUNT' ? 'Actual plot amount' : 'Collected amount'}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{rule.ratePercent}%</td><td style={{ verticalAlign: 'top' }}>{rule.applyToAllStaff ? 'All active staff' : rule.staff?.map((member) => member.name).join(', ') || 'No staff'}</td><td style={{ verticalAlign: 'top' }}><button type="button" className="btn-secondary" onClick={() => onManage(plan.plotSiteId)} aria-label={`Manage rule ${rule.id}`}>Manage</button></td></tr>)}</tbody></table></div>
+    <CommissionRulesPagination ruleCount={rows.length} currentPage={currentPage} totalPages={totalPages} pageStart={((currentPage - 1) * pageSize) + 1} pageEnd={Math.min(currentPage * pageSize, rows.length)} pageSize={pageSize} onPageSizeChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} onPageChange={setPage} />
+  </>;
+}
+
+function CommissionRecordTableHeader() {
+  return <thead><tr>{['Rule ID', 'Plot', 'Actual plot amount', 'Collectable threshold amount', 'Collected amount', 'Applied commission rule', 'Status', 'Assigned member name', 'Actions'].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead>;
 }
 
 function CommissionRecordsTableLegacy({ records, recordsTableRef, onScroll, onRuleClick, showLoadHint }) {
-  return <div className="commission-records-table-wrap" ref={recordsTableRef} onScroll={onScroll} style={{ overflow: 'auto' }}><table className="commission-records-table commission-records-data-table" style={{ width: '100%', minWidth: 1480 }}><thead><tr>{['Rule ID', 'Plot', 'Actual plot amount', 'Collectable threshold amount', 'Collected amount', 'Applied commission rule', 'Status', 'Assigned member name', 'Actions'].map((heading) => <th key={heading} style={{ whiteSpace: 'nowrap' }}>{heading}</th>)}</tr></thead><tbody>{records.map((record) => {
+  return <div className="commission-records-table-wrap" ref={recordsTableRef} onScroll={onScroll} style={{ overflow: 'auto' }}><table className="commission-records-table commission-records-data-table" style={{ width: '100%' }}><CommissionRecordTableHeader /><tbody>{records.map((record) => {
     const staffNames = [...new Set((record.rules || []).flatMap((rule) => rule.staffNames?.length ? rule.staffNames : rule.staff?.map((member) => member.name) || []))];
-    return <tr key={record.plot.id}><td style={{ verticalAlign: 'top' }}>{record.rules?.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{record.rules.map((rule) => <button type="button" key={rule.id} className="commission-rule-id-button" onClick={() => onRuleClick(record, rule)} aria-label={`View details for rule ${rule.id}`}>#{rule.id}</button>)}</div> : <span style={{ ...muted }}>—</span>}</td><td style={{ verticalAlign: 'top' }}><strong>{record.plot.name}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{record.plot.plotNumber || 'Plot number unavailable'}{record.booking?.contact?.name ? ` · ${record.booking.contact.name}` : ''}</div></td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{formatPaise(record.actualAmountPaise)}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}><strong>{formatPaise(record.collectionTargetPaise)}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{record.plan ? `${record.plan.markupType === 'PERCENT' ? record.plan.markupValue : formatRupees(record.plan.markupValue)}${record.plan.markupType === 'PERCENT' ? '% of plot price' : ' per plot'}` : 'Uses plot price'}</div></td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{formatPaise(record.collectedAmountPaise)}<div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{formatPaise(record.outstandingPaise)} remaining</div></td><td style={{ verticalAlign: 'top', minWidth: 220 }}>{record.rules?.length ? <div style={{ display: 'grid', gap: 7 }}>{record.rules.map((rule) => <div key={rule.id}><strong style={{ fontSize: 13 }}>{rule.name}</strong><div style={{ ...muted, fontSize: 12, marginTop: 2 }}>{rule.ratePercent}% · {(rule.basis || 'COLLECTED_AMOUNT').replaceAll('_', ' ').toLowerCase()}</div></div>)}</div> : <span style={{ ...muted, fontSize: 13 }}>No rules configured</span>}</td><td style={{ verticalAlign: 'top' }}><StatusBadge status={record.status} label={record.statusLabel} /></td><td style={{ verticalAlign: 'top', minWidth: 190 }}>{staffNames.length ? staffNames.join(', ') : <span style={{ ...muted }}>—</span>}</td></tr>;
+    return <tr key={record.plot.id}><td style={{ verticalAlign: 'top' }}>{record.rules?.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{record.rules.map((rule) => <button type="button" key={rule.id} className="commission-rule-id-button" onClick={() => onRuleClick(record, rule)} aria-label={`View details for rule ${rule.id}`}>#{rule.id}</button>)}</div> : <span style={{ ...muted }}>—</span>}</td><td style={{ verticalAlign: 'top' }}><strong>{record.plot.name}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{record.plot.plotNumber || 'Plot number unavailable'}{record.booking?.contact?.name ? ` · ${record.booking.contact.name}` : ''}</div></td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{formatPaise(record.actualAmountPaise)}</td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}><strong>{formatPaise(record.collectionTargetPaise)}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{record.plan ? `${record.plan.markupType === 'PERCENT' ? record.plan.markupValue : formatRupees(record.plan.markupValue)}${record.plan.markupType === 'PERCENT' ? '% of plot price' : ' per plot'}` : 'Uses plot price'}</div></td><td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{formatPaise(record.collectedAmountPaise)}<div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{formatPaise(record.outstandingPaise)} remaining</div></td><td style={{ verticalAlign: 'top' }}>{record.rules?.length ? <div style={{ display: 'grid', gap: 7 }}>{record.rules.map((rule) => <div key={rule.id}><strong style={{ fontSize: 13 }}>{rule.name}</strong><div style={{ ...muted, fontSize: 12, marginTop: 2 }}>{rule.ratePercent}% · {(rule.basis || 'COLLECTED_AMOUNT').replaceAll('_', ' ').toLowerCase()}</div></div>)}</div> : <span style={{ ...muted, fontSize: 13 }}>No rules configured</span>}</td><td style={{ verticalAlign: 'top' }}><StatusBadge status={record.status} label={record.statusLabel} /></td><td style={{ verticalAlign: 'top' }}>{staffNames.length ? staffNames.join(', ') : <span style={{ ...muted }}>—</span>}</td></tr>;
   })}{!records.length && <tr><td colSpan="9" style={{ padding: 28, textAlign: 'center', ...muted }}>No commission records match the selected filters.</td></tr>}</tbody></table>{showLoadHint && <div className="commission-records-load-hint">Scroll to load more rows</div>}</div>;
 }
 
 function CommissionRecordsTable({ records, recordsTableRef, onScroll, onRuleClick, onAction, onInvoice, showLoadHint }) {
   if (!records.length) return <CommissionRecordsTableLegacy records={records} recordsTableRef={recordsTableRef} onScroll={onScroll} onRuleClick={onRuleClick} showLoadHint={showLoadHint} />;
   return <div className="commission-records-table-wrap" ref={recordsTableRef} onScroll={onScroll} style={{ overflow: 'auto' }}>
-    <table className="commission-records-table commission-records-data-table" style={{ width: '100%', minWidth: 1480 }}>
-      <thead><tr>{['Rule ID', 'Plot', 'Actual plot amount', 'Collectable threshold amount', 'Collected amount', 'Applied commission rule', 'Status', 'Assigned member name', 'Actions'].map((heading) => <th key={heading} style={{ whiteSpace: 'nowrap' }}>{heading}</th>)}</tr></thead>
+    <table className="commission-records-table commission-records-data-table" style={{ width: '100%' }}>
+      <CommissionRecordTableHeader />
       <tbody>{records.map((record) => {
         const staffNames = [...new Set((record.rules || []).flatMap((rule) => rule.staffNames?.length ? rule.staffNames : rule.staff?.map((member) => member.name) || []))];
         const hasBooking = Boolean(record.booking?.id);
@@ -279,9 +367,9 @@ function CommissionRecordsTable({ records, recordsTableRef, onScroll, onRuleClic
           <td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{formatPaise(record.actualAmountPaise)}</td>
           <td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}><strong>{formatPaise(record.collectionTargetPaise)}</strong><div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{record.plan ? `${record.plan.markupType === 'PERCENT' ? record.plan.markupValue : formatRupees(record.plan.markupValue)}${record.plan.markupType === 'PERCENT' ? '% of plot price' : ' per plot'}` : 'Uses plot price'}</div></td>
           <td style={{ verticalAlign: 'top', whiteSpace: 'nowrap' }}>{formatPaise(record.collectedAmountPaise)}<div style={{ ...muted, fontSize: 12, marginTop: 4 }}>{formatPaise(record.outstandingPaise)} remaining</div></td>
-          <td style={{ verticalAlign: 'top', minWidth: 220 }}>{record.rules?.length ? <div style={{ display: 'grid', gap: 7 }}>{record.rules.map((rule) => <div key={rule.id}><strong style={{ fontSize: 13 }}>{rule.name}</strong><div style={{ ...muted, fontSize: 12, marginTop: 2 }}>{rule.ratePercent}% - {(rule.basis || 'COLLECTED_AMOUNT').replaceAll('_', ' ').toLowerCase()}</div></div>)}</div> : <span style={{ ...muted, fontSize: 13 }}>No rules configured</span>}</td>
+          <td style={{ verticalAlign: 'top' }}>{record.rules?.length ? <div style={{ display: 'grid', gap: 7 }}>{record.rules.map((rule) => <div key={rule.id}><strong style={{ fontSize: 13 }}>{rule.name}</strong><div style={{ ...muted, fontSize: 12, marginTop: 2 }}>{rule.ratePercent}% - {(rule.basis || 'COLLECTED_AMOUNT').replaceAll('_', ' ').toLowerCase()}</div></div>)}</div> : <span style={{ ...muted, fontSize: 13 }}>No rules configured</span>}</td>
           <td style={{ verticalAlign: 'top' }}><StatusBadge status={record.status} label={record.statusLabel} /></td>
-          <td style={{ verticalAlign: 'top', minWidth: 190 }}>{staffNames.length ? staffNames.join(', ') : <span style={{ ...muted }}>-</span>}</td>
+          <td style={{ verticalAlign: 'top' }}>{staffNames.length ? staffNames.join(', ') : <span style={{ ...muted }}>-</span>}</td>
           <td className="commission-record-actions-cell" style={{ verticalAlign: 'top' }}>{hasBooking ? <div className="commission-record-actions"><button type="button" className="btn-secondary" onClick={() => onAction({ kind: 'complete', record })} disabled={record.status === 'COMPLETED'} aria-label={`Mark payment completed for ${record.plot.name}`}><CheckCircle2 size={14} /> {record.status === 'COMPLETED' ? 'Completed' : 'Mark completed'}</button><button type="button" className="btn-secondary" onClick={() => onInvoice(record)} aria-label={`${hasInvoice ? 'Download' : 'Add'} invoice for ${record.plot.name}`}><FileText size={14} /> {hasInvoice ? 'Invoice' : 'Add invoice'}</button><button type="button" className="btn-secondary" onClick={() => onAction({ kind: 'message', record })} aria-label={`Send payment message for ${record.plot.name}`}><MessageSquare size={14} /> Message</button></div> : <span style={{ ...muted, fontSize: 12 }}>Booking required</span>}</td>
         </tr>;
       })}</tbody>
@@ -323,7 +411,7 @@ function PaymentActionDialog({ action, busy, onClose, onSubmit }) {
   };
 
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="payment-action-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="payment-action-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><span style={{ ...muted, fontSize: 12, fontWeight: 700 }}>{isComplete ? 'Payment action' : 'Customer message'}</span><h2 id="payment-action-title" style={{ margin: '5px 0 0', fontSize: '1.2rem' }}>{isComplete ? 'Mark payment as completed' : 'Send payment message'}</h2><p style={{ ...muted, margin: '6px 0 0' }}>{record.plot.name}{record.plot.plotNumber ? ` · ${record.plot.plotNumber}` : ''}{contact?.name ? ` · ${contact.name}` : ''}</p></div><button type="button" className="btn-secondary" aria-label="Close payment action" onClick={onClose} disabled={busy} style={{ padding: 7 }}><X size={16} /></button></header>
       {isComplete && <div className="commission-payment-summary"><div><span>Amount to record</span><strong>{formatPaise(record.outstandingPaise)}</strong></div><div><span>Invoice</span><strong>Generated automatically</strong></div></div>}
       <form onSubmit={submit} style={{ display: 'grid', gap: 14, marginTop: 20 }}>
@@ -355,7 +443,7 @@ function AddInvoiceDialog({ action, busy, onClose, onSubmit }) {
   };
 
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="add-invoice-title" style={{ width: 'min(560px, 100%)', maxHeight: 'min(680px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="add-invoice-title" style={{ width: 'min(560px, 100%)', maxHeight: 'min(680px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><span style={{ ...muted, fontSize: 12, fontWeight: 700 }}>Invoice details</span><h2 id="add-invoice-title" style={{ margin: '5px 0 0', fontSize: '1.2rem' }}>Add invoice</h2><p style={{ ...muted, margin: '6px 0 0' }}>{record.plot.name}{record.plot.plotNumber ? ` · ${record.plot.plotNumber}` : ''}</p></div><button type="button" className="btn-secondary" aria-label="Close add invoice" onClick={onClose} disabled={busy} style={{ padding: 7 }}><X size={16} /></button></header>
       <form onSubmit={submit} style={{ display: 'grid', gap: 14, marginTop: 20 }}>
         <label>Invoice screenshot<input className="input-field" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setScreenshot(event.target.files?.[0] || null)} /></label>
@@ -373,7 +461,7 @@ function RuleDetailsDialog({ detail, onClose }) {
   const staffNames = rule.staffNames?.length ? rule.staffNames : rule.staff?.map((member) => member.name) || [];
   const basis = (rule.basis || rule.commissionBasis || 'COLLECTED_AMOUNT').replaceAll('_', ' ').toLowerCase();
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="commission-rule-details-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="commission-rule-details-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><span style={{ ...muted, fontSize: 12, fontWeight: 700 }}>Rule ID #{rule.id}</span><h2 id="commission-rule-details-title" style={{ margin: '5px 0 0', fontSize: '1.2rem' }}>{rule.name}</h2></div><button type="button" className="btn-secondary" aria-label="Close rule details" onClick={onClose} style={{ padding: 7 }}><X size={16} /></button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10, marginTop: 20 }}><div className="commission-rule-detail-item"><span>Plot</span><strong>{record.plot.name}{record.plot.plotNumber ? ` · ${record.plot.plotNumber}` : ''}</strong></div><div className="commission-rule-detail-item"><span>Actual plot amount</span><strong>{formatPaise(record.actualAmountPaise)}</strong></div><div className="commission-rule-detail-item"><span>Collectable threshold</span><strong>{formatPaise(record.collectionTargetPaise)}</strong></div><div className="commission-rule-detail-item"><span>Collected amount</span><strong>{formatPaise(record.collectedAmountPaise)}</strong></div><div className="commission-rule-detail-item"><span>Commission calculated on</span><strong>{basis}</strong></div><div className="commission-rule-detail-item"><span>Commission rate</span><strong>{rule.ratePercent}%</strong></div><div className="commission-rule-detail-item"><span>Current commission</span><strong>{formatPaise(rule.commissionPaise)}</strong></div><div className="commission-rule-detail-item"><span>Status</span><StatusBadge status={record.status} label={record.statusLabel} /></div></div>
       <div style={{ marginTop: 12 }} className="commission-rule-detail-item"><span>Assigned member name</span><strong>{staffNames.length ? staffNames.join(', ') : 'No staff assigned'}</strong></div>
@@ -412,7 +500,8 @@ export default function PlotPayouts() {
     setLoading(true);
     try {
       const response = await fetchApi('/api/commissions/workspace', { silent: true });
-      setWorkspace({ plots: response.plots || [], staff: response.staff || [], plans: response.plans || [], records: response.records || [] });
+      const staff = (response.staff || []).filter((member) => !isAdminStaff(member));
+      setWorkspace({ plots: response.plots || [], staff, plans: response.plans || [], records: response.records || [] });
     } catch (error) {
       notify.error(error.message || 'Could not load commissions.');
     } finally {
@@ -571,9 +660,10 @@ export default function PlotPayouts() {
 
   const sendRecordMessage = async (record, { channel, message }) => {
     const contact = record.booking?.contact;
-    if (channel === 'email') {
+    const normalizedChannel = String(channel || '').trim().toLowerCase();
+    if (normalizedChannel === 'email') {
       if (!contact?.email) throw new Error('This customer does not have an email address.');
-      await fetchApi('/api/communications/send-email', {
+      const result = await fetchApi('/api/communications/send-email', {
         method: 'POST',
         body: JSON.stringify({
           to: contact.email,
@@ -582,13 +672,18 @@ export default function PlotPayouts() {
           body: message,
         }),
       });
+      if (result?.delivered === false || (Number(result?.totalSent) === 0 && Number(result?.totalFailed) > 0)) {
+        throw new Error(result?.error || 'The email could not be delivered.');
+      }
       return;
     }
+    if (normalizedChannel !== 'sms') throw new Error('Select a valid message channel.');
     if (!contact?.phone) throw new Error('This customer does not have a phone number.');
-    await fetchApi('/api/sms/send', {
+    const result = await fetchApi('/api/sms/send', {
       method: 'POST',
       body: JSON.stringify({ to: contact.phone, contactId: contact.id, body: message }),
     });
+    if (result?.success === false) throw new Error(result.error || 'The SMS could not be delivered.');
   };
 
   const downloadInvoicePdf = async (invoiceId, invoiceNum) => {
@@ -676,7 +771,7 @@ export default function PlotPayouts() {
         if (messageError) notify.error(`Payment completed, but the message was not sent: ${messageError}`);
         return;
       }
-      await sendRecordMessage(record, values);
+      await sendRecordMessage(record, { channel: values.messageChannel, message: values.message });
       setPaymentAction(null);
       notify.success('Message sent to the customer.');
     } catch (error) {
@@ -703,7 +798,7 @@ export default function PlotPayouts() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  return <main className="finance-page" data-testid="commission-page" style={{ maxWidth: 1480, padding: 'clamp(16px, 2.5vw, 32px)' }}>
+  return <main className="finance-page commission-page" data-testid="commission-page">
     <section style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap', marginBottom: 22 }}>
       <div style={{ minWidth: 0 }}><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 38, height: 38, borderRadius: 12, display: 'grid', placeItems: 'center', background: 'var(--primary-color, var(--accent-color))', color: '#fff' }}><Coins size={20} /></span><div><h1 style={{ margin: 0, fontSize: 'clamp(1.45rem, 2.2vw, 2rem)' }}>Commissions</h1><p style={{ ...muted, margin: '5px 0 0' }}>Set plot collection thresholds, assign commission rules, and track collection progress from Finance.</p></div></div></div>
       <button type="button" className="btn-secondary" onClick={load} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh</button>

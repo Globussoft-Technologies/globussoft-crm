@@ -22,6 +22,7 @@ const MODULES = [
   { path: "/super-admin/page-visibility", label: "Page Visibility", icon: Eye },
   { path: "/super-admin/revenue", label: "Revenue Analytics", icon: TrendingUp },
   { path: "/super-admin/landing-form", label: "Landing Page Form", icon: PanelsTopLeft },
+  { path: "/super-admin/generic-chat-knowledge", label: "CRM Chatbox Knowledge", icon: Bot },
 ];
 
 function getThemeIcon(theme) {

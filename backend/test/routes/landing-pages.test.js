@@ -125,8 +125,6 @@ prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tripParticipant.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
 prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
-prisma.tripMicrosite = prisma.tripMicrosite || {};
-prisma.tripMicrosite.findUnique = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 // Phase 11 — PUT /:id can set tripId, which validates the trip exists
@@ -284,7 +282,6 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripParticipant.update.mockReset().mockResolvedValue({ id: 1 });
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
-  prisma.tripMicrosite.findUnique.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.tmcTrip.findFirst.mockReset();
   hardDeleteContactMock.mockReset().mockResolvedValue(1);
@@ -1249,7 +1246,6 @@ describe('GET /api/landing-pages/public/by-slug/:slug (no auth, full published p
           runtimePage: 'http://crm.example.test/p/modern-classroom',
           json: 'http://crm.example.test/p/modern-classroom/json',
           registrationDraft: 'http://crm.example.test/p/modern-classroom/registration-draft',
-          registrationDocuments: 'http://crm.example.test/p/modern-classroom/registration-documents',
           paymentStatus: 'http://crm.example.test/p/modern-classroom/payment-status',
           track: 'http://crm.example.test/p/modern-classroom/track',
         },
@@ -2504,11 +2500,6 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       id: 7001, tenantId: 1, tripId: 100, status: 'DRAFT', otpVerified: false,
       draftToken: 'aaaa1111bbbb2222cccc3333dddd4444',
     });
-    prisma.tripMicrosite.findUnique.mockResolvedValue({
-      publicUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      publishedAt: new Date(),
-      expiresAt: null,
-    });
     prisma.tenant.findUnique.mockResolvedValue({ slug: 'travel-stall' });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
     prisma.contact.create.mockResolvedValue({ id: 8001, tenantId: 1 });
@@ -2528,7 +2519,6 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
     expect(res.body.message).toContain('registration has been received');
-    expect(prisma.tripMicrosite.findUnique).not.toHaveBeenCalled();
     expect(prisma.tenant.findUnique).toHaveBeenCalled();
 
     // PendingTripRegistration row was created with the right shape
@@ -2605,7 +2595,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     });
   });
 
-  test('redirects to customer portal (regardless of microsite) when trip has no published microsite', async () => {
+  test('redirects to customer portal for a trip-linked registration draft', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1',
@@ -2615,8 +2605,6 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       id: 7002, status: 'DRAFT',
       draftToken: 'token',
     });
-    prisma.tripMicrosite.findUnique.mockResolvedValue(null); // no microsite yet
-
     const res = await request(makeApp())
       .post('/p/trip-bali2026/submit')
       .send({
@@ -2630,58 +2618,8 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       draftId: 7002,
       redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
-    // Draft still created — the microsite-less state doesn't block onboarding
+    // Draft still created — onboarding continues through the parent portal.
     expect(prisma.pendingTripRegistration.create).toHaveBeenCalled();
-  });
-
-  test('redirects to customer portal when microsite is unpublished (publishedAt null)', async () => {
-    prisma.landingPage.findFirst.mockResolvedValue({
-      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
-      content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
-    });
-    prisma.pendingTripRegistration.create.mockResolvedValue({ id: 7003, draftToken: 't' });
-    prisma.tripMicrosite.findUnique.mockResolvedValue({
-      publicUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      publishedAt: null, // unpublished draft
-      expiresAt: null,
-    });
-    const res = await request(makeApp())
-      .post('/p/trip-bali2026/submit')
-      .send({
-        student: { name: 'X' },
-        parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
-        passport: { status: 'Valid for 6+ months' },
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.redirect).toMatchObject({
-      type: 'customer-registration',
-      url: expect.stringContaining('/customer/register'),
-    });
-  });
-
-  test('redirects to customer portal when microsite has expired', async () => {
-    prisma.landingPage.findFirst.mockResolvedValue({
-      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
-      content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
-    });
-    prisma.pendingTripRegistration.create.mockResolvedValue({ id: 7004, draftToken: 't' });
-    prisma.tripMicrosite.findUnique.mockResolvedValue({
-      publicUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      publishedAt: new Date('2026-01-01'),
-      expiresAt: new Date('2026-02-01'), // past
-    });
-    const res = await request(makeApp())
-      .post('/p/trip-bali2026/submit')
-      .send({
-        student: { name: 'X' },
-        parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
-        passport: { status: 'Valid for 6+ months' },
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.redirect).toMatchObject({
-      type: 'customer-registration',
-      url: expect.stringContaining('/customer/register'),
-    });
   });
 
   test('missing required fields returns 400 MISSING_FIELDS, no draft created', async () => {
@@ -2706,8 +2644,6 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
     });
     prisma.pendingTripRegistration.create.mockResolvedValue({ id: 7005, draftToken: 't' });
-    prisma.tripMicrosite.findUnique.mockResolvedValue(null);
-
     const res = await request(makeApp())
       .post('/p/trip-bali2026/submit')
       .send({
@@ -2833,8 +2769,6 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     });
     prisma.pendingTripRegistration.create.mockResolvedValue({ id: 7006, draftToken: 't' });
     prisma.contact.create.mockResolvedValue({ id: 8002, tenantId: 1 });
-    prisma.tripMicrosite.findUnique.mockResolvedValue(null);
-
     const res = await request(makeApp())
       .post('/p/custom-trip/submit')
       .send({
@@ -3635,11 +3569,6 @@ describe('POST /api/landing-pages/:id/submit (authenticated endpoint, ID-based)'
     prisma.pendingTripRegistration.create.mockResolvedValue({
       id: 7001, tenantId: 1, tripId: 100, status: 'DRAFT', otpVerified: false,
       draftToken: 'aaaa1111bbbb2222cccc3333dddd4444',
-    });
-    prisma.tripMicrosite.findUnique.mockResolvedValue({
-      publicUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      publishedAt: new Date(),
-      expiresAt: null,
     });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
     prisma.contact.create.mockResolvedValue({ id: 8001, tenantId: 1 });

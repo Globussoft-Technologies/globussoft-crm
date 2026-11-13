@@ -242,8 +242,9 @@ export default function LandingPageBuilder() {
   const [tripSearch, setTripSearch] = useState('');
   const tripPickerRef = useRef(null);
   const tripFetchSeqRef = useRef(0);
-  // #454: dirty-state tracking + beforeunload guard.
+  // #454: dirty-state tracking + unsaved-changes warning.
   const [isDirty, setIsDirty] = useState(false);
+  const reloadConfirmOpenRef = useRef(false);
   // Version-history drawer state. Lightweight versioning per PRD ?
   // snapshots are captured server-side on create / manual save /
   // publish / AI generation / restore; the drawer just lists them
@@ -374,17 +375,34 @@ export default function LandingPageBuilder() {
     }
   };
 
-  // #454: native beforeunload guard.
+  // Use the application's confirmation modal for keyboard reloads. This
+  // keeps the Reload/Cancel choice without using a toast or native alert.
+  // The browser toolbar refresh cannot be intercepted by page JavaScript.
   useEffect(() => {
-    if (!isDirty) return;
-    const onBeforeUnload = (e) => {
-      e.preventDefault();
-      e.returnValue = '';
-      return '';
+    const onRefreshShortcut = async (event) => {
+      const key = String(event.key || '').toLowerCase();
+      const isKeyboardReload = (event.ctrlKey || event.metaKey) && key === 'r';
+      const isFunctionReload = event.key === 'F5';
+      if (!isDirty || (!isKeyboardReload && !isFunctionReload)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (reloadConfirmOpenRef.current) return;
+      reloadConfirmOpenRef.current = true;
+      try {
+        const shouldReload = await notify.confirm({
+          title: 'Reload site?',
+          message: 'Changes you made may not be saved.',
+          confirmText: 'Reload',
+          cancelText: 'Cancel',
+        });
+        if (shouldReload) window.location.reload();
+      } finally {
+        reloadConfirmOpenRef.current = false;
+      }
     };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isDirty]);
+    window.addEventListener('keydown', onRefreshShortcut, true);
+    return () => window.removeEventListener('keydown', onRefreshShortcut, true);
+  }, [isDirty, notify]);
 
   // #450: keyboard shortcuts. Ctrl/Cmd + Z = undo, Ctrl/Cmd + Y or
   // Ctrl/Cmd + Shift + Z = redo. We intentionally skip when the user is
@@ -811,17 +829,20 @@ export default function LandingPageBuilder() {
               </button>
               {tripPickerOpen && (
                 <div style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.18)', zIndex: 300, width: 280, overflow: 'hidden' }}>
-                  <div style={{ padding: '8px 8px 6px', borderBottom: '1px solid var(--border-color)', position: 'relative' }}>
-                    <Search size={13} aria-hidden style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 8px 6px', borderBottom: '1px solid var(--border-color)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, width: '100%', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg, var(--surface-color))', paddingLeft: 8 }}>
+                    <Search size={13} aria-hidden style={{ color: 'var(--text-secondary)', flex: '0 0 auto' }} />
                     <input
                       autoFocus
-                      type="search"
+                      type="text"
+                      role="searchbox"
                       value={tripSearch}
                       onChange={(e) => setTripSearch(e.target.value)}
                       placeholder="Search trips..."
                       aria-label="Search trips"
-                      style={{ width: '100%', padding: '5px 8px 5px 26px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-color))', color: 'var(--text-primary)', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                      style={{ flex: '1 1 auto', minWidth: 0, width: '100%', padding: '5px 8px', border: 0, outline: 0, background: 'transparent', color: 'var(--text-primary)', fontSize: '0.78rem', boxSizing: 'border-box' }}
                     />
+                  </div>
                   </div>
                   <ul role="listbox" onMouseDown={(e) => e.preventDefault()} style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 220, overflowY: 'auto' }}>
                     <li
@@ -899,8 +920,8 @@ export default function LandingPageBuilder() {
           stays in place for every other page so non-template flows
           are unaffected. */}
       {isTemplateMode ? (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div className="landing-builder__template-shell" style={{ display: 'flex', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div className="landing-builder__template-editor" style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
             {page && page.templateType === 'wanderlux-v1' ? (
               <LandingPageWanderluxEditor
                 content={templateContent}
@@ -998,8 +1019,8 @@ export default function LandingPageBuilder() {
           </aside>
         </div>
       ) : isGenericLandingSite ? (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
             <LandingPageGenericEditor
               content={components}
               onChange={(next) => { dispatch({ type: 'COMMIT', value: next }); setIsDirty(true); }}
@@ -1008,8 +1029,8 @@ export default function LandingPageBuilder() {
           </div>
         </div>
       ) : isWellnessLandingSite ? (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
             <LandingPageWellnessEditor
               content={components}
               onChange={(next) => { dispatch({ type: 'COMMIT', value: next }); setIsDirty(true); }}
@@ -3010,10 +3031,17 @@ function RegistrationFormPreview({ p }) {
 }
 
 function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
+  const notify = useNotify();
   const presets = listRegFormPresets();
-  const onPresetChange = (newAudience) => {
+  const onPresetChange = async (newAudience) => {
     if (newAudience === p.audience) return;
-    if (!window.confirm('Switch audience preset? This will overwrite the current fields, submit text, and thank-you message with the new preset.\n\nClick "Cancel" to keep your custom edits.')) {
+    const shouldSwitch = await notify.confirm({
+      title: 'Switch audience preset?',
+      message: 'This will overwrite the current fields, submit text, and thank-you message with the new preset.',
+      confirmText: 'Switch preset',
+      cancelText: 'Cancel',
+    });
+    if (!shouldSwitch) {
       return;
     }
     const next = regFormDefaultPropsFor(newAudience);

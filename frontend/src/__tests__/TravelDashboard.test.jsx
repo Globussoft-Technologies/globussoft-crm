@@ -25,13 +25,12 @@
  *      await findBy for data-dependent text).
  *   5. GET on mount: hits /api/travel/dashboard (exactly one call, no query
  *      args, no method override — default GET).
- *   6. KPI tiles — seven tiles render with their labels: Active trips,
- *      Diagnostics (last 30 days), Itineraries, Microsites, Cost master
- *      (active rates), Pricing rules, Web check-ins. Plus their headline numeric values.
- *   7. KPI tiles — accent + footer text: "12 departing in 30 days" accent
- *      under Active trips; "all current" microsites footer when expired=0;
- *      "3 expired" microsites footer when expired>0; missed count rendered
- *      in danger color when webCheckins.missed > 0.
+ *   6. KPI tiles — seven current tiles render with their labels: Active trips,
+ *      Diagnostics, Itineraries, Landing pages, Cost master, Pricing rules,
+ *      and Web check-ins. Plus their headline numeric values.
+ *   7. KPI tiles — accent + footer text: "12 departing in 30 days" under
+ *      Active trips; the landing-page state footer; missed count rendered in
+ *      danger color when webCheckins.missed > 0.
  *   8. KPI tiles — links: each linked tile wraps a <Link> with the expected
  *      href (/travel/trips, /travel/diagnostics, /travel/itineraries,
  *      /landing-pages, /travel/cost-master, /travel/pricing-rules,
@@ -353,7 +352,7 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     expect(screen.getByText('Cost master (active rates)')).toBeInTheDocument();
     expect(screen.getByText('Pricing rules')).toBeInTheDocument();
     expect(screen.getByText('Web check-ins')).toBeInTheDocument();
-    // Microsites tile must not appear.
+    // The removed legacy microsites tile must not appear.
     expect(screen.queryByText('Microsites')).not.toBeInTheDocument();
     // Headline values.
     expect(screen.getByText('47')).toBeInTheDocument(); // trips

@@ -25,7 +25,7 @@ import { useNotify } from "../utils/notify";
 //     contact.customFields[field.fieldKey]), onSaved(newValue) — called
 //     after a successful save so the parent can update its local state
 //     without a full page refetch.
-export default function InlineCellEditor({ contactId, field, value, onSaved }) {
+export default function InlineCellEditor({ contactId, field, value, onSaved, readOnly = false }) {
   const notify = useNotify();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -67,7 +67,7 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
     const isEmpty = value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
     let display;
     if (isEmpty) {
-      display = <span style={{ color: "var(--accent-color)", fontSize: "0.8rem" }}>+ Click to add</span>;
+      display = <span style={{ color: readOnly ? "var(--text-secondary)" : "var(--accent-color)", fontSize: "0.8rem" }}>{readOnly ? "—" : "+ Click to add"}</span>;
     } else if (field.fieldType === "checkbox") {
       display = value ? "Yes" : "No";
     } else if (field.fieldType === "multiselect") {
@@ -83,12 +83,12 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
     }
     return (
       <div
-        onClick={startEdit}
+        onClick={readOnly ? undefined : startEdit}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        title={field.tooltip || `Click to edit ${field.label}`}
+        title={readOnly ? field.tooltip : (field.tooltip || `Click to edit ${field.label}`)}
         style={{
-          cursor: "pointer",
+          cursor: readOnly ? "default" : "pointer",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -100,7 +100,7 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
         className="inline-cell-editor-display"
       >
         <span>{display}</span>
-        <button
+        {!readOnly && <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -121,8 +121,8 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
           }}
         >
           <Pencil size={12} />
-        </button>
-        {!isEmpty && (
+        </button>}
+        {!readOnly && !isEmpty && (
           <button
             type="button"
             onClick={handleClear}

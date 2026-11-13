@@ -54,7 +54,15 @@ const {
 const digilockerClient = require("../services/digilockerClient");
 const googleDriveClient = require("../services/googleDriveClient");
 const visaDocStore = require("../lib/visaDocStore");
-const { normalizeTripType, tripRequiresPassport } = require("../lib/travelDocumentPolicy");
+const {
+  normalizeTripType,
+  tripRequiresPassport,
+  normalizeAcceptedFileTypes,
+  normalizeCaptureMode,
+  projectTripDocumentRequirement,
+} = require("../lib/travelDocumentPolicy");
+const { parseConsentAnswers } = require("../lib/tmcDigitalConsent");
+const { sanitizeText } = require("../lib/sanitizeJson");
 const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
@@ -181,6 +189,52 @@ async function requireTmcAccess(req, res, next) {
   }
 }
 
+// Resolve a supplied school-variant parent to the family's root trip. The
+// relationship is administrative only; every trip keeps its own teacher,
+// landing page, participants, payments, and parent-registration scope.
+async function resolveFamilyParentId({ tenantId, candidateId, currentTripId = null }) {
+  if (candidateId === undefined || candidateId === null || candidateId === "") return null;
+  const parsed = Number(candidateId);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    const error = new Error("familyParentId must be a positive integer");
+    error.status = 400;
+    error.code = "INVALID_FAMILY_PARENT_ID";
+    throw error;
+  }
+
+  const visited = new Set();
+  let cursor = parsed;
+  let rootId = null;
+  while (cursor) {
+    if (cursor === Number(currentTripId)) {
+      const error = new Error("A trip cannot be grouped with itself or one of its variants");
+      error.status = 400;
+      error.code = "INVALID_FAMILY_PARENT_ID";
+      throw error;
+    }
+    if (visited.has(cursor)) {
+      const error = new Error("Trip family relationship contains a cycle");
+      error.status = 400;
+      error.code = "INVALID_FAMILY_PARENT_ID";
+      throw error;
+    }
+    visited.add(cursor);
+    const parent = await prisma.tmcTrip.findFirst({
+      where: { id: cursor, tenantId },
+      select: { id: true, familyParentId: true },
+    });
+    if (!parent) {
+      const error = new Error("Family parent trip not found in this tenant");
+      error.status = 400;
+      error.code = "INVALID_FAMILY_PARENT_ID";
+      throw error;
+    }
+    rootId = parent.id;
+    cursor = parent.familyParentId;
+  }
+  return rootId;
+}
+
 // ─── Trip CRUD ────────────────────────────────────────────────────────
 
 // GET /api/travel/trips
@@ -189,7 +243,7 @@ async function requireTmcAccess(req, res, next) {
 // shape unchanged (full TmcTrip row + _count include) — every existing
 // caller (frontend Trips.jsx + TripDetail.jsx + e2e specs) keeps working.
 // Callers can opt into the slim summary projection (id + tripCode +
-// destination + status + dates + createdAt; NO microsite URL, drive
+// destination + status + dates + createdAt; NO legacy microsite URL, drive
 // folder id, or pricePerStudent) by passing `?fields=summary`. The slim
 // path also skips the `_count` include — slim-shape pickers don't need
 // per-trip child counts. The projection lookup is centralized in
@@ -274,9 +328,18 @@ router.get(
       } else {
         findManyArgs.include = {
           _count: {
-            select: { participants: true, documentRequirements: true },
+            select: { participants: true, documentRequirements: true, familyVariants: true },
           },
           paymentPlan: { select: { instalmentsJson: true } },
+          familyParent: {
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              departDate: true,
+              returnDate: true,
+            },
+          },
         };
       }
       const [trips, total] = await Promise.all([
@@ -360,9 +423,9 @@ router.post(
         legalEntity,
         pricePerStudent,
         status,
-        micrositeUrl,
         driveFolderId,
         tripType,
+        familyParentId,
       } = req.body || {};
 
       // Either schoolContactId (existing FK — back-compat for any caller that
@@ -383,6 +446,13 @@ router.post(
           code: "MISSING_FIELDS",
         });
       }
+      // Validate the family target before the free-text school path can
+      // create a Contact. An invalid grouping request must not leave an
+      // orphan school contact behind as a side effect.
+      const resolvedFamilyParentId = await resolveFamilyParentId({
+        tenantId: req.travelTenant.id,
+        candidateId: familyParentId,
+      });
       let sid = null;
       if (schoolContactId) {
         const parsed = parseInt(schoolContactId, 10);
@@ -528,8 +598,8 @@ router.post(
           pricePerStudent:
             pricePerStudent != null ? Number(pricePerStudent) : null,
           status: finalStatus,
-          micrositeUrl: micrositeUrl || null,
           driveFolderId: resolvedDriveFolderId,
+          familyParentId: resolvedFamilyParentId,
         },
       });
       await ensureCostCentre({
@@ -543,6 +613,9 @@ router.post(
       });
       res.status(201).json(created);
     } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
       if (e.code === "P2002") {
         return res
           .status(409)
@@ -1265,22 +1338,70 @@ router.get(
           },
           documentRequirements: { orderBy: { id: "asc" } },
           paymentPlan: true,
-          microsite: true,
+          familyParent: {
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              departDate: true,
+              returnDate: true,
+            },
+          },
+          familyVariants: {
+            orderBy: { id: "asc" },
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              schoolContactId: true,
+              teacherContactId: true,
+              familyParentId: true,
+              status: true,
+            },
+          },
         },
       });
       if (!trip)
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
-      const firstInstalmentPayments = await prisma.tripInstalmentPayment.findMany({
-        where: { tripId: trip.id, instalmentIndex: 0 },
-        select: { participantId: true, paidAmount: true },
+      if (trip.schoolContactId) {
+        const schoolContact = await prisma.contact.findFirst({
+          where: { id: trip.schoolContactId, tenantId: req.travelTenant.id },
+          select: { id: true, name: true },
+        });
+        trip.schoolName = schoolContact?.name || null;
+      } else {
+        trip.schoolName = null;
+      }
+      const participantPayments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: trip.id },
+        select: { participantId: true, instalmentIndex: true, amount: true, paidAmount: true, status: true },
       });
-      const participantsWithFirstPayment = new Set(
-        firstInstalmentPayments
-          .filter((payment) => Number(payment.paidAmount) > 0)
-          .map((payment) => Number(payment.participantId)),
-      );
+      const paymentSummaryByParticipant = new Map();
+      for (const payment of participantPayments) {
+        const participantId = Number(payment.participantId);
+        if (!Number.isFinite(participantId)) continue;
+        const summary = paymentSummaryByParticipant.get(participantId) || {
+          totalInstallments: 0,
+          completedInstallments: 0,
+          totalAmount: 0,
+          paidAmount: 0,
+          hasFirstPayment: false,
+        };
+        const amount = Number(payment.amount) || 0;
+        const paidAmount = Number(payment.paidAmount) || 0;
+        const isComplete = String(payment.status || "").toLowerCase() === "paid"
+          || (amount > 0 && paidAmount >= amount);
+        summary.totalInstallments += 1;
+        summary.completedInstallments += isComplete ? 1 : 0;
+        summary.totalAmount += amount;
+        summary.paidAmount += paidAmount;
+        if ((payment.instalmentIndex == null || Number(payment.instalmentIndex) === 0) && paidAmount > 0) {
+          summary.hasFirstPayment = true;
+        }
+        paymentSummaryByParticipant.set(participantId, summary);
+      }
       const pendingParentRows = await prisma.pendingTripRegistration.findMany({
         where: { tenantId: req.travelTenant.id, tripId: trip.id },
         select: { parentEmail: true },
@@ -1297,7 +1418,22 @@ router.get(
       );
       trip.participants = (trip.participants || []).map((participant) => ({
         ...participant,
-        hasFirstPayment: participantsWithFirstPayment.has(Number(participant.id)),
+        hasFirstPayment: Boolean(paymentSummaryByParticipant.get(Number(participant.id))?.hasFirstPayment),
+        paymentStatus: paymentSummaryByParticipant.get(Number(participant.id))?.totalInstallments > 0
+          && paymentSummaryByParticipant.get(Number(participant.id)).completedInstallments
+            === paymentSummaryByParticipant.get(Number(participant.id)).totalInstallments
+          ? "completed"
+          : "pending",
+        paymentSummary: (() => {
+          const summary = paymentSummaryByParticipant.get(Number(participant.id));
+          if (!summary) return { completedInstallments: 0, totalInstallments: 0, paidAmount: 0, totalAmount: 0 };
+          return {
+            completedInstallments: summary.completedInstallments,
+            totalInstallments: summary.totalInstallments,
+            paidAmount: Math.round(summary.paidAmount * 100) / 100,
+            totalAmount: Math.round(summary.totalAmount * 100) / 100,
+          };
+        })(),
         parentDocuments: (parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [])
           .map(projectStaffParentDocument),
         consentDocument: projectStaffConsentDocument(
@@ -1312,10 +1448,7 @@ router.get(
         parentEmail,
         documents: documents.map(projectStaffParentDocument),
       }));
-      if (!tripRequiresPassport(trip.tripType)) {
-        trip.documentRequirements = (trip.documentRequirements || [])
-          .filter((doc) => String(doc.docType || "").toLowerCase() !== "passport");
-      }
+      trip.documentRequirements = (trip.documentRequirements || []).map(projectTripDocumentRequirement);
       res.json(trip);
     } catch (e) {
       console.error("[travel-trips] get error:", e.message);
@@ -1483,9 +1616,7 @@ router.get(
       // so submittedCount = 0 / missingCount = requirementCount. When
       // a submission tracking column lands, flip this to count rows
       // whose status is the most-restrictive "actually-done" bucket.
-      const requirementCount = docs.filter((d) => (
-        d.required && (tripRequiresPassport(trip.tripType) || String(d.docType || "").toLowerCase() !== "passport")
-      )).length;
+      const requirementCount = docs.filter((d) => d.required).length;
       const submittedCount = 0;
       const missingCount = requirementCount - submittedCount;
 
@@ -1636,6 +1767,7 @@ router.patch(
           tripCode: true,
           destination: true,
           departDate: true,
+          familyParentId: true,
         },
       });
       if (!existing)
@@ -1651,10 +1783,10 @@ router.patch(
         legalEntity,
         pricePerStudent,
         status,
-        micrositeUrl,
         driveFolderId,
         tripType,
         teacherContactId,
+        familyParentId,
       } = req.body || {};
 
       if (destination !== undefined) data.destination = String(destination);
@@ -1702,9 +1834,15 @@ router.patch(
         }
         data.status = status;
       }
-      if (micrositeUrl !== undefined) data.micrositeUrl = micrositeUrl || null;
       if (driveFolderId !== undefined)
         data.driveFolderId = driveFolderId || null;
+      if (familyParentId !== undefined) {
+        data.familyParentId = await resolveFamilyParentId({
+          tenantId: req.travelTenant.id,
+          candidateId: familyParentId,
+          currentTripId: id,
+        });
+      }
       if (teacherContactId !== undefined) {
         if (teacherContactId === null || teacherContactId === "") {
           data.teacherContactId = null;
@@ -1903,6 +2041,9 @@ router.patch(
 
       res.json(updated);
     } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
       if (e.code === "P2002") {
         return res
           .status(409)
@@ -2041,7 +2182,7 @@ function defaultWanderluxConfig(trip) {
     sections: [],
     // The registration block defaults to mode="registration-draft"
     // (Phase 3) so the wizard creates a PendingTripRegistration and
-    // redirects to the trip's microsite instead of creating a
+    // continues through the parent-registration flow instead of creating a
     // Contact+Deal. Step shape mirrors the existing Wanderlux template.
     register: {
       title: "Register your child for this trip",
@@ -2238,14 +2379,25 @@ function projectStaffConsentDocument(document) {
 
 function projectStaffParentDocument(document) {
   if (!document) return null;
+  const captureMode = normalizeCaptureMode(document.captureMode);
   return {
     id: document.id,
-    documentType: document.documentType || "consent-form",
+    documentType: document.documentType || "Travel document",
+    documentRequirementId: document.documentRequirementId || null,
+    captureMode,
     filename: document.filename,
     fileSize: document.fileSize,
     mimeType: document.mimeType,
     status: document.status,
+    signatureName: document.signatureName || null,
+    agreedAt: document.agreedAt || null,
     uploadedAt: document.uploadedAt,
+    ...(captureMode === "digital_consent"
+      ? {
+          answers: parseConsentAnswers(document.answersJson),
+          termsSnapshot: document.termsSnapshot || null,
+        }
+      : {}),
   };
 }
 
@@ -2268,11 +2420,17 @@ async function findParentDocumentsForParticipants({ tenantId, tripId, participan
     id: true,
     parentContactId: true,
     documentType: true,
+    documentRequirementId: true,
     tripId: true,
     filename: true,
     fileSize: true,
     mimeType: true,
+    captureMode: true,
     status: true,
+    signatureName: true,
+    agreedAt: true,
+    answersJson: true,
+    termsSnapshot: true,
     uploadedAt: true,
     createdAt: true,
     fileUrl: true,
@@ -2309,7 +2467,10 @@ async function findParentConsentDocumentsForParticipants(args) {
   const documentsByEmail = await findParentDocumentsForParticipants(args);
   const consentByEmail = new Map();
   for (const [email, documents] of documentsByEmail.entries()) {
-    const document = documents.find((row) => (row.documentType || "consent-form") === "consent-form");
+    const document = documents.find((row) => (
+      normalizeCaptureMode(row.captureMode) === "digital_consent"
+      || (row.documentType || "consent-form") === "consent-form"
+    ));
     if (document) consentByEmail.set(email, document);
   }
   return consentByEmail;
@@ -2473,6 +2634,7 @@ router.post(
       const seen = new Map();
       const errors = [];
       const importedRows = [];
+      const warnings = [];
       let inserted = 0;
       let updated = 0;
       let skipped = 0;
@@ -2516,6 +2678,7 @@ router.post(
           select: { id: true },
         });
 
+        let participantId;
         if (existing) {
           const data = {};
           for (const [key, value] of Object.entries(parsedRow.data)) {
@@ -2530,17 +2693,39 @@ router.post(
             where: { id: existing.id },
             data,
           });
+          participantId = existing.id;
           updated += 1;
           importedRows.push({ row: rowNumber, fullName: parsedRow.data.fullName, action: "updated" });
         } else {
-          await prisma.tripParticipant.create({
+          const createdParticipant = await prisma.tripParticipant.create({
             data: {
               tripId: trip.id,
               ...parsedRow.data,
             },
           });
+          participantId = createdParticipant.id;
           inserted += 1;
           importedRows.push({ row: rowNumber, fullName: parsedRow.data.fullName, action: "imported" });
+        }
+
+        try {
+          await materializeTripInstalmentsFromPlan({
+            db: prisma,
+            tripId: trip.id,
+            participantIds: [participantId],
+            allowMissingPlan: true,
+          });
+          await createDraftInvoiceForParticipant({
+            db: prisma,
+            tenantId: req.travelTenant.id,
+            tripId: trip.id,
+            participantId,
+          });
+        } catch (billingError) {
+          warnings.push({
+            row: rowNumber,
+            reason: "Participant imported, but payment setup could not be completed: " + billingError.message,
+          });
         }
 
       }
@@ -2551,6 +2736,7 @@ router.post(
         skipped,
         importedRows,
         errors,
+        warnings,
         total: rows.length,
       });
     } catch (e) {
@@ -3134,7 +3320,7 @@ router.get(
         where,
         orderBy: { createdAt: "desc" },
         // Slim shape — omit the draftToken (server-side secret) and
-        // draftTokenExpiresAt (microsite-only signal). Operators don't
+        // draftTokenExpiresAt (server-side continuation signal). Operators don't
         // need either; the CRM acts on the draft id directly.
         select: {
           id: true,
@@ -3186,7 +3372,7 @@ router.get(
 
 // GET /trips/:id/registrations/:rid/documents/:docType/view-url
 // Mints a short-lived (5-min) signed URL for a passport, Aadhaar scan or
-// parent consent letter uploaded via the public microsite and stored in
+// parent consent letter uploaded during registration and stored in
 // PendingTripRegistration.
 // All authenticated travel users (including USER/agent role) can view documents —
 // document access is controlled by trip tenancy, not by role.
@@ -3235,7 +3421,7 @@ router.get(
           code: "DOC_NOT_FOUND",
         });
       }
-      // Map microsite descriptor shape { storage, url, key } → visaDocStore item shape
+      // Map stored descriptor shape { storage, url, key } → visaDocStore item shape
       const item = {
         attachmentUrl: descriptor.url,
         attachmentKey: descriptor.key,
@@ -3295,7 +3481,7 @@ router.post(
       const { trip, draft } = await loadPendingRegistration(req);
       // Operators can approve any draft that is not already final.
       // The original OTP_VERIFIED gate was relaxed because production
-      // tenants often collect consent outside the microsite OTP flow
+      // tenants often collect consent outside the original OTP flow
       // (in-person / phone), and blocking approval there left drafts
       // permanently stuck. CONVERTED and REJECTED remain terminal.
       if (draft.status === "CONVERTED" || draft.status === "REJECTED") {
@@ -3733,11 +3919,7 @@ router.get(
         where: { tripId: trip.id },
         orderBy: { id: "asc" },
       });
-      res.json({
-        documents: tripRequiresPassport(trip.tripType)
-          ? rows
-          : rows.filter((doc) => String(doc.docType || "").toLowerCase() !== "passport"),
-      });
+      res.json({ documents: rows.map(projectTripDocumentRequirement) });
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3755,28 +3937,79 @@ router.post(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
-      const { docType, required } = req.body || {};
-      if (!docType) {
+      const { docType, acceptedFileTypes, required, captureMode, consentTerms } = req.body || {};
+      const normalizedDocType = String(docType || "").trim();
+      if (!normalizedDocType) {
         return res
           .status(400)
           .json({ error: "docType required", code: "MISSING_FIELDS" });
       }
-      if (String(docType).trim().toLowerCase() === "passport" && !tripRequiresPassport(trip.tripType)) {
-        return res.status(400).json({ error: "Passport is not required for this trip", code: "PASSPORT_NOT_REQUIRED" });
-      }
       const created = await prisma.tripDocumentRequirement.create({
         data: {
           tripId: trip.id,
-          docType: String(docType),
+          docType: normalizedDocType,
+          acceptedFileTypes: JSON.stringify(normalizeAcceptedFileTypes(acceptedFileTypes)),
           required: required !== false,
+          captureMode: normalizeCaptureMode(captureMode),
+          consentTerms: normalizeCaptureMode(captureMode) === "digital_consent"
+            ? sanitizeText(String(consentTerms || "").trim()).slice(0, 10000) || null
+            : null,
         },
       });
-      res.status(201).json(created);
+      res.status(201).json(projectTripDocumentRequirement(created));
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] doc create error:", e.message);
       res.status(500).json({ error: "Failed to create document requirement" });
+    }
+  },
+);
+
+router.patch(
+  "/trips/:id/documents/:docId",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const docId = parseInt(req.params.docId, 10);
+      if (!Number.isFinite(docId)) {
+        return res.status(400).json({ error: "docId must be a number", code: "INVALID_DOC_ID" });
+      }
+      const existing = await prisma.tripDocumentRequirement.findFirst({
+        where: { id: docId, tripId: trip.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Document requirement not found", code: "DOC_NOT_FOUND" });
+      }
+      const body = req.body || {};
+      const data = {};
+      if (Object.prototype.hasOwnProperty.call(body, "docType")) {
+        const docType = String(body.docType || "").trim();
+        if (!docType) return res.status(400).json({ error: "docType required", code: "MISSING_FIELDS" });
+        data.docType = docType;
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "acceptedFileTypes")) {
+        data.acceptedFileTypes = JSON.stringify(normalizeAcceptedFileTypes(body.acceptedFileTypes));
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "required")) data.required = body.required !== false;
+      if (Object.prototype.hasOwnProperty.call(body, "captureMode")) {
+        data.captureMode = normalizeCaptureMode(body.captureMode);
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "consentTerms")) {
+        data.consentTerms = normalizeCaptureMode(body.captureMode ?? existing.captureMode) === "digital_consent"
+          ? sanitizeText(String(body.consentTerms || "").trim()).slice(0, 10000) || null
+          : null;
+      }
+      if (!Object.keys(data).length) return res.status(400).json({ error: "No changes supplied", code: "MISSING_FIELDS" });
+      const updated = await prisma.tripDocumentRequirement.update({ where: { id: docId }, data });
+      res.json(projectTripDocumentRequirement(updated));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] doc update error:", e.message);
+      res.status(500).json({ error: "Failed to update document requirement" });
     }
   },
 );

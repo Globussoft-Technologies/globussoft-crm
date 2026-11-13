@@ -86,6 +86,7 @@ const permissionMw = requireCJS('../../middleware/requirePermission');
 const permissionState = {
   allowed: new Set([
     'contacts.read',
+    'leads.read',
     'itineraries.read',
     'quotes.read',
     'invoices.read',
@@ -112,6 +113,56 @@ const MODELS = [
   'campaign',
   'survey',
   'whatsappMessage',
+  'emailTemplate',
+  'automationRule',
+  'quote',
+  'expense',
+  'payment',
+  'webForm',
+  'landingPage',
+  'signatureRequest',
+  'documentTemplate',
+  'pipeline',
+  'playbook',
+  'abTest',
+  'chatbot',
+  'slaPolicy',
+  'liveChatSession',
+  'webVisitor',
+  'socialPost',
+  'user',
+  'salesTeam',
+  'territory',
+  'pickupLocation',
+  'plotSite',
+  'transportPerson',
+  'plotBroker',
+  'billingPerson',
+  'customerPickup',
+  'auditLog',
+  'commissionProfile',
+  'commissionData',
+  'customEntity',
+  'whatsAppMessage',
+  'calendarEvent',
+  'leadCustomFieldDefinition',
+  'dealInsight',
+  'reportSchedule',
+  'tenantSetting',
+  'notificationPreference',
+  'staffRevenueGoal',
+];
+const GENERIC_VISIBLE_MODELS = [
+  'contact', 'deal', 'campaign', 'invoice', 'ticket', 'task', 'project',
+  'contract', 'emailMessage', 'emailTemplate', 'automationRule', 'quote',
+  'expense', 'payment', 'webForm', 'landingPage', 'signatureRequest',
+  'documentTemplate', 'pipeline', 'playbook', 'abTest', 'chatbot', 'slaPolicy',
+  'liveChatSession', 'webVisitor', 'socialPost', 'user', 'salesTeam', 'territory',
+  'pickupLocation', 'plotSite', 'transportPerson', 'plotBroker', 'billingPerson',
+  'customerPickup', 'auditLog', 'commissionProfile', 'commissionData', 'customEntity',
+  'whatsAppMessage', 'calendarEvent', 'leadCustomFieldDefinition',
+  'dealInsight', 'reportSchedule', 'tenantSetting', 'notificationPreference',
+  'staffRevenueGoal',
 ];
 const TRAVEL_MODELS = ['itinerary', 'travelQuote', 'travelInvoice', 'travelSupplier', 'tmcTrip'];
 for (const m of MODELS) {
@@ -145,11 +196,14 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn();
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findMany = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
+const { clearTenantPageVisibilityCache } = requireCJS('../../lib/tenantPageVisibility');
 const searchRouter = requireCJS('../../routes/search');
 
 const TENANT_ID = 1;
@@ -204,6 +258,20 @@ function defaultRowFor(model) {
       return { id: 13, title: 'Customer satisfaction', name: 'nps_survey', type: 'NPS' };
     case 'whatsappMessage':
       return { id: 14, phoneNumber: '+91 99999 99999', body: 'Hello from WhatsApp', direction: 'inbound', createdAt: new Date('2026-05-01').toISOString() };
+    case 'emailTemplate':
+      return { id: 15, name: 'Welcome email', subject: 'Welcome', channel: 'EMAIL', category: 'Onboarding', updatedAt: new Date('2026-05-01').toISOString() };
+    case 'automationRule':
+      return { id: 16, name: 'Push new leads', actionType: 'send_webhook', targetState: null, isActive: true, updatedAt: new Date('2026-05-01').toISOString() };
+    case 'dealInsight':
+      return { id: 17, dealId: 2, type: 'RISK', insight: 'Timeline risk', severity: 'WARNING', isResolved: false };
+    case 'reportSchedule':
+      return { id: 18, name: 'Weekly pipeline', reportType: 'pipeline', frequency: 'weekly', format: 'PDF', enabled: true };
+    case 'tenantSetting':
+      return { id: 19, key: 'generic.dealTypes', category: 'configuration' };
+    case 'notificationPreference':
+      return { id: 20, timezone: 'Asia/Kolkata', quietHoursStart: '22:00', quietHoursEnd: '07:00' };
+    case 'staffRevenueGoal':
+      return { id: 21, userId: 7, period: 'MONTHLY', scope: 'ALL', user: { name: 'Amita Rao', email: 'a@x.com' } };
     default:
       return { id: 0 };
   }
@@ -216,14 +284,58 @@ beforeEach(() => {
   // T33 — generic tenant by default so canSearchPatients() returns false and
   // patient.findMany is never invoked. Wellness-specific tests can override.
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, vertical: 'generic' });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.transportPerson.findFirst = vi.fn().mockResolvedValue({ customerIdsJson: '[1]' });
+  prisma.plotBroker.findFirst = vi.fn().mockResolvedValue({ customerIdsJson: '[1]' });
+  clearTenantPageVisibilityCache(TENANT_ID);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null, userRoles: [] });
   prisma.patient.findMany.mockReset().mockResolvedValue([]);
   for (const m of TRAVEL_MODELS) prisma[m].findMany.mockReset().mockResolvedValue([]);
   permissionState.allowed = new Set([
     'contacts.read',
+    'leads.read',
+    'pipeline.read',
+    'pipeline.write',
+    'marketing.read',
+    'invoices.read',
+    'tickets.read',
+    'tasks.read',
+    'projects.read',
+    'surveys.read',
+    'contracts.read',
+    'estimates.read',
+    'communications.read',
+    'knowledge_base.read',
+    'document_templates.read',
+    'developer.read',
+    'expenses.read',
+    'payments.read',
+    'web_forms.read',
+    'marketing.read',
+    'signatures.read',
+    'playbooks.read',
+    'live_chat.read',
+    'ab_tests.read',
+    'analytics.read',
+    'chatbots.read',
+    'social.read',
+    'sla.read',
+    'staff.manage',
+    'territories.read',
+    'billing_workspace.read',
+    'audit.read',
+    'settings.manage',
+    'settings.read',
+    'deal_insights.read',
+    'reports.read',
+    'reports.write',
+    'transport_workspace.read',
+    'broker_workspace.read',
+    'custom_objects.read',
+    'whatsapp.read',
+    'calendar.read',
     'itineraries.read',
     'quotes.read',
-    'invoices.read',
     'suppliers.read',
     'trips.read',
   ]);
@@ -252,32 +364,36 @@ describe('GET /api/search — global search envelope', () => {
     expect(res.body).toHaveProperty('campaigns');
     expect(res.body).toHaveProperty('surveys');
     expect(res.body).toHaveProperty('whatsappMessages');
+    expect(res.body).toHaveProperty('campaignTemplates');
+    expect(res.body).toHaveProperty('webhookWorkflows');
+    for (const key of [
+      'leads', 'quotes', 'expenses', 'payments', 'webForms', 'landingPages',
+      'signatureRequests', 'documentTemplates', 'pipelines', 'playbooks',
+      'abTests', 'chatbots', 'slaPolicies', 'liveChatSessions', 'webVisitors',
+      'socialPosts', 'staffMembers', 'salesTeams', 'territories', 'pickupLocations',
+      'plotSites', 'transportPersons', 'plotBrokers', 'billingPersons',
+      'customerPickups', 'auditLogs', 'commissionProfiles', 'commissionData',
+      'customEntities',
+      'genericWhatsAppMessages', 'calendarEvents', 'leadFieldDefinitions',
+      'dealInsights', 'leadReportLeads', 'reportSchedules', 'agentReportAgents',
+      'tenantSettings', 'notificationPreferences', 'revenueGoals',
+      'workAssignmentStaff', 'transportWork', 'siteVisitWork',
+    ]) expect(res.body).toHaveProperty(key);
     expect(res.body).toHaveProperty('totalResults');
 
     // For generic tenants (default fixture), patients & whatsappMessages are empty (conditional on includePatients).
     // Each other default fixture returns 1 row → totalResults must be 13.
-    const computed =
-      res.body.contacts.length +
-      res.body.deals.length +
-      res.body.invoices.length +
-      res.body.tickets.length +
-      res.body.tasks.length +
-      res.body.projects.length +
-      res.body.contracts.length +
-      res.body.estimates.length +
-      res.body.emails.length +
-      res.body.kbArticles.length +
-      res.body.sequences.length +
-      res.body.campaigns.length +
-      res.body.surveys.length +
-      res.body.whatsappMessages.length;
+    const computed = Object.values(res.body)
+      .filter(Array.isArray)
+      .reduce((sum, rows) => sum + rows.length, 0);
     expect(res.body.totalResults).toBe(computed);
-    expect(res.body.totalResults).toBe(13); // 13 for generic, 0 for patients & whatsappMessages (conditional)
-
-    // Every unconditional model was queried exactly once.
-    const unconditionalModels = MODELS.filter(m => m !== 'whatsappMessage'); // whatsappMessage is conditional
-    for (const m of unconditionalModels) {
-      expect(prisma[m].findMany).toHaveBeenCalledOnce();
+    // Only models backed by visible Generic sidebar pages are queried.
+    for (const m of GENERIC_VISIBLE_MODELS) {
+      expect(prisma[m].findMany, `${m} should be searched`).toHaveBeenCalled();
+    }
+    expect(prisma.contact.findMany).toHaveBeenCalledTimes(3);
+    for (const m of ['sequence', 'survey', 'kbArticle', 'estimate', 'whatsappMessage']) {
+      expect(prisma[m].findMany).not.toHaveBeenCalled();
     }
   });
 
@@ -313,9 +429,7 @@ describe('GET /api/search — global search envelope', () => {
     const res = await request(makeApp({ tenantId: otherTenant })).get('/api/search?q=test');
 
     expect(res.status).toBe(200);
-    // Only check unconditional models (whatsappMessage is conditional on includePatients)
-    const unconditionalModels = MODELS.filter(m => m !== 'whatsappMessage');
-    for (const m of unconditionalModels) {
+    for (const m of GENERIC_VISIBLE_MODELS) {
       const args = prisma[m].findMany.mock.calls[0][0];
       expect(args.where.tenantId).toBe(otherTenant);
     }
@@ -325,9 +439,7 @@ describe('GET /api/search — global search envelope', () => {
     const res = await request(makeApp()).get('/api/search?q=test');
 
     expect(res.status).toBe(200);
-    // Only check unconditional models
-    const unconditionalModels = MODELS.filter(m => m !== 'whatsappMessage');
-    for (const m of unconditionalModels) {
+    for (const m of GENERIC_VISIBLE_MODELS) {
       const args = prisma[m].findMany.mock.calls[0][0];
       expect(args.take).toBe(5);
     }
@@ -354,6 +466,153 @@ describe('GET /api/search — global search envelope', () => {
     expect(res.body).toEqual({ error: 'Search failed' });
     // Negative pin: the internal error message MUST NOT appear in the body.
     expect(JSON.stringify(res.body)).not.toContain('DB connection lost');
+  });
+
+  test('generic search only queries records whose destination page permission is accessible', async () => {
+    permissionState.allowed = new Set(['contacts.read']);
+
+    const res = await request(makeApp()).get('/api/search?q=test');
+
+    expect(res.status).toBe(200);
+    expect(res.body.contacts).toHaveLength(1);
+    expect(res.body.sequences).toEqual([]);
+    expect(res.body.campaignTemplates).toEqual([]);
+    expect(res.body.webhookWorkflows).toEqual([]);
+    expect(prisma.contact.findMany).toHaveBeenCalledOnce();
+    expect(prisma.sequence.findMany).not.toHaveBeenCalled();
+    expect(prisma.emailTemplate.findMany).not.toHaveBeenCalled();
+    expect(prisma.automationRule.findMany).not.toHaveBeenCalled();
+    expect(getUserPermissions).toHaveBeenCalledWith(TENANT_ID, USER_ID, 'generic');
+  });
+
+  test('generic tenant-hidden pages suppress their page-backed record categories', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ hiddenPaths: ['/invoices', '/marketing', '/pipelines', '/whatsapp'] }),
+    });
+    clearTenantPageVisibilityCache(TENANT_ID);
+
+    const res = await request(makeApp()).get('/api/search?q=test');
+
+    expect(res.status).toBe(200);
+    expect(res.body.invoices).toEqual([]);
+    expect(res.body.campaigns).toEqual([]);
+    expect(res.body.campaignTemplates).toEqual([]);
+    expect(res.body.webhookWorkflows).toEqual([]);
+    expect(res.body.pipelines).toEqual([]);
+    expect(res.body.genericWhatsAppMessages).toEqual([]);
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+    expect(prisma.campaign.findMany).not.toHaveBeenCalled();
+    expect(prisma.emailTemplate.findMany).not.toHaveBeenCalled();
+    expect(prisma.automationRule.findMany).not.toHaveBeenCalled();
+    expect(prisma.pipeline.findMany).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
+  });
+
+  test('generic tenant-hidden report, settings, goal, and work pages suppress their record categories', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({
+        hiddenPaths: [
+          '/deal-insights', '/lead-reports', '/reports', '/agent-reports',
+          '/settings', '/notification-settings', '/revenue-goals',
+          '/pickup-work-assignments', '/transport-workspace', '/sales-workspace',
+        ],
+      }),
+    });
+    clearTenantPageVisibilityCache(TENANT_ID);
+
+    const res = await request(makeApp()).get('/api/search?q=titan');
+
+    expect(res.status).toBe(200);
+    for (const key of [
+      'dealInsights', 'leadReportLeads', 'reportSchedules', 'agentReportAgents',
+      'tenantSettings', 'notificationPreferences', 'revenueGoals',
+      'workAssignmentStaff', 'transportWork', 'siteVisitWork',
+    ]) expect(res.body[key]).toEqual([]);
+    expect(prisma.dealInsight.findMany).not.toHaveBeenCalled();
+    expect(prisma.reportSchedule.findMany).not.toHaveBeenCalled();
+    expect(prisma.notificationPreference.findMany).not.toHaveBeenCalled();
+    expect(prisma.staffRevenueGoal.findMany).not.toHaveBeenCalled();
+    expect(prisma.transportPerson.findFirst).not.toHaveBeenCalled();
+    expect(prisma.plotBroker.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('generic operational work search is limited to the signed-in user assignments', async () => {
+    prisma.transportPerson.findFirst.mockResolvedValue({ customerIdsJson: '[41, 42]' });
+    prisma.plotBroker.findFirst.mockResolvedValue({ customerIdsJson: '[52]' });
+
+    const res = await request(makeApp()).get('/api/search?q=titan');
+
+    expect(res.status).toBe(200);
+    expect(prisma.transportPerson.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID, userId: USER_ID },
+      select: { customerIdsJson: true },
+    });
+    expect(prisma.plotBroker.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID, userId: USER_ID },
+      select: { customerIdsJson: true },
+    });
+    const scopedPickupCalls = prisma.customerPickup.findMany.mock.calls
+      .map(([options]) => options)
+      .filter((options) => options.where.contactId?.in);
+    expect(scopedPickupCalls.map((options) => options.where.contactId.in)).toEqual([
+      [41, 42],
+      [52],
+    ]);
+    expect(scopedPickupCalls[0].where.OR).toContainEqual({
+      contact: { is: { name: { contains: 'titan' } } },
+    });
+    expect(scopedPickupCalls[0].select.contact).toEqual({
+      select: { name: true, email: true, phone: true, company: true },
+    });
+  });
+
+  test('notification settings search is user-scoped and never selects preference JSON blobs', async () => {
+    const res = await request(makeApp()).get('/api/search?q=notification');
+
+    expect(res.status).toBe(200);
+    expect(prisma.notificationPreference.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: TENANT_ID, userId: USER_ID },
+      select: {
+        id: true,
+        timezone: true,
+        quietHoursStart: true,
+        quietHoursEnd: true,
+        updatedAt: true,
+      },
+      take: 5,
+    }));
+    expect(res.body).not.toHaveProperty('roles');
+  });
+
+  test('generic contacts and leads are separated by lifecycle status', async () => {
+    const res = await request(makeApp()).get('/api/search?q=kanchan');
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledTimes(3);
+    expect(prisma.contact.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+      tenantId: TENANT_ID,
+      status: { not: 'Lead' },
+    }));
+    expect(prisma.contact.findMany.mock.calls[1][0].where).toEqual(expect.objectContaining({
+      tenantId: TENANT_ID,
+      status: 'Lead',
+    }));
+  });
+
+  test('generic webhook search only returns webhook workflow rules', async () => {
+    const res = await request(makeApp()).get('/api/search?q=contact');
+
+    expect(res.status).toBe(200);
+    expect(prisma.automationRule.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: TENANT_ID,
+        AND: [{ OR: [
+          { actionType: 'send_webhook' },
+          { targetState: { contains: '"send_webhook"' } },
+        ] }],
+      }),
+      take: 5,
+    }));
   });
 
   test('travel tenant searches travel records only and scopes them to the active sub-brand', async () => {

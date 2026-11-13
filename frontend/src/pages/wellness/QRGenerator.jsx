@@ -106,10 +106,14 @@ export default function QRGenerator() {
 
   useEffect(() => {
     setVisibleQrCount(QR_LIST_PAGE_SIZE);
-  }, [selectedEventId, selectedEventQrs.length]);
+  }, [selectedEventId]);
 
   const handleQrListScroll = (event) => {
-    const el = event.currentTarget;
+    // React supplies currentTarget for normal browser events. The target
+    // fallback keeps the boundary check reliable for synthetic scroll events
+    // and browsers that retarget delegated scroll notifications.
+    const el = event.currentTarget || event.target;
+    if (!el) return;
     if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
     setVisibleQrCount((count) => Math.min(count + QR_LIST_PAGE_SIZE, selectedEventQrs.length));
   };

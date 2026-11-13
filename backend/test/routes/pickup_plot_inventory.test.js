@@ -40,6 +40,7 @@ prisma.invoice = prisma.invoice || {};
 prisma.payment = prisma.payment || {};
 prisma.plotBooking = prisma.plotBooking || {};
 prisma.plotCommission = prisma.plotCommission || {};
+prisma.plotCommissionPlan = prisma.plotCommissionPlan || {};
 prisma.plotInstallment = prisma.plotInstallment || {};
 prisma.plotInvoiceItem = prisma.plotInvoiceItem || {};
 prisma.plotWorkflowEvent = prisma.plotWorkflowEvent || {};
@@ -104,6 +105,8 @@ prisma.plotCommission.upsert = vi.fn();
 prisma.plotCommission.create = vi.fn();
 prisma.plotCommission.update = vi.fn();
 prisma.plotCommission.updateMany = vi.fn();
+prisma.plotCommissionPlan.findMany = vi.fn();
+prisma.plotCommissionPlan.findFirst = vi.fn();
 prisma.plotInstallment.findMany = vi.fn();
 prisma.plotInstallment.findFirst = vi.fn();
 prisma.plotInstallment.create = vi.fn();
@@ -146,6 +149,8 @@ beforeEach(() => {
   prisma.plotSite.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
   prisma.plotCommission.findMany.mockResolvedValue([]);
+  prisma.plotCommissionPlan.findMany.mockResolvedValue([]);
+  prisma.plotCommissionPlan.findFirst.mockResolvedValue(null);
   prisma.plotInstallment.findMany.mockResolvedValue([]);
   prisma.plotInstallment.findFirst.mockResolvedValue(null);
   prisma.plotInstallment.updateMany.mockReset().mockResolvedValue({ count: 1 });
@@ -2889,20 +2894,20 @@ describe('plot broker mutations', () => {
     expect(response.status).toBe(201);
     expect(prisma.plotSite.findMany).toHaveBeenCalledWith({ where: { id: { in: [30, 31] }, tenantId: 7 }, select: { id: true } });
     expect(prisma.plotBroker.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
-      name: 'Asha', commissionPercent: 2.5, plotSiteId: 30, plotSiteIdsJson: '[30,31]', customerIdsJson: '[61,62]',
+      name: 'Asha', plotSiteId: 30, plotSiteIdsJson: '[30,31]', customerIdsJson: '[61,62]',
       assignmentPairsJson: '[{"customerId":61,"plotSiteId":30},{"customerId":62,"plotSiteId":31}]', tenantId: 7,
     }) }));
     expect(response.body.plotSiteIds).toEqual([30, 31]);
     expect(response.body.customerIds).toEqual([61, 62]);
   });
 
-  test('rejects a broker commission above 100 percent', async () => {
+  test('ignores legacy broker commission values outside the Finance workflow', async () => {
     const response = await request(makeApp()).post('/api/pickup-plot-inventory/brokers').send({
       name: 'Asha', phone: '9000022222', commissionPercent: '101',
     });
-    expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-    expect(prisma.plotBroker.create).not.toHaveBeenCalled();
+    expect(response.status).toBe(201);
+    expect(prisma.plotBroker.create).toHaveBeenCalled();
+    expect(prisma.plotBroker.create.mock.calls[0][0].data).not.toHaveProperty('commissionPercent');
   });
 
   test('rejects digits in a broker name and letters in a phone number', async () => {
@@ -3953,7 +3958,11 @@ describe('customer pickup status', () => {
       id: 501, bookingNumber: 'BOOK-501', tenantId: 7, contactId: 61,
       plotSiteId: 30, plotBrokerId: 51, totalAmount: 4500000, amountPaid: 0, balance: 4500000,
     });
-    prisma.plotBroker.findFirst.mockResolvedValue({ id: 51, commissionPercent: 10 });
+    prisma.plotBroker.findFirst.mockResolvedValue({ id: 51, userId: 3, commissionPercent: 10 });
+    prisma.plotCommissionPlan.findFirst.mockResolvedValue({
+      plotSiteId: 30,
+      rules: [{ rateBp: 1000, applyToAllStaff: true, staffUserIdsJson: '[]', isActive: true }],
+    });
     prisma.payment.create.mockImplementation(async ({ data }) => ({ id: 701, ...data }));
     prisma.plotCommission.create.mockResolvedValue({ id: 801 });
 
@@ -4110,26 +4119,14 @@ describe('customer pickup status', () => {
     expect(prisma.plotInstallment.create).not.toHaveBeenCalled();
   });
 
-  test('lets an admin change the one-time commission percentage on the total deal', async () => {
-    prisma.plotCommission.findFirst.mockResolvedValue({
-      id: 801, tenantId: 7, plotBookingId: 501, paymentId: 701, plotBrokerId: 51,
-      contactId: 61, commissionPercent: 10, eligibleAmount: 4500000,
-      commissionAmount: 450000, status: 'EARNED',
-    });
-    prisma.plotCommission.update.mockImplementation(async ({ data }) => ({
-      id: 801, eligibleAmount: 4500000, status: 'EARNED', ...data,
-    }));
-
+  test('rejects commission percentage edits outside Finance', async () => {
     const response = await request(makeApp())
       .patch('/api/pickup-plot-inventory/commissions/801/rate')
       .send({ commissionPercent: 5 });
 
-    expect(response.status, JSON.stringify(response.body)).toBe(200);
-    expect(response.body).toMatchObject({ commissionPercent: 5, commissionAmount: 225000 });
-    expect(prisma.plotCommission.update).toHaveBeenCalledWith({
-      where: { id: 801 },
-      data: { commissionPercent: 5, commissionAmount: 225000 },
-    });
+    expect(response.status, JSON.stringify(response.body)).toBe(403);
+    expect(response.body.code).toBe('COMMISSION_EDIT_ONLY_IN_FINANCE');
+    expect(prisma.plotCommission.update).not.toHaveBeenCalled();
   });
 
   test.each(['APPROVED', 'PAID'])('rejects unfunded commission transition to %s', async status => {
@@ -4180,28 +4177,14 @@ describe('customer pickup status', () => {
     });
   });
 
-  test('lets an admin set the one-time commission deduction amount', async () => {
-    prisma.plotCommission.findFirst.mockResolvedValue({
-      id: 801, tenantId: 7, plotBookingId: 501, paymentId: 701, plotBrokerId: 51,
-      contactId: 61, commissionPercent: 10, eligibleAmount: 20000,
-      commissionAmount: 2000, status: 'EARNED',
-    });
-    prisma.plotCommission.update.mockImplementation(async ({ data }) => ({
-      id: 801, eligibleAmount: 20000, status: 'EARNED', ...data,
-    }));
-
+  test('rejects commission amount edits outside Finance', async () => {
     const response = await request(makeApp())
       .patch('/api/pickup-plot-inventory/commissions/801/amount')
       .send({ commissionAmount: 1500 });
 
-    expect(response.status, JSON.stringify(response.body)).toBe(200);
-    expect(response.body).toMatchObject({
-      commissionAmount: 1500, commissionPercent: 7.5, netPaymentAmount: 18500,
-    });
-    expect(prisma.plotCommission.update).toHaveBeenCalledWith({
-      where: { id: 801 },
-      data: { commissionAmount: 1500, commissionPercent: 7.5 },
-    });
+    expect(response.status, JSON.stringify(response.body)).toBe(403);
+    expect(response.body.code).toBe('COMMISSION_EDIT_ONLY_IN_FINANCE');
+    expect(prisma.plotCommission.update).not.toHaveBeenCalled();
   });
 
   test('serializes concurrent payments and rechecks the balance inside the booking lock', async () => {

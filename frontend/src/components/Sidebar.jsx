@@ -2195,8 +2195,8 @@ function TravelSubBrandSwitcher({ activeSubBrand, visibleSubBrands, onChange }) 
 //
 // Slim placeholder nav for the travel vertical. Phase 1 (docs/TRAVEL_CRM_PRD.md
 // 7) will fill out the full surface: Diagnostics, Itineraries, Trips (per
-// sub-brand: TMC trips / RFU pilgrims), Visa Applications, Suppliers,
-// Microsites. For Day 1, only Dashboard is wired  everything else is
+// sub-brand: TMC trips / RFU pilgrims), Visa Applications, Suppliers.
+// For Day 1, only Dashboard is wired  everything else is
 // "Coming in Phase 1" so the user can see the planned navigation map
 // without dead links.
 // Travel "Travel" section label + Q25 sub-brand switcher. Rendered in the
@@ -2754,18 +2754,6 @@ function renderGenericNav({
           wellness sidebar; keep both branches in sync. */}
       {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
       {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
-      {renderGroup("Sales", <>
-        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
-        <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
-        <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
-        <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
-        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
-        <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
-        <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
-      </>)}
-
       {renderGroup("Leads", <>
         <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
@@ -2778,26 +2766,6 @@ function renderGenericNav({
         <Link to="/field-config" icon={SlidersHorizontal} label="Field Config" adminOnly />
       </>, "leads-group")}
 
-      {renderGroup("Communication", <>
-        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
-        <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
-        <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
-        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
-      </>)}
-
-      {renderGroup("Work Management", <>
-        <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
-        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
-        {/* Generic CRM: hide the standalone Workflows page without touching
-            the embedded Marketing Sequences webhook workflow feature. */}
-        {/* <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} /> */}
-      </>)}
-
-      {renderGroup("Customer Support", <>
-        <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} requiredPermission={{ module: "tickets", action: "read" }} />
-        <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
-        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
-      </>)}
       {renderGroup("Marketing & Automation", <>
         <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
         <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
@@ -2808,6 +2776,37 @@ function renderGenericNav({
         <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
         <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
         <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
+      </>)}
+
+      {renderGroup("Communication", <>
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+        <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" requiredPermission={{ module: "calendar", action: "read" }} />
+      </>)}
+
+      {renderGroup("Sales", <>
+        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
+        <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
+        <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
+        <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
+        <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
+        <Link to="/quotas" icon={Award} label="Quotas" managerOnly requiredPermission={{ module: "quotas", action: "read" }} />
+      </>)}
+
+      {renderGroup("Work Management", <>
+        <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
+        <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+      </>)}
+
+      {renderGroup("Customer Support", <>
+        <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} requiredPermission={{ module: "tickets", action: "read" }} />
+        <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
+        <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
+        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
       </>)}
 
       {renderGroup("Documents & Delivery", <>

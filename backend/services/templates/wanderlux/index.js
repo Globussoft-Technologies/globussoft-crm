@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const layoutComposer = require('./layoutComposer');
+const { applyWanderluxGlobalFontStyle } = require('./fontStyles');
 
 const TEMPLATE_ID = 'wanderlux-v1';
 const TEMPLATE_DIR = __dirname;
@@ -122,6 +123,7 @@ function render(landingPage, options = {}) {
       isPublished: !!(landingPage && landingPage.status === 'PUBLISHED'),
       tripType: String(landingPage && landingPage.tripType || config.meta?.tripType || '').toLowerCase(),
     });
+    config = applyWanderluxGlobalFontStyle(config);
   }
 
   let html = readTemplateHtml();

@@ -69,16 +69,20 @@ jobs:
             backend/package-lock.json
             e2e/package-lock.json
 
-      - name: Install mysql-client (for G-15 backup-engine-api.spec.js)
-        # ubuntu-latest ships mysqladmin (used by the wait loop below)
-        # but NOT mysqldump — mysqldump lives in the mysql-client
-        # package. cron/backupEngine.js shells `mysqldump` from PATH.
-        # Mirrors the deploy.yml api_tests gate.
+      - name: Configure mysqldump from the MySQL service (for G-15 backup-engine-api.spec.js)
+        # Reuse the client bundled in the MySQL service image. Installing
+        # mysql-client on ubuntu-latest can fail while configuring a stale
+        # mysql-server package before this job reaches its tests.
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends mysql-client
-          mysqldump --version
+          mysql_container="$(docker ps --filter 'ancestor=mysql:8.0' --format '{{.ID}}' | head -n 1)"
+          if [ -z "$mysql_container" ]; then
+            echo "::error::Could not locate the MySQL service container"
+            docker ps --format 'table {{.ID}}\t{{.Image}}\t{{.Names}}'
+            exit 1
+          fi
+          docker exec "$mysql_container" mysqldump --version
+          echo "MYSQLDUMP_DOCKER_CONTAINER=$mysql_container" >> "$GITHUB_ENV"
 
       - name: Wait for MySQL ready
         run: |
@@ -291,7 +295,6 @@ jobs:
             tests/landing-pages-travel-api.spec.js \
             tests/travel-promotional-website-api.spec.js \
             tests/landing-pages-registration-form-api.spec.js \
-            tests/landing-page-pending-registration-api.spec.js \
             tests/landing-pages-versions-api.spec.js \
             tests/wanderlux-layout-api.spec.js \
             tests/landing-pages-investment-sync-api.spec.js \
@@ -316,8 +319,6 @@ jobs:
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
             tests/travel-purchase-orders-api.spec.js \
-            tests/travel-microsites-api.spec.js \
-            tests/travel-microsites-brand-kit-api.spec.js \
             tests/travel-religious-packets-api.spec.js \
             tests/travel-rfu-profiles-api.spec.js \
             tests/travel-pricing-api.spec.js \

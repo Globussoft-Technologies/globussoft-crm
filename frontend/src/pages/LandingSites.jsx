@@ -1023,7 +1023,20 @@ export default function LandingSites() {
 
         <div role="dialog" aria-modal="true" aria-labelledby="landing-site-generate-title" style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.5))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }} onClick={(e) => { if (e.target === e.currentTarget && !generating) setShowGenerateModal(false); }}>
 
-          <div className="card" style={{ padding: '1.75rem', width: 'min(640px, 94vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div
+            className="card landing-site-generate-modal"
+            style={{
+              padding: '1.75rem',
+              width: 'min(640px, 94vw)',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              background: 'var(--modal-bg, #fff)',
+              color: 'var(--text-primary)',
+              opacity: 1,
+              backdropFilter: 'none',
+              WebkitBackdropFilter: 'none',
+            }}
+          >
 
             <h3 id="landing-site-generate-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800, marginBottom: '0.4rem', fontSize: '1.2rem' }}>
 
@@ -1122,19 +1135,20 @@ export default function LandingSites() {
                   </div>
                   <div style={{ fontSize: '0.8rem', fontWeight: 700, margin: '0.9rem 0 0.25rem' }}>Campaign layout</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>Choose the page composition that best fits this campaign.</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
+                  <div className="landing-site-generate-layout-grid" style={{ display: 'grid', gap: '0.7rem' }}>
                     {layoutOptions.map((layout) => {
                       const selected = form.wellnessLayout === layout.id;
                       return (
                         <button
                           key={layout.id}
+                          className="landing-site-generate-layout-card"
                           type="button"
                           aria-pressed={selected}
                           onClick={() => setForm((current) => ({ ...current, wellnessLayout: layout.id }))}
-                          style={{ border: `1px solid ${selected ? 'var(--accent-color)' : 'var(--border-color)'}`, borderRadius: 10, padding: '0.55rem', background: selected ? 'rgba(31,138,112,0.10)' : 'var(--surface-color)', cursor: 'pointer', textAlign: 'left', color: 'var(--text-primary)' }}
+                          style={{ border: `1px solid ${selected ? 'var(--accent-color)' : 'var(--border-color)'}`, borderRadius: 10, padding: '0.7rem 0.75rem', background: selected ? 'rgba(31,138,112,0.10)' : 'var(--surface-color)', cursor: 'pointer', textAlign: 'left', color: 'var(--text-primary)' }}
                         >
-                          <strong style={{ display: 'block', fontSize: '0.76rem' }}>{layout.label}</strong>
-                          <span style={{ display: 'block', marginTop: 4, fontSize: '0.68rem', color: 'var(--text-secondary)', lineHeight: 1.35 }}>{layout.description}</span>
+                          <strong style={{ display: 'block', fontSize: '0.76rem', lineHeight: 1.25 }}>{layout.label}</strong>
+                          <span style={{ display: 'block', marginTop: 5, fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>{layout.description}</span>
                         </button>
                       );
                     })}

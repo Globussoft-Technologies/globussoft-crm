@@ -42,8 +42,8 @@ function buildParticipantImportTemplate(format) {
   if (format === "xlsx") {
     const XLSX = require("xlsx");
     const workbook = XLSX.utils.book_new();
-    const sheet = XLSX.utils.aoa_to_sheet([PARTICIPANT_REQUIRED_HEADERS]);
-    sheet["!cols"] = PARTICIPANT_REQUIRED_HEADERS.map((header) => ({ wch: Math.max(18, header.length + 2) }));
+    const sheet = XLSX.utils.aoa_to_sheet([PARTICIPANT_IMPORT_HEADERS]);
+    sheet["!cols"] = PARTICIPANT_IMPORT_HEADERS.map((header) => ({ wch: Math.max(18, header.length + 2) }));
     XLSX.utils.book_append_sheet(workbook, sheet, "Participants");
     const guide = XLSX.utils.aoa_to_sheet([
       ["Column", "Required", "Format"],
@@ -64,7 +64,7 @@ function buildParticipantImportTemplate(format) {
   }
   const { serializeRows } = require("./csvHelpers");
   return serializeRows(
-    PARTICIPANT_REQUIRED_HEADERS.map((header) => ({ key: header, header })),
+    PARTICIPANT_IMPORT_HEADERS.map((header) => ({ key: header, header })),
     [],
   );
 }

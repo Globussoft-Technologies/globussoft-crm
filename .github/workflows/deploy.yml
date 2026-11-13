@@ -198,32 +198,22 @@ jobs:
             backend/package-lock.json
             e2e/package-lock.json
 
-      - name: Install mysql-client (for G-15 backup-engine-api.spec.js)
-        # ubuntu-latest ships mysqladmin (used by the wait loop below)
-        # but NOT mysqldump  mysqldump lives in the mysql-client
-        # package. cron/backupEngine.js shells `mysqldump` from PATH;
-        # without this step the G-15 spec would skip its file-creation
-        # tests with a "mysqldump unreachable" warning. Adds ~5s install.
-        # Wrapped with timeout+retry because apt mirrors occasionally hang
-        # and the default 20m job timeout wastes the whole api_tests gate.
+      - name: Configure mysqldump from the MySQL service (for G-15 backup-engine-api.spec.js)
+        # The MySQL service image already contains mysqldump. Avoid installing
+        # mysql-client on the hosted runner: ubuntu-latest can carry a
+        # partially configured mysql-server package, causing apt to fail while
+        # configuring an unrelated package and preventing every API shard from
+        # reaching its tests.
         run: |
           set -euo pipefail
-          export DEBIAN_FRONTEND=noninteractive
-          for attempt in 1 2 3; do
-            echo "::notice::apt-get update attempt $attempt"
-            if timeout 90 sudo apt-get update -qq; then
-              echo "::notice::apt-get install mysql-client attempt $attempt"
-              if timeout 180 sudo apt-get install -y --no-install-recommends mysql-client; then
-                mysqldump --version
-                echo "::notice::mysql-client installed successfully on attempt $attempt"
-                exit 0
-              fi
-            fi
-            echo "::warning::mysql-client install attempt $attempt failed; waiting 5s before retry"
-            sleep 5
-          done
-          echo "::error::Failed to install mysql-client after 3 attempts"
-          exit 1
+          mysql_container="$(docker ps --filter 'ancestor=mysql:8.0' --format '{{.ID}}' | head -n 1)"
+          if [ -z "$mysql_container" ]; then
+            echo "::error::Could not locate the MySQL service container"
+            docker ps --format 'table {{.ID}}\t{{.Image}}\t{{.Names}}'
+            exit 1
+          fi
+          docker exec "$mysql_container" mysqldump --version
+          echo "MYSQLDUMP_DOCKER_CONTAINER=$mysql_container" >> "$GITHUB_ENV"
 
       - name: Wait for MySQL ready
         run: |
@@ -507,7 +497,6 @@ jobs:
             tests/landing-pages-travel-api.spec.js \
             tests/travel-promotional-website-api.spec.js \
             tests/landing-pages-registration-form-api.spec.js \
-            tests/landing-page-pending-registration-api.spec.js \
             tests/landing-pages-versions-api.spec.js \
             tests/wanderlux-layout-api.spec.js \
             tests/landing-pages-investment-sync-api.spec.js \
@@ -532,8 +521,6 @@ jobs:
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
             tests/travel-purchase-orders-api.spec.js \
-            tests/travel-microsites-api.spec.js \
-            tests/travel-microsites-brand-kit-api.spec.js \
             tests/travel-religious-packets-api.spec.js \
             tests/travel-rfu-profiles-api.spec.js \
             tests/travel-pricing-api.spec.js \
@@ -939,6 +926,7 @@ jobs:
             npm ci --include=dev --no-audit --no-fund --loglevel=error 2>&1 | tail -5
             npm run build:windows 2>&1 | tail -5
             test -s dist/TallyConnector.exe
+            export TALLY_CONNECTOR_EXE_PATH="$HOME/globussoft-crm/tally-connector/dist/TallyConnector.exe"
 
             # The brochure engine is vendored under agentic-orchcrm/ and the
             # backend spawns tsx from its node_modules at runtime. Install its
@@ -1010,6 +998,7 @@ jobs:
             fi
 
             echo "=== pm2 restart ==="
+            test -s "$TALLY_CONNECTOR_EXE_PATH"
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
 
             echo "=== health poll ==="

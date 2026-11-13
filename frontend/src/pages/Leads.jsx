@@ -14,7 +14,13 @@ import {
 import { createPortal } from "react-dom";
 import IntlTelInput from "@intl-tel-input/react";
 import "intl-tel-input/styles";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import ReturnToBanner from "../components/ReturnToBanner";
 import {
   UserPlus,
@@ -215,11 +221,11 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
 ]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
+const LEADS_PAGINATION_STORAGE_PREFIX = "globuscrm.leads.pagination.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
 const LEADS_FILTERS_STORAGE_PREFIX = "globuscrm.leads.filters.v1";
-const CREATE_LEAD_FIELDS_STORAGE_PREFIX =
-  "globuscrm.leads.createFields.v3";
+const CREATE_LEAD_FIELDS_STORAGE_PREFIX = "globuscrm.leads.createFields.v3";
 const GENERIC_FIELD_CONFIG_SETTING_KEY = "generic.fieldConfig";
 const DEFAULT_CREATE_LEAD_VISIBLE_FIELDS = [
   "name",
@@ -230,13 +236,15 @@ const DEFAULT_CREATE_LEAD_VISIBLE_FIELDS = [
   "source",
 ];
 const loadCreateLeadFieldPrefs = (storageKey) => {
-  if (typeof window === "undefined") return { visible: null, required: null };
+  if (typeof window === "undefined")
+    return { visible: null, required: null, quickAddSnapshot: null };
   try {
     const saved = JSON.parse(window.localStorage.getItem(storageKey) || "null");
     if (Array.isArray(saved)) {
       return {
         visible: saved.filter((key) => typeof key === "string"),
         required: null,
+        quickAddSnapshot: null,
       };
     }
     return {
@@ -246,10 +254,67 @@ const loadCreateLeadFieldPrefs = (storageKey) => {
       required: Array.isArray(saved?.required)
         ? saved.required.filter((key) => typeof key === "string")
         : null,
+      quickAddSnapshot:
+        saved?.quickAddSnapshot && typeof saved.quickAddSnapshot === "object"
+          ? Object.fromEntries(
+              Object.entries(saved.quickAddSnapshot).filter(
+                ([key, value]) =>
+                  typeof key === "string" && typeof value === "boolean",
+              ),
+            )
+          : null,
     };
   } catch (_err) {
-    return { visible: null, required: null };
+    return { visible: null, required: null, quickAddSnapshot: null };
   }
+};
+
+const readLeadsPaginationState = (storageKey) => {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = JSON.parse(
+      window.sessionStorage.getItem(storageKey) || "null",
+    );
+    if (
+      !stored ||
+      !Number.isInteger(Number(stored.pageIndex)) ||
+      !Number.isInteger(Number(stored.pageSize))
+    ) {
+      return null;
+    }
+    return {
+      pageIndex: Number(stored.pageIndex),
+      pageSize: Number(stored.pageSize),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const readLeadsPaginationStateFromQuery = (search) => {
+  if (typeof search !== "string") return null;
+  const params = new URLSearchParams(search);
+  const page = Number(params.get("page"));
+  if (!Number.isInteger(page) || page < 1) return null;
+  const pageSize = Number(params.get("limit"));
+  return {
+    pageIndex: page - 1,
+    pageSize:
+      Number.isInteger(pageSize) && pageSize >= 1
+        ? pageSize
+        : GENERIC_LEADS_PAGE_SIZE,
+  };
+};
+
+const buildLeadsListPath = (search, pageIndex, pageSize) => {
+  const params = new URLSearchParams(search || "");
+  params.set("page", String(Math.max(0, Number(pageIndex) || 0) + 1));
+  params.set(
+    "limit",
+    String(Math.max(1, Number(pageSize) || GENERIC_LEADS_PAGE_SIZE)),
+  );
+  const query = params.toString();
+  return query ? `/leads?${query}` : "/leads";
 };
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
@@ -270,19 +335,22 @@ const LEAD_CHECKBOX_STYLE = {
 const LEADS_HEADER_MENU_WIDTH = 300;
 const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
 const LEADS_HEADER_MENU_GAP = 6;
-const PURCHASED_PLOT_STATUSES = new Set([
-  "PLOT_SOLD",
-  "TRANSACTION_COMPLETED",
-]);
+const PURCHASED_PLOT_STATUSES = new Set(["PLOT_SOLD", "TRANSACTION_COMPLETED"]);
 const isPurchasedCustomerPlot = (plot, customer, pickupStatus) => {
-  if (String(plot?.availability || "").trim().toUpperCase() === "SOLD") {
+  if (
+    String(plot?.availability || "")
+      .trim()
+      .toUpperCase() === "SOLD"
+  ) {
     return true;
   }
   const booking = customer?.booking;
   if (
     Number(booking?.plotSiteId) === Number(plot?.id) &&
     PURCHASED_PLOT_STATUSES.has(
-      String(booking?.status || "").trim().toUpperCase(),
+      String(booking?.status || "")
+        .trim()
+        .toUpperCase(),
     )
   ) {
     return true;
@@ -305,7 +373,9 @@ const isPurchasedCustomerPlot = (plot, customer, pickupStatus) => {
 };
 const isTransportWorkflowLocked = (pickupStatus) => {
   if (!pickupStatus) return false;
-  const stage = String(pickupStatus.currentStage || "").trim().toLowerCase();
+  const stage = String(pickupStatus.currentStage || "")
+    .trim()
+    .toLowerCase();
   if (["broker", "billing"].includes(stage)) return true;
   if (stage !== "transport") return false;
   const status = String(
@@ -313,7 +383,9 @@ const isTransportWorkflowLocked = (pickupStatus) => {
       pickupStatus.workflow?.transport?.status ||
       pickupStatus.status ||
       "",
-  ).trim().toUpperCase();
+  )
+    .trim()
+    .toUpperCase();
   return Boolean(status && status !== "PICKUP_LOCATION_CAPTURED");
 };
 const LEADS_DEFAULT_VISIBLE_COLUMNS = [
@@ -355,7 +427,9 @@ const ensureGenericPlotAssignCatalog = (columns) => {
     (column) => column?.key === "pickupLocation",
   );
   withoutPlotAssign.splice(
-    pickupLocationIndex >= 0 ? pickupLocationIndex + 1 : withoutPlotAssign.length,
+    pickupLocationIndex >= 0
+      ? pickupLocationIndex + 1
+      : withoutPlotAssign.length,
     0,
     { key: "plotAssign", label: "Plot Assign" },
   );
@@ -448,6 +522,7 @@ const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
 const CSV_IMPORT_FIELD_TYPES = {
   aiScore: "number",
   status: "dropdown",
+  lifecycleStage: "dropdown",
   birthDate: "date",
   anniversary: "date",
   website: "url",
@@ -657,7 +732,7 @@ function removeLeadTagFromList(rawTags, tagKey) {
   return nextTags.length === currentTags.length ? null : nextTags;
 }
 
-function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
+function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
   const tags = normalizeLeadTags(lead.tags);
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
@@ -771,7 +846,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
 
   const deleteSavedTag = async (tag) => {
     const normalizedTag = cleanLeadTagInput(tag);
-    if (!normalizedTag || !onDeleteTag) return false;
+    if (!canEdit || !normalizedTag || !onDeleteTag) return false;
     const tagKey = normalizedTag.toLowerCase();
     if (deletingTag === tagKey) return false;
     setDeletingTag(tagKey);
@@ -825,12 +900,22 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
       onMouseLeave={() => setHovered(false)}
       onClick={(e) => {
         e.stopPropagation();
-        setOpen(true);
+        if (canEdit) setOpen(true);
       }}
     >
-      <div className="lead-tags-display" title={tags.join(", ") || "Add tags"}>
+      <div
+        className="lead-tags-display"
+        title={tags.join(", ") || (canEdit ? "Add tags" : "No tags")}
+      >
         {tags.length === 0 ? (
-          <span style={inlineBuiltinEmptyStyle}>+ Click to add</span>
+          <span
+            style={{
+              ...inlineBuiltinEmptyStyle,
+              color: canEdit ? undefined : "var(--text-secondary)",
+            }}
+          >
+            {canEdit ? "+ Click to add" : "—"}
+          </span>
         ) : (
           <>
             {tags.map((tag) => (
@@ -841,25 +926,27 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
           </>
         )}
       </div>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(true);
-        }}
-        aria-label={`Edit Tags for ${lead.name || "lead"}`}
-        title="Edit Tags"
-        style={{
-          ...actionIconBtn,
-          flexShrink: 0,
-          padding: 2,
-          opacity: hovered ? 0.85 : 0,
-          pointerEvents: hovered ? "auto" : "none",
-          transition: "opacity 0.15s ease",
-        }}
-      >
-        <Pencil size={12} />
-      </button>
+      {canEdit && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
+          aria-label={`Edit Tags for ${lead.name || "lead"}`}
+          title="Edit Tags"
+          style={{
+            ...actionIconBtn,
+            flexShrink: 0,
+            padding: 2,
+            opacity: hovered ? 0.85 : 0,
+            pointerEvents: hovered ? "auto" : "none",
+            transition: "opacity 0.15s ease",
+          }}
+        >
+          <Pencil size={12} />
+        </button>
+      )}
       {open &&
         createPortal(
           <>
@@ -927,15 +1014,17 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                       className="lead-tag-chip lead-tag-chip--selected"
                     >
                       <span className="lead-tag-chip__label">{tag}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeDraftTag(tag)}
-                        aria-label={`Remove ${tag} from this lead`}
-                        className="lead-tag-chip-action lead-tag-chip-action--remove"
-                      >
-                        <X size={12} />
-                      </button>
-                      {optionKeySet.has(tag.toLowerCase()) && (
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => removeDraftTag(tag)}
+                          aria-label={`Remove ${tag} from this lead`}
+                          className="lead-tag-chip-action lead-tag-chip-action--remove"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                      {canEdit && optionKeySet.has(tag.toLowerCase()) && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1014,27 +1103,31 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
                         const deletingThisTag = deletingTag === tagKey;
                         return (
                           <div key={tag} className="lead-tags-option-row">
-                            <button
-                              type="button"
-                              className="lead-tags-option"
-                              onClick={() => applyExistingTag(tag)}
-                            >
-                              {tag}
-                            </button>
-                            <button
-                              type="button"
-                              className="lead-tags-option-delete"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                deleteSavedTag(tag);
-                              }}
-                              aria-label={`Delete saved tag ${tag}`}
-                              title={`Delete saved tag ${tag}`}
-                              disabled={saving || deletingThisTag}
-                            >
-                              <Trash2 size={11} />
-                            </button>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                className="lead-tags-option"
+                                onClick={() => applyExistingTag(tag)}
+                              >
+                                {tag}
+                              </button>
+                            )}
+                            {canEdit && (
+                              <button
+                                type="button"
+                                className="lead-tags-option-delete"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  deleteSavedTag(tag);
+                                }}
+                                aria-label={`Delete saved tag ${tag}`}
+                                title={`Delete saved tag ${tag}`}
+                                disabled={saving || deletingThisTag}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
                           </div>
                         );
                       })
@@ -2508,7 +2601,8 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
   );
 }
 
-const Leads = () => {
+const Leads = ({ initialListState = null } = {}) => {
+  const location = useLocation();
   const navigate = useNavigate();
   const notify = useNotify();
   // #600  vertical-aware Lead form. Wellness tenants get the Patient-intake
@@ -2555,47 +2649,68 @@ const Leads = () => {
   // standalone component usable for the existing unauthenticated test/demo
   // render, while authenticated sessions remain fully permission-driven.
   const hasLegacyRenderAccess = !auth?.user;
+  const canLeadRead =
+    hasLegacyRenderAccess ||
+    (permissionsReady && hasPermission("leads", "read"));
   const canLeadWrite =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "write"));
+  const canLeadExport =
+    hasLegacyRenderAccess ||
+    (permissionsReady &&
+      (hasPermission("leads", "export") ||
+        hasPermission("contacts", "export")));
   const canLeadUpdate =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "update"));
   const canAssignLead =
     hasLegacyRenderAccess ||
     (permissionsReady &&
-      (hasPermission("leads", "update") || hasPermission("contacts", "update")));
+      (hasPermission("leads", "update") ||
+        hasPermission("contacts", "update")));
   const canLeadDelete =
     hasLegacyRenderAccess ||
     (permissionsReady && hasPermission("leads", "delete"));
   const canLeadBulkActions = canLeadUpdate || canLeadDelete;
-  // The Callified settings API is still intentionally ADMIN-only, so do not
-  // expose a button that opens requests a Leads permission cannot authorize.
-  const canManageCallSettings = isAdmin;
+  // Tenant-wide Callified settings follow the effective settings.manage grant.
+  // Lead campaign data is separate and follows the effective leads grants.
+  const canManageCallSettings =
+    hasLegacyRenderAccess ||
+    (permissionsReady && hasPermission("settings", "manage"));
   const [leads, setLeads] = useState([]);
   const [genericLifecycleOptions, setGenericLifecycleOptions] = useState([]);
   useEffect(() => {
     if (!isGeneric) return undefined;
     let active = true;
-    fetchApi('/api/tenant-settings/generic.contactLifecycleStages', { silent: true })
+    fetchApi("/api/tenant-settings/generic.contactLifecycleStages", {
+      silent: true,
+    })
       .then((setting) => {
         if (!active) return;
         try {
-          const stages = JSON.parse(setting?.value || '[]');
-          setGenericLifecycleOptions((Array.isArray(stages) ? stages : []).flatMap((stage) => (
-            Array.isArray(stage?.options) ? stage.options.map((option, optionIndex) => ({
-              id: String(option.id || ''),
-              label: String(option.label || ''),
-              status: option.status,
-              negative: optionIndex > 0 || option.negative === true,
-            })) : []
-          )).filter((option) => option.id && option.label && option.status));
+          const stages = JSON.parse(setting?.value || "[]");
+          setGenericLifecycleOptions(
+            (Array.isArray(stages) ? stages : [])
+              .flatMap((stage) =>
+                Array.isArray(stage?.options)
+                  ? stage.options.map((option, optionIndex) => ({
+                      id: String(option.id || ""),
+                      label: String(option.label || ""),
+                      status: option.status,
+                      negative: optionIndex > 0 || option.negative === true,
+                    }))
+                  : [],
+              )
+              .filter((option) => option.id && option.label && option.status),
+          );
         } catch (_error) {
           setGenericLifecycleOptions([]);
         }
       })
       .catch(() => {});
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [isGeneric]);
   const [pickupPlotStatusByContact, setPickupPlotStatusByContact] = useState(
     () => new Map(),
@@ -2613,7 +2728,8 @@ const Leads = () => {
   const [viewingLeadPlots, setViewingLeadPlots] = useState(null);
   const [changingPlotAssignment, setChangingPlotAssignment] = useState(null);
   const [editingLeadPlotName, setEditingLeadPlotName] = useState("");
-  const [originalEditingLeadPlotName, setOriginalEditingLeadPlotName] = useState("");
+  const [originalEditingLeadPlotName, setOriginalEditingLeadPlotName] =
+    useState("");
   const [leadReplacementPlotIds, setLeadReplacementPlotIds] = useState([]);
   const [changingPlotNumber, setChangingPlotNumber] = useState(false);
   const loadPlotAssignmentInventory = useCallback(async () => {
@@ -2637,7 +2753,9 @@ const Leads = () => {
             : [],
         customers: [
           ...(Array.isArray(response?.customers) ? response.customers : []),
-          ...(Array.isArray(response?.plotAssignments) ? response.plotAssignments : []),
+          ...(Array.isArray(response?.plotAssignments)
+            ? response.plotAssignments
+            : []),
         ],
       };
       setPlotAssignmentInventory(next);
@@ -2665,12 +2783,41 @@ const Leads = () => {
   const genericPhoneCountryDetectionRunRef = useRef(false);
   const fetchLeadsRef = useRef(null);
   const classifyVisibleLeadsRef = useRef(null);
-  const [leadsPage, setLeadsPage] = useState(0);
+  const leadsPaginationStorageKey = `${LEADS_PAGINATION_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const storedLeadsListState = readLeadsPaginationState(
+    leadsPaginationStorageKey,
+  );
+  const routeLeadsListState = location.state?.leadsListState;
+  // The URL is the canonical page location. A detail route keeps the list
+  // page in its query string, while router state and session storage are only
+  // fallbacks for older/direct links. Prefer the URL so stale state from a
+  // previous profile cannot put the embedded Leads backdrop on page one.
+  const queryLeadsListState = readLeadsPaginationStateFromQuery(
+    location.search,
+  );
+  const restoredLeadsListState =
+    initialListState ||
+    queryLeadsListState ||
+    routeLeadsListState ||
+    storedLeadsListState;
+  const restoredPageIndex = Number(restoredLeadsListState?.pageIndex);
+  const restoredPageSize = Number(restoredLeadsListState?.pageSize);
+  const initialLeadsPage =
+    Number.isInteger(restoredPageIndex) && restoredPageIndex >= 0
+      ? restoredPageIndex
+      : 0;
+  const initialPageSize =
+    Number.isInteger(restoredPageSize) &&
+    restoredPageSize >= 1 &&
+    restoredPageSize <= MAX_LEADS_PAGE_SIZE
+      ? restoredPageSize
+      : 10;
+  const [leadsPage, setLeadsPage] = useState(initialLeadsPage);
   const [leadsPageSize, setLeadsPageSize] = useState(10);
   // Generic CRM uses API pagination; other verticals keep their existing
   // client-side pagination behavior.
   const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(
-    GENERIC_LEADS_PAGE_SIZE,
+    isGeneric ? initialPageSize : GENERIC_LEADS_PAGE_SIZE,
   );
   const [customLeadsPageSizeOpen, setCustomLeadsPageSizeOpen] = useState(false);
   const [customLeadsPageSizeDraft, setCustomLeadsPageSizeDraft] = useState("");
@@ -2683,8 +2830,47 @@ const Leads = () => {
   });
   const genericPageEffectInitializedRef = useRef(false);
   const genericQueryEffectInitializedRef = useRef(false);
-  const [pageInput, setPageInput] = useState("1");
+  const [pageInput, setPageInput] = useState(String(initialLeadsPage + 1));
   const [selectedLeads, setSelectedLeads] = useState([]);
+
+  // Keep the current Generic Leads page available even when the detail route
+  // is opened without React Router location state (for example from a stale
+  // browser history entry or a direct profile link). The URL is the primary
+  // source on the list route; session storage is the same-tab fallback used by
+  // the Leads backdrop rendered inside ContactDetail.
+  useEffect(() => {
+    if (!isGeneric) return;
+    const pageIndex = Math.max(0, leadsPage);
+    const pageSize = Math.min(
+      MAX_LEADS_PAGE_SIZE,
+      Math.max(1, genericLeadsPageSize),
+    );
+    try {
+      window.sessionStorage.setItem(
+        leadsPaginationStorageKey,
+        JSON.stringify({ pageIndex, pageSize }),
+      );
+    } catch {
+      // Storage can be unavailable in privacy-restricted browser contexts.
+    }
+    if (location.pathname !== "/leads") return;
+    setDrillParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("page", String(pageIndex + 1));
+        next.set("limit", String(pageSize));
+        return next.toString() === previous.toString() ? previous : next;
+      },
+      { replace: true },
+    );
+  }, [
+    genericLeadsPageSize,
+    isGeneric,
+    leadsPage,
+    leadsPaginationStorageKey,
+    location.pathname,
+    setDrillParams,
+  ]);
 
   useEffect(() => {
     if (!isGeneric || typeof window === "undefined") return;
@@ -2797,12 +2983,12 @@ const Leads = () => {
     useState(false);
   const [leadFieldModalOpen, setLeadFieldModalOpen] = useState(false);
   const createLeadFieldsStorageKey = `${CREATE_LEAD_FIELDS_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
-  const [savedCreateLeadFieldPrefs, setSavedCreateLeadFieldPrefs] =
-    useState(() =>
+  const [savedCreateLeadFieldPrefs, setSavedCreateLeadFieldPrefs] = useState(
+    () =>
       isGeneric
         ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
-        : { visible: null, required: null },
-    );
+        : { visible: null, required: null, quickAddSnapshot: null },
+  );
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
   const [nameStartsWith, setNameStartsWith] = useState("");
@@ -2816,7 +3002,7 @@ const Leads = () => {
     setSavedCreateLeadFieldPrefs(
       isGeneric
         ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
-        : { visible: null, required: null },
+        : { visible: null, required: null, quickAddSnapshot: null },
     );
   }, [createLeadFieldsStorageKey, isGeneric]);
 
@@ -2868,7 +3054,11 @@ const Leads = () => {
       return webFormFromUrl
         ? [
             ...restored.filter((filter) => filter?.field !== "webForm"),
-            { field: "webForm", operator: "contains", values: [webFormFromUrl] },
+            {
+              field: "webForm",
+              operator: "contains",
+              values: [webFormFromUrl],
+            },
           ]
         : restored;
     } catch (_err) {
@@ -2951,23 +3141,82 @@ const Leads = () => {
   useEffect(() => {
     if (!isGeneric) return;
     let active = true;
-    fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_FIELD_CONFIG_SETTING_KEY)}`, { silent: true })
+    fetchApi(
+      `/api/tenant-settings/${encodeURIComponent(GENERIC_FIELD_CONFIG_SETTING_KEY)}`,
+      { silent: true },
+    )
       .then((response) => {
         if (!active || !response?.value) return;
         const parsed = JSON.parse(response.value);
         if (parsed && typeof parsed === "object") setTenantFieldConfig(parsed);
       })
-      .catch(() => { if (active) setTenantFieldConfig(null); });
-    return () => { active = false; };
+      .catch(() => {
+        if (active) setTenantFieldConfig(null);
+      });
+    return () => {
+      active = false;
+    };
   }, [isGeneric]);
   const createLeadFieldCatalog = useMemo(
     () => [
-      { key: "name", configId: "name", label: "Full Name", required: true, lockedVisible: true, lockedRequired: true },
-      { key: "email", configId: "email", label: "Email Address", required: true, lockedVisible: true, lockedRequired: (tenantFieldConfig?.fieldOverrides?.email?.required ?? tenantFieldConfig?.fieldOverrides?.email?.isRequired) === true },
-      { key: "company", configId: "company", label: "Company", required: false, lockedVisible: false, lockedRequired: false },
-      { key: "title", configId: "title", label: "Job Title", required: false, lockedVisible: false, lockedRequired: false },
-      { key: "phone", configId: "phone", label: "Phone", required: false, lockedVisible: false, lockedRequired: false },
-      { key: "source", configId: "source", label: "Lead Source", required: false, lockedVisible: false, lockedRequired: false },
+      {
+        key: "name",
+        configId: "name",
+        label: "Full Name",
+        required: true,
+        lockedVisible: true,
+        lockedRequired: true,
+      },
+      {
+        key: "email",
+        configId: "email",
+        label: "Email Address",
+        required: true,
+        lockedVisible: true,
+        lockedRequired:
+          (tenantFieldConfig?.fieldOverrides?.email?.required ??
+            tenantFieldConfig?.fieldOverrides?.email?.isRequired) === true,
+      },
+      {
+        key: "company",
+        configId: "company",
+        label: "Company",
+        required: false,
+        lockedVisible: false,
+        lockedRequired: false,
+      },
+      {
+        key: "title",
+        configId: "title",
+        label: "Job Title",
+        required: false,
+        lockedVisible: false,
+        lockedRequired: false,
+      },
+      {
+        key: "phone",
+        configId: "phone",
+        label: "Phone",
+        required: false,
+        lockedVisible: false,
+        lockedRequired: false,
+      },
+      {
+        key: "website",
+        configId: "website",
+        label: "Website URL",
+        required: false,
+        lockedVisible: false,
+        lockedRequired: false,
+      },
+      {
+        key: "source",
+        configId: "source",
+        label: "Lead Source",
+        required: false,
+        lockedVisible: false,
+        lockedRequired: false,
+      },
       ...customFieldDefs.map((field) => ({
         key: `custom:${field.fieldKey}`,
         configId: `custom:${field.id}`,
@@ -2979,33 +3228,89 @@ const Leads = () => {
     ],
     [customFieldDefs, tenantFieldConfig],
   );
+  const tenantQuickAddSnapshot = useMemo(() => {
+    const overrides = tenantFieldConfig?.fieldOverrides || {};
+    return Object.fromEntries(
+      createLeadFieldCatalog.map((field) => [
+        field.key,
+        field.lockedVisible ||
+          Boolean(
+            overrides[field.configId]?.quickAdd ??
+            DEFAULT_CREATE_LEAD_VISIBLE_FIELDS.includes(field.key),
+          ),
+      ]),
+    );
+  }, [createLeadFieldCatalog, tenantFieldConfig]);
   const createLeadVisibleFieldKeys = useMemo(() => {
     const overrides = tenantFieldConfig?.fieldOverrides || {};
-    const saved = Array.isArray(savedCreateLeadFieldPrefs.visible)
+    const hasSavedVisibility = Array.isArray(savedCreateLeadFieldPrefs.visible);
+    const saved = hasSavedVisibility
       ? new Set(savedCreateLeadFieldPrefs.visible)
-      : new Set(createLeadFieldCatalog
-          .filter((field) => overrides[field.configId]?.quickAdd ?? DEFAULT_CREATE_LEAD_VISIBLE_FIELDS.includes(field.key))
-          .map((field) => field.key));
+      : new Set(
+          createLeadFieldCatalog
+            .filter((field) => tenantQuickAddSnapshot[field.key])
+            .map((field) => field.key),
+        );
+    if (hasSavedVisibility) {
+      const previousQuickAdd = savedCreateLeadFieldPrefs.quickAddSnapshot;
+      for (const field of createLeadFieldCatalog) {
+        const current = tenantQuickAddSnapshot[field.key];
+        if (
+          previousQuickAdd &&
+          typeof previousQuickAdd[field.key] === "boolean"
+        ) {
+          if (previousQuickAdd[field.key] === current) continue;
+          if (current) saved.add(field.key);
+          else saved.delete(field.key);
+        } else if (typeof overrides[field.configId]?.quickAdd === "boolean") {
+          // Migrate older personal preferences: explicit tenant Quick-add
+          // selections win, while fields without a tenant override keep the
+          // user's existing Customize-fields choice.
+          if (current) saved.add(field.key);
+          else saved.delete(field.key);
+        }
+      }
+    }
     return createLeadFieldCatalog
       .filter((field) => field.lockedVisible || saved.has(field.key))
       .map((field) => field.key);
-  }, [createLeadFieldCatalog, savedCreateLeadFieldPrefs.visible, tenantFieldConfig]);
+  }, [
+    createLeadFieldCatalog,
+    savedCreateLeadFieldPrefs.quickAddSnapshot,
+    savedCreateLeadFieldPrefs.visible,
+    tenantFieldConfig,
+    tenantQuickAddSnapshot,
+  ]);
   const createLeadVisibleFieldSet = useMemo(
     () => new Set(createLeadVisibleFieldKeys),
     [createLeadVisibleFieldKeys],
   );
   const createLeadRequiredFieldKeys = useMemo(() => {
     const overrides = tenantFieldConfig?.fieldOverrides || {};
-    const hasTenantRequiredConfig = Object.values(overrides).some((value) => value && (Object.prototype.hasOwnProperty.call(value, "required") || Object.prototype.hasOwnProperty.call(value, "isRequired")));
+    const hasTenantRequiredConfig = Object.values(overrides).some(
+      (value) =>
+        value &&
+        (Object.prototype.hasOwnProperty.call(value, "required") ||
+          Object.prototype.hasOwnProperty.call(value, "isRequired")),
+    );
     const saved = Array.isArray(savedCreateLeadFieldPrefs.required)
       ? new Set(savedCreateLeadFieldPrefs.required)
       : hasTenantRequiredConfig
-        ? new Set(createLeadFieldCatalog.filter((field) => overrides[field.configId]?.required ?? overrides[field.configId]?.isRequired ?? field.required).map((field) => field.key))
-      : new Set(
-          createLeadFieldCatalog
-            .filter((field) => field.required)
-            .map((field) => field.key),
-        );
+        ? new Set(
+            createLeadFieldCatalog
+              .filter(
+                (field) =>
+                  overrides[field.configId]?.required ??
+                  overrides[field.configId]?.isRequired ??
+                  field.required,
+              )
+              .map((field) => field.key),
+          )
+        : new Set(
+            createLeadFieldCatalog
+              .filter((field) => field.required)
+              .map((field) => field.key),
+          );
     return createLeadFieldCatalog
       .filter(
         (field) =>
@@ -3197,7 +3502,12 @@ const Leads = () => {
       );
     }
     if (key === "actions") {
-      return Math.max(configuredWidth, isTravel ? LEADS_TRAVEL_ACTIONS_COLUMN_WIDTH : LEADS_ACTIONS_COLUMN_WIDTH);
+      return Math.max(
+        configuredWidth,
+        isTravel
+          ? LEADS_TRAVEL_ACTIONS_COLUMN_WIDTH
+          : LEADS_ACTIONS_COLUMN_WIDTH,
+      );
     }
     if (key === "source") {
       return Math.max(configuredWidth, LEADS_SOURCE_COLUMN_MIN_WIDTH);
@@ -3303,6 +3613,7 @@ const Leads = () => {
     countryCode: isWellness || isTravel ? "+91" : "+1",
     source: isWellness ? "walk-in" : isTravel ? "tmc_registration" : "Organic",
     status: "Lead",
+    ...(isGeneric ? { website: "" } : {}),
     treatmentOfInterest: "",
     preferredLocationId: "",
     preferredPractitionerId: "",
@@ -3336,15 +3647,19 @@ const Leads = () => {
     const iti = input?.closest(".iti");
     const countryButton = iti?.querySelector(".iti__selected-country");
     const selectorId = countryButton?.getAttribute("aria-controls");
-    const selector = (selectorId && document.getElementById(selectorId))
-      || iti?.querySelector(".iti__country-selector");
+    const selector =
+      (selectorId && document.getElementById(selectorId)) ||
+      iti?.querySelector(".iti__country-selector");
     const phoneField = input?.closest(".create-lead-travel-phone");
     if (!modal || !selector || !phoneField) return;
     const searchInput = selector.querySelector(".iti__search-input");
     const previousPhonePadding = input.style.getPropertyValue("padding-left");
-    const previousPhonePaddingPriority = input.style.getPropertyPriority("padding-left");
-    const previousSearchPadding = searchInput?.style.getPropertyValue("padding-left") ?? "";
-    const previousSearchPaddingPriority = searchInput?.style.getPropertyPriority("padding-left") ?? "";
+    const previousPhonePaddingPriority =
+      input.style.getPropertyPriority("padding-left");
+    const previousSearchPadding =
+      searchInput?.style.getPropertyValue("padding-left") ?? "";
+    const previousSearchPaddingPriority =
+      searchInput?.style.getPropertyPriority("padding-left") ?? "";
 
     // The library positions its menu absolutely. Reserve its measured height
     // in the form so the source field and actions follow directly beneath it.
@@ -3354,7 +3669,8 @@ const Leads = () => {
       const menuHeight = selector.getBoundingClientRect().height;
       // The form already has a 14px row gap; subtract it so this reservation
       // leaves only a small visual gap after the menu.
-      if (menuHeight > 0) phoneField.style.marginBottom = `${Math.max(0, menuHeight - 6)}px`;
+      if (menuHeight > 0)
+        phoneField.style.marginBottom = `${Math.max(0, menuHeight - 6)}px`;
     };
     const frame = window.requestAnimationFrame(reserveMenuSpace);
     const countryList = selector.querySelector(".iti__country-list");
@@ -3362,9 +3678,17 @@ const Leads = () => {
 
     return () => {
       window.cancelAnimationFrame(frame);
-      input.style.setProperty("padding-left", previousPhonePadding, previousPhonePaddingPriority);
+      input.style.setProperty(
+        "padding-left",
+        previousPhonePadding,
+        previousPhonePaddingPriority,
+      );
       if (searchInput) {
-        searchInput.style.setProperty("padding-left", previousSearchPadding, previousSearchPaddingPriority);
+        searchInput.style.setProperty(
+          "padding-left",
+          previousSearchPadding,
+          previousSearchPaddingPriority,
+        );
       }
       phoneField.style.marginBottom = "";
     };
@@ -3374,17 +3698,27 @@ const Leads = () => {
     phone: "",
   });
 
-  const fetchLeads = async ({ background = false, pageOverride, filterOverrides = null } = {}) => {
+  const fetchLeads = async ({
+    background = false,
+    pageOverride,
+    filterOverrides = null,
+  } = {}) => {
     const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
-      const effectiveAdvancedFilters = filterOverrides?.advancedFilters ?? advancedFilters;
+      const effectiveAdvancedFilters =
+        filterOverrides?.advancedFilters ?? advancedFilters;
       const effectiveSearchTerm = filterOverrides?.searchTerm ?? searchTerm;
-      const effectiveNameStartsWith = filterOverrides?.nameStartsWith ?? nameStartsWith;
-      const effectiveSourceFilter = filterOverrides?.sourceFilter ?? sourceFilter;
-      const effectiveCampaignFilter = filterOverrides?.campaignFilter ?? campaignFilter;
-      const effectiveLeadStatusFilter = filterOverrides?.leadStatusFilter ?? leadStatusFilter;
-      const effectiveAssigneeFilter = filterOverrides?.assigneeFilter ?? assigneeFilter;
+      const effectiveNameStartsWith =
+        filterOverrides?.nameStartsWith ?? nameStartsWith;
+      const effectiveSourceFilter =
+        filterOverrides?.sourceFilter ?? sourceFilter;
+      const effectiveCampaignFilter =
+        filterOverrides?.campaignFilter ?? campaignFilter;
+      const effectiveLeadStatusFilter =
+        filterOverrides?.leadStatusFilter ?? leadStatusFilter;
+      const effectiveAssigneeFilter =
+        filterOverrides?.assigneeFilter ?? assigneeFilter;
       const effectiveScoreMin = filterOverrides?.scoreMin ?? scoreMin;
       const effectiveScoreMax = filterOverrides?.scoreMax ?? scoreMax;
       const filtersQs =
@@ -3558,15 +3892,21 @@ const Leads = () => {
   const fetchStaff = useCallback(async () => {
     const requestId = ++staffRequestId.current;
     try {
-      const endpoint = isTravel && !isAdmin && canAssignLead ? "/api/contacts/assignees" : "/api/staff";
+      const endpoint =
+        isTravel && !isAdmin && canAssignLead
+          ? "/api/contacts/assignees"
+          : "/api/staff";
       const data = await fetchApi(endpoint);
-      if (requestId === staffRequestId.current) setStaff(Array.isArray(data) ? data : []);
+      if (requestId === staffRequestId.current)
+        setStaff(Array.isArray(data) ? data : []);
     } catch {
       if (requestId === staffRequestId.current) setStaff([]);
     }
   }, [isTravel, isAdmin, canAssignLead]);
 
-  useEffect(() => { fetchStaff(); }, [fetchStaff]);
+  useEffect(() => {
+    fetchStaff();
+  }, [fetchStaff]);
 
   const staffBrandSuffix = (member) => {
     if (!isTravel) return "";
@@ -3591,7 +3931,7 @@ const Leads = () => {
   };
 
   const loadAutoCampaignRules = useCallback(async () => {
-    if (!isGeneric) return;
+    if (!isGeneric || !canLeadRead) return;
     setAutoCampaignRulesLoading(true);
     try {
       const d = await fetchApi("/api/callified/auto-campaign-rules", {
@@ -3614,11 +3954,11 @@ const Leads = () => {
     } finally {
       setAutoCampaignRulesLoading(false);
     }
-  }, [isGeneric]);
+  }, [isGeneric, canLeadRead]);
 
   const saveAutoCampaignRules = useCallback(
     async ({ enabled, rules, markSavedId } = {}) => {
-      if (!isGeneric) return;
+      if (!isGeneric || !canLeadWrite) return;
       setAutoCampaignRulesSaving(true);
       const nextEnabled =
         enabled !== undefined ? enabled : autoCampaignRulesEnabled;
@@ -3659,7 +3999,13 @@ const Leads = () => {
         setAutoCampaignRulesSaving(false);
       }
     },
-    [isGeneric, autoCampaignRulesEnabled, autoCampaignRules, notify],
+    [
+      isGeneric,
+      canLeadWrite,
+      autoCampaignRulesEnabled,
+      autoCampaignRules,
+      notify,
+    ],
   );
 
   const saveLeadPickupLocation = async (lead, pickupStatus, locationId) => {
@@ -3681,18 +4027,15 @@ const Leads = () => {
           method: "PUT",
           body: JSON.stringify({
             pickupAddress,
-            sourceTranscriptId:
-              pickupStatus?.sourceTranscriptId || null,
-            sourceExcerpt:
-              pickupStatus?.sourceExcerpt || null,
+            sourceTranscriptId: pickupStatus?.sourceTranscriptId || null,
+            sourceExcerpt: pickupStatus?.sourceExcerpt || null,
           }),
         },
       );
       const updatedAt = savedPickup?.updatedAt || new Date().toISOString();
       setPickupPlotStatusByContact((current) => {
         const next = new Map(current);
-        const existing =
-          next.get(contactId) || pickupStatus;
+        const existing = next.get(contactId) || pickupStatus;
         next.set(
           contactId,
           existing
@@ -3714,8 +4057,7 @@ const Leads = () => {
                   email: lead.email,
                   company: lead.company,
                   status: lead.status,
-                  interestedPlotArea:
-                    lead.interestedPlotArea,
+                  interestedPlotArea: lead.interestedPlotArea,
                 },
                 workflow: {},
                 workflowHistory: [],
@@ -3747,9 +4089,11 @@ const Leads = () => {
         return customer.assignedPlots;
       }
       const assignedIds = new Set(
-        (customer.customerAssignedPlotIds || customer.assignedPlotIds || []).map(
-          Number,
-        ),
+        (
+          customer.customerAssignedPlotIds ||
+          customer.assignedPlotIds ||
+          []
+        ).map(Number),
       );
       return plotAssignmentInventory.plots.filter((plot) =>
         assignedIds.has(Number(plot.id)),
@@ -3763,13 +4107,16 @@ const Leads = () => {
   };
   const availablePlotAssignmentOptions = plotAssignmentInventory.plots.filter(
     (plot) =>
-      String(plot.availability || "").trim().toUpperCase() === "AVAILABLE" &&
-      String(plot.plotNumber || "").trim(),
+      String(plot.availability || "")
+        .trim()
+        .toUpperCase() === "AVAILABLE" && String(plot.plotNumber || "").trim(),
   );
   const availablePlotAssignmentNames = [
     ...new Map(
       availablePlotAssignmentOptions.map((plot) => [
-        String(plot.name || "").trim().toLowerCase(),
+        String(plot.name || "")
+          .trim()
+          .toLowerCase(),
         String(plot.name || "").trim(),
       ]),
     ).values(),
@@ -3786,24 +4133,31 @@ const Leads = () => {
   );
   const assigningPlotOptions = availablePlotAssignmentOptions.filter(
     (plot) =>
-      String(plot.name || "").trim().toLowerCase() ===
-      assigningPlotName.trim().toLowerCase(),
+      String(plot.name || "")
+        .trim()
+        .toLowerCase() === assigningPlotName.trim().toLowerCase(),
   );
   const getDefaultPlotAssignmentName = (leadId, inventory) => {
     const customer = inventory.customers.find(
       (item) => Number(item?.contact?.id ?? item?.contactId) === Number(leadId),
     );
-    const assignedName = String(customer?.assignedPlots?.[0]?.name || "").trim();
+    const assignedName = String(
+      customer?.assignedPlots?.[0]?.name || "",
+    ).trim();
     const availableNames = [
       ...new Map(
         inventory.plots
           .filter(
             (plot) =>
-              String(plot.availability || "").trim().toUpperCase() ===
-                "AVAILABLE" && String(plot.plotNumber || "").trim(),
+              String(plot.availability || "")
+                .trim()
+                .toUpperCase() === "AVAILABLE" &&
+              String(plot.plotNumber || "").trim(),
           )
           .map((plot) => [
-            String(plot.name || "").trim().toLowerCase(),
+            String(plot.name || "")
+              .trim()
+              .toLowerCase(),
             String(plot.name || "").trim(),
           ]),
       ).values(),
@@ -3815,8 +4169,12 @@ const Leads = () => {
       : availableNames[0] || "";
   };
   const openLeadPlotAssignment = async (lead) => {
-    if (isTransportWorkflowLocked(pickupPlotStatusByContact.get(Number(lead.id)))) {
-      notify.info("Plot assignments cannot be changed after transport has started.");
+    if (
+      isTransportWorkflowLocked(pickupPlotStatusByContact.get(Number(lead.id)))
+    ) {
+      notify.info(
+        "Plot assignments cannot be changed after transport has started.",
+      );
       return;
     }
     setAssigningPlotLead(lead);
@@ -3845,53 +4203,107 @@ const Leads = () => {
       []
     ).map(Number),
   );
-  const editingLeadPlotNameOptions = [...new Map([
-    ...(changingPlotAssignment?.plots || []),
-    ...(plotAssignmentInventory.plots || []),
-  ].map((plot) => [String(plot.name || "").trim().toLowerCase(), String(plot.name || "").trim()])).values()].filter(Boolean);
+  const editingLeadPlotNameOptions = [
+    ...new Map(
+      [
+        ...(changingPlotAssignment?.plots || []),
+        ...(plotAssignmentInventory.plots || []),
+      ].map((plot) => [
+        String(plot.name || "")
+          .trim()
+          .toLowerCase(),
+        String(plot.name || "").trim(),
+      ]),
+    ).values(),
+  ].filter(Boolean);
   const replacementPlotOptions = changingPlotAssignment
-    ? [...new Map((plotAssignmentInventory.plots || [])
-        .filter((plot) => (
-          plot?.id
-          && !replacementAssignedPlotIds.has(Number(plot.id))
-          && String(plot.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase()
-        ))
-        .map((plot) => [`${String(plot.name || "").trim().toLowerCase()}::${String(plot.plotNumber || "").trim().toLowerCase()}`, plot])).values()]
-        .sort((left, right) => String(left.plotNumber || "").localeCompare(
+    ? [
+        ...new Map(
+          (plotAssignmentInventory.plots || [])
+            .filter(
+              (plot) =>
+                plot?.id &&
+                !replacementAssignedPlotIds.has(Number(plot.id)) &&
+                String(plot.name || "")
+                  .trim()
+                  .toLowerCase() === editingLeadPlotName.trim().toLowerCase(),
+            )
+            .map((plot) => [
+              `${String(plot.name || "")
+                .trim()
+                .toLowerCase()}::${String(plot.plotNumber || "")
+                .trim()
+                .toLowerCase()}`,
+              plot,
+            ]),
+        ).values(),
+      ].sort((left, right) =>
+        String(left.plotNumber || "").localeCompare(
           String(right.plotNumber || ""),
           undefined,
           { numeric: true, sensitivity: "base" },
-        ))
+        ),
+      )
     : [];
   const replacementPlotChoices = replacementPlotOptions.map((plot) => {
     return {
       plot,
-      canSelect: String(plot.availability || "").trim().toUpperCase() === "AVAILABLE",
+      canSelect:
+        String(plot.availability || "")
+          .trim()
+          .toUpperCase() === "AVAILABLE",
     };
   });
   const editingLeadAssignedPlotIds = (changingPlotAssignment?.plots || [])
-    .filter((plot) => String(plot.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase())
+    .filter(
+      (plot) =>
+        String(plot.name || "")
+          .trim()
+          .toLowerCase() === editingLeadPlotName.trim().toLowerCase(),
+    )
     .map((plot) => Number(plot.id));
-  const editingLeadComparisonIds = editingLeadPlotName.trim().toLowerCase() !== originalEditingLeadPlotName.trim().toLowerCase()
-    ? (changingPlotAssignment?.plots || []).map((plot) => Number(plot.id))
-    : editingLeadAssignedPlotIds;
-  const hasLeadPlotChanges = editingLeadComparisonIds.length !== leadReplacementPlotIds.length
-    || editingLeadComparisonIds.some((id) => !leadReplacementPlotIds.includes(id));
+  const editingLeadComparisonIds =
+    editingLeadPlotName.trim().toLowerCase() !==
+    originalEditingLeadPlotName.trim().toLowerCase()
+      ? (changingPlotAssignment?.plots || []).map((plot) => Number(plot.id))
+      : editingLeadAssignedPlotIds;
+  const hasLeadPlotChanges =
+    editingLeadComparisonIds.length !== leadReplacementPlotIds.length ||
+    editingLeadComparisonIds.some((id) => !leadReplacementPlotIds.includes(id));
   const openLeadPlotReplacement = async () => {
     const viewState = viewingLeadPlots;
     if (isTransportWorkflowLocked(viewState.pickupStatus)) {
-      notify.info("Plot assignments cannot be changed after transport has started.");
+      notify.info(
+        "Plot assignments cannot be changed after transport has started.",
+      );
       return;
     }
     setViewingLeadPlots(null);
     setChangingPlotAssignment(viewState);
-    const firstEditablePlot = viewState.plots.find((plot) => (
-      plot.id && !isPurchasedCustomerPlot(plot, viewState.customer, viewState.pickupStatus)
-    ));
-    const firstPlotName = String(firstEditablePlot?.name || viewState.plots[0]?.name || "").trim();
+    const firstEditablePlot = viewState.plots.find(
+      (plot) =>
+        plot.id &&
+        !isPurchasedCustomerPlot(
+          plot,
+          viewState.customer,
+          viewState.pickupStatus,
+        ),
+    );
+    const firstPlotName = String(
+      firstEditablePlot?.name || viewState.plots[0]?.name || "",
+    ).trim();
     setEditingLeadPlotName(firstPlotName);
     setOriginalEditingLeadPlotName(firstPlotName);
-    setLeadReplacementPlotIds(viewState.plots.filter((plot) => String(plot.name || "").trim().toLowerCase() === firstPlotName.toLowerCase()).map((plot) => Number(plot.id)));
+    setLeadReplacementPlotIds(
+      viewState.plots
+        .filter(
+          (plot) =>
+            String(plot.name || "")
+              .trim()
+              .toLowerCase() === firstPlotName.toLowerCase(),
+        )
+        .map((plot) => Number(plot.id)),
+    );
     await loadPlotAssignmentInventory();
   };
   const closeLeadPlotReplacement = () => {
@@ -3903,29 +4315,51 @@ const Leads = () => {
   };
   const toggleLeadReplacementPlot = (plotId, checked) => {
     const numericId = Number(plotId);
-    setLeadReplacementPlotIds((current) => (
-      checked ? [...current, numericId] : current.filter((id) => id !== numericId)
-    ));
+    setLeadReplacementPlotIds((current) =>
+      checked
+        ? [...current, numericId]
+        : current.filter((id) => id !== numericId),
+    );
   };
   const replaceLeadPlot = async (event) => {
     event.preventDefault();
     const allAssignedPlots = changingPlotAssignment?.plots || [];
-    const changingPlotType = editingLeadPlotName.trim().toLowerCase() !== originalEditingLeadPlotName.trim().toLowerCase();
-    const selectedTypeAssignedPlots = allAssignedPlots.filter((plot) => (
-      String(plot.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase()
-    ));
-    const assignedIds = selectedTypeAssignedPlots.map((plot) => Number(plot.id));
+    const changingPlotType =
+      editingLeadPlotName.trim().toLowerCase() !==
+      originalEditingLeadPlotName.trim().toLowerCase();
+    const selectedTypeAssignedPlots = allAssignedPlots.filter(
+      (plot) =>
+        String(plot.name || "")
+          .trim()
+          .toLowerCase() === editingLeadPlotName.trim().toLowerCase(),
+    );
+    const assignedIds = selectedTypeAssignedPlots.map((plot) =>
+      Number(plot.id),
+    );
     const additionalPlots = replacementPlotChoices
-      .filter(({ plot }) => leadReplacementPlotIds.includes(Number(plot.id)) && !assignedIds.includes(Number(plot.id)))
+      .filter(
+        ({ plot }) =>
+          leadReplacementPlotIds.includes(Number(plot.id)) &&
+          !assignedIds.includes(Number(plot.id)),
+      )
       .map(({ plot }) => plot);
-    const removedPlots = (changingPlotType ? allAssignedPlots : selectedTypeAssignedPlots)
-      .filter((plot) => !leadReplacementPlotIds.includes(Number(plot.id)));
-    if (!changingPlotAssignment?.lead?.id || (!additionalPlots.length && !removedPlots.length)) return;
-    const addedNumbers = additionalPlots.map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`).join(", ");
-    const removedNumbers = removedPlots.map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`).join(", ");
+    const removedPlots = (
+      changingPlotType ? allAssignedPlots : selectedTypeAssignedPlots
+    ).filter((plot) => !leadReplacementPlotIds.includes(Number(plot.id)));
+    if (
+      !changingPlotAssignment?.lead?.id ||
+      (!additionalPlots.length && !removedPlots.length)
+    )
+      return;
+    const addedNumbers = additionalPlots
+      .map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`)
+      .join(", ");
+    const removedNumbers = removedPlots
+      .map((plot) => `Plot ${plot.plotNumber || "number unavailable"}`)
+      .join(", ");
     const confirmed = await notify.confirm({
       title: "Confirm plot assignments",
-      message: `Are you sure you want to update ${(changingPlotAssignment.lead.name || "this lead")}'s ${editingLeadPlotName} plots?${addedNumbers ? ` Assign ${addedNumbers}.` : ""}${removedNumbers ? ` Deselect ${removedNumbers}.` : ""}`,
+      message: `Are you sure you want to update ${changingPlotAssignment.lead.name || "this lead"}'s ${editingLeadPlotName} plots?${addedNumbers ? ` Assign ${addedNumbers}.` : ""}${removedNumbers ? ` Deselect ${removedNumbers}.` : ""}`,
       confirmText: "Save changes",
       cancelText: "Edit",
     });
@@ -3940,8 +4374,13 @@ const Leads = () => {
       }
       const plotsBySite = new Map();
       additionalPlots.forEach((plot) => {
-        const key = String(plot.name || "").trim().toLowerCase();
-        plotsBySite.set(key, [...(plotsBySite.get(key) || []), Number(plot.id)]);
+        const key = String(plot.name || "")
+          .trim()
+          .toLowerCase();
+        plotsBySite.set(key, [
+          ...(plotsBySite.get(key) || []),
+          Number(plot.id),
+        ]);
       });
       for (const plotSiteIds of plotsBySite.values()) {
         await fetchApi(
@@ -3959,7 +4398,11 @@ const Leads = () => {
       setLeadReplacementPlotIds([]);
       await loadPlotAssignmentInventory();
     } catch (error) {
-      notify.error(error?.body?.error || error?.message || "Could not assign the selected plots.");
+      notify.error(
+        error?.body?.error ||
+          error?.message ||
+          "Could not assign the selected plots.",
+      );
     } finally {
       setChangingPlotNumber(false);
     }
@@ -3995,7 +4438,7 @@ const Leads = () => {
   // that were actually called, so a real call that just completed updates both
   // the Lead Score and the Call Status without a browser reload.
   const refreshAll = async () => {
-    if (isGeneric) {
+    if (isGeneric && canLeadUpdate) {
       await fetchApi("/api/callified/leads/sync-call-statuses", {
         method: "POST",
         silent: true,
@@ -4089,10 +4532,12 @@ const Leads = () => {
       }
       inFlight = true;
       try {
-        await fetchApi("/api/callified/leads/sync-call-statuses", {
-          method: "POST",
-          silent: true,
-        }).catch(() => null);
+        if (canLeadUpdate) {
+          await fetchApi("/api/callified/leads/sync-call-statuses", {
+            method: "POST",
+            silent: true,
+          }).catch(() => null);
+        }
         const freshLeads = await fetchLeadsRef.current?.({ background: true });
         const connectedLeads = Array.isArray(freshLeads)
           ? freshLeads.filter(
@@ -4128,7 +4573,13 @@ const Leads = () => {
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [isGeneric, savedAutoRefreshEnabled, callQueueActive, leads]);
+  }, [
+    isGeneric,
+    savedAutoRefreshEnabled,
+    callQueueActive,
+    canLeadUpdate,
+    leads,
+  ]);
 
   // Backfill assignment for qualified leads that slipped through without an owner.
   // Handles existing leads created before auto-assignment, transient backend
@@ -4252,7 +4703,6 @@ const Leads = () => {
       }
     });
     loadLeadTagCatalog();
-    loadAutoCampaignRules();
     if (isTravel) {
       fetchApi("/api/pipeline_stages", { silent: true })
         .then((data) => setPipelineStages(Array.isArray(data) ? data : []))
@@ -4311,6 +4761,13 @@ const Leads = () => {
         .catch(() => setTmcPaidByEmail({}));
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wait for the effective permission set before reading the optional
+  // Callified rules. This prevents a transient 403 while permissions load and
+  // avoids probing the endpoint for read-only users without leads.read.
+  useEffect(() => {
+    loadAutoCampaignRules();
+  }, [loadAutoCampaignRules]);
 
   // Refetch (server-side) whenever the FilterPanel's filter set changes.
   // Skips the very first render — the mount effect above already fetched
@@ -4399,17 +4856,36 @@ const Leads = () => {
     // request shape for them. Non-admin Leads users may legitimately lack
     // the separate Callified integration permission, so that probe must not
     // create a misleading global permission toast.
-    fetchApi(
-      "/api/integrations/callified/config",
-      isAdmin ? undefined : { silent: true },
-    )
-      .then((d) => setCallifiedConfigured(!!d?.isActive))
-      .catch(() => setCallifiedConfigured(false));
-  }, [isGeneric, isAdmin]);
+    if (!canLeadRead) {
+      setCallifiedConfigured(false);
+      return;
+    }
+    fetchApi("/api/callified/status")
+      .then(async (d) => {
+        if (typeof d?.isActive === "boolean") {
+          setCallifiedConfigured(d.isActive);
+          return;
+        }
+        // Keep compatibility with older tenants/backends that expose the
+        // integration status through the settings route. The status endpoint
+        // is preferred because it only needs leads.read; this fallback keeps
+        // the Leads surface usable during a rolling backend deployment.
+        const legacy = await fetchApi("/api/integrations/callified/config");
+        setCallifiedConfigured(!!legacy?.isActive);
+      })
+      .catch(async () => {
+        try {
+          const legacy = await fetchApi("/api/integrations/callified/config");
+          setCallifiedConfigured(!!legacy?.isActive);
+        } catch {
+          setCallifiedConfigured(false);
+        }
+      });
+  }, [isGeneric, canLeadRead]);
 
   // Load Callified campaigns for campaign assignment + bulk dial (generic only).
   const loadCallifiedCampaigns = useCallback(async () => {
-    if (!isGeneric || !callifiedConfigured) return;
+    if (!isGeneric || !callifiedConfigured || !canLeadWrite) return;
     try {
       const d = await fetchApi("/api/callified/campaigns/with-lead-counts");
       const list = Array.isArray(d?.campaigns) ? d.campaigns : [];
@@ -4417,7 +4893,7 @@ const Leads = () => {
     } catch {
       setCallifiedCampaigns([]);
     }
-  }, [isGeneric, callifiedConfigured]);
+  }, [isGeneric, callifiedConfigured, canLeadWrite]);
 
   useEffect(() => {
     loadCallifiedCampaigns();
@@ -4668,7 +5144,7 @@ const Leads = () => {
   }, [loadCallSettings]);
 
   const saveAllCallSettings = async () => {
-    if (!isAdmin || callSettingsSaving) return;
+    if (!canManageCallSettings || callSettingsSaving) return;
     const normalized = {
       dnpMaxRetries: Math.max(1, Math.min(Number(dnpMaxRetries) || 3, 10)),
       dnpIntervalMinutes: Math.max(
@@ -4834,7 +5310,9 @@ const Leads = () => {
 
   const saveCreateLeadFieldPrefs = ({ visible, required }) => {
     if (!isGeneric) return;
-    const allowedKeys = new Set(createLeadFieldCatalog.map((field) => field.key));
+    const allowedKeys = new Set(
+      createLeadFieldCatalog.map((field) => field.key),
+    );
     const lockedVisibleKeys = createLeadFieldCatalog
       .filter((field) => field.lockedVisible)
       .map((field) => field.key);
@@ -4856,9 +5334,18 @@ const Leads = () => {
         ),
       ]),
     ];
+    const nextQuickAddSnapshot = isAdmin
+      ? Object.fromEntries(
+          createLeadFieldCatalog.map((field) => [
+            field.key,
+            visibleSet.has(field.key),
+          ]),
+        )
+      : tenantQuickAddSnapshot;
     const normalized = {
       visible: normalizedVisible,
       required: normalizedRequired,
+      quickAddSnapshot: nextQuickAddSnapshot,
     };
     setSavedCreateLeadFieldPrefs(normalized);
     try {
@@ -4870,14 +5357,51 @@ const Leads = () => {
       notify.error("Could not save Create Lead field preferences.");
     }
     setCreateLeadFieldsPickerOpen(false);
+
+    // Generic CRM admins edit the tenant-wide Quick-add selection from the
+    // same Customize-fields surface. Non-admin users retain the established
+    // personal-only preferences and never write organization settings.
+    if (isAdmin) {
+      const previousConfig = tenantFieldConfig;
+      const nextOverrides = { ...(tenantFieldConfig?.fieldOverrides || {}) };
+      for (const field of createLeadFieldCatalog) {
+        nextOverrides[field.configId] = {
+          ...(nextOverrides[field.configId] || {}),
+          quickAdd: visibleSet.has(field.key),
+        };
+      }
+      const nextConfig = {
+        ...(tenantFieldConfig || {}),
+        fieldOverrides: nextOverrides,
+      };
+      setTenantFieldConfig(nextConfig);
+      void fetchApi(
+        `/api/tenant-settings/${encodeURIComponent(GENERIC_FIELD_CONFIG_SETTING_KEY)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            value: JSON.stringify(nextConfig),
+            category: "fields",
+          }),
+        },
+      ).catch((error) => {
+        setTenantFieldConfig(previousConfig);
+        notify.error(
+          error?.body?.error ||
+            error?.message ||
+            "Could not update tenant Quick-add fields.",
+        );
+      });
+    }
   };
 
   const createSeparateProductLead = async () => {
-    const phoneOut = isWellness || isTravel
-      ? String(newLead.phone || "").trim()
-      : newLead.phone
-        ? `${newLead.countryCode} ${newLead.phone}`
-        : "";
+    const phoneOut =
+      isWellness || isTravel
+        ? String(newLead.phone || "").trim()
+        : newLead.phone
+          ? `${newLead.countryCode} ${newLead.phone}`
+          : "";
     setCreatingDuplicateLead(true);
     try {
       await fetchApi("/api/contacts?force=true", {
@@ -4900,6 +5424,7 @@ const Leads = () => {
         phone: "",
         source: "Organic",
         status: "Lead",
+        ...(isGeneric ? { website: "" } : {}),
         customFields: {},
       });
       setLeadDuplicate(null);
@@ -4995,10 +5520,7 @@ const Leads = () => {
     //    #600: under wellness, email is OPTIONAL (Patient intake mirrors this);
     //    phone becomes the required identifier instead.
     const email = String(newLead.email || "").trim();
-    if (
-      isWellness ||
-      (isGeneric && !createLeadRequiredFieldSet.has("email"))
-    ) {
+    if (isWellness || (isGeneric && !createLeadRequiredFieldSet.has("email"))) {
       if (email && !EMAIL_RE.test(email)) {
         notify.error("Please enter a valid email address");
         return;
@@ -5079,7 +5601,11 @@ const Leads = () => {
       const phoneType = phoneInstance?.getNumberType();
       const isMobileType =
         phoneType === "MOBILE" || phoneType === "FIXED_LINE_OR_MOBILE";
-      if (!travelPhoneValid || !phoneInstance?.isValidNumber() || !isMobileType) {
+      if (
+        !travelPhoneValid ||
+        !phoneInstance?.isValidNumber() ||
+        !isMobileType
+      ) {
         notify.error("Enter a valid mobile number");
         return;
       }
@@ -5098,7 +5624,7 @@ const Leads = () => {
       notify.error("Please select a valid country code");
       return;
     }
-    for (const field of isGeneric ? ["company", "title"] : []) {
+    for (const field of isGeneric ? ["company", "title", "website"] : []) {
       const value = String(newLead[field] || "");
       if (value && CONTROL_CHAR_RE.test(value)) {
         notify.error(`${field} contains invalid control characters`);
@@ -5115,11 +5641,12 @@ const Leads = () => {
       // Generic CRM: prepend the picker's country code (the input field
       // is the local-part). Wellness: phone is already canonicalised by
       // the +91-optional regex above  store as-is.
-      const phoneOut = isWellness || isTravel
-        ? phone
-        : newLead.phone
-          ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
-          : "";
+      const phoneOut =
+        isWellness || isTravel
+          ? phone
+          : newLead.phone
+            ? `${newLead.countryCode}${isGeneric ? "" : " "}${newLead.phone}`
+            : "";
       await fetchApi("/api/contacts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5140,6 +5667,7 @@ const Leads = () => {
         phone: "",
         source: "Organic",
         status: "Lead",
+        ...(isGeneric ? { website: "" } : {}),
         customFields: {},
       });
       // #892  close the drawer on successful create; the list refresh
@@ -5266,12 +5794,24 @@ const Leads = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assignedToId: assignedToId || null }),
       });
-      const ownerId = updated?.assignedToId ?? (assignedToId ? Number(assignedToId) : null);
-      const owner = updated?.assignedTo ?? staff.find((member) => String(member.id) === String(ownerId)) ?? null;
-      setLeads((rows) => rows.map((lead) => lead.id === contactId
-        ? { ...lead, assignedToId: ownerId, assignedTo: owner }
-        : lead));
-      notify.success(ownerId ? `Assigned to ${owner?.name || owner?.email || "staff member"}` : "Assignment cleared");
+      const ownerId =
+        updated?.assignedToId ?? (assignedToId ? Number(assignedToId) : null);
+      const owner =
+        updated?.assignedTo ??
+        staff.find((member) => String(member.id) === String(ownerId)) ??
+        null;
+      setLeads((rows) =>
+        rows.map((lead) =>
+          lead.id === contactId
+            ? { ...lead, assignedToId: ownerId, assignedTo: owner }
+            : lead,
+        ),
+      );
+      notify.success(
+        ownerId
+          ? `Assigned to ${owner?.name || owner?.email || "staff member"}`
+          : "Assignment cleared",
+      );
       if (assigneeFilter) fetchLeads({ background: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to assign lead");
@@ -5825,22 +6365,17 @@ const Leads = () => {
     () => new Set(leadColumnCatalog.map((column) => column.key)),
     [leadColumnCatalog],
   );
-  const preferredVisibleColumns = useMemo(
-    () => {
-      const preferred = Array.isArray(visibleColumns)
-        ? visibleColumns
-        : [
-            ...LEADS_DEFAULT_VISIBLE_COLUMNS,
-            ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
-          ];
-      return isGeneric
-        ? preferred.filter(
-            (key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key),
-          )
-        : preferred;
-    },
-    [customFieldDefs, isGeneric, visibleColumns],
-  );
+  const preferredVisibleColumns = useMemo(() => {
+    const preferred = Array.isArray(visibleColumns)
+      ? visibleColumns
+      : [
+          ...LEADS_DEFAULT_VISIBLE_COLUMNS,
+          ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
+        ];
+    return isGeneric
+      ? preferred.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+      : preferred;
+  }, [customFieldDefs, isGeneric, visibleColumns]);
   const leadFilterFieldCatalog = useMemo(() => {
     const wellnessTableColumns = [
       { key: "name", label: "Name" },
@@ -6130,31 +6665,44 @@ const Leads = () => {
           { key: "amount", label: "Amount" },
         ]
       : []),
-  ].filter(
-    (column) => {
-      if (!isGeneric) return true;
-      if (CALLIFIED_LEAD_COLUMN_KEYS.has(column.key)) {
-        return preferredVisibleColumns.includes(column.key);
-      }
-      if (["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(column.key)) {
-        return !Array.isArray(visibleColumns) || visibleColumns.includes(column.key);
-      }
-      return true;
-    },
-  );
+  ].filter((column) => {
+    if (!isGeneric) return true;
+    if (CALLIFIED_LEAD_COLUMN_KEYS.has(column.key)) {
+      return preferredVisibleColumns.includes(column.key);
+    }
+    if (
+      [
+        "interestedPlotArea",
+        "pickupLocation",
+        "plotAssign",
+        "overallPickupStatus",
+      ].includes(column.key)
+    ) {
+      return (
+        !Array.isArray(visibleColumns) || visibleColumns.includes(column.key)
+      );
+    }
+    return true;
+  });
   const firstCallifiedColumnIndex = preferredVisibleColumns.findIndex((key) =>
     CALLIFIED_LEAD_COLUMN_KEYS.has(key),
   );
-  const leadUserColumnsBeforeCallified = firstCallifiedColumnIndex < 0
-    ? leadUserColumnDefs
-    : leadUserColumnDefs.filter(
-        (column) => preferredVisibleColumns.indexOf(column.key) < firstCallifiedColumnIndex,
-      );
-  const leadUserColumnsAfterCallified = firstCallifiedColumnIndex < 0
-    ? []
-    : leadUserColumnDefs.filter(
-        (column) => preferredVisibleColumns.indexOf(column.key) > firstCallifiedColumnIndex,
-      );
+  const leadUserColumnsBeforeCallified =
+    firstCallifiedColumnIndex < 0
+      ? leadUserColumnDefs
+      : leadUserColumnDefs.filter(
+          (column) =>
+            preferredVisibleColumns.indexOf(column.key) <
+            firstCallifiedColumnIndex,
+        );
+  const leadUserColumnsAfterCallified =
+    firstCallifiedColumnIndex < 0
+      ? []
+      : leadUserColumnDefs.filter(
+          (column) =>
+            preferredVisibleColumns.indexOf(column.key) >
+            firstCallifiedColumnIndex,
+        );
   const isLeadFixedColumnVisible = (key) =>
     leadFixedExtraColumnDefs.some((column) => column.key === key);
   const getCustomFieldFilterKind = (fieldType) => {
@@ -6755,10 +7303,14 @@ const Leads = () => {
       );
       const minimumHeight = isCompact ? 40 : 52;
       const fallbackMaximumHeight = isCompact ? 48 : 64;
-      const naturalHeight = (row) => Math.max(
-        row.offsetHeight,
-        Math.min(Math.ceil(row.getBoundingClientRect().height), fallbackMaximumHeight),
-      );
+      const naturalHeight = (row) =>
+        Math.max(
+          row.offsetHeight,
+          Math.min(
+            Math.ceil(row.getBoundingClientRect().height),
+            fallbackMaximumHeight,
+          ),
+        );
       const rowHeights = rowPairs.map(([frozenRow, scrollRow]) =>
         Math.max(
           minimumHeight,
@@ -6799,6 +7351,16 @@ const Leads = () => {
     if (isTravel) return `/travel/leads/${lead.id}`;
     if (!isGeneric) return `/contacts/${lead.id}`;
     return `/leads/${lead.id}`;
+  };
+
+  const leadDetailPathWithListState = (lead) => {
+    const path = leadDetailPath(lead);
+    if (!isGeneric) return path;
+    const params = new URLSearchParams({
+      page: String(Math.max(1, leadsPage + 1)),
+      limit: String(currentLeadsPageSize),
+    });
+    return `${path}?${params.toString()}`;
   };
 
   const leadTagOptions = Array.from(
@@ -6852,7 +7414,11 @@ const Leads = () => {
     }
     if (isGeneric && field === "companySize") {
       const employeeCount = Number(value);
-      if (String(value).trim() !== "" && Number.isFinite(employeeCount) && employeeCount < 0) {
+      if (
+        String(value).trim() !== "" &&
+        Number.isFinite(employeeCount) &&
+        employeeCount < 0
+      ) {
         notify.error("Number of employees cannot be negative");
         return false;
       }
@@ -7152,12 +7718,9 @@ const Leads = () => {
   const leadsPageSizeOptions = isGeneric
     ? GENERIC_LEADS_PAGE_SIZE_OPTIONS
     : LEADS_PAGE_SIZE_OPTIONS;
-  const currentLeadsPageSize = isGeneric
-    ? genericLeadsPageSize
-    : leadsPageSize;
-  const hasCustomLeadsPageSize = !leadsPageSizeOptions.includes(
-    currentLeadsPageSize,
-  );
+  const currentLeadsPageSize = isGeneric ? genericLeadsPageSize : leadsPageSize;
+  const hasCustomLeadsPageSize =
+    !leadsPageSizeOptions.includes(currentLeadsPageSize);
   const pageSizeSelectValue =
     customLeadsPageSizeOpen || hasCustomLeadsPageSize
       ? "custom"
@@ -7182,13 +7745,56 @@ const Leads = () => {
         currentLeadsPage * leadsPageSize,
         currentLeadsPage * leadsPageSize + leadsPageSize,
       );
+  const leadListNavigationState = {
+    ...(location.state && typeof location.state === "object"
+      ? location.state
+      : {}),
+    returnTo: buildLeadsListPath(
+      location.search,
+      isGeneric ? leadsPage : currentLeadsPage,
+      currentLeadsPageSize,
+    ),
+    leadsListState: {
+      // Use the requested page rather than the display-clamped page. During
+      // the short window while the next API page is loading, the server's
+      // previous total can temporarily clamp the display to page one.
+      pageIndex: isGeneric ? leadsPage : currentLeadsPage,
+      pageSize: currentLeadsPageSize,
+    },
+  };
+  const rememberLeadListState = () => {
+    if (!isGeneric || typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(
+        leadsPaginationStorageKey,
+        JSON.stringify(leadListNavigationState.leadsListState),
+      );
+    } catch {
+      // The URL and router state remain the primary handoff when storage is unavailable.
+    }
+  };
+  const openLeadDetail = (lead) => {
+    navigate(leadDetailPathWithListState(lead), {
+      state: leadListNavigationState,
+    });
+  };
   useEffect(() => {
-    if (!isGeneric || !Number.isInteger(focusedCallifiedLeadId) || focusedCallifiedLeadId <= 0 || loading) return;
+    if (
+      !isGeneric ||
+      !Number.isInteger(focusedCallifiedLeadId) ||
+      focusedCallifiedLeadId <= 0 ||
+      loading
+    )
+      return;
     const cell = document.querySelector(
       `[data-callified-ai-lead-id="${focusedCallifiedLeadId}"]`,
     );
     if (typeof cell?.scrollIntoView === "function") {
-      cell.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      cell.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "center",
+      });
     }
   }, [focusedCallifiedLeadId, isGeneric, loading, paginatedLeads]);
   const visibleSelectedLeadCount = paginatedLeads.reduce(
@@ -7352,145 +7958,171 @@ const Leads = () => {
           !visibleFieldKeys || visibleFieldKeys.has(`custom:${field.fieldKey}`),
       )
       .map((f) => {
-      const value = values?.[f.fieldKey] ?? "";
-      const handle = (v) => onChange(f.fieldKey, v);
-      const label = f.label;
-      const isRequired = requiredFieldKeys
-        ? requiredFieldKeys.has(`custom:${f.fieldKey}`)
-        : f.isRequired;
-      const inputId = `lead-custom-field-${f.id}`;
-      const placeholder = isRequired
-        ? `${f.placeholder || label} *`
-        : (f.placeholder || `${label} (optional)`);
-      const fieldLabel = <>{label}{isRequired && <span aria-hidden="true" className="required-mark" style={{ color: "var(--danger-color, #ef4444)", marginLeft: "0.2rem" }}>*</span>}</>;
-      const titleAttr = f.tooltip ? { title: f.tooltip } : {};
-
-      if (f.fieldType === "checkbox") {
-        return (
-          <label
-            key={f.id}
-            style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-            {...titleAttr}
-          >
-            <input
-              type="checkbox"
-              checked={Boolean(value)}
-              required={isRequired}
-              onChange={(e) => handle(e.target.checked)}
-            />
-            {fieldLabel}
-          </label>
+        const value = values?.[f.fieldKey] ?? "";
+        const handle = (v) => onChange(f.fieldKey, v);
+        const label = f.label;
+        const isRequired = requiredFieldKeys
+          ? requiredFieldKeys.has(`custom:${f.fieldKey}`)
+          : f.isRequired;
+        const inputId = `lead-custom-field-${f.id}`;
+        const placeholder = isRequired
+          ? `${f.placeholder || label} *`
+          : f.placeholder || `${label} (optional)`;
+        const fieldLabel = (
+          <>
+            {label}
+            {isRequired && (
+              <span
+                aria-hidden="true"
+                className="required-mark"
+                style={{
+                  color: "var(--danger-color, #ef4444)",
+                  marginLeft: "0.2rem",
+                }}
+              >
+                *
+              </span>
+            )}
+          </>
         );
-      }
+        const titleAttr = f.tooltip ? { title: f.tooltip } : {};
 
-      if (f.fieldType === "dropdown" || f.fieldType === "radio") {
-        return (
-          <div key={f.id} {...titleAttr}>
-            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
-            <select
-              id={inputId}
-              className="input-field"
-              required={isRequired}
-              value={value}
-              onChange={(e) => handle(e.target.value)}
+        if (f.fieldType === "checkbox") {
+          return (
+            <label
+              key={f.id}
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+              {...titleAttr}
             >
-              <option value="">{placeholder}</option>
-              {(f.options || []).map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-          </div>
-        );
-      }
+              <input
+                type="checkbox"
+                checked={Boolean(value)}
+                required={isRequired}
+                onChange={(e) => handle(e.target.checked)}
+              />
+              {fieldLabel}
+            </label>
+          );
+        }
 
-      if (f.fieldType === "multiselect") {
-        const selected = Array.isArray(value) ? value : value ? [value] : [];
-        return (
-          <div
-            key={f.id}
-            style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}
-            {...titleAttr}
-          >
-            {fieldLabel}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
-              {(f.options || []).map((opt) => (
-                <label
-                  key={opt}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.3rem",
-                    fontSize: "0.8rem",
-                    padding: "0.2rem 0.5rem",
-                    borderRadius: 6,
-                    border: "1px solid var(--border-color)",
-                    background: "var(--surface-color)",
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(opt)}
-                    required={isRequired && selected.length === 0}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? [...selected, opt]
-                        : selected.filter((s) => s !== opt);
-                      handle(next);
-                    }}
-                  />
-                  {opt}
-                </label>
-              ))}
+        if (f.fieldType === "dropdown" || f.fieldType === "radio") {
+          return (
+            <div key={f.id} {...titleAttr}>
+              <label htmlFor={inputId} style={createLeadFieldLabelStyle}>
+                {fieldLabel}
+              </label>
+              <select
+                id={inputId}
+                className="input-field"
+                required={isRequired}
+                value={value}
+                onChange={(e) => handle(e.target.value)}
+              >
+                <option value="">{placeholder}</option>
+                {(f.options || []).map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
             </div>
-          </div>
-        );
-      }
+          );
+        }
 
-      if (f.fieldType === "textarea") {
+        if (f.fieldType === "multiselect") {
+          const selected = Array.isArray(value) ? value : value ? [value] : [];
+          return (
+            <div
+              key={f.id}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.4rem",
+              }}
+              {...titleAttr}
+            >
+              {fieldLabel}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                {(f.options || []).map((opt) => (
+                  <label
+                    key={opt}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.3rem",
+                      fontSize: "0.8rem",
+                      padding: "0.2rem 0.5rem",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-color)",
+                      background: "var(--surface-color)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(opt)}
+                      required={isRequired && selected.length === 0}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...selected, opt]
+                          : selected.filter((s) => s !== opt);
+                        handle(next);
+                      }}
+                    />
+                    {opt}
+                  </label>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        if (f.fieldType === "textarea") {
+          return (
+            <div key={f.id} {...titleAttr}>
+              <label htmlFor={inputId} style={createLeadFieldLabelStyle}>
+                {fieldLabel}
+              </label>
+              <textarea
+                id={inputId}
+                className="input-field"
+                required={isRequired}
+                value={value}
+                placeholder={placeholder}
+                maxLength={2000}
+                rows={3}
+                onChange={(e) => handle(e.target.value)}
+                style={{ padding: "0.45rem", fontSize: "0.85rem" }}
+              />
+            </div>
+          );
+        }
+
+        const inputType =
+          f.fieldType === "date"
+            ? "date"
+            : f.fieldType === "number"
+              ? "number"
+              : f.fieldType === "url"
+                ? "url"
+                : "text";
         return (
           <div key={f.id} {...titleAttr}>
-            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
-            <textarea
+            <label htmlFor={inputId} style={createLeadFieldLabelStyle}>
+              {fieldLabel}
+            </label>
+            <input
               id={inputId}
+              type={inputType}
               className="input-field"
               required={isRequired}
               value={value}
               placeholder={placeholder}
-              maxLength={2000}
-              rows={3}
               onChange={(e) => handle(e.target.value)}
               style={{ padding: "0.45rem", fontSize: "0.85rem" }}
             />
           </div>
         );
-      }
-
-      const inputType =
-        f.fieldType === "date"
-          ? "date"
-          : f.fieldType === "number"
-            ? "number"
-            : f.fieldType === "url"
-              ? "url"
-              : "text";
-      return (
-        <div key={f.id} {...titleAttr}>
-          <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{fieldLabel}</label>
-          <input
-            id={inputId}
-            type={inputType}
-            className="input-field"
-            required={isRequired}
-            value={value}
-            placeholder={placeholder}
-            onChange={(e) => handle(e.target.value)}
-            style={{ padding: "0.45rem", fontSize: "0.85rem" }}
-          />
-        </div>
-      );
       });
   };
 
@@ -7616,6 +8248,8 @@ const Leads = () => {
         onSave={onSave}
         renderValue={renderValue}
         required={required}
+        editOnDisplayClick={canLeadUpdate}
+        showEditButton={canLeadUpdate}
         disableTruncation={disableTruncation}
       />
     </td>
@@ -7653,6 +8287,7 @@ const Leads = () => {
             contactId={lead.id}
             field={field}
             value={raw}
+            readOnly={!canLeadUpdate}
             onSaved={(newValue, updatedAt) => {
               setLeads((prev) =>
                 prev.map((l) =>
@@ -7709,13 +8344,15 @@ const Leads = () => {
     ];
     if (isGeneric && trackingKeys.includes(column.key)) {
       const metadata = leadTrackingMetadata(lead);
-      const aliasValue = column.key === "landingPageUrl"
-        ? metadata.landing_page
-        : column.key === "referrerUrl"
-          ? metadata.referrer
-          : "";
+      const aliasValue =
+        column.key === "landingPageUrl"
+          ? metadata.landing_page
+          : column.key === "referrerUrl"
+            ? metadata.referrer
+            : "";
       const value =
-        metadata[column.key] || aliasValue ||
+        metadata[column.key] ||
+        aliasValue ||
         (column.key === "submittedAt"
           ? lead?.webFormSubmissions?.[0]?.submittedAt
           : "");
@@ -7883,6 +8520,7 @@ const Leads = () => {
               options={leadTagOptions}
               onSave={updateLeadInlineValue}
               onDeleteTag={handleDeleteLeadTag}
+              canEdit={canLeadUpdate}
             />
           </td>
         );
@@ -7893,7 +8531,7 @@ const Leads = () => {
             style={getBodyCellStyle("assignedTo")}
             onClick={(e) => e.stopPropagation()}
           >
-            {canAssignLead && (isAdmin || isTravel) ? (
+            {canAssignLead && (isAdmin || isTravel || isGeneric) ? (
               <div className="leads-assignee-control">
                 <select
                   className="input-field"
@@ -7910,11 +8548,16 @@ const Leads = () => {
                   aria-label={`Assign ${lead.name || "lead"} to staff`}
                 >
                   <option value="">Unassigned</option>
-                  {lead.assignedToId && !assignableStaff(lead).some((s) => String(s.id) === String(lead.assignedToId)) && (
-                    <option value={lead.assignedToId}>
-                      {lead.assignedTo?.name || lead.assignedTo?.email || `Staff #${lead.assignedToId}`}
-                    </option>
-                  )}
+                  {lead.assignedToId &&
+                    !assignableStaff(lead).some(
+                      (s) => String(s.id) === String(lead.assignedToId),
+                    ) && (
+                      <option value={lead.assignedToId}>
+                        {lead.assignedTo?.name ||
+                          lead.assignedTo?.email ||
+                          `Staff #${lead.assignedToId}`}
+                      </option>
+                    )}
                   {assignableStaff(lead).map((s) => (
                     <option key={s.id} value={s.id}>
                       {staffOptionLabel(s)}
@@ -7951,11 +8594,16 @@ const Leads = () => {
         );
       case "lifecycleStage": {
         const configuredStage = isGeneric
-          ? genericLifecycleOptions.find((option) => option.id === lead.lifecycleStageKey)
+          ? genericLifecycleOptions.find(
+              (option) => option.id === lead.lifecycleStageKey,
+            )
           : null;
-        const lifecycleOptions = isGeneric && genericLifecycleOptions.length
-          ? genericLifecycleOptions
-          : ["Lead", "Prospect", "Customer", "Churned", "Junk"].map((status) => ({ id: status, label: status, status }));
+        const lifecycleOptions =
+          isGeneric && genericLifecycleOptions.length
+            ? genericLifecycleOptions
+            : ["Lead", "Prospect", "Customer", "Churned", "Junk"].map(
+                (status) => ({ id: status, label: status, status }),
+              );
         // Lifecycle stage — inline-editable dropdown, pill display.
         return renderBuiltInLeadCell({
           lead,
@@ -7964,36 +8612,48 @@ const Leads = () => {
           // Generic CRM keeps lifecycle stage independent from CRM Status.
           // Existing rows without an explicit lifecycle stage stay at the
           // pipeline's initial Lead stage instead of mirroring lead.status.
-          value: configuredStage?.label || (isGeneric ? "Lead" : lead.status || "Lead"),
+          value:
+            configuredStage?.label ||
+            (isGeneric ? "Lead" : lead.status || "Lead"),
           type: "select",
           options: lifecycleOptions.map((option) => option.label),
           renderValue: (displayValue) => (
             <span style={sourceBadgeStyle}>{displayValue || ""}</span>
           ),
           onSave: async (row, _field, selectedLabel) => {
-            const option = lifecycleOptions.find((item) => item.label === selectedLabel);
+            const option = lifecycleOptions.find(
+              (item) => item.label === selectedLabel,
+            );
             if (!option) return;
-            let lifecycleTransitionReason = '';
+            let lifecycleTransitionReason = "";
             if (isGeneric && option.negative) {
               const reason = await notify.prompt({
-                title: 'Reason required',
+                title: "Reason required",
                 message: `Tell us why ${option.label} was selected.`,
-                placeholder: 'Enter the reason for this negative stage',
-                confirmText: 'Confirm stage',
+                placeholder: "Enter the reason for this negative stage",
+                confirmText: "Confirm stage",
               });
-              lifecycleTransitionReason = String(reason || '').trim();
+              lifecycleTransitionReason = String(reason || "").trim();
               if (!lifecycleTransitionReason) return false;
             }
             const updated = await fetchApi(`/api/contacts/${row.id}`, {
               method: "PATCH",
-              body: JSON.stringify(isGeneric && genericLifecycleOptions.length
-                ? {
-                    lifecycleStageKey: option.id,
-                    ...(lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
-                  }
-                : { status: option.status }),
+              body: JSON.stringify(
+                isGeneric && genericLifecycleOptions.length
+                  ? {
+                      lifecycleStageKey: option.id,
+                      ...(lifecycleTransitionReason
+                        ? { lifecycleTransitionReason }
+                        : {}),
+                    }
+                  : { status: option.status },
+              ),
             });
-            setLeads((current) => current.map((item) => item.id === row.id ? { ...item, ...updated } : item));
+            setLeads((current) =>
+              current.map((item) =>
+                item.id === row.id ? { ...item, ...updated } : item,
+              ),
+            );
           },
         });
       }
@@ -8593,21 +9253,27 @@ const Leads = () => {
               entity="contacts"
               label="Leads"
               formats={["csv", "xlsx"]}
-              genericLeadWizard={isGeneric}
+              genericLeadWizard={isGeneric && canLeadRead}
+              showExport={!isGeneric || canLeadExport}
+              allowImport={!isGeneric || canLeadWrite}
               onImported={isGeneric ? refreshAll : undefined}
               mappingFields={
                 isGeneric
                   ? leadColumnCatalog
                       .filter(
                         (field) =>
-                          !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key),
+                          !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key) ||
+                          field.key === "lifecycleStage",
                       )
                       .map((catalogField) => {
                         const key = catalogField.key;
                         const customField = customFieldByKey.get(key);
                         return {
                           key,
-                          fieldKey: key,
+                          fieldKey:
+                            key === "lifecycleStage"
+                              ? "lifecycleStageKey"
+                              : key,
                           label:
                             catalogField.label ||
                             customField?.label ||
@@ -8633,7 +9299,7 @@ const Leads = () => {
 
           <span aria-hidden="true" style={compactToolbarDividerStyle} />
 
-          {isGeneric && callifiedConfigured && (
+          {isGeneric && callifiedConfigured && canLeadWrite && (
             <>
               {/* Auto-assign campaign rules: dropdown shows a grid where each
                   rule maps a lead column + value to a Callified campaign. */}
@@ -8742,7 +9408,7 @@ const Leads = () => {
                             display: "inline-flex",
                             alignItems: "center",
                             gap: "0.4rem",
-                            cursor: isAdmin ? "pointer" : "not-allowed",
+                            cursor: canLeadWrite ? "pointer" : "not-allowed",
                             fontSize: "0.8rem",
                             color: "var(--text-secondary)",
                           }}
@@ -8750,7 +9416,7 @@ const Leads = () => {
                           <input
                             type="checkbox"
                             checked={autoCampaignRulesEnabled}
-                            disabled={autoCampaignRulesSaving || !isAdmin}
+                            disabled={autoCampaignRulesSaving || !canLeadWrite}
                             onChange={() => {
                               const next = !autoCampaignRulesEnabled;
                               setAutoCampaignRulesEnabled(next);
@@ -8816,7 +9482,9 @@ const Leads = () => {
                               padding: "0 0.25rem",
                             }}
                           >
-                            <span className="auto-campaign-rule-on-heading">On</span>
+                            <span className="auto-campaign-rule-on-heading">
+                              On
+                            </span>
                             <span>Lead column</span>
                             <span>Value</span>
                             <span>Campaign</span>
@@ -8877,7 +9545,9 @@ const Leads = () => {
                                   className="auto-campaign-rule-checkbox"
                                   type="checkbox"
                                   checked={!!rule.enabled}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={
+                                    autoCampaignRulesSaving || !canLeadWrite
+                                  }
                                   onChange={() => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
@@ -8888,13 +9558,17 @@ const Leads = () => {
                                     removeSavedStatus();
                                   }}
                                   style={{
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
+                                    cursor: canLeadWrite
+                                      ? "pointer"
+                                      : "not-allowed",
                                   }}
                                 />
                                 <select
                                   className="input-field"
                                   value={rule.column || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={
+                                    autoCampaignRulesSaving || !canLeadWrite
+                                  }
                                   onChange={(e) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
@@ -8920,7 +9594,9 @@ const Leads = () => {
                                 <input
                                   type="text"
                                   value={rule.value || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={
+                                    autoCampaignRulesSaving || !canLeadWrite
+                                  }
                                   placeholder="e.g. web-form"
                                   onChange={(e) => {
                                     const next = autoCampaignRules.map((r) =>
@@ -8944,7 +9620,9 @@ const Leads = () => {
                                 <select
                                   className="input-field"
                                   value={rule.campaignId || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={
+                                    autoCampaignRulesSaving || !canLeadWrite
+                                  }
                                   onChange={(e) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
@@ -8980,7 +9658,7 @@ const Leads = () => {
                                     disabled={
                                       !ruleIsValid ||
                                       autoCampaignRulesSaving ||
-                                      !isAdmin
+                                      !canLeadWrite
                                     }
                                     onClick={() => {
                                       saveAutoCampaignRules({
@@ -8997,7 +9675,7 @@ const Leads = () => {
                                       color: "var(--text-primary)",
                                       fontSize: "0.75rem",
                                       cursor:
-                                        isAdmin &&
+                                        canLeadWrite &&
                                         ruleIsValid &&
                                         !autoCampaignRulesSaving
                                           ? "pointer"
@@ -9024,7 +9702,9 @@ const Leads = () => {
                                 </div>
                                 <button
                                   type="button"
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  disabled={
+                                    autoCampaignRulesSaving || !canLeadWrite
+                                  }
                                   onClick={() => {
                                     const next = autoCampaignRules.filter(
                                       (r) => r.id !== rule.id,
@@ -9044,7 +9724,9 @@ const Leads = () => {
                                     background: "none",
                                     border: "none",
                                     color: "var(--danger-color, #ef4444)",
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
+                                    cursor: canLeadWrite
+                                      ? "pointer"
+                                      : "not-allowed",
                                     display: "inline-flex",
                                     alignItems: "center",
                                     justifyContent: "center",
@@ -9060,7 +9742,7 @@ const Leads = () => {
 
                           <button
                             type="button"
-                            disabled={autoCampaignRulesSaving || !isAdmin}
+                            disabled={autoCampaignRulesSaving || !canLeadWrite}
                             onClick={() => {
                               const next = [
                                 ...autoCampaignRules,
@@ -9085,7 +9767,7 @@ const Leads = () => {
                               border: "1px dashed var(--border-color)",
                               background: "transparent",
                               color: "var(--text-secondary)",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canLeadWrite ? "pointer" : "not-allowed",
                               fontSize: "0.8rem",
                               alignSelf: "flex-start",
                             }}
@@ -9093,7 +9775,7 @@ const Leads = () => {
                             <Plus size={14} /> Add rule
                           </button>
 
-                          {!isAdmin && (
+                          {!canLeadWrite && (
                             <div
                               className="call-settings-admin-note"
                               style={{
@@ -9102,7 +9784,8 @@ const Leads = () => {
                                 marginTop: "0.5rem",
                               }}
                             >
-                              Only admins can change auto-assign rules.
+                              A role with leads.write can change auto-assign
+                              rules.
                             </div>
                           )}
                         </div>
@@ -9472,7 +10155,9 @@ const Leads = () => {
                             <select
                               className="input-field"
                               value={bulkCampaignId}
-                              onChange={(e) => setBulkCampaignId(e.target.value)}
+                              onChange={(e) =>
+                                setBulkCampaignId(e.target.value)
+                              }
                               disabled={bulkCampaignSaving}
                               style={{
                                 flex: 1,
@@ -9493,7 +10178,9 @@ const Leads = () => {
                               className="btn-secondary"
                               onClick={() => {
                                 setLeadBulkActionsOpen(false);
-                                handleBulkAssignCampaign(bulkCampaignId || null);
+                                handleBulkAssignCampaign(
+                                  bulkCampaignId || null,
+                                );
                               }}
                               disabled={bulkCampaignSaving}
                               style={{
@@ -9816,7 +10503,10 @@ const Leads = () => {
               flex: "1 1 520px",
             }}
           >
-            <div className="search-with-leading-icon" style={{ width: "min(100%, 300px)" }}>
+            <div
+              className="search-with-leading-icon"
+              style={{ width: "min(100%, 300px)" }}
+            >
               <Search
                 size={18}
                 style={{
@@ -10124,7 +10814,9 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings
+                                ? "pointer"
+                                : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                             }}
@@ -10132,7 +10824,9 @@ const Leads = () => {
                             <input
                               type="checkbox"
                               checked={autoDialNewLeadsEnabled}
-                              disabled={callSettingsSaving || !isAdmin}
+                              disabled={
+                                callSettingsSaving || !canManageCallSettings
+                              }
                               onChange={(e) => {
                                 saveAutoDialNewLeadsEnabled(e.target.checked);
                               }}
@@ -10172,7 +10866,9 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "flex-start",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings
+                                ? "pointer"
+                                : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                             }}
@@ -10236,7 +10932,9 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings
+                                ? "pointer"
+                                : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                               marginBottom: "0.75rem",
@@ -10248,7 +10946,7 @@ const Leads = () => {
                               disabled={
                                 dnpSettingsLoading ||
                                 callSettingsSaving ||
-                                !isAdmin
+                                !canManageCallSettings
                               }
                               onChange={(e) => {
                                 saveDnpRetryEnabled(e.target.checked);
@@ -10286,7 +10984,7 @@ const Leads = () => {
                                   disabled={
                                     dnpSettingsLoading ||
                                     callSettingsSaving ||
-                                    !isAdmin
+                                    !canManageCallSettings
                                   }
                                   onChange={(e) => {
                                     setDnpMaxRetries(Number(e.target.value));
@@ -10347,7 +11045,7 @@ const Leads = () => {
                                 disabled={
                                   dnpSettingsLoading ||
                                   callSettingsSaving ||
-                                  !isAdmin
+                                  !canManageCallSettings
                                 }
                               />
                             </div>
@@ -10385,7 +11083,9 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings
+                                ? "pointer"
+                                : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                               marginBottom: "0.75rem",
@@ -10397,7 +11097,7 @@ const Leads = () => {
                               disabled={
                                 pendingSettingsLoading ||
                                 callSettingsSaving ||
-                                !isAdmin
+                                !canManageCallSettings
                               }
                               onChange={(e) =>
                                 savePendingSetting(
@@ -10439,7 +11139,7 @@ const Leads = () => {
                                   disabled={
                                     pendingSettingsLoading ||
                                     callSettingsSaving ||
-                                    !isAdmin
+                                    !canManageCallSettings
                                   }
                                   onChange={(e) =>
                                     setPendingMaxRetries(Number(e.target.value))
@@ -10508,7 +11208,7 @@ const Leads = () => {
                                 disabled={
                                   pendingSettingsLoading ||
                                   callSettingsSaving ||
-                                  !isAdmin
+                                  !canManageCallSettings
                                 }
                               />
                             </div>
@@ -10546,7 +11246,9 @@ const Leads = () => {
                               display: "flex",
                               alignItems: "center",
                               gap: "0.5rem",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
+                              cursor: canManageCallSettings
+                                ? "pointer"
+                                : "not-allowed",
                               fontSize: "0.85rem",
                               color: "var(--text-primary)",
                               marginBottom: "0.75rem",
@@ -10558,7 +11260,7 @@ const Leads = () => {
                               disabled={
                                 assignSettingsLoading ||
                                 callSettingsSaving ||
-                                !isAdmin
+                                !canManageCallSettings
                               }
                               onChange={(e) => {
                                 saveAssignStaffEnabled(e.target.checked);
@@ -10594,7 +11296,7 @@ const Leads = () => {
                                   disabled={
                                     assignSettingsLoading ||
                                     callSettingsSaving ||
-                                    !isAdmin
+                                    !canManageCallSettings
                                   }
                                   onChange={(e) => {
                                     saveAssignStaffLogic(e.target.value);
@@ -10639,7 +11341,7 @@ const Leads = () => {
                                     disabled={
                                       assignSettingsLoading ||
                                       callSettingsSaving ||
-                                      !isAdmin
+                                      !canManageCallSettings
                                     }
                                     onChange={(e) => {
                                       setAssignStaffLeadsPerUser(
@@ -10702,7 +11404,7 @@ const Leads = () => {
                           </div>
                         </div>
 
-                        {!isAdmin && (
+                        {!canManageCallSettings && (
                           <div
                             style={{
                               fontSize: "0.75rem",
@@ -10710,7 +11412,8 @@ const Leads = () => {
                               marginTop: "0.75rem",
                             }}
                           >
-                            Only admins can change these settings.
+                            A role with settings.manage can change these
+                            settings.
                           </div>
                         )}
                         <div
@@ -10737,7 +11440,9 @@ const Leads = () => {
                             type="button"
                             className="btn-primary"
                             onClick={saveAllCallSettings}
-                            disabled={callSettingsSaving || !isAdmin}
+                            disabled={
+                              callSettingsSaving || !canManageCallSettings
+                            }
                           >
                             {callSettingsSaving ? "Saving…" : "Save changes"}
                           </button>
@@ -10751,18 +11456,28 @@ const Leads = () => {
             {supportsColumnCustomization && (
               <ColumnPicker
                 tableKey="leads"
-                onColumnsChange={(columns) => setVisibleColumns(isGeneric
-                  ? columns.filter(
-                      (column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
-                    )
-                  : columns)}
-                onAvailableColumnsChange={(columns) => setLeadColumnCatalog(isGeneric
-                  ? ensureGenericOverallStatusCatalog(
-                      ensureGenericPlotAssignCatalog(columns),
-                    ).filter(
-                      (column) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
-                    )
-                  : columns)}
+                onColumnsChange={(columns) =>
+                  setVisibleColumns(
+                    isGeneric
+                      ? columns.filter(
+                          (column) =>
+                            !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
+                        )
+                      : columns,
+                  )
+                }
+                onAvailableColumnsChange={(columns) =>
+                  setLeadColumnCatalog(
+                    isGeneric
+                      ? ensureGenericOverallStatusCatalog(
+                          ensureGenericPlotAssignCatalog(columns),
+                        ).filter(
+                          (column) =>
+                            !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
+                        )
+                      : columns,
+                  )
+                }
                 deletableColumns={
                   isGeneric && isAdmin
                     ? customFieldDefs.map((field) => ({
@@ -10850,52 +11565,91 @@ const Leads = () => {
                 onClick={() => setMobileLeadActionsOpen((open) => !open)}
               >
                 More actions
-                {mobileLeadActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {mobileLeadActionsOpen ? (
+                  <ChevronUp size={14} />
+                ) : (
+                  <ChevronDown size={14} />
+                )}
               </button>
             </div>
           )}
         </div>
         <div
           className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
-          onWheel={isGeneric ? (event) => {
-            const grid = event.currentTarget;
-            const scrollbar = grid.querySelector(".top-scroll-sync__sticky-bottom");
-            if (!scrollbar || scrollbar.scrollWidth <= scrollbar.clientWidth) return;
+          onWheel={
+            isGeneric
+              ? (event) => {
+                  const grid = event.currentTarget;
+                  const scrollbar = grid.querySelector(
+                    ".top-scroll-sync__sticky-bottom",
+                  );
+                  if (
+                    !scrollbar ||
+                    scrollbar.scrollWidth <= scrollbar.clientWidth
+                  )
+                    return;
 
-            // Keep vertical wheel/touchpad gestures vertical, including when
-            // the grid is already at its top or bottom. Only an intentional
-            // horizontal gesture (or Shift+wheel) should move across columns.
-            const horizontalDelta = event.shiftKey
-              ? event.deltaY
-              : Math.abs(event.deltaX) > Math.abs(event.deltaY)
-                ? event.deltaX
-                : 0;
-            if (!horizontalDelta) return;
-            const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? grid.clientWidth : 1;
-            scrollbar.scrollLeft += horizontalDelta * multiplier;
-          } : undefined}
-          onTouchStart={isGeneric ? (event) => {
-            const touch = event.touches[0];
-            const scrollbar = event.currentTarget.querySelector(".top-scroll-sync__sticky-bottom");
-            if (!touch || !scrollbar) return;
-            leadsHorizontalTouchRef.current = {
-              x: touch.clientX,
-              y: touch.clientY,
-              scrollLeft: scrollbar.scrollLeft,
-              scrollbar,
-            };
-          } : undefined}
-          onTouchMove={isGeneric ? (event) => {
-            const gesture = leadsHorizontalTouchRef.current;
-            const touch = event.touches[0];
-            if (!gesture || !touch) return;
-            const deltaX = gesture.x - touch.clientX;
-            const deltaY = gesture.y - touch.clientY;
-            if (Math.abs(deltaX) < 8 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
-            gesture.scrollbar.scrollLeft = gesture.scrollLeft + deltaX;
-            if (event.cancelable) event.preventDefault();
-          } : undefined}
-          onTouchEnd={isGeneric ? () => { leadsHorizontalTouchRef.current = null; } : undefined}
+                  // Keep vertical wheel/touchpad gestures vertical, including when
+                  // the grid is already at its top or bottom. Only an intentional
+                  // horizontal gesture (or Shift+wheel) should move across columns.
+                  const horizontalDelta = event.shiftKey
+                    ? event.deltaY
+                    : Math.abs(event.deltaX) > Math.abs(event.deltaY)
+                      ? event.deltaX
+                      : 0;
+                  if (!horizontalDelta) return;
+                  const multiplier =
+                    event.deltaMode === 1
+                      ? 16
+                      : event.deltaMode === 2
+                        ? grid.clientWidth
+                        : 1;
+                  scrollbar.scrollLeft += horizontalDelta * multiplier;
+                }
+              : undefined
+          }
+          onTouchStart={
+            isGeneric
+              ? (event) => {
+                  const touch = event.touches[0];
+                  const scrollbar = event.currentTarget.querySelector(
+                    ".top-scroll-sync__sticky-bottom",
+                  );
+                  if (!touch || !scrollbar) return;
+                  leadsHorizontalTouchRef.current = {
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    scrollLeft: scrollbar.scrollLeft,
+                    scrollbar,
+                  };
+                }
+              : undefined
+          }
+          onTouchMove={
+            isGeneric
+              ? (event) => {
+                  const gesture = leadsHorizontalTouchRef.current;
+                  const touch = event.touches[0];
+                  if (!gesture || !touch) return;
+                  const deltaX = gesture.x - touch.clientX;
+                  const deltaY = gesture.y - touch.clientY;
+                  if (
+                    Math.abs(deltaX) < 8 ||
+                    Math.abs(deltaX) <= Math.abs(deltaY)
+                  )
+                    return;
+                  gesture.scrollbar.scrollLeft = gesture.scrollLeft + deltaX;
+                  if (event.cancelable) event.preventDefault();
+                }
+              : undefined
+          }
+          onTouchEnd={
+            isGeneric
+              ? () => {
+                  leadsHorizontalTouchRef.current = null;
+                }
+              : undefined
+          }
           style={
             isGeneric
               ? {
@@ -10995,7 +11749,7 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                         onClick={() => {
-                          if (!isTravel) navigate(leadDetailPath(lead));
+                          if (!isTravel) openLeadDetail(lead);
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
@@ -11041,41 +11795,68 @@ const Leads = () => {
                                 onSave={updateLeadInlineValue}
                                 required
                                 editOnDisplayClick={false}
+                                showEditButton={canLeadUpdate}
                                 disableTruncation
                                 renderValue={(name) => (
-                                  <a
-                                    href={
-                                      isTravel ? "#lead-preview" : leadDetailPath(lead)
-                                    }
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      if (isTravel) setPreviewLead(lead);
-                                      else navigate(leadDetailPath(lead));
-                                    }}
-                                    title={
-                                      isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
-                                    }
-                                    style={{
-                                      minWidth: 0,
-                                      overflow: "visible",
-                                      textOverflow: "clip",
-                                      whiteSpace: "nowrap",
-                                      color: "var(--accent-color)",
-                                      fontWeight: 700,
-                                      textDecoration: "none",
-                                    }}
-                                    onMouseEnter={(e) => {
-                                      e.currentTarget.style.textDecoration =
-                                        "underline";
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      e.currentTarget.style.textDecoration =
-                                        "none";
-                                    }}
-                                  >
-                                    {name || "Unnamed lead"}
-                                  </a>
+                                  isTravel ? (
+                                    <a
+                                      href="#lead-preview"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setPreviewLead(lead);
+                                      }}
+                                      title={`Preview ${lead.name || "lead"}`}
+                                      style={{
+                                        minWidth: 0,
+                                        overflow: "visible",
+                                        textOverflow: "clip",
+                                        whiteSpace: "nowrap",
+                                        color: "var(--accent-color)",
+                                        fontWeight: 700,
+                                        textDecoration: "none",
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.textDecoration =
+                                          "underline";
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.textDecoration =
+                                          "none";
+                                      }}
+                                    >
+                                      {name || "Unnamed lead"}
+                                    </a>
+                                  ) : (
+                                    <Link
+                                      to={leadDetailPathWithListState(lead)}
+                                      state={leadListNavigationState}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        rememberLeadListState();
+                                      }}
+                                      title={`Open profile for ${name || "lead"}`}
+                                      style={{
+                                        minWidth: 0,
+                                        overflow: "visible",
+                                        textOverflow: "clip",
+                                        whiteSpace: "nowrap",
+                                        color: "var(--accent-color)",
+                                        fontWeight: 700,
+                                        textDecoration: "none",
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.textDecoration =
+                                          "underline";
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.textDecoration =
+                                          "none";
+                                      }}
+                                    >
+                                      {name || "Unnamed lead"}
+                                    </Link>
+                                  )
                                 )}
                               />
                             </div>
@@ -11294,7 +12075,7 @@ const Leads = () => {
                         }}
                         className="table-row-hover"
                         onClick={() => {
-                          if (!isTravel) navigate(leadDetailPath(lead));
+                          if (!isTravel) openLeadDetail(lead);
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
@@ -11332,33 +12113,52 @@ const Leads = () => {
                                   onSave={updateLeadInlineValue}
                                   required
                                   editOnDisplayClick={false}
+                                  showEditButton={canLeadUpdate}
                                   disableTruncation
                                   renderValue={(name) => (
-                                    <a
-                                      href={
-                                        isTravel ? "#lead-preview" : leadDetailPath(lead)
-                                      }
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        if (isTravel) setPreviewLead(lead);
-                                        else navigate(leadDetailPath(lead));
-                                      }}
-                                      title={
-                                        isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
-                                      }
-                                      style={{
-                                        minWidth: 0,
-                                        overflow: "visible",
-                                        textOverflow: "clip",
-                                        whiteSpace: "nowrap",
-                                        color: "var(--accent-color)",
-                                        fontWeight: 700,
-                                        textDecoration: "none",
-                                      }}
-                                    >
-                                      {name || "Unnamed lead"}
-                                    </a>
+                                    isTravel ? (
+                                      <a
+                                        href="#lead-preview"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setPreviewLead(lead);
+                                        }}
+                                        title={`Preview ${lead.name || "lead"}`}
+                                        style={{
+                                          minWidth: 0,
+                                          overflow: "visible",
+                                          textOverflow: "clip",
+                                          whiteSpace: "nowrap",
+                                          color: "var(--accent-color)",
+                                          fontWeight: 700,
+                                          textDecoration: "none",
+                                        }}
+                                      >
+                                        {name || "Unnamed lead"}
+                                      </a>
+                                    ) : (
+                                      <Link
+                                        to={leadDetailPathWithListState(lead)}
+                                        state={leadListNavigationState}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          rememberLeadListState();
+                                        }}
+                                        title={`Open profile for ${name || "lead"}`}
+                                        style={{
+                                          minWidth: 0,
+                                          overflow: "visible",
+                                          textOverflow: "clip",
+                                          whiteSpace: "nowrap",
+                                          color: "var(--accent-color)",
+                                          fontWeight: 700,
+                                          textDecoration: "none",
+                                        }}
+                                      >
+                                        {name || "Unnamed lead"}
+                                      </Link>
+                                    )
                                   )}
                                 />
                               </div>
@@ -11380,16 +12180,20 @@ const Leads = () => {
                               : "Not started";
                             const pickupAddress =
                               pickupStatus?.pickupAddress?.trim();
-                            const selectedPickupLocation = pickupLocationOptions.find(
-                              (location) => String(location.address || "").trim() === pickupAddress,
-                            );
-                            const currentPickupOption = pickupAddress && !selectedPickupLocation
-                              ? {
-                                  id: `current-${lead.id}`,
-                                  name: "Current pickup",
-                                  address: pickupAddress,
-                                }
-                              : null;
+                            const selectedPickupLocation =
+                              pickupLocationOptions.find(
+                                (location) =>
+                                  String(location.address || "").trim() ===
+                                  pickupAddress,
+                              );
+                            const currentPickupOption =
+                              pickupAddress && !selectedPickupLocation
+                                ? {
+                                    id: `current-${lead.id}`,
+                                    name: "Current pickup",
+                                    address: pickupAddress,
+                                  }
+                                : null;
                             const plotAssignmentCustomer =
                               getPlotAssignmentCustomer(lead.id);
                             const assignedPlots = getAssignedPlotsForLead(
@@ -11447,14 +12251,25 @@ const Leads = () => {
                                         boxSizing: "border-box",
                                       }}
                                     >
-                                      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                                      <div
+                                        style={{
+                                          flex: "1 1 auto",
+                                          minWidth: 0,
+                                        }}
+                                      >
                                         <PickupLocationSelect
                                           compact
                                           ariaLabel={`Pickup location for ${lead.name || "lead"}`}
-                                          value={selectedPickupLocation?.id || currentPickupOption?.id || ""}
+                                          value={
+                                            selectedPickupLocation?.id ||
+                                            currentPickupOption?.id ||
+                                            ""
+                                          }
                                           disabled={
-                                            pickupLocationOptions.length === 0 ||
-                                            savingPickupLocationId === Number(lead.id) ||
+                                            pickupLocationOptions.length ===
+                                              0 ||
+                                            savingPickupLocationId ===
+                                              Number(lead.id) ||
                                             transportWorkflowLocked
                                           }
                                           onChange={(locationId) =>
@@ -11464,9 +12279,14 @@ const Leads = () => {
                                               locationId,
                                             )
                                           }
-                                          options={currentPickupOption
-                                            ? [currentPickupOption, ...pickupLocationOptions]
-                                            : pickupLocationOptions}
+                                          options={
+                                            currentPickupOption
+                                              ? [
+                                                  currentPickupOption,
+                                                  ...pickupLocationOptions,
+                                                ]
+                                              : pickupLocationOptions
+                                          }
                                         />
                                       </div>
                                       {pickupAddress && (
@@ -11510,13 +12330,15 @@ const Leads = () => {
                                           type="button"
                                           className="btn-secondary"
                                           aria-label={`View plots for ${lead.name || "lead"}`}
-                                          onClick={() => setViewingLeadPlots({
-                                            lead,
-                                            plots: assignedPlots,
-                                            customer: plotAssignmentCustomer,
-                                            pickupStatus,
-                                            selectedPlot: null,
-                                          })}
+                                          onClick={() =>
+                                            setViewingLeadPlots({
+                                              lead,
+                                              plots: assignedPlots,
+                                              customer: plotAssignmentCustomer,
+                                              pickupStatus,
+                                              selectedPlot: null,
+                                            })
+                                          }
                                           style={{
                                             display: "inline-flex",
                                             alignItems: "center",
@@ -11530,29 +12352,34 @@ const Leads = () => {
                                           <Eye size={13} /> View plot
                                         </button>
                                       )}
-                                      {isAdmin && assignedPlots.length === 0 && (
-                                        <button
-                                          type="button"
-                                          className="btn-secondary"
-                                          aria-label={`Assign plot to ${lead.name || "lead"}`}
-                                          title={transportWorkflowLocked
-                                            ? "Plot assignments are locked because transport has started"
-                                            : "Assign plots"}
-                                          onClick={() => openLeadPlotAssignment(lead)}
-                                          disabled={transportWorkflowLocked}
-                                          style={{
-                                            display: "inline-flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                            gap: 5,
-                                            width: "fit-content",
-                                            padding: ".35rem .55rem",
-                                            fontSize: ".72rem",
-                                          }}
-                                        >
-                                          <Plus size={13} /> Assign plot
-                                        </button>
-                                      )}
+                                      {isAdmin &&
+                                        assignedPlots.length === 0 && (
+                                          <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            aria-label={`Assign plot to ${lead.name || "lead"}`}
+                                            title={
+                                              transportWorkflowLocked
+                                                ? "Plot assignments are locked because transport has started"
+                                                : "Assign plots"
+                                            }
+                                            onClick={() =>
+                                              openLeadPlotAssignment(lead)
+                                            }
+                                            disabled={transportWorkflowLocked}
+                                            style={{
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              justifyContent: "center",
+                                              gap: 5,
+                                              width: "fit-content",
+                                              padding: ".35rem .55rem",
+                                              fontSize: ".72rem",
+                                            }}
+                                          >
+                                            <Plus size={13} /> Assign plot
+                                          </button>
+                                        )}
                                     </div>
                                   </td>
                                 )}
@@ -11613,7 +12440,7 @@ const Leads = () => {
                               onChange={(campaignId) =>
                                 handleCampaignChange(lead, campaignId)
                               }
-                              disabled={!callifiedConfigured}
+                              disabled={!callifiedConfigured || !canLeadUpdate}
                               width={160}
                               maxVisibleRows={5}
                               ariaLabel={`Assign Callified campaign for ${lead.name || "lead"}`}
@@ -11714,7 +12541,9 @@ const Leads = () => {
                                         e.target.value,
                                       )
                                     }
-                                    disabled={!callifiedConfigured}
+                                    disabled={
+                                      !callifiedConfigured || !canLeadUpdate
+                                    }
                                     style={{
                                       padding: "0.25rem 0.6rem",
                                       borderRadius: "999px",
@@ -11764,15 +12593,19 @@ const Leads = () => {
                           <td
                             data-callified-ai-lead-id={String(lead.id)}
                             data-callified-ai-highlighted={
-                              Number(lead.id) === focusedCallifiedLeadId ? "true" : undefined
+                              Number(lead.id) === focusedCallifiedLeadId
+                                ? "true"
+                                : undefined
                             }
                             aria-label={`Callified AI call for ${lead.name || "lead"}`}
                             style={getBodyCellStyle(
                               "callifiedAi",
                               Number(lead.id) === focusedCallifiedLeadId
                                 ? {
-                                    background: "color-mix(in srgb, var(--primary-color, var(--accent-color)) 18%, transparent)",
-                                    boxShadow: "inset 0 0 0 2px var(--primary-color, var(--accent-color))",
+                                    background:
+                                      "color-mix(in srgb, var(--primary-color, var(--accent-color)) 18%, transparent)",
+                                    boxShadow:
+                                      "inset 0 0 0 2px var(--primary-color, var(--accent-color))",
                                   }
                                 : {},
                             )}
@@ -12032,36 +12865,42 @@ const Leads = () => {
                           >
                             <Eye size={15} />
                           </button>
-                          <button
-                            onClick={() => openEdit(lead)}
-                            title="Edit lead"
-                            style={{ ...actionIconBtn, marginLeft: 6 }}
-                          >
-                            <Pencil size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleConvert(lead.id)}
-                            title="Convert to Prospect"
-                            aria-label={`Convert ${lead.name || "lead"} to Prospect`}
-                            style={{
-                              ...actionIconBtn,
-                              color: "var(--success-color)",
-                              marginLeft: 6,
-                            }}
-                          >
-                            <ArrowRightCircle size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(lead)}
-                            title="Delete lead"
-                            style={{
-                              ...actionIconBtn,
-                              color: "var(--danger-color, #f43f5e)",
-                              marginLeft: 6,
-                            }}
-                          >
-                            <Trash2 size={15} />
-                          </button>
+                          {canLeadUpdate && (
+                            <>
+                              <button
+                                onClick={() => openEdit(lead)}
+                                title="Edit lead"
+                                style={{ ...actionIconBtn, marginLeft: 6 }}
+                              >
+                                <Pencil size={15} />
+                              </button>
+                              <button
+                                onClick={() => handleConvert(lead.id)}
+                                title="Convert to Prospect"
+                                aria-label={`Convert ${lead.name || "lead"} to Prospect`}
+                                style={{
+                                  ...actionIconBtn,
+                                  color: "var(--success-color)",
+                                  marginLeft: 6,
+                                }}
+                              >
+                                <ArrowRightCircle size={15} />
+                              </button>
+                            </>
+                          )}
+                          {canLeadDelete && (
+                            <button
+                              onClick={() => handleDelete(lead)}
+                              title="Delete lead"
+                              style={{
+                                ...actionIconBtn,
+                                color: "var(--danger-color, #f43f5e)",
+                                marginLeft: 6,
+                              }}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -12122,7 +12961,12 @@ const Leads = () => {
                   <h2 id="lead-assign-plots-title" style={{ margin: 0 }}>
                     Assign plots
                   </h2>
-                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
                     {assigningPlotLead.name || "Lead"}
                   </p>
                 </div>
@@ -12137,9 +12981,17 @@ const Leads = () => {
                 </button>
               </div>
               <p style={{ color: "var(--text-secondary)", fontSize: ".84rem" }}>
-                Choose one Plot / Site name, then select one or more available plot numbers. Reserved and sold plots are hidden.
+                Choose one Plot / Site name, then select one or more available
+                plot numbers. Reserved and sold plots are hidden.
               </p>
-              <label style={{ display: "grid", gap: 6, fontWeight: 700, fontSize: ".8rem" }}>
+              <label
+                style={{
+                  display: "grid",
+                  gap: 6,
+                  fontWeight: 700,
+                  fontSize: ".8rem",
+                }}
+              >
                 Plot / Site
                 <select
                   className="input-field"
@@ -12152,18 +13004,30 @@ const Leads = () => {
                   }}
                 >
                   {availablePlotAssignmentNames.map((name) => (
-                    <option key={name} value={name}>{name}</option>
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
                   ))}
                 </select>
               </label>
               <div
                 role="group"
                 aria-label="Plots to assign"
-                style={{ display: "grid", gap: 8, maxHeight: 340, overflowY: "auto", marginTop: 14 }}
+                style={{
+                  display: "grid",
+                  gap: 8,
+                  maxHeight: 340,
+                  overflowY: "auto",
+                  marginTop: 14,
+                }}
               >
                 {assigningPlotOptions.map((plotOption) => {
-                  const alreadyAssigned = alreadyAssignedPlotIds.has(Number(plotOption.id));
-                  const checked = assigningPlotIds.includes(Number(plotOption.id));
+                  const alreadyAssigned = alreadyAssignedPlotIds.has(
+                    Number(plotOption.id),
+                  );
+                  const checked = assigningPlotIds.includes(
+                    Number(plotOption.id),
+                  );
                   return (
                     <label
                       key={plotOption.id}
@@ -12184,15 +13048,25 @@ const Leads = () => {
                           setAssigningPlotIds((current) =>
                             event.target.checked
                               ? [...current, Number(plotOption.id)]
-                              : current.filter((id) => id !== Number(plotOption.id)),
+                              : current.filter(
+                                  (id) => id !== Number(plotOption.id),
+                                ),
                           )
                         }
                       />
                       <span>
                         <strong>Plot {plotOption.plotNumber}</strong>
-                        <small style={{ display: "block", marginTop: 2, color: "var(--text-secondary)" }}>
+                        <small
+                          style={{
+                            display: "block",
+                            marginTop: 2,
+                            color: "var(--text-secondary)",
+                          }}
+                        >
                           {plotOption.name}
-                          {plotOption.block ? ` · Block ${plotOption.block}` : ""}
+                          {plotOption.block
+                            ? ` · Block ${plotOption.block}`
+                            : ""}
                           {alreadyAssigned ? " · Already assigned" : ""}
                         </small>
                       </span>
@@ -12221,11 +13095,27 @@ const Leads = () => {
                   </div>
                 )}
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-                <button type="button" className="btn-secondary" onClick={closeLeadPlotAssignment} disabled={assigningPlots}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  marginTop: 18,
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={closeLeadPlotAssignment}
+                  disabled={assigningPlots}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={!assigningPlotIds.length || assigningPlots}>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={!assigningPlotIds.length || assigningPlots}
+                >
                   {assigningPlots
                     ? "Assigning…"
                     : assigningPlotIds.length
@@ -12261,19 +13151,47 @@ const Leads = () => {
                 background: "var(--modal-bg, var(--surface-color))",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginBottom: 16,
+                }}
+              >
                 <div>
-                  <h2 id="lead-view-plots-title" style={{ margin: 0 }}>Assigned plots</h2>
-                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                  <h2 id="lead-view-plots-title" style={{ margin: 0 }}>
+                    Assigned plots
+                  </h2>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
                     {viewingLeadPlots.lead.name || "Lead"}
                   </p>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {!isTransportWorkflowLocked(viewingLeadPlots.pickupStatus) && viewingLeadPlots.plots.some((plot) => plot.id && !isPurchasedCustomerPlot(plot, viewingLeadPlots.customer, viewingLeadPlots.pickupStatus)) && (
-                    <button type="button" className="btn-secondary" aria-label={`Edit assigned plots for ${viewingLeadPlots.lead.name || "lead"}`} onClick={openLeadPlotReplacement}>
-                      <Pencil size={13} /> Edit
-                    </button>
-                  )}
+                  {!isTransportWorkflowLocked(viewingLeadPlots.pickupStatus) &&
+                    viewingLeadPlots.plots.some(
+                      (plot) =>
+                        plot.id &&
+                        !isPurchasedCustomerPlot(
+                          plot,
+                          viewingLeadPlots.customer,
+                          viewingLeadPlots.pickupStatus,
+                        ),
+                    ) && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        aria-label={`Edit assigned plots for ${viewingLeadPlots.lead.name || "lead"}`}
+                        onClick={openLeadPlotReplacement}
+                      >
+                        <Pencil size={13} /> Edit
+                      </button>
+                    )}
                   <button
                     type="button"
                     className="btn-secondary"
@@ -12284,7 +13202,10 @@ const Leads = () => {
                   </button>
                 </div>
               </div>
-              <div aria-label="Assigned plot list" style={{ display: "grid", gap: 10 }}>
+              <div
+                aria-label="Assigned plot list"
+                style={{ display: "grid", gap: 10 }}
+              >
                 {viewingLeadPlots.plots.map((plot) => (
                   <div
                     key={plot.id || `${plot.name}-${plot.plotNumber}`}
@@ -12300,23 +13221,37 @@ const Leads = () => {
                   >
                     <span>
                       <strong>{plot.name || "Plot"}</strong>
-                      <small style={{ display: "block", marginTop: 3, color: "var(--text-secondary)" }}>
-                        {plot.plotNumber ? `Plot ${plot.plotNumber}` : "Plot number unavailable"}
+                      <small
+                        style={{
+                          display: "block",
+                          marginTop: 3,
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        {plot.plotNumber
+                          ? `Plot ${plot.plotNumber}`
+                          : "Plot number unavailable"}
                       </small>
                     </span>
-                    {plot.id && (isPurchasedCustomerPlot(
+                    {plot.id &&
+                    (isPurchasedCustomerPlot(
                       plot,
                       viewingLeadPlots.customer,
                       viewingLeadPlots.pickupStatus,
-                    ) || isTransportWorkflowLocked(viewingLeadPlots.pickupStatus)) ? (
+                    ) ||
+                      isTransportWorkflowLocked(
+                        viewingLeadPlots.pickupStatus,
+                      )) ? (
                       <button
                         type="button"
                         className="btn-secondary"
                         aria-label={`View selected plot ${plot.plotNumber || plot.name || "details"} for ${viewingLeadPlots.lead.name || "lead"}`}
-                        onClick={() => setViewingLeadPlots((current) => ({
-                          ...current,
-                          selectedPlot: plot,
-                        }))}
+                        onClick={() =>
+                          setViewingLeadPlots((current) => ({
+                            ...current,
+                            selectedPlot: plot,
+                          }))
+                        }
                       >
                         <Eye size={12} /> View selected plot
                       </button>
@@ -12337,11 +13272,31 @@ const Leads = () => {
                   }}
                 >
                   <strong>Selected plot details</strong>
-                  <div style={{ display: "grid", gap: 5, marginTop: 8, fontSize: ".82rem" }}>
-                    <span>Plot / Site: {viewingLeadPlots.selectedPlot.name || "Not available"}</span>
-                    <span>Plot number: {viewingLeadPlots.selectedPlot.plotNumber || "Not available"}</span>
-                    <span>Block: {viewingLeadPlots.selectedPlot.block || "Not available"}</span>
-                    <span>Address: {viewingLeadPlots.selectedPlot.address || "Not available"}</span>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 5,
+                      marginTop: 8,
+                      fontSize: ".82rem",
+                    }}
+                  >
+                    <span>
+                      Plot / Site:{" "}
+                      {viewingLeadPlots.selectedPlot.name || "Not available"}
+                    </span>
+                    <span>
+                      Plot number:{" "}
+                      {viewingLeadPlots.selectedPlot.plotNumber ||
+                        "Not available"}
+                    </span>
+                    <span>
+                      Block:{" "}
+                      {viewingLeadPlots.selectedPlot.block || "Not available"}
+                    </span>
+                    <span>
+                      Address:{" "}
+                      {viewingLeadPlots.selectedPlot.address || "Not available"}
+                    </span>
                   </div>
                 </div>
               )}
@@ -12374,10 +13329,23 @@ const Leads = () => {
                 background: "var(--modal-bg, var(--surface-color))",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
                 <div>
-                  <h2 id="lead-change-plot-title" style={{ margin: 0 }}>Edit assigned plots</h2>
-                  <p style={{ margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                  <h2 id="lead-change-plot-title" style={{ margin: 0 }}>
+                    Edit assigned plots
+                  </h2>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
                     {changingPlotAssignment.lead.name || "Lead"}
                   </p>
                 </div>
@@ -12392,70 +13360,197 @@ const Leads = () => {
                 </button>
               </div>
               <p style={{ color: "var(--text-secondary)", fontSize: ".84rem" }}>
-                Select or deselect plots for this Plot / Site. Choosing a different Plot / Site replaces the previous assignments.
+                Select or deselect plots for this Plot / Site. Choosing a
+                different Plot / Site replaces the previous assignments.
               </p>
-              <label style={{ display: "grid", gap: 6, marginBottom: 12, fontSize: ".82rem", fontWeight: 700 }}>
+              <label
+                style={{
+                  display: "grid",
+                  gap: 6,
+                  marginBottom: 12,
+                  fontSize: ".82rem",
+                  fontWeight: 700,
+                }}
+              >
                 Plot / Site
-                <select className="input-field" aria-label="Edit plot or site name" value={editingLeadPlotName} disabled={changingPlotNumber} onChange={(event) => { const name = event.target.value; setEditingLeadPlotName(name); setLeadReplacementPlotIds((changingPlotAssignment.plots || []).filter((plot) => String(plot.name || "").trim().toLowerCase() === name.trim().toLowerCase()).map((plot) => Number(plot.id))); }}>
-                  {editingLeadPlotNameOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+                <select
+                  className="input-field"
+                  aria-label="Edit plot or site name"
+                  value={editingLeadPlotName}
+                  disabled={changingPlotNumber}
+                  onChange={(event) => {
+                    const name = event.target.value;
+                    setEditingLeadPlotName(name);
+                    setLeadReplacementPlotIds(
+                      (changingPlotAssignment.plots || [])
+                        .filter(
+                          (plot) =>
+                            String(plot.name || "")
+                              .trim()
+                              .toLowerCase() === name.trim().toLowerCase(),
+                        )
+                        .map((plot) => Number(plot.id)),
+                    );
+                  }}
+                >
+                  {editingLeadPlotNameOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
                 </select>
               </label>
-              <div role="group" aria-label="Assigned and available plots" style={{ display: "grid", gap: 8 }}>
-                {(changingPlotAssignment.plots || []).filter((plotOption) => String(plotOption.name || "").trim().toLowerCase() === editingLeadPlotName.trim().toLowerCase()).map((plotOption) => {
-                  const locked = isPurchasedCustomerPlot(plotOption, changingPlotAssignment.customer, changingPlotAssignment.pickupStatus);
-                  return (
-                  <label
-                    key={`assigned-${plotOption.id}`}
+              <div
+                role="group"
+                aria-label="Assigned and available plots"
+                style={{ display: "grid", gap: 8 }}
+              >
+                {(changingPlotAssignment.plots || [])
+                  .filter(
+                    (plotOption) =>
+                      String(plotOption.name || "")
+                        .trim()
+                        .toLowerCase() ===
+                      editingLeadPlotName.trim().toLowerCase(),
+                  )
+                  .map((plotOption) => {
+                    const locked = isPurchasedCustomerPlot(
+                      plotOption,
+                      changingPlotAssignment.customer,
+                      changingPlotAssignment.pickupStatus,
+                    );
+                    return (
+                      <label
+                        key={`assigned-${plotOption.id}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: ".75rem",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: 10,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          value={plotOption.id}
+                          checked={leadReplacementPlotIds.includes(
+                            Number(plotOption.id),
+                          )}
+                          disabled={changingPlotNumber || locked}
+                          onChange={(event) =>
+                            toggleLeadReplacementPlot(
+                              plotOption.id,
+                              event.target.checked,
+                            )
+                          }
+                        />
+                        <span>
+                          <strong>Plot {plotOption.plotNumber}</strong>
+                          {plotOption.block && (
+                            <small
+                              style={{
+                                display: "block",
+                                color: "var(--text-secondary)",
+                              }}
+                            >
+                              Block {plotOption.block}
+                            </small>
+                          )}
+                          <small
+                            style={{
+                              display: "block",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            {plotOption.name || "Plot"} ·{" "}
+                            {locked ? "Purchased" : "Assigned"}
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                {replacementPlotChoices
+                  .filter(({ canSelect }) => canSelect)
+                  .map(({ plot: plotOption }) => {
+                    const checked = leadReplacementPlotIds.includes(
+                      Number(plotOption.id),
+                    );
+                    return (
+                      <label
+                        key={`available-${plotOption.id}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: ".75rem",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: 10,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          value={plotOption.id}
+                          checked={checked}
+                          disabled={changingPlotNumber}
+                          onChange={(event) =>
+                            toggleLeadReplacementPlot(
+                              plotOption.id,
+                              event.target.checked,
+                            )
+                          }
+                        />
+                        <span>
+                          <strong>Plot {plotOption.plotNumber}</strong>
+                          <small
+                            style={{
+                              display: "block",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            {plotOption.name || "Plot"}
+                            {plotOption.block
+                              ? ` · Block ${plotOption.block}`
+                              : ""}{" "}
+                            · Available
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                {!replacementPlotChoices.some(({ canSelect }) => canSelect) && (
+                  <div
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: ".75rem",
-                      border: "1px solid var(--border-color)",
+                      padding: "1rem",
+                      border: "1px dashed var(--border-color)",
                       borderRadius: 10,
                     }}
                   >
-                    <input
-                      type="checkbox"
-                      value={plotOption.id}
-                      checked={leadReplacementPlotIds.includes(Number(plotOption.id))}
-                      disabled={changingPlotNumber || locked}
-                      onChange={(event) => toggleLeadReplacementPlot(plotOption.id, event.target.checked)}
-                    />
-                    <span>
-                      <strong>Plot {plotOption.plotNumber}</strong>
-                      {plotOption.block && (
-                        <small style={{ display: "block", color: "var(--text-secondary)" }}>
-                          Block {plotOption.block}
-                        </small>
-                      )}
-                      <small style={{ display: "block", color: "var(--text-secondary)" }}>
-                        {plotOption.name || "Plot"} · {locked ? "Purchased" : "Assigned"}
-                      </small>
-                    </span>
-                  </label>
-                  );
-                })}
-                {replacementPlotChoices.filter(({ canSelect }) => canSelect).map(({ plot: plotOption }) => {
-                  const checked = leadReplacementPlotIds.includes(Number(plotOption.id));
-                  return (
-                    <label key={`available-${plotOption.id}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: ".75rem", border: "1px solid var(--border-color)", borderRadius: 10 }}>
-                      <input type="checkbox" value={plotOption.id} checked={checked} disabled={changingPlotNumber} onChange={(event) => toggleLeadReplacementPlot(plotOption.id, event.target.checked)} />
-                      <span><strong>Plot {plotOption.plotNumber}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>{plotOption.name || "Plot"}{plotOption.block ? ` · Block ${plotOption.block}` : ""} · Available</small></span>
-                    </label>
-                  );
-                })}
-                {!replacementPlotChoices.some(({ canSelect }) => canSelect) && (
-                  <div style={{ padding: "1rem", border: "1px dashed var(--border-color)", borderRadius: 10 }}>
                     No additional plots are currently available.
                   </div>
                 )}
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-                <button type="button" className="btn-secondary" onClick={closeLeadPlotReplacement} disabled={changingPlotNumber}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  marginTop: 18,
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={closeLeadPlotReplacement}
+                  disabled={changingPlotNumber}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={!hasLeadPlotChanges || changingPlotNumber}>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={!hasLeadPlotChanges || changingPlotNumber}
+                >
                   {changingPlotNumber ? "Saving…" : "Save changes"}
                 </button>
               </div>
@@ -13497,7 +14592,11 @@ const Leads = () => {
                 >
                   {isTravel ? "Status" : "Score"}
                 </div>
-                <strong>{isTravel ? (previewLeadCurrent.status || "Lead") : `${previewLeadCurrent.aiScore ?? 0}/100`}</strong>
+                <strong>
+                  {isTravel
+                    ? previewLeadCurrent.status || "Lead"
+                    : `${previewLeadCurrent.aiScore ?? 0}/100`}
+                </strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
                 <div
@@ -13509,7 +14608,11 @@ const Leads = () => {
                   {isTravel ? "Assigned" : "Source"}
                 </div>
                 <strong>
-                  {isTravel ? (previewLeadCurrent.assignedTo?.name || previewLeadCurrent.assignedTo?.email || "Unassigned") : leadSourceLabel(previewLeadCurrent, isGeneric)}
+                  {isTravel
+                    ? previewLeadCurrent.assignedTo?.name ||
+                      previewLeadCurrent.assignedTo?.email ||
+                      "Unassigned"
+                    : leadSourceLabel(previewLeadCurrent, isGeneric)}
                 </strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
@@ -13522,7 +14625,11 @@ const Leads = () => {
                   {isTravel ? "Score" : "Assigned"}
                 </div>
                 <strong>
-                  {isTravel ? `${previewLeadCurrent.aiScore ?? 0}/100` : (previewLeadCurrent.assignedTo?.name || previewLeadCurrent.assignedTo?.email || "Unassigned")}
+                  {isTravel
+                    ? `${previewLeadCurrent.aiScore ?? 0}/100`
+                    : previewLeadCurrent.assignedTo?.name ||
+                      previewLeadCurrent.assignedTo?.email ||
+                      "Unassigned"}
                 </strong>
               </div>
             </div>
@@ -13589,28 +14696,32 @@ const Leads = () => {
                 <button
                   type="button"
                   className="btn-secondary"
-                  onClick={() => navigate(leadDetailPath(previewLeadCurrent))}
+                  onClick={() => openLeadDetail(previewLeadCurrent)}
                 >
                   Open full detail
                 </button>
               </>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  openEdit(previewLeadCurrent);
-                  setPreviewLead(null);
-                }}
-              >
-                {isTravel ? "Edit contact" : "Edit lead"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => handleConvert(previewLeadCurrent.id)}
-              >
-                Convert to Prospect
-              </button>
+              {canLeadUpdate && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      openEdit(previewLeadCurrent);
+                      setPreviewLead(null);
+                    }}
+                  >
+                    {isTravel ? "Edit contact" : "Edit lead"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => handleConvert(previewLeadCurrent.id)}
+                  >
+                    Convert to Prospect
+                  </button>
+                </>
+              )}
             </div>
 
             <section style={{ marginTop: "1.25rem" }}>
@@ -13813,7 +14924,19 @@ const Leads = () => {
               }}
             >
               <div>
-                <label htmlFor="create-lead-name" style={createLeadFieldLabelStyle}>Full Name<span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span></label>
+                <label
+                  htmlFor="create-lead-name"
+                  style={createLeadFieldLabelStyle}
+                >
+                  Full Name
+                  <span
+                    aria-hidden="true"
+                    className="required-mark"
+                    style={requiredMarkStyle}
+                  >
+                    *
+                  </span>
+                </label>
                 <input
                   id="create-lead-name"
                   type="text"
@@ -13845,195 +14968,329 @@ const Leads = () => {
                 )}
               </div>
               <div>
-                <label htmlFor="create-lead-email" style={createLeadFieldLabelStyle}>Email Address{((isGeneric && createLeadRequiredFieldSet.has("email")) || (!isGeneric && !isWellness)) && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
+                <label
+                  htmlFor="create-lead-email"
+                  style={createLeadFieldLabelStyle}
+                >
+                  Email Address
+                  {((isGeneric && createLeadRequiredFieldSet.has("email")) ||
+                    (!isGeneric && !isWellness)) && (
+                    <span
+                      aria-hidden="true"
+                      className="required-mark"
+                      style={requiredMarkStyle}
+                    >
+                      *
+                    </span>
+                  )}
+                </label>
                 <input
                   id="create-lead-email"
                   type="email"
-                  placeholder={(isWellness || (isGeneric && !createLeadRequiredFieldSet.has("email"))) ? "Email Address (optional)" : "Email Address"}
-                  required={!isWellness && (!isGeneric || createLeadRequiredFieldSet.has("email"))}
+                  placeholder={
+                    isWellness ||
+                    (isGeneric && !createLeadRequiredFieldSet.has("email"))
+                      ? "Email Address (optional)"
+                      : "Email Address"
+                  }
+                  required={
+                    !isWellness &&
+                    (!isGeneric || createLeadRequiredFieldSet.has("email"))
+                  }
                   maxLength={191}
                   className="input-field"
                   value={newLead.email}
                   onChange={(e) => handleChange("email", e.target.value)}
                 />
               </div>
-              {(!isGeneric || createLeadVisibleFieldSet.has("company")) && <div>
-                <label htmlFor="create-lead-company" style={createLeadFieldLabelStyle}>{isTravel ? "Category" : "Company"}{isGeneric && createLeadRequiredFieldSet.has("company") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
-                <input
-                  id="create-lead-company"
-                  type="text"
-                  placeholder={
-                    isTravel
-                      ? "Category (e.g. School Trip, Umrah, Family Holiday)"
-                      : "Company"
-                  }
-                  maxLength={191}
-                  required={isGeneric && createLeadRequiredFieldSet.has("company")}
-                  className="input-field"
-                  value={newLead.company}
-                  onChange={(e) => handleChange("company", e.target.value)}
-                />
-              </div>}
+              {(!isGeneric || createLeadVisibleFieldSet.has("company")) && (
+                <div>
+                  <label
+                    htmlFor="create-lead-company"
+                    style={createLeadFieldLabelStyle}
+                  >
+                    {isTravel ? "Category" : "Company"}
+                    {isGeneric && createLeadRequiredFieldSet.has("company") && (
+                      <span
+                        aria-hidden="true"
+                        className="required-mark"
+                        style={requiredMarkStyle}
+                      >
+                        *
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    id="create-lead-company"
+                    type="text"
+                    placeholder={
+                      isTravel
+                        ? "Category (e.g. School Trip, Umrah, Family Holiday)"
+                        : "Company"
+                    }
+                    maxLength={191}
+                    required={
+                      isGeneric && createLeadRequiredFieldSet.has("company")
+                    }
+                    className="input-field"
+                    value={newLead.company}
+                    onChange={(e) => handleChange("company", e.target.value)}
+                  />
+                </div>
+              )}
               {!isTravel &&
                 (!isGeneric || createLeadVisibleFieldSet.has("title")) && (
+                  <div>
+                    <label
+                      htmlFor="create-lead-title"
+                      style={createLeadFieldLabelStyle}
+                    >
+                      Job Title
+                      {isGeneric && createLeadRequiredFieldSet.has("title") && (
+                        <span
+                          aria-hidden="true"
+                          className="required-mark"
+                          style={requiredMarkStyle}
+                        >
+                          *
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      id="create-lead-title"
+                      type="text"
+                      placeholder="Job Title"
+                      maxLength={200}
+                      required={
+                        isGeneric && createLeadRequiredFieldSet.has("title")
+                      }
+                      className="input-field"
+                      value={newLead.title}
+                      onChange={(e) => handleChange("title", e.target.value)}
+                    />
+                  </div>
+                )}
+              {isGeneric && createLeadVisibleFieldSet.has("website") && (
                 <div>
-                  <label htmlFor="create-lead-title" style={createLeadFieldLabelStyle}>Job Title{isGeneric && createLeadRequiredFieldSet.has("title") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
+                  <label
+                    htmlFor="create-lead-website"
+                    style={createLeadFieldLabelStyle}
+                  >
+                    Website URL
+                    {createLeadRequiredFieldSet.has("website") && (
+                      <span
+                        aria-hidden="true"
+                        className="required-mark"
+                        style={requiredMarkStyle}
+                      >
+                        *
+                      </span>
+                    )}
+                  </label>
                   <input
-                    id="create-lead-title"
-                    type="text"
-                    placeholder="Job Title"
+                    id="create-lead-website"
+                    type="url"
+                    placeholder="https://example.com"
                     maxLength={200}
-                    required={isGeneric && createLeadRequiredFieldSet.has("title")}
+                    required={createLeadRequiredFieldSet.has("website")}
                     className="input-field"
-                    value={newLead.title}
-                    onChange={(e) => handleChange("title", e.target.value)}
+                    value={newLead.website || ""}
+                    onChange={(e) => handleChange("website", e.target.value)}
                   />
                 </div>
               )}
               {/* Phone field — required for wellness, optional for generic and travel. */}
-              {(!isGeneric || createLeadVisibleFieldSet.has("phone")) && <div>
-                {isTravel ? (
-                  <div className="create-lead-travel-phone">
-                    <IntlTelInput
-                      ref={travelPhoneInputRef}
-                      value={newLead.phone}
-                      initialCountry="in"
-                      countrySearch
-                      separateDialCode
-                      countrySelectorMode="DROPDOWN"
-                      onOpenCountrySelector={handleTravelCountryOpen}
-                      onCloseCountrySelector={handleTravelCountryClose}
-                      uiTranslations={{
-                        searchPlaceholder: "Search country or calling code",
-                      }}
-                      formatAsYouType
-                      strictMode
-                      loadUtils={() => import("intl-tel-input/utils")}
-                      inputProps={{
-                        className: "input-field travel-lead-phone-input",
-                        placeholder: "Mobile number (optional)",
-                        autoComplete: "tel-national",
-                        "aria-label": "Mobile number (optional)",
-                      }}
-                      onChangeNumber={(value) => handleChange("phone", value)}
-                      onChangeValidity={setTravelPhoneValid}
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <label htmlFor="create-lead-phone" style={createLeadFieldLabelStyle}>Phone{(isWellness || (isGeneric && createLeadRequiredFieldSet.has("phone"))) && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
-                  {isGeneric ? (
-                    <SearchableSelect
-                      ariaLabel="Country code"
-                      value={newLead.countryCode}
-                      placeholder="Code"
-                      allowClear={false}
-                      sanitizeInput={(input) => `${String(input).trimStart().startsWith("+") ? "+" : ""}${String(input).replace(/\D/g, "")}`}
-                      options={COUNTRY_CODES.map((cc) => ({ value: cc.code, label: cc.code, keywords: cc.code }))}
-                      onChange={(value) => {
-                        genericPhoneCountryUserChangedRef.current = true;
-                        handleChange("countryCode", value);
-                      }}
-                      style={{ color: "#111827", caretColor: "#111827" }}
-                      wrapperStyle={{ width: "100px", flexShrink: 0 }}
-                    />
-                  ) : (
-                    <select
-                      className="input-field"
-                      value={newLead.countryCode}
-                      onChange={(e) =>
-                        handleChange("countryCode", e.target.value)
-                      }
-                      style={{ width: "100px" }}
-                    >
-                      {COUNTRY_CODES.map((cc) => (
-                        <option key={cc.code} value={cc.code}>
-                          {cc.code}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <input
-                    id="create-lead-phone"
-                    type="tel"
-                    placeholder={
-                      isWellness
-                        ? "Phone (10-digit mobile, e.g. 9876543210)"
-                        : isGeneric
-                          ? `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits${createLeadRequiredFieldSet.has("phone") ? "" : ", optional"})`
-                          : "Phone (optional)"
-                    }
-                    required={isWellness || (isGeneric && createLeadRequiredFieldSet.has("phone"))}
-                    inputMode={isGeneric ? "numeric" : undefined}
-                    pattern={isGeneric ? "[0-9]*" : undefined}
-                    minLength={
-                      isGeneric
-                        ? getLeadPhoneRule(newLead.countryCode)[0]
-                        : undefined
-                    }
-                    maxLength={
-                      isGeneric
-                        ? getLeadPhoneRule(newLead.countryCode)[1]
-                        : undefined
-                    }
-                    className="input-field"
-                    value={newLead.phone}
-                    aria-invalid={Boolean(createFieldErrors.phone)}
-                    aria-describedby={
-                      createFieldErrors.phone
-                        ? "create-lead-phone-error"
-                        : undefined
-                    }
-                    onChange={(e) => handleChange("phone", e.target.value)}
-                    style={{ flex: 1 }}
-                  />
+              {(!isGeneric || createLeadVisibleFieldSet.has("phone")) && (
+                <div>
+                  {isTravel ? (
+                    <div className="create-lead-travel-phone">
+                      <IntlTelInput
+                        ref={travelPhoneInputRef}
+                        value={newLead.phone}
+                        initialCountry="in"
+                        countrySearch
+                        separateDialCode
+                        countrySelectorMode="DROPDOWN"
+                        onOpenCountrySelector={handleTravelCountryOpen}
+                        onCloseCountrySelector={handleTravelCountryClose}
+                        uiTranslations={{
+                          searchPlaceholder: "Search country or calling code",
+                        }}
+                        formatAsYouType
+                        strictMode
+                        loadUtils={() => import("intl-tel-input/utils")}
+                        inputProps={{
+                          className: "input-field travel-lead-phone-input",
+                          placeholder: "Mobile number (optional)",
+                          autoComplete: "tel-national",
+                          "aria-label": "Mobile number (optional)",
+                        }}
+                        onChangeNumber={(value) => handleChange("phone", value)}
+                        onChangeValidity={setTravelPhoneValid}
+                      />
                     </div>
-                  </>
-                )}
-                {createFieldErrors.phone && (
-                  <div
-                    id="create-lead-phone-error"
-                    role="alert"
-                    style={{
-                      color: "#b42318",
-                      fontSize: "0.8rem",
-                      marginTop: "0.35rem",
-                    }}
+                  ) : (
+                    <>
+                      <label
+                        htmlFor="create-lead-phone"
+                        style={createLeadFieldLabelStyle}
+                      >
+                        Phone
+                        {(isWellness ||
+                          (isGeneric &&
+                            createLeadRequiredFieldSet.has("phone"))) && (
+                          <span
+                            aria-hidden="true"
+                            className="required-mark"
+                            style={requiredMarkStyle}
+                          >
+                            *
+                          </span>
+                        )}
+                      </label>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        {isGeneric ? (
+                          <SearchableSelect
+                            ariaLabel="Country code"
+                            value={newLead.countryCode}
+                            placeholder="Code"
+                            allowClear={false}
+                            sanitizeInput={(input) =>
+                              `${String(input).trimStart().startsWith("+") ? "+" : ""}${String(input).replace(/\D/g, "")}`
+                            }
+                            options={COUNTRY_CODES.map((cc) => ({
+                              value: cc.code,
+                              label: cc.code,
+                              keywords: cc.code,
+                            }))}
+                            onChange={(value) => {
+                              genericPhoneCountryUserChangedRef.current = true;
+                              handleChange("countryCode", value);
+                            }}
+                            style={{ color: "#111827", caretColor: "#111827" }}
+                            wrapperStyle={{ width: "100px", flexShrink: 0 }}
+                          />
+                        ) : (
+                          <select
+                            className="input-field"
+                            value={newLead.countryCode}
+                            onChange={(e) =>
+                              handleChange("countryCode", e.target.value)
+                            }
+                            style={{ width: "100px" }}
+                          >
+                            {COUNTRY_CODES.map((cc) => (
+                              <option key={cc.code} value={cc.code}>
+                                {cc.code}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <input
+                          id="create-lead-phone"
+                          type="tel"
+                          placeholder={
+                            isWellness
+                              ? "Phone (10-digit mobile, e.g. 9876543210)"
+                              : isGeneric
+                                ? `Phone (${getLeadPhoneRule(newLead.countryCode).join("-")} digits${createLeadRequiredFieldSet.has("phone") ? "" : ", optional"})`
+                                : "Phone (optional)"
+                          }
+                          required={
+                            isWellness ||
+                            (isGeneric &&
+                              createLeadRequiredFieldSet.has("phone"))
+                          }
+                          inputMode={isGeneric ? "numeric" : undefined}
+                          pattern={isGeneric ? "[0-9]*" : undefined}
+                          minLength={
+                            isGeneric
+                              ? getLeadPhoneRule(newLead.countryCode)[0]
+                              : undefined
+                          }
+                          maxLength={
+                            isGeneric
+                              ? getLeadPhoneRule(newLead.countryCode)[1]
+                              : undefined
+                          }
+                          className="input-field"
+                          value={newLead.phone}
+                          aria-invalid={Boolean(createFieldErrors.phone)}
+                          aria-describedby={
+                            createFieldErrors.phone
+                              ? "create-lead-phone-error"
+                              : undefined
+                          }
+                          onChange={(e) =>
+                            handleChange("phone", e.target.value)
+                          }
+                          style={{ flex: 1 }}
+                        />
+                      </div>
+                    </>
+                  )}
+                  {createFieldErrors.phone && (
+                    <div
+                      id="create-lead-phone-error"
+                      role="alert"
+                      style={{
+                        color: "#b42318",
+                        fontSize: "0.8rem",
+                        marginTop: "0.35rem",
+                      }}
+                    >
+                      {createFieldErrors.phone}
+                    </div>
+                  )}
+                </div>
+              )}
+              {(!isGeneric || createLeadVisibleFieldSet.has("source")) && (
+                <div>
+                  <label
+                    htmlFor="create-lead-source"
+                    style={createLeadFieldLabelStyle}
                   >
-                    {createFieldErrors.phone}
-                  </div>
-                )}
-              </div>}
-              {(!isGeneric || createLeadVisibleFieldSet.has("source")) && <div>
-                <label htmlFor="create-lead-source" style={createLeadFieldLabelStyle}>Lead Source{isGeneric && createLeadRequiredFieldSet.has("source") && <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>*</span>}</label>
-                <select
-                  id="create-lead-source"
-                  className="input-field"
-                  name="source"
-                  required={isGeneric && createLeadRequiredFieldSet.has("source")}
-                  value={newLead.source}
-                  onChange={(e) => handleChange("source", e.target.value)}
-                >
-                  {isWellness
-                    ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))
-                    : isTravel
-                      ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+                    Lead Source
+                    {isGeneric && createLeadRequiredFieldSet.has("source") && (
+                      <span
+                        aria-hidden="true"
+                        className="required-mark"
+                        style={requiredMarkStyle}
+                      >
+                        *
+                      </span>
+                    )}
+                  </label>
+                  <select
+                    id="create-lead-source"
+                    className="input-field"
+                    name="source"
+                    required={
+                      isGeneric && createLeadRequiredFieldSet.has("source")
+                    }
+                    value={newLead.source}
+                    onChange={(e) => handleChange("source", e.target.value)}
+                  >
+                    {isWellness
+                      ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>
                             {opt.label}
                           </option>
                         ))
-                      : SOURCE_OPTIONS.map((src) => (
-                          <option key={src} value={src}>
-                            {src}
-                          </option>
-                        ))}
-                </select>
-              </div>}
+                      : isTravel
+                        ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))
+                        : SOURCE_OPTIONS.map((src) => (
+                            <option key={src} value={src}>
+                              {src}
+                            </option>
+                          ))}
+                  </select>
+                </div>
+              )}
 
               {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the
@@ -14414,6 +15671,7 @@ const Leads = () => {
         positionStorageKey={`generic-leads-assistant-position.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
         sessionStorageKey={`generic-leads-assistant-session.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
       />
+      <Outlet />
     </div>
   );
 };

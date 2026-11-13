@@ -115,6 +115,113 @@ function renderTextAsPdf(paragraphs) {
   });
 }
 
+function parseDigitalConsentAnswers(value) {
+  if (value && typeof value === "object" && !Buffer.isBuffer(value)) return value;
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_err) {
+    return {};
+  }
+}
+
+function parseDigitalConsentTerms(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return { title: "", introduction: "", sections: [] };
+
+  const chunks = normalized.split(/(?=\b\d+\.\s+[A-Z])/g).filter(Boolean);
+  const opening = chunks.shift() || normalized;
+  const titleMatch = opening.match(/^(.+?)(?=\s+These Terms)/i);
+  const titleOnlyMatch = opening.match(/^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)\s*$/);
+  const title = titleMatch ? titleMatch[1].trim() : (titleOnlyMatch ? titleOnlyMatch[1].trim() : "");
+  const introduction = title
+    ? opening.slice(titleMatch ? titleMatch[0].length : title.length).trim()
+    : opening.trim();
+
+  const sections = chunks.map((chunk) => {
+    const headingMatch = chunk.match(/^(\d+\.\s+[A-Z][A-Z0-9 &'(),-]*?)(?=\s+(?:[A-Z][a-z]|[A-Z]\.))/);
+    const heading = headingMatch ? headingMatch[1].trim() : "";
+    const body = heading ? chunk.slice(headingMatch[0].length).trim() : chunk.trim();
+    const paragraphs = body.split(/(?=\b[A-Z]\.\s)/g).map((paragraph) => paragraph.trim()).filter(Boolean);
+    return { heading, paragraphs: paragraphs.length ? paragraphs : (body ? [body] : []) };
+  });
+
+  return { title, introduction, sections };
+}
+
+function renderTmcDigitalConsentPdf(consent) {
+  const answers = parseDigitalConsentAnswers(consent?.answersJson);
+  const fields = [
+    ["Parent or guardian full name", answers.parentName],
+    ["Student / participant full name", answers.participantName],
+    ["Relationship to the student", answers.relationship],
+    ["Signature", answers.signatureName || consent?.signatureName],
+    ["Additional notes", answers.notes],
+  ];
+
+  return new Promise((resolve, reject) => {
+    const document = new PDFDocument({ size: "A4", margin: 54, bufferPages: true });
+    const chunks = [];
+    document.on("data", (chunk) => chunks.push(chunk));
+    document.once("error", reject);
+    document.once("end", () => resolve(Buffer.concat(chunks)));
+
+    document.font("Helvetica-Bold").fontSize(18).fillColor("#122647")
+      .text(pdfSafeText(consent?.documentType || "Digital consent form"));
+    document.moveDown(0.35).font("Helvetica").fontSize(10).fillColor("#66758a")
+      .text(pdfSafeText(`Submitted ${consent?.agreedAt || consent?.uploadedAt || ""}`));
+    if (consent?.tripId) document.text(pdfSafeText(`Trip reference: ${consent.tripId}`));
+
+    const terms = parseDigitalConsentTerms(consent?.termsSnapshot);
+    document.moveDown(1).font("Helvetica-Bold").fontSize(9).fillColor("#008f66")
+      .text("STEP 1  ·  TERMS ACCEPTED");
+    document.moveDown(0.25).font("Helvetica-Bold").fontSize(13).fillColor("#122647")
+      .text("Terms and conditions");
+    document.moveDown(0.2).font("Helvetica").fontSize(9.5).fillColor("#66758a")
+      .text("The exact terms accepted by the parent at the time of submission.");
+    if (terms.title) {
+      document.moveDown(0.65).font("Helvetica-Bold").fontSize(9.5).fillColor("#122647")
+        .text(pdfSafeText(terms.title), { lineGap: 2 });
+    }
+    if (terms.introduction) {
+      document.moveDown(0.2).font("Helvetica").fontSize(9.5).fillColor("#172033")
+        .text(pdfSafeText(terms.introduction), { lineGap: 2 });
+    }
+    if (!terms.title && !terms.introduction && !terms.sections.length) {
+      document.moveDown(0.65).font("Helvetica").fontSize(9.5).fillColor("#66758a")
+        .text("No terms were recorded with this submission.");
+    }
+    terms.sections.forEach((section) => {
+      if (section.heading) {
+        document.moveDown(0.65).font("Helvetica-Bold").fontSize(9.5).fillColor("#122647")
+          .text(pdfSafeText(section.heading), { lineGap: 2 });
+      }
+      section.paragraphs.forEach((paragraph) => {
+        document.moveDown(section.heading ? 0.2 : 0.65).font("Helvetica").fontSize(9.5).fillColor("#172033")
+          .text(pdfSafeText(paragraph), { lineGap: 2 });
+      });
+    });
+
+    document.moveDown(1).font("Helvetica-Bold").fontSize(9).fillColor("#008f66")
+      .text("STEP 2  ·  SUBMITTED DETAILS");
+    document.moveDown(0.25).font("Helvetica-Bold").fontSize(13).fillColor("#122647")
+      .text("Submitted details");
+    document.moveDown(0.2).font("Helvetica").fontSize(9.5).fillColor("#66758a")
+      .text("Information provided and signed by the parent or guardian.");
+    fields.forEach(([label, value]) => {
+      if (!String(value || "").trim()) return;
+      document.moveDown(0.55).font("Helvetica-Bold").fontSize(9.5).fillColor("#33445d")
+        .text(pdfSafeText(label));
+      document.moveDown(0.15).font("Helvetica").fontSize(10).fillColor("#172033")
+        .text(pdfSafeText(value), { lineGap: 2 });
+    });
+
+    document.moveDown(1).font("Helvetica-Bold").fontSize(10).fillColor("#008f66")
+      .text("Agreement: Accepted");
+    document.end();
+  });
+}
+
 async function convertTmcConsentTemplateToPdf(template) {
   const fileBlob = Buffer.isBuffer(template?.fileBlob) ? template.fileBlob : Buffer.from(template?.fileBlob || []);
   if (isPdfBuffer(fileBlob) || template?.mimeType === PDF_MIME_TYPE) {
@@ -139,4 +246,6 @@ module.exports = {
   extractDocxParagraphs,
   isPdfBuffer,
   pdfFilename,
+  parseDigitalConsentTerms,
+  renderTmcDigitalConsentPdf,
 };

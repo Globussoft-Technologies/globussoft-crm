@@ -579,7 +579,7 @@ describe('<PlotBrokers />', () => {
   it('creates a broker with person plots and an explicit connected customer plot', async () => {
     fetchApiMock.mockImplementation((url, options) => {
       if (url === '/api/pickup-plot-inventory/brokers' && !options) return Promise.resolve({
-        brokers: [{ id: 2, name: 'Asha Rao', phone: '9000022222', agency: 'Prime Plots', commissionPercent: '2.50', isActive: true, plotSiteId: 9, plotSite: { id: 9, name: 'Plot A-9' } }],
+        brokers: [{ id: 2, name: 'Asha Rao', phone: '9000022222', agency: 'Prime Plots', commissionRateLabel: '4%', isActive: true, plotSiteId: 9, plotSite: { id: 9, name: 'Plot A-9' } }],
         plots: [
           { id: 9, name: 'Plot A-9', address: '80 Feet Rd, Koramangala, Bengaluru, Karnataka 560095', availability: 'AVAILABLE' },
           { id: 10, name: 'Plot B-10', address: '100 Feet Rd, Indiranagar, Bengaluru, Karnataka 560038', availability: 'AVAILABLE' },
@@ -595,7 +595,7 @@ describe('<PlotBrokers />', () => {
     expect(screen.getByRole('table', { name: 'Sales Executives' })).toHaveStyle({ width: '100%', tableLayout: 'fixed' });
     expect(screen.getByRole('columnheader', { name: 'S.No.' })).toBeInTheDocument();
     expect(screen.getAllByRole('separator', { name: /Resize .+ column/ })).toHaveLength(9);
-    expect(screen.getByText(/2.5%/)).toBeInTheDocument();
+    expect(screen.getByText('4%')).toBeInTheDocument();
     const brokerRow = screen.getByText('Asha Rao').closest('tr');
     expect(within(brokerRow).getByText('Active')).toHaveStyle({
       alignSelf: 'flex-start', padding: '0.2rem 0.45rem', borderRadius: '6px',
@@ -632,7 +632,7 @@ describe('<PlotBrokers />', () => {
     const requestBody = JSON.parse(call[1].body);
     expect(requestBody).toMatchObject({
       name: 'Vikram', email: 'vikram@example.com', password: 'secret123',
-      plotSiteIds: [9, 10], commissionPercent: '', customerIds: [21],
+      plotSiteIds: [9, 10], customerIds: [21],
       assignments: [{ customerId: 21, plotSiteId: 9 }],
     });
   });

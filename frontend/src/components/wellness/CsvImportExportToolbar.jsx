@@ -25,7 +25,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2, ChevronDown } from "lucide-react";
+import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2, ChevronDown, Eye } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -113,12 +113,53 @@ const normalizeMappingIdentity = (value) => String(value || "")
   .replace(/^cf_/, "")
   .replace(/[^a-z0-9]+/g, "");
 
+const parseCsvReport = (text) => {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') {
+      if (quoted && text[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === "," && !quoted) {
+      row.push(value);
+      value = "";
+    } else if ((character === "\n" || character === "\r") && !quoted) {
+      if (character === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(value);
+      if (row.some((cell) => cell !== "")) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+  if (value || row.length) {
+    row.push(value);
+    if (row.some((cell) => cell !== "")) rows.push(row);
+  }
+  const headers = rows.shift() || [];
+  return rows.map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] || ""])));
+};
+
 const buildAvailableMappingFields = (mappingFields, dynamicLeadFields) => (
-  [...mappingFields, ...dynamicLeadFields]
-    .filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id))
-    .filter((field, index, fields) => fields.findIndex(
-      (item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id),
-    ) === index)
+  [
+    // Built-in tracking columns are system-populated and are not valid CSV
+    // import destinations. Tenant-defined lead fields are different: even if
+    // an admin gave one an automatic-looking key such as "utm_term", it is a
+    // real LeadCustomFieldDefinition and must remain selectable so imports can
+    // reuse it instead of trying to create a duplicate field.
+    ...mappingFields.filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id)),
+    ...dynamicLeadFields,
+  ].filter((field, index, fields) => fields.findIndex(
+    (item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id),
+  ) === index)
 );
 
 const findAvailableMappingField = (fields, value) => {
@@ -187,6 +228,8 @@ export default function CsvImportExportToolbar({
   const [showRecentImport, setShowRecentImport] = useState(false);
   const [showImportHistory, setShowImportHistory] = useState(false);
   const [contactsImport, setContactsImport] = useState(null);
+  const [errorsImport, setErrorsImport] = useState(null);
+  const [actionImport, setActionImport] = useState(null);
   const [importHistory, setImportHistory] = useState(() => {
     return [];
   });
@@ -198,7 +241,7 @@ export default function CsvImportExportToolbar({
 
   useEffect(() => {
     if (!genericLeadWizard) return;
-    fetchApi("/api/csv/contacts/import-history")
+    fetchApi("/api/csv/contacts/import-history", { silent: true })
       .then((rows) => setImportHistory(Array.isArray(rows) ? rows : []))
       .catch(() => setImportHistory([]));
   }, [genericLeadWizard]);
@@ -225,6 +268,56 @@ export default function CsvImportExportToolbar({
       }
     }
     return parts.length ? `?${parts.join("&")}` : "";
+  };
+
+  const downloadImportReport = async (item, format) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(`/api/csv/contacts/import-history/${item.id}/report?format=${format}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error("Failed to download import report");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${String(item.fileName || "import").replace(/\.[^.]+$/, "")}-import-report.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify.error(error?.message || "Failed to download import report");
+    }
+  };
+
+  const viewImportErrors = async (item) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(`/api/csv/contacts/import-history/${item.id}/report?format=csv`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error("Failed to load import errors");
+      setErrorsImport({ fileName: item.fileName, rows: parseCsvReport(await response.text()) });
+    } catch (error) {
+      notify.error(error?.message || "Failed to load import errors");
+    }
+  };
+
+  const viewImportAction = (item, action) => {
+    const contacts = item.contacts || [];
+    const hasActionDetails = contacts.some((contact) => contact.action);
+    const actionCount = action === "created" ? item.inserted : action === "updated" ? item.updated : item[action];
+    const storedRows = action === "skipped" || action === "errors"
+      ? (item.errorRows || []).map((row) => ({ ...row.data, rowNumber: row.rowNumber, field: row.field || "row", reason: row.reason || "Import failed", action: row.action || "rejected" }))
+      : (hasActionDetails ? contacts : []).filter((contact) => contact.action === action);
+    const rows = storedRows.length || !actionCount ? storedRows : [{
+      rowNumber: "—",
+      field: "Unavailable",
+      reason: `${actionCount} ${action} record(s) from this older import do not have stored row details.`,
+      action,
+    }];
+    setActionImport({ fileName: item.fileName, action, rows, expectedCount: actionCount });
   };
 
   const doExport = async (format = "csv") => {
@@ -279,6 +372,12 @@ export default function CsvImportExportToolbar({
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [importMenuOpen]);
+
+  const actionEye = (item, action, label) => (
+    <button type="button" aria-label={`View ${label} import data`} title={`View ${label} import data`} disabled={!(action === "created" ? item.inserted : action === "updated" ? item.updated : item[action])} onClick={() => viewImportAction(item, action)} style={{ border: 0, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: 2, verticalAlign: "middle", opacity: (action === "created" ? item.inserted : action === "updated" ? item.updated : item[action]) ? 1 : 0.35 }}>
+      <Eye size={14} aria-hidden="true" />
+    </button>
+  );
 
   const multiFormat = formats.length > 1;
 
@@ -381,10 +480,24 @@ export default function CsvImportExportToolbar({
 
       {showImportHistory && (
         <div role="dialog" aria-modal="true" aria-labelledby="import-history-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowImportHistory(false)}>
-          <div className="glass" style={{ width: "min(980px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
+          <div className="glass" style={{ width: "min(1500px, calc(100vw - 32px))", maxHeight: "90vh", overflow: "auto", padding: 20, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-history-title" style={{ margin: 0, fontSize: "1.05rem" }}>Past imports</h2><button type="button" aria-label="Close import history" onClick={() => setShowImportHistory(false)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
             {importHistory.length ? (
-              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 860, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{["Import label", "Created", "Updated", "Skipped", "Errors", "Status", "Imported at", "Contacts"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead><tbody>{importHistory.map((item) => <tr key={item.id}><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", fontWeight: 600, maxWidth: 260, overflowWrap: "anywhere" }}>{item.fileName}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}>{item.inserted}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}>{item.updated}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}>{item.skipped}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", color: item.errors ? "var(--danger-color, #dc2626)" : "inherit" }}>{item.errors}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}><span style={{ color: item.errors ? "#d97706" : "#059669", fontWeight: 600 }}>{item.errors ? "Completed, with errors" : "Completed"}</span></td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{new Date(item.completedAt).toLocaleString()}</td><td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)" }}><button type="button" className="btn-secondary" disabled={!item.contacts?.length} onClick={() => setContactsImport(item)}>{item.contacts?.length ? "View contacts" : "No contacts"}</button></td></tr>)}</tbody></table></div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                  <thead><tr>{["Import label", "Created", "Updated", "Skipped", "Errors", "Status", "Imported at", "Contacts"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead>
+                  <tbody>{importHistory.map((item) => <tr key={item.id}>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", fontWeight: 600, minWidth: 180, maxWidth: 280, overflowWrap: "anywhere" }}>{item.fileName}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.inserted} {actionEye(item, "created", "created")}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.updated} {actionEye(item, "updated", "updated")}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.skipped} {actionEye(item, "skipped", "skipped")}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", color: item.errors ? "var(--danger-color, #dc2626)" : "inherit", whiteSpace: "nowrap" }}>{item.errors} {actionEye(item, "errors", "error")}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 150 }}><span style={{ color: item.errors ? "#d97706" : "#059669", fontWeight: 600 }}>{item.errors ? "Completed, with errors" : "Completed"}</span></td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap", minWidth: 190 }}>{new Date(item.completedAt).toLocaleString()}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 130 }}><button type="button" className="btn-secondary" disabled={!item.contacts?.length} onClick={() => setContactsImport(item)}>{item.contacts?.length ? "View contacts" : "No contacts"}</button></td>
+                  </tr>)}</tbody>
+                </table>
+              </div>
             ) : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No imports completed yet.</p>}
           </div>
         </div>
@@ -395,6 +508,24 @@ export default function CsvImportExportToolbar({
           <div className="glass" style={{ width: "min(1000px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-contacts-title" style={{ margin: 0, fontSize: "1.05rem" }}>Contacts from {contactsImport.fileName}</h2><button type="button" aria-label="Close imported contacts" onClick={() => setContactsImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
             <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{["Name", "Email", "Phone", "Company", "Title", "Status", "Source"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>{heading}</th>)}</tr></thead><tbody>{contactsImport.contacts.map((contact) => <tr key={contact.id}>{[contact.name, contact.email, contact.phone, contact.company, contact.title, contact.status, contact.source].map((value, index) => <td key={index} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)" }}>{value || "—"}</td>)}</tr>)}</tbody></table></div>
+          </div>
+        </div>
+      )}
+
+      {actionImport && (
+        <div role="dialog" aria-modal="true" aria-labelledby="import-action-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setActionImport(null)}>
+          <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-action-title" style={{ margin: 0, fontSize: "1.05rem" }}>{actionImport.action === "errors" ? "Errors" : `${actionImport.action[0].toUpperCase()}${actionImport.action.slice(1)} records`} from {actionImport.fileName}</h2><button type="button" aria-label="Close import action data" onClick={() => setActionImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+            {actionImport.rows.length ? <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(actionImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead><tbody>{actionImport.rows.map((row, index) => <tr key={`${row.id || row.rowNumber || "row"}-${index}`} style={{ color: actionImport.action === "skipped" || actionImport.action === "errors" ? "#dc2626" : actionImport.action === "updated" ? "#b45309" : "inherit" }}>{Object.keys(actionImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", minWidth: heading === "reason" ? 260 : 100 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>{actionImport.expectedCount ? "Detailed row data was not stored for this older import." : "No records in this category."}</p>}
+          </div>
+        </div>
+      )}
+
+      {errorsImport && (
+        <div role="dialog" aria-modal="true" aria-labelledby="import-errors-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setErrorsImport(null)}>
+          <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-errors-title" style={{ margin: 0, fontSize: "1.05rem" }}>Import errors from {errorsImport.fileName}</h2><button type="button" aria-label="Close import errors" onClick={() => setErrorsImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+            {errorsImport.rows.length ? <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(errorsImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead><tbody>{errorsImport.rows.map((row, index) => <tr key={`${row.rowNumber || "row"}-${index}`}>{Object.keys(errorsImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", minWidth: heading === "reason" ? 220 : 100 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No error details were recorded for this import.</p>}
           </div>
         </div>
       )}
@@ -753,7 +884,10 @@ function ImportModal({
     const tooBig = file.size > thresholds.bytes;
     const tooLong = previewRows.length === 10 && file.size > 100 * 1024; // heuristic; the row count is properly checked server-side
 
-    const useAsync = !forceSync && (tooBig || tooLong);
+    // Generic Leads has a synchronous contacts importer, but no Wellness-style
+    // job endpoint. Keep its large uploads on the contacts route instead of
+    // falling back to /api/wellness/csv/contacts/import/async.
+    const useAsync = !genericLeadWizard && !forceSync && (tooBig || tooLong);
     const endpoint = useAsync ?
       (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
       : (importUrl || `/api/wellness/csv/${entity}/import`);
@@ -764,6 +898,22 @@ function ImportModal({
       const fieldsCreatedDuringImport = [];
 
       if (genericLeadWizard) {
+        // These are Generic CRM system fields, not custom fields. Keep them
+        // out of the auto-create-field path so every import uses the same
+        // status/lifecycle mapping even when the UI payload is stale.
+        for (const header of previewHeaders) {
+          const normalizedHeader = String(header || "")
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "");
+          if (normalizedHeader === "status") {
+            resolvedMappings[header] = "status";
+            resolvedFieldTypes[header] = "text";
+          } else if (normalizedHeader === "lifecyclestage" || normalizedHeader === "lifecyclestagekey") {
+            resolvedMappings[header] = "lifecycleStageKey";
+            resolvedFieldTypes[header] = "dropdown";
+          }
+        }
         let knownFields = [...availableMappingFields];
         for (const header of previewHeaders) {
           if (!String(header || "").trim()) continue;
@@ -971,17 +1121,24 @@ function ImportModal({
         onClick={(e) => e.stopPropagation()}
       >
         {genericLeadWizard && (
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginBottom: "1.5rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-            {["File info", "Upload file", "Review mapping", "Finalize import"].map((step, index) => (
-              <span key={step} style={{ flex: 1, textAlign: "center", fontWeight: wizardStep === index + 1 ? 700 : 500, color: wizardStep >= index + 1 ? "var(--accent-color)" : "var(--text-secondary)" }}>{step}</span>
-            ))}
+          <div style={{ display: "flex", position: "relative", justifyContent: "space-between", marginBottom: "1.5rem", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+            <div aria-hidden="true" style={{ position: "absolute", top: 15, left: "12.5%", right: "12.5%", height: 2, background: "var(--border-color, #d8dee9)" }} />
+            { ["File info", "Upload file", "Review mapping", "Finalize import"].map((step, index) => {
+              const stepNumber = index + 1;
+              const completed = wizardStep > stepNumber;
+              const current = wizardStep === stepNumber;
+              return <div key={step} style={{ flex: 1, display: "flex", position: "relative", zIndex: 1, flexDirection: "column", alignItems: "center", gap: 7, textAlign: "center", fontWeight: current || completed ? 700 : 500, color: current || completed ? "var(--accent-color)" : "var(--text-secondary)" }}>
+                <span style={{ display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: "50%", border: `2px solid ${current || completed ? "var(--accent-color)" : "var(--border-color, #d8dee9)"}`, background: completed ? "var(--accent-color)" : "#ffffff", color: completed ? "#ffffff" : current ? "var(--accent-color)" : "var(--text-secondary)", fontWeight: 700 }}>{completed ? "✓" : stepNumber}</span>
+                <span>{step}</span>
+              </div>;
+            })}
           </div>
         )}
         {genericLeadWizard && wizardStep === 1 && (
           <div className="generic-import-step-overlay" style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "5.5rem 2rem 3rem", textAlign: "center", borderRadius: "inherit" }}>
             <h2 style={{ marginTop: 0 }}>Tell us what your file contains</h2>
             <div style={{ display: "flex", justifyContent: "center", gap: "1rem", margin: "2rem 0" }}>
-              {["leads", "leadsAccounts"].map((mode) => {
+              {["leads"].map((mode) => {
                 const selected = genericImportMode === mode;
                 return <button key={mode} type="button" onClick={() => setGenericImportMode(mode)} aria-pressed={selected} style={{ width: 210, minHeight: 190, padding: "2rem 1rem", border: `${selected ? 2 : 1}px solid ${selected ? "var(--accent-color)" : "var(--border-color)"}`, borderRadius: 12, background: selected ? "var(--accent-bg)" : "transparent", color: "inherit", cursor: "pointer" }}><FileText size={28} /><h3>{mode === "leads" ? "Leads" : "Leads and accounts"}</h3><p>{mode === "leads" ? "My file has information about people" : "My file has people and their companies"}</p></button>;
               })}
@@ -1131,7 +1288,7 @@ function ImportModal({
           Upload a {formats.length > 1 ? "CSV or Excel (XLSX) file" : "CSV"} with these columns:{" "}
           <code style={codePillStyle}>{expectedHeaders.join(", ") || "(loading...)"}</code>.
           Extra columns are ignored.
-          {forceSync ? (
+          {forceSync || genericLeadWizard ? (
             ' Imports are processed immediately on this page.'
           ) : (
             <> Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.</>

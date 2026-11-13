@@ -57,10 +57,11 @@
  *                                                           410 SESSION_GONE on expired/failed;
  *                                                           tokenId NEVER appears in response
  *
- *   - Document requirements (3 routes):
+ *   - Document requirements (4 routes):
  *       GET    /trips/:id/documents                         cross-tenant trip returns 404
- *       POST   /trips/:id/documents                         MISSING_FIELDS w/o docType;
+ *       POST   /trips/:id/documents                         free-form docType + acceptedFileTypes;
  *                                                           required:false honoured
+ *       PATCH  /trips/:id/documents/:docId                  updates the custom requirement
  *       DELETE /trips/:id/documents/:docId                  DOC_NOT_FOUND on cross-trip
  *
  * Pinned guards (all routes go through these in order):
@@ -123,6 +124,7 @@ prisma.tripDocumentRequirement = {
   findFirst: vi.fn(),
   findMany: vi.fn(),
   create: vi.fn(),
+  update: vi.fn(),
   delete: vi.fn(),
 };
 prisma.tripPaymentPlan = {
@@ -238,6 +240,7 @@ beforeEach(() => {
   prisma.tripDocumentRequirement.findFirst.mockReset();
   prisma.tripDocumentRequirement.findMany.mockReset().mockResolvedValue([]);
   prisma.tripDocumentRequirement.create.mockReset();
+  prisma.tripDocumentRequirement.update.mockReset();
   prisma.tripDocumentRequirement.delete.mockReset();
   prisma.tripPaymentPlan.findUnique.mockReset().mockResolvedValue(null);
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
@@ -425,6 +428,42 @@ describe('POST /api/travel/trips', () => {
     );
   });
 
+  test('accepts a same-tenant family parent without changing trip ownership', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, familyParentId: null });
+    prisma.tmcTrip.create.mockResolvedValue({
+      id: 201,
+      tenantId: 1,
+      tripCode: 'bali2026-school-b',
+      familyParentId: 100,
+      status: 'confirmed',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        ...validBody(),
+        tripCode: 'bali2026-school-b',
+        familyParentId: 100,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.tmcTrip.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ familyParentId: 100 }),
+      }),
+    );
+  });
+
+  test('rejects a family parent that is not in the current tenant', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ...validBody(), familyParentId: 9999 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_FAMILY_PARENT_ID' });
+    expect(prisma.tmcTrip.create).not.toHaveBeenCalled();
+  });
+
   test('missing required fields returns 400 MISSING_FIELDS', async () => {
     const body = validBody();
     delete body.tripCode;
@@ -570,6 +609,66 @@ describe('GET /api/travel/trips/:id', () => {
     expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 100, tenantId: 1 } }),
     );
+  });
+
+  test('decorates the trip with its tenant-scoped school name', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'bali2026',
+      tenantId: 1,
+      schoolContactId: 55,
+      participants: [],
+      documentRequirements: [],
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 55, name: 'The Modern Classroom' });
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.schoolName).toBe('The Modern Classroom');
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 55, tenantId: 1 },
+      select: { id: true, name: true },
+    });
+  });
+
+  test('adds completed or pending payment status from all participant instalments', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'bali2026',
+      tenantId: 1,
+      participants: [
+        { id: 50, fullName: 'Paid Participant', parentEmail: null },
+        { id: 51, fullName: 'Pending Participant', parentEmail: null },
+      ],
+      documentRequirements: [],
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { participantId: 50, instalmentIndex: 0, amount: 100, paidAmount: 100, status: 'paid' },
+      { participantId: 50, instalmentIndex: 1, amount: 100, paidAmount: 100, status: 'paid' },
+      { participantId: 51, instalmentIndex: 0, amount: 100, paidAmount: 50, status: 'partial' },
+      { participantId: 51, instalmentIndex: 1, amount: 100, paidAmount: 0, status: 'pending' },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.participants).toEqual([
+      expect.objectContaining({
+        id: 50,
+        paymentStatus: 'completed',
+        paymentSummary: { completedInstallments: 2, totalInstallments: 2, paidAmount: 200, totalAmount: 200 },
+      }),
+      expect.objectContaining({
+        id: 51,
+        paymentStatus: 'pending',
+        paymentSummary: { completedInstallments: 0, totalInstallments: 2, paidAmount: 50, totalAmount: 200 },
+      }),
+    ]);
   });
 
   test('attaches the latest parent-portal consent form to the matching participant', async () => {
@@ -791,6 +890,51 @@ describe('PATCH /api/travel/trips/:id', () => {
       .send({ destination: 'X' });
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(prisma.tmcTrip.update).not.toHaveBeenCalled();
+  });
+
+  test('groups an existing trip with a same-tenant primary trip', async () => {
+    prisma.tmcTrip.findFirst
+      .mockResolvedValueOnce({
+        id: 100,
+        status: 'confirmed',
+        driveFolderId: 'stub-folder-x',
+        tripCode: 'bali-school-b',
+        destination: 'Bali',
+        departDate: new Date('2026-09-15'),
+        familyParentId: null,
+      })
+      .mockResolvedValueOnce({ id: 50, familyParentId: null });
+    prisma.tmcTrip.update.mockResolvedValue({ id: 100, familyParentId: 50 });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ familyParentId: 50 });
+    expect(res.status).toBe(200);
+    expect(prisma.tmcTrip.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 100 },
+        data: expect.objectContaining({ familyParentId: 50 }),
+      }),
+    );
+  });
+
+  test('rejects grouping a trip with itself', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      status: 'confirmed',
+      driveFolderId: 'stub-folder-x',
+      tripCode: 'bali-school-b',
+      destination: 'Bali',
+      departDate: new Date('2026-09-15'),
+      familyParentId: null,
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ familyParentId: 100 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_FAMILY_PARENT_ID' });
     expect(prisma.tmcTrip.update).not.toHaveBeenCalled();
   });
 });
@@ -1081,7 +1225,7 @@ describe('Participants', () => {
     expect(prisma.tripParticipant.create.mock.calls[0][0].data).not.toHaveProperty('tenantId');
   });
 
-  test('GET participant import template returns only the required headers as CSV', async () => {
+  test('GET participant import template returns all supported headers as CSV', async () => {
     const res = await request(makeApp())
       .get('/api/travel/trips/100/participants/import-template?format=csv')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
@@ -1094,6 +1238,12 @@ describe('Participants', () => {
       'parentName',
       'parentPhone',
       'parentEmail',
+      'applicationStatus',
+      'passportNumber',
+      'passportExpiry',
+      'aadhaarLast4',
+      'medicalNotes',
+      'reviewNotes',
     ].join(','));
   });
 
@@ -1409,23 +1559,30 @@ describe('DigiLocker', () => {
 describe('Document requirements', () => {
   test('GET documents returns list scoped to trip', async () => {
     prisma.tripDocumentRequirement.findMany.mockResolvedValue([
-      { id: 1, tripId: 100, docType: 'passport', required: true },
+      { id: 1, tripId: 100, docType: 'School medical clearance', acceptedFileTypes: '["pdf","docx"]', required: true },
     ]);
     const res = await request(makeApp())
       .get('/api/travel/trips/100/documents')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ documents: expect.any(Array) });
+    expect(res.body).toEqual({
+      documents: [expect.objectContaining({
+        id: 1,
+        docType: 'School medical clearance',
+        acceptedFileTypes: ['pdf', 'docx'],
+        required: true,
+      })],
+    });
     expect(prisma.tripDocumentRequirement.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { tripId: 100 } }),
     );
   });
 
-  test('GET documents omits passport for a day trip and POST rejects it', async () => {
+  test('GET documents keeps admin-defined names and POST accepts them for any trip type', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, tripType: 'day_trip' });
     prisma.tripDocumentRequirement.findMany.mockResolvedValue([
-      { id: 1, tripId: 100, docType: 'passport', required: true },
-      { id: 2, tripId: 100, docType: 'aadhaar', required: true },
+      { id: 1, tripId: 100, docType: 'Passport copy', acceptedFileTypes: '["pdf"]', required: true },
+      { id: 2, tripId: 100, docType: 'Emergency contact letter', acceptedFileTypes: '["jpg","png"]', required: true },
     ]);
 
     const listRes = await request(makeApp())
@@ -1433,16 +1590,36 @@ describe('Document requirements', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(listRes.status).toBe(200);
     expect(listRes.body.documents).toEqual([
-      { id: 2, tripId: 100, docType: 'aadhaar', required: true },
+      expect.objectContaining({ id: 1, docType: 'Passport copy', acceptedFileTypes: ['pdf'] }),
+      expect.objectContaining({ id: 2, docType: 'Emergency contact letter', acceptedFileTypes: ['jpg', 'png'] }),
     ]);
 
+    prisma.tripDocumentRequirement.create.mockResolvedValue({
+      id: 3,
+      tripId: 100,
+      docType: 'Travel insurance certificate',
+      acceptedFileTypes: '["pdf","jpg"]',
+      required: true,
+    });
     const createRes = await request(makeApp())
       .post('/api/travel/trips/100/documents')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ docType: 'passport', required: true });
-    expect(createRes.status).toBe(400);
-    expect(createRes.body).toMatchObject({ code: 'PASSPORT_NOT_REQUIRED' });
-    expect(prisma.tripDocumentRequirement.create).not.toHaveBeenCalled();
+      .send({ docType: 'Travel insurance certificate', acceptedFileTypes: ['pdf', 'jpg'] });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body).toMatchObject({
+      id: 3,
+      docType: 'Travel insurance certificate',
+      acceptedFileTypes: ['pdf', 'jpg'],
+      required: true,
+    });
+    expect(prisma.tripDocumentRequirement.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tripId: 100,
+        docType: 'Travel insurance certificate',
+        acceptedFileTypes: '["pdf","jpg"]',
+        required: true,
+      }),
+    }));
   });
 
   test('POST document without docType returns 400 MISSING_FIELDS', async () => {
@@ -1457,20 +1634,81 @@ describe('Document requirements', () => {
 
   test('POST document defaults required to true (required:false is honoured)', async () => {
     prisma.tripDocumentRequirement.create.mockResolvedValue({
-      id: 9, tripId: 100, docType: 'aadhaar', required: false,
+      id: 9, tripId: 100, docType: 'Optional travel note', acceptedFileTypes: '["pdf"]', required: false,
     });
     const res = await request(makeApp())
       .post('/api/travel/trips/100/documents')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ docType: 'aadhaar', required: false });
+      .send({ docType: 'Optional travel note', acceptedFileTypes: ['pdf'], required: false });
     expect(res.status).toBe(201);
     expect(prisma.tripDocumentRequirement.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          tripId: 100, docType: 'aadhaar', required: false,
+          tripId: 100,
+          docType: 'Optional travel note',
+          acceptedFileTypes: '["pdf"]',
+          required: false,
         }),
       }),
     );
+  });
+
+  test('POST document can enable digital consent with sanitized terms', async () => {
+    prisma.tripDocumentRequirement.create.mockResolvedValue({
+      id: 10,
+      tripId: 100,
+      docType: 'Parent consent form',
+      acceptedFileTypes: '["pdf","jpg","png"]',
+      required: true,
+      captureMode: 'digital_consent',
+      consentTerms: 'I agree to the trip terms.',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        docType: 'Parent consent form',
+        captureMode: 'digital_consent',
+        consentTerms: '<script>alert(1)</script>I agree to the trip terms.',
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.tripDocumentRequirement.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        captureMode: 'digital_consent',
+        consentTerms: 'I agree to the trip terms.',
+      }),
+    }));
+  });
+
+  test('PATCH updates the custom document name and accepted file types', async () => {
+    prisma.tripDocumentRequirement.findFirst.mockResolvedValue({
+      id: 9,
+      tripId: 100,
+      docType: 'Old name',
+      acceptedFileTypes: '["pdf"]',
+      required: true,
+    });
+    prisma.tripDocumentRequirement.update.mockResolvedValue({
+      id: 9,
+      tripId: 100,
+      docType: 'Updated travel authorization',
+      acceptedFileTypes: '["docx","pdf"]',
+      required: true,
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100/documents/9')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ docType: 'Updated travel authorization', acceptedFileTypes: ['docx', 'pdf'] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 9,
+      docType: 'Updated travel authorization',
+      acceptedFileTypes: ['docx', 'pdf'],
+    });
+    expect(prisma.tripDocumentRequirement.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 9 },
+      data: { docType: 'Updated travel authorization', acceptedFileTypes: '["docx","pdf"]' },
+    }));
   });
 
   test('DELETE document cross-trip returns 404 DOC_NOT_FOUND', async () => {

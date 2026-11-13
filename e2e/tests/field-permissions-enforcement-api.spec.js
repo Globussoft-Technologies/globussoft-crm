@@ -145,10 +145,9 @@ async function createDeal(request, overrides = {}) {
 }
 
 // #588: USER role's GET /api/contacts scopes to assignedToId = req.user.userId.
-// Same fix shape as createDeal above — POST as USER so the contact's
-// assignedToId is set to USER's userId by the route's default (added to
-// routes/contacts.js in the same commit). ADMIN tests still pass because
-// ADMIN is unscoped and sees all tenant contacts including USER-owned ones.
+// Create the fixture as ADMIN because the seeded USER role is intentionally
+// read-only, then assign it to USER before exercising the read filter. ADMIN
+// tests still pass because ADMIN is unscoped and sees all tenant contacts.
 //
 // 2026-05-14: demo accumulates AutomationRule rows over time (e.g. rule id=5550
 // `contact.created` → `assign_agent`). These fire async AFTER the POST returns
@@ -158,7 +157,7 @@ async function createDeal(request, overrides = {}) {
 // PUT after a short settle delay. The "USER list call strips Contact.email"
 // test (line 282) was a casualty of this and went hard-failing on v3.7.13/14.
 async function createContact(request, overrides = {}) {
-  const r = await userPost(request, '/api/contacts', {
+  const r = await adminPost(request, '/api/contacts', {
     name: `${RUN_TAG} ${overrides.name || 'Anjali Field'}`,
     email: overrides.email || `${RUN_TAG.toLowerCase()}.anjali.${Date.now()}@example.test`,
   });

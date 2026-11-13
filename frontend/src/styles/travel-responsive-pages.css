@@ -853,3 +853,19 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
     overflow-wrap: anywhere;
   }
 }
+
+.travel-trips-table .travel-trips-row > td {
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.travel-trips-table .travel-trips-row:hover > td {
+  background: var(--surface-hover, rgba(79, 70, 229, 0.055));
+}
+
+.travel-trips-table .travel-trips-row--family-parent > td {
+  font-weight: 500;
+}
+
+.travel-trips-table .travel-trips-row--family-child > td {
+  color: var(--text-secondary);
+}

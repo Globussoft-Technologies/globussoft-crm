@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { createPortal } from 'react-dom';
 import { AuthContext } from '../App';
-import { ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, GripVertical, LayoutGrid, Link2, Mail, Pencil, Phone, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, GripVertical, LayoutGrid, Link2, Mail, Pencil, Phone, Plus, RefreshCw, Settings, Shield, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { usePermissions, invalidatePermissionCache } from '../hooks/usePermissions';
@@ -196,7 +196,6 @@ const MODULE_DESCRIPTIONS = {
   web_checkins:         'Online check-in tracking for upcoming flights.',
   passport:             'OCR-driven passport verification queue and approvals.',
   visa:                 'Visa Sure sub-brand applications, checklists, and embassy rules.',
-  microsites:           'Per-sub-brand consumer landing pages and OTP-gated portals.',
   // Travel — Sub-brand specific
   curriculum:           'TMC school-trip curriculum modules and learning outcomes.',
   school_terms:         'TMC school terms and academic calendar tagging.',
@@ -520,6 +519,8 @@ export default function RolesAdmin() {
   const [editRole, setEditRole] = useState(null);
   const [widgetsRole, setWidgetsRole] = useState(null);
   const [activeTab, setActiveTab] = useState('roles');
+  const [leadVisibility, setLeadVisibility] = useState('closed');
+  const [leadVisibilityOpen, setLeadVisibilityOpen] = useState(false);
 
   useEffect(() => {
     if (!showTmcShareableLink) setActiveTab('roles');
@@ -618,6 +619,22 @@ export default function RolesAdmin() {
   }, [applyPermissionCatalog, canRead, permLoading]);
 
   useEffect(() => {
+    if (permLoading || !canRead || tenantVertical !== 'generic') return undefined;
+    let cancelled = false;
+    fetchApi('/api/roles/lead-visibility', { silent: true })
+      .then((res) => {
+        if (!cancelled) setLeadVisibility(res?.visibility === 'open' ? 'open' : 'closed');
+      })
+      .catch(() => {
+        // The server defaults to the safer closed bucket if this setting is
+        // unavailable; keep that same fail-closed value in the UI.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canRead, permLoading, tenantVertical]);
+
+  useEffect(() => {
     const refresh = () => { refreshPermissionCatalog(); };
     const onStorage = (event) => {
       if (event.key === 'globuscrm:tenant-page-visibility-updated') refresh();
@@ -710,16 +727,28 @@ export default function RolesAdmin() {
             </div>
           )}
         </div>
-        {canManage && (
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="btn-primary"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-          >
-            <Plus size={16} /> New role
-          </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          {canManage && tenantVertical === 'generic' && (
+            <button
+              type="button"
+              onClick={() => setLeadVisibilityOpen(true)}
+              className="btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <Settings size={16} /> Lead visibility: {leadVisibility === 'open' ? 'Open bucket' : 'Closed bucket'}
+            </button>
+          )}
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <Plus size={16} /> New role
+            </button>
+          )}
+        </div>
       </div>
 
       {showTmcShareableLink && (
@@ -987,6 +1016,16 @@ export default function RolesAdmin() {
           onSuccess={async () => {
             setCreateOpen(false);
             await loadRoles();
+          }}
+        />
+      )}
+      {leadVisibilityOpen && (
+        <LeadVisibilityModal
+          value={leadVisibility}
+          onClose={() => setLeadVisibilityOpen(false)}
+          onSaved={(value) => {
+            setLeadVisibility(value);
+            setLeadVisibilityOpen(false);
           }}
         />
       )}
@@ -3832,6 +3871,92 @@ function ModalActions({ children }) {
     >
       {children}
     </div>
+  );
+}
+
+function LeadVisibilityModal({ value, onClose, onSaved }) {
+  const [selected, setSelected] = useState(value === 'open' ? 'open' : 'closed');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const notify = useNotify();
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetchApi('/api/roles/lead-visibility', {
+        method: 'PUT',
+        body: JSON.stringify({ visibility: selected }),
+      });
+      notify.success?.(`Lead visibility set to ${selected === 'open' ? 'Open bucket' : 'Closed bucket'}`);
+      onSaved(response?.visibility === 'open' ? 'open' : 'closed');
+    } catch (err) {
+      setError(err.message || 'Could not save lead visibility');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell
+      title="Lead visibility"
+      subtitle="Choose whether staff can see every lead or only leads assigned to them. Administrators and managers can always see all leads."
+      onClose={onClose}
+      width={520}
+    >
+      <form onSubmit={submit}>
+        <div role="radiogroup" aria-label="Lead visibility bucket" style={{ display: 'grid', gap: '0.65rem' }}>
+          {[
+            {
+              value: 'open',
+              title: 'Open bucket',
+              description: 'Every staff member with Leads read permission can see all leads in this organization.',
+            },
+            {
+              value: 'closed',
+              title: 'Closed bucket',
+              description: 'Staff can see only leads assigned to their user account. Administrators and managers remain unrestricted.',
+            },
+          ].map((option) => (
+            <label
+              key={option.value}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.65rem',
+                padding: '0.8rem',
+                border: `1px solid ${selected === option.value ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+                borderRadius: 8,
+                cursor: saving ? 'not-allowed' : 'pointer',
+                background: selected === option.value ? 'color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, transparent)' : 'transparent',
+              }}
+            >
+              <input
+                type="radio"
+                name="lead-visibility"
+                value={option.value}
+                checked={selected === option.value}
+                onChange={() => setSelected(option.value)}
+                disabled={saving}
+                style={{ marginTop: '0.2rem' }}
+              />
+              <span>
+                <strong>{option.title}</strong>
+                <span style={{ display: 'block', marginTop: '0.2rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                  {option.description}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {error && <div role="alert" style={{ ...errBoxStyle, marginTop: '0.75rem', marginBottom: 0 }}>{error}</div>}
+        <ModalActions>
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={saving}>Save visibility</button>
+        </ModalActions>
+      </form>
+    </ModalShell>
   );
 }
 

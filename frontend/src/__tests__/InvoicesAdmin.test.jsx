@@ -705,7 +705,8 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
 
     fireEvent.change(await screen.findByLabelText(/^Customer$/i), { target: { value: '7' } });
-    fireEvent.change(screen.getByLabelText(/^Trip$/i), { target: { value: '501' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Trip$/i }));
+    fireEvent.click(await screen.findByRole('option', { name: /TMC-0501/i }));
     fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '12500.50' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
     fetchApiMock.mockClear();
@@ -731,9 +732,10 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     await screen.findByText('TINV-2026-0001');
     fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0001/i }));
 
-    const tripSelect = await screen.findByLabelText(/^Trip$/i);
-    expect(tripSelect).toHaveValue('501');
-    fireEvent.change(tripSelect, { target: { value: '' } });
+    const tripCombobox = await screen.findByRole('button', { name: /^Trip$/i });
+    expect(tripCombobox).toHaveTextContent(/Trip #501|TMC-0501/);
+    fireEvent.click(tripCombobox);
+    fireEvent.click(await screen.findByRole('option', { name: /No trip linked/i }));
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Save Changes$/ }));
 
@@ -758,6 +760,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Trip$/i }));
     expect(screen.queryByRole('option', { name: /LEGACY-TRIP/i })).not.toBeInTheDocument();
 
     fireEvent.change(await screen.findByLabelText(/Search trips/i), {
@@ -773,7 +776,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     });
     expect(await screen.findByRole('option', { name: /LEGACY-TRIP.*Older Goa/i })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(/^Trip$/i), { target: { value: '999' } });
+    fireEvent.click(await screen.findByRole('option', { name: /LEGACY-TRIP.*Older Goa/i }));
     fireEvent.change(screen.getByLabelText(/^Customer$/i), { target: { value: '7' } });
     fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '25000' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
@@ -799,6 +802,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Trip$/i }));
     const loadMore = await screen.findByRole('button', { name: /Load more trips/i });
     expect(screen.getByRole('option', { name: /TMC-0001/i })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /TMC-0201/i })).not.toBeInTheDocument();

@@ -417,6 +417,12 @@ app.post(
   forgotPasswordEmailLimiter,
   (req, res, next) => next(),
 );
+app.post(
+  "/api/portal/forgot",
+  forgotPasswordIpLimiter,
+  forgotPasswordEmailLimiter,
+  (req, res, next) => next(),
+);
 
 // Email-existence pre-check used by the marketing /get-started wizard.
 // Moderate limits: this is a normal onboarding step, but we still cap

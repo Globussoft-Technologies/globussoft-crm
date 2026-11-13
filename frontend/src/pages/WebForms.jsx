@@ -13975,6 +13975,36 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 8px;
         }
+        .web-form-builder-travel .wf-library-action-buttons {
+          display: flex !important;
+          flex-wrap: nowrap !important;
+          align-items: center;
+          gap: 8px;
+          white-space: nowrap;
+        }
+        .web-form-builder-travel .wf-library-action-buttons > .btn-secondary {
+          flex: 1 1 0;
+          min-width: 0;
+          white-space: nowrap !important;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .web-form-builder-travel .wf-library-actions {
+          display: flex !important;
+          flex-wrap: nowrap !important;
+          align-items: end;
+          gap: 8px;
+        }
+        .web-form-builder-travel .wf-library-primary-row,
+        .web-form-builder-travel .wf-library-action-buttons {
+          display: contents;
+        }
+        .web-form-builder-travel .wf-library-primary-row > .btn-primary,
+        .web-form-builder-travel .wf-library-action-buttons > .btn-secondary {
+          flex: 1 1 0;
+          min-width: 0;
+          white-space: nowrap !important;
+        }
         .wf-library-primary-row > .btn-primary,
         .wf-library-action-buttons > .btn-secondary {
           display: inline-flex;
@@ -20620,9 +20650,14 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                     </div>
                     <div className={canViewFormLeads ? "wf-library-action-buttons" : "wf-library-action-buttons wf-library-action-buttons--no-leads"}>
                       <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowEmbed(true); }}>Embed</button>
-                      <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>Preview</button>
+                      <button type="button" className="btn-secondary" aria-label={`Preview ${form.name}`} title="Preview form" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>
+                        {scope === "travel" ? <Eye size={15} aria-hidden="true" /> : "Preview"}
+                      </button>
                       {canViewFormLeads && <button type="button" className="btn-secondary" onClick={() => setLeadsForm(form)}>View All Leads</button>}
-                      <button type="button" className="btn-secondary wf-danger-action" onClick={() => deleteForm(form)}><Trash2 size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />Delete</button>
+                      <button type="button" className="btn-secondary wf-danger-action" aria-label={`Delete ${form.name}`} title="Delete form" onClick={() => deleteForm(form)}>
+                        <Trash2 size={15} aria-hidden="true" style={scope === "travel" ? undefined : { marginRight: 6, verticalAlign: "middle" }} />
+                        {scope === "travel" ? null : "Delete"}
+                      </button>
                     </div>
                   </div>
                 </article>

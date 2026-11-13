@@ -926,6 +926,7 @@ jobs:
             npm ci --include=dev --no-audit --no-fund --loglevel=error 2>&1 | tail -5
             npm run build:windows 2>&1 | tail -5
             test -s dist/TallyConnector.exe
+            export TALLY_CONNECTOR_EXE_PATH="$HOME/globussoft-crm/tally-connector/dist/TallyConnector.exe"
 
             # The brochure engine is vendored under agentic-orchcrm/ and the
             # backend spawns tsx from its node_modules at runtime. Install its
@@ -997,6 +998,7 @@ jobs:
             fi
 
             echo "=== pm2 restart ==="
+            test -s "$TALLY_CONNECTOR_EXE_PATH"
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
 
             echo "=== health poll ==="

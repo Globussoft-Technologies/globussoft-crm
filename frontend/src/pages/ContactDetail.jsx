@@ -1487,7 +1487,11 @@ export default function ContactDetail() {
       return cell(
         <InlineField
           value={contact.email ?? ''}
-          display={linkDisplay(contact.email, 'email', openTravelEmail)}
+          display={contact.email ? (
+            <span className="cp-email-value" title={contact.email}>
+              {linkDisplay(contact.email, 'email', openTravelEmail)}
+            </span>
+          ) : undefined}
           type="text"
           onSave={(v) => patchField({ email: v })}
         />,
@@ -1916,6 +1920,7 @@ export default function ContactDetail() {
                           <>
                             <button
                               type="button"
+                              title={`Move to ${displayTitle}`}
                               onClick={() => setOpenSeg(openSeg === seg.id ? null : seg.id)}
                               className={`cp-chev${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative || (i === activeSeg && activeNegative) ? ' lost' : ''}`}
                             ><span className="cp-chev-label">{displayTitle}</span> <ChevronDown size={12} /></button>
@@ -2037,20 +2042,12 @@ export default function ContactDetail() {
                           const keys = orderedVisibleKeys(prefs);
                           if (keys.length === 0) {
                             return (
-                              <div className="cp-info-col">
-                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
-                                  No fields selected. Use Customize overview to choose fields.
-                                </span>
-                              </div>
+                              <span className="cp-info-empty">
+                                No fields selected. Use Customize overview to choose fields.
+                              </span>
                             );
                           }
-                          const cols = [[], [], []];
-                          keys.forEach((k, i) => cols[i % 3].push(k));
-                          return cols.map((colKeys, ci) => (
-                            <div className="cp-info-col" key={ci}>
-                              {colKeys.map((k) => renderOverviewField(k))}
-                            </div>
-                          ));
+                          return keys.map((key) => renderOverviewField(key));
                         })()}
                       </div>
                     </>

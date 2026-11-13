@@ -12,9 +12,13 @@ const { CONNECTOR_PATH, CONNECTOR_PROVIDER } = tallyConnectorBridge;
 
 const guards = [verifyToken, requireTravelTenant];
 const activePushes = new Set();
-const connectorBinaryPath = path.resolve(
-  process.env.TALLY_CONNECTOR_EXE_PATH
-    || path.join(__dirname, "..", "..", "tally-connector", "dist", "TallyConnector.exe"),
+const packagedConnectorBinaryPath = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "tally-connector",
+  "dist",
+  "TallyConnector.exe",
 );
 const connectorDeploymentDirectory = path.join(__dirname, "..", "..", "tally-connector");
 const connectorDeploymentFiles = [
@@ -23,6 +27,16 @@ const connectorDeploymentFiles = [
   "uninstall-startup.ps1",
   "README.md",
 ];
+
+function resolveConnectorBinaryPath() {
+  const configuredPath = String(process.env.TALLY_CONNECTOR_EXE_PATH || "").trim();
+  const candidates = configuredPath
+    ? [path.resolve(configuredPath), packagedConnectorBinaryPath]
+    : [packagedConnectorBinaryPath];
+  return candidates.find((candidate, index) => (
+    candidates.indexOf(candidate) === index && fs.existsSync(candidate)
+  )) || null;
+}
 
 function safeCredentials(raw) {
   if (!raw) return null;
@@ -383,7 +397,8 @@ router.post("/credentials", ...guards, requirePermission("tally", "update"), asy
 });
 
 router.get("/binary", ...guards, requirePermission("tally", "read"), (req, res) => {
-  if (!fs.existsSync(connectorBinaryPath)) {
+  const connectorBinaryPath = resolveConnectorBinaryPath();
+  if (!connectorBinaryPath) {
     return res.status(503).json({
       error: "The Tally connector package is not available on this server.",
       code: "TALLY_CONNECTOR_BINARY_UNAVAILABLE",
@@ -617,6 +632,7 @@ router.__testHooks = {
   legacyPurchasePaymentEntries,
   omitPreviouslyExportedVouchers,
   previouslyExportedVoucherKeys,
+  resolveConnectorBinaryPath,
   retainOnlyLiveVoucherHistory,
   shouldOfferExistingVoucherUpdate,
   syncLogRequestPayload,

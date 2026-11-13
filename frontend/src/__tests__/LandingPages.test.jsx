@@ -285,7 +285,7 @@ describe('<LandingPages /> — index page surface', () => {
 
     const searchInput = screen.getByRole('searchbox', { name: /Search landing pages/i });
     expect(searchInput).toBeInTheDocument();
-    expect(searchInput.style.paddingLeft).toBe('2.5rem');
+    expect(searchInput.parentElement).toHaveStyle({ display: 'flex' });
     expect(screen.getByRole('button', { name: /All\s*2/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Published\s*1/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Drafts\s*1/i })).toBeInTheDocument();

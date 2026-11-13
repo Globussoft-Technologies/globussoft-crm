@@ -347,12 +347,12 @@ export default function Reviews() {
             size={14}
             aria-hidden
             style={{
+              color: "var(--text-secondary)",
+              pointerEvents: "none",
               position: "absolute",
               left: 10,
               top: "50%",
               transform: "translateY(-50%)",
-              color: "var(--text-secondary)",
-              pointerEvents: "none",
             }}
           />
           <input
@@ -773,7 +773,6 @@ const teacherReportToolbarStyle = {
 
 const teacherReportSearchStyle = {
   flex: 1,
-  minWidth: 0,
   padding: "8px 10px",
   border: "1px solid var(--border-color)",
   borderRadius: 6,

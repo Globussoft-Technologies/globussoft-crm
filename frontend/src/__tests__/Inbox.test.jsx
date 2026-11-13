@@ -679,6 +679,33 @@ describe("<Inbox />", () => {
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
   });
 
+  it("renders meeting-confirmation HTML in travel inbox mail instead of showing markup", async () => {
+    const user = userEvent.setup();
+    const meetingEmail = {
+      ...sampleInboxEmail,
+      subject: "Your Conversation with TMC is Confirmed",
+      body: '<div style="font-family:Arial"><div>Hi Asim shaw,</div><div>Your conversation is confirmed.</div><div><a href="https://zoom.us/j/123">Join Meeting</a></div><div><img src="https://example.com/logo.png" alt="TMC logo" /></div></div>',
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (!opts || !opts.method || opts.method === "GET") {
+        if (url === "/api/communications/inbox" || url.startsWith("/api/communications/inbox?")) {
+          return Promise.resolve([meetingEmail]);
+        }
+        if (url === "/api/contacts") return Promise.resolve([sampleContact]);
+        if (url === "/api/wellness/patients") return Promise.resolve({ patients: [] });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderInbox({ tenant: { vertical: "travel" } });
+    await user.click(await screen.findByText(meetingEmail.subject));
+
+    expect(await screen.findByText("Hi Asim shaw,")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Join Meeting" })).toHaveAttribute("href", "https://zoom.us/j/123");
+    expect(screen.getByRole("img", { name: "TMC logo" })).toBeInTheDocument();
+    expect(screen.queryByText(/<div style=/)).not.toBeInTheDocument();
+  });
+
   it("submitting Schedule Meeting logs an activity for the selected contact", async () => {
     const user = userEvent.setup();
     renderInbox();

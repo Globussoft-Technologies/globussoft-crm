@@ -1140,15 +1140,16 @@ const EMBED_ATTRIBUTION_QUERY_KEYS = [
   "hsa_net", "hsa_ver",
 ];
 
-function buildEmbedHostScript(enableAttribution) {
+function buildEmbedHostScript(enableAttribution, cookieDomain = "") {
   if (!enableAttribution) {
     return '<script>(function(frame){if(!frame)return;var lastDevice="";function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>';
   }
   const keys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
-  return `<script>(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=storedAttribution(key)||(query?query.get(key):"");value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>`;
+  const safeDomain = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(String(cookieDomain || "").trim()) ? String(cookieDomain).trim().toLowerCase() : "";
+  return `<script>(function(frame){if(!frame)return;var keys=${keys},taggedVisitKeys=["utm_source","utm_medium","utm_campaign","utm_id","utm_term","utm_content","gclid","gbraid","wbraid","fbclid","fbc","fbp","campaign_id","adset_id","ad_id","campaign_name","adset_name","ad_name"],maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}function writeCookie(name,value){try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax${safeDomain ? `; Domain=${safeDomain}` : ""}"+(location.protocol==="https:"?"; Secure":"");}catch(e){}}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}var isTaggedVisit=query&&taggedVisitKeys.some(function(key){return query.has(key);});for(var i=0;i<keys.length;i++){var key=keys[i],value;if(isTaggedVisit){value=query.has(key)?(query.get(key)||""):"";writeCookie("gbs_"+key,value);}else{value=storedAttribution(key);if(value&&!readCookie("gbs_"+key))writeCookie("gbs_"+key,value);}if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>`;
 }
 
-function buildEmbedCode(form, origin) {
+function buildEmbedCode(form, origin, trackingCookieDomainOverride = "") {
   const configuredBase =
     origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
   const base = String(configuredBase).replace(
@@ -1157,6 +1158,13 @@ function buildEmbedCode(form, origin) {
   );
 
   const safeTitle = escapeHtml(form?.name || "Web form");
+  let trackingCookieDomain = "";
+  try {
+    const settings = JSON.parse(String(form?.settingsJson || "{}"));
+    trackingCookieDomain = String(trackingCookieDomainOverride || settings?.trackingCookieDomain || "").trim();
+  } catch (_err) {
+    trackingCookieDomain = "";
+  }
 
   const query =
     form?.id != null && String(form.id) !== ""
@@ -1167,7 +1175,7 @@ function buildEmbedCode(form, origin) {
     "<!-- Globussoft CRM web form -->",
 
     `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" allow="geolocation *" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
-    buildEmbedHostScript(!form?.scope || form.scope === "generic"),
+    buildEmbedHostScript(!form?.scope || form.scope === "generic", trackingCookieDomain),
   ].join("\n");
 }
 
@@ -1210,12 +1218,33 @@ async function findDuplicateFormName(tenantId, scope, name, excludeId = null) {
   });
 }
 
-function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = []) {
+function isValidTrackingCookieDomain(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(String(value || "").trim());
+}
+
+async function resolveGenericTrackingCookieDomain(tenantId) {
+  const raw = await getSetting(tenantId, KEYS.GENERIC_TRACKING_COOKIE_DOMAINS, {
+    coerce: String,
+    fallback: "{}",
+  });
+  try {
+    const parsed = JSON.parse(String(raw || "{}"));
+    const candidate = parsed?.selectedDomain || Object.keys(parsed).find((key) => key !== "selectedDomain" && key !== "domains");
+    return isValidTrackingCookieDomain(candidate) ? String(candidate).trim().toLowerCase() : "";
+  } catch (_err) {
+    return "";
+  }
+}
+
+function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = [], trackingCookieDomain = "") {
   if (!row) return null;
 
   const fields = normalizeFields(row.fieldsJson, row.scope || "generic", leadFieldDefinitions);
   const style = normalizeStyle(row.styleJson);
   const settings = normalizeSettings(row.settingsJson);
+  if ((row.scope || "generic") === "generic" && trackingCookieDomain && !settings.trackingCookieDomain) {
+    settings.trackingCookieDomain = trackingCookieDomain;
+  }
 
   if (isPublic) {
     const payload = {
@@ -1233,7 +1262,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, le
     if (supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
       payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
     }
-    if (origin) payload.embedCode = buildEmbedCode(row, origin);
+    if (origin) payload.embedCode = buildEmbedCode(row, origin, trackingCookieDomain);
     return payload;
   }
 
@@ -1253,7 +1282,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, le
     payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
   }
 
-  if (origin) payload.embedCode = buildEmbedCode(row, origin);
+  if (origin) payload.embedCode = buildEmbedCode(row, origin, trackingCookieDomain);
 
   return payload;
 }
@@ -1472,7 +1501,10 @@ async function listWithCounts(tenantId, scope) {
     );
   }
 
-  return forms.map((form) => shapeForm(form, counts[form.id] || 0));
+  const trackingCookieDomain = scope === "generic"
+    ? await resolveGenericTrackingCookieDomain(tenantId)
+    : "";
+  return forms.map((form) => shapeForm(form, counts[form.id] || 0, null, false, [], trackingCookieDomain));
 }
 
 // Public routes -------------------------------------------------------------
@@ -1507,7 +1539,10 @@ async function loadLeadFieldDefinitions(tenantId) {
 
 async function buildPublicFormPayload(form, origin) {
   const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
-  const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
+  const trackingCookieDomain = (form.scope || "generic") === "generic"
+    ? await resolveGenericTrackingCookieDomain(form.tenantId)
+    : "";
+  const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions, trackingCookieDomain);
   if (supportsAdvancedWebFormFeatures(form.scope || "generic")) {
     const recaptchaSiteKey = form.scope === "travel"
       ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
@@ -2697,7 +2732,10 @@ router.get("/:id", verifyToken, async (req, res) => {
         .status(404)
         .json({ error: "Form not found", code: "FORM_NOT_FOUND" });
 
-    res.json(shapeForm(form, 0, `${req.protocol}://${req.get("host")}`));
+    const trackingCookieDomain = scope === "generic"
+      ? await resolveGenericTrackingCookieDomain(req.user.tenantId)
+      : "";
+    res.json(shapeForm(form, 0, `${req.protocol}://${req.get("host")}`, false, [], trackingCookieDomain));
   } catch (err) {
     console.error("[web-forms] get error:", err && err.message);
 

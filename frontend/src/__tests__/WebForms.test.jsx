@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, normalizeTrackingCookieDomain, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 // These assertions check source contracts, not the formatter's quote style
 // or whitespace. Runtime/layout assertions below remain unchanged.
@@ -35,8 +35,8 @@ describe('webForms helpers', () => {
     expect(hasDuplicateWebFormName(forms, '', 1)).toBe(false);
   });
 
-  test('builds a website snippet that preserves first-touch Generic tracking cookies', () => {
-    const source = buildGenericTrackingCookieSetupCode()
+  test('builds a website snippet that replaces the complete campaign on a new tagged visit', () => {
+    const source = buildGenericTrackingCookieSetupCode('https://poweradspy.com/')
       .replace(/^<script>\s*/, '')
       .replace(/\s*<\/script>$/, '');
     const cookies = new Map();
@@ -59,10 +59,43 @@ describe('webForms helpers', () => {
     expect(cookies.get('gbs_utm_source')).toBe('google');
     expect(cookies.get('gbs_gclid')).toBe('click-123');
 
-    context.window.location.search = '?utm_source=facebook&gclid=click-456';
+    context.window.location.search = '?utm_source=facebook&utm_medium=cpc';
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('facebook');
+    expect(cookies.get('gbs_gclid')).toBe('');
+    expect(cookies.get('gbs_utm_campaign')).toBe('');
+    expect(source).toContain('Domain=poweradspy.com');
+    expect(source).toContain('SameSite=Lax');
+    expect(source).toContain('Secure');
+  });
+
+  test('preserves cookies on untagged pages and ignores device-only URLs', () => {
+    const source = buildGenericTrackingCookieSetupCode()
+      .replace(/^<script>\s*/, '')
+      .replace(/\s*<\/script>$/, '');
+    const cookies = new Map([['gbs_utm_source', 'google']]);
+    const document = {};
+    Object.defineProperty(document, 'cookie', {
+      get: () => [...cookies].map(([key, value]) => `${key}=${value}`).join('; '),
+      set: (value) => {
+        const pair = value.split(';', 1)[0];
+        const separator = pair.indexOf('=');
+        cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+      },
+    });
+    const context = { document, URLSearchParams, window: { location: { search: '?device=mobile', protocol: 'https:' } } };
     runInNewContext(source, context);
     expect(cookies.get('gbs_utm_source')).toBe('google');
-    expect(cookies.get('gbs_gclid')).toBe('click-123');
+    context.window.location.search = '';
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('google');
+  });
+
+  test('normalizes full URLs without broadening the selected hostname', () => {
+    expect(normalizeTrackingCookieDomain('https://app.poweradspy.com/path')).toBe('app.poweradspy.com');
+    expect(normalizeTrackingCookieDomain('poweradspy.com')).toBe('poweradspy.com');
+    expect(normalizeTrackingCookieDomain('https://poweradspy.com.evil.example')).toBe('poweradspy.com.evil.example');
+    expect(normalizeTrackingCookieDomain('not a domain')).toBe('');
   });
 });
 
@@ -193,7 +226,7 @@ describe('buildWebFormEmbedCode', () => {
     }
   });
 
-  test('preserves first-touch attribution when a later visit has new campaign parameters', () => {
+  test('replaces attribution when a later visit has new campaign parameters', () => {
     const code = buildWebFormEmbedCode(
       { id: 106, name: 'External Contact', scope: 'generic' },
       'https://crm.example.com',
@@ -220,14 +253,14 @@ describe('buildWebFormEmbedCode', () => {
       ))();
       frameListeners.load();
 
-      expect(document.cookie).toContain('gbs_utm_source=first-campaign');
-      expect(document.cookie).toContain('gbs_utm_campaign=launch-one');
+      expect(document.cookie).toContain('gbs_utm_source=later-campaign');
+      expect(document.cookie).toContain('gbs_utm_campaign=launch-two');
       expect(messages).toContainEqual(expect.objectContaining({
         source: 'gbs-web-form-host',
         type: 'context',
         attribution: expect.objectContaining({
-          utm_source: 'first-campaign',
-          utm_campaign: 'launch-one',
+          utm_source: 'later-campaign',
+          utm_campaign: 'launch-two',
         }),
       }));
     } finally {

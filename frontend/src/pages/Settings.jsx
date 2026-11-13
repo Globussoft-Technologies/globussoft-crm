@@ -49,7 +49,7 @@ import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEf
 import ProductTourSettings from "../components/ProductTourSettings";
 import GoogleMapsSettingsCard from "../components/GoogleMapsSettingsCard";
 import TwilioSettingsCard from "../components/TwilioSettingsCard";
-import { buildGenericTrackingCookieSetupCode } from "../utils/webForms";
+import { buildGenericTrackingCookieSetupCode, normalizeTrackingCookieDomain } from "../utils/webForms";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -3848,9 +3848,14 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
 
 function GenericWebFormAutomaticTrackingCard() {
   const [showSetupModal, setShowSetupModal] = useState(false);
+  const [domainInput, setDomainInput] = useState("");
+  const [cookieDomain, setCookieDomain] = useState("");
+  const [domainError, setDomainError] = useState("");
+  const [savedDomains, setSavedDomains] = useState({});
+  const [savingDomain, setSavingDomain] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  const setupCode = buildGenericTrackingCookieSetupCode();
+  const setupCode = buildGenericTrackingCookieSetupCode(cookieDomain);
   const cookieKeys = [
     ["UTM Source", "utm_source"],
     ["UTM Medium", "utm_medium"],
@@ -3876,6 +3881,23 @@ function GenericWebFormAutomaticTrackingCard() {
     ["Referrer", "referrer"],
   ];
   useEffect(() => {
+    let active = true;
+    fetchApi("/api/tenant-settings")
+      .then((payload) => {
+        if (!active) return;
+        const row = (Array.isArray(payload?.settings) ? payload.settings : [])
+          .find((entry) => entry.key === "generic.webForm.trackingCookieDomains");
+        try {
+          const parsed = JSON.parse(String(row?.value || "{}"));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) setSavedDomains(parsed);
+        } catch {
+          setSavedDomains({});
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
     if (!showSetupModal) return undefined;
     const closeOnEscape = (event) => {
       if (event.key === "Escape") setShowSetupModal(false);
@@ -3887,6 +3909,36 @@ function GenericWebFormAutomaticTrackingCard() {
     setShowSetupModal(false);
     setCopied(false);
     setCopyError(false);
+    setDomainError("");
+  };
+  const openSetupModal = () => {
+    setDomainInput("");
+    setCookieDomain("");
+    setDomainError("");
+    setShowSetupModal(true);
+  };
+  const generateSetupCode = async () => {
+    const normalized = normalizeTrackingCookieDomain(domainInput);
+    if (!normalized) {
+      setDomainError("Enter a valid website domain or full website URL.");
+      return;
+    }
+    setSavingDomain(true);
+    try {
+      const nextDomains = { ...savedDomains, selectedDomain: normalized, [normalized]: { domain: normalized, updatedAt: new Date().toISOString() } };
+      await fetchApi("/api/tenant-settings/generic.webForm.trackingCookieDomains", {
+        method: "PUT",
+        body: JSON.stringify({ value: JSON.stringify(nextDomains), category: "general" }),
+      });
+      setSavedDomains(nextDomains);
+      setCookieDomain(normalized);
+      setDomainInput(normalized);
+      setDomainError("");
+    } catch (error) {
+      setDomainError(error?.message || "Could not save the website domain.");
+    } finally {
+      setSavingDomain(false);
+    }
   };
   const copySetupCode = async () => {
     try {
@@ -3915,7 +3967,7 @@ function GenericWebFormAutomaticTrackingCard() {
         <button
           type="button"
           className="btn-primary"
-          onClick={() => setShowSetupModal(true)}
+          onClick={openSetupModal}
           style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}
         >
           <Copy size={16} />
@@ -3979,7 +4031,7 @@ function GenericWebFormAutomaticTrackingCard() {
                   Cookie setup function
                 </h3>
                 <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>
-                  Add this function once to your website header or footer. It keeps the first tracking value for 90 days.
+                  Choose the website domain first. The generated function replaces a campaign when a new tagged visit arrives and keeps it when the next page has no campaign parameters.
                 </p>
               </div>
               <button type="button" className="btn-secondary" onClick={closeSetupModal} aria-label="Close cookie setup modal" style={{ minWidth: "42px", minHeight: "42px", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -3987,25 +4039,35 @@ function GenericWebFormAutomaticTrackingCard() {
               </button>
             </div>
             <div style={{ display: "grid", gap: "16px", padding: "20px 22px 22px" }}>
-              <label style={{ display: "grid", gap: "8px" }}>
-                <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website cookie function</span>
-                <textarea
-                  className="input-field"
-                  readOnly
-                  aria-label="Cookie setup function"
-                  value={setupCode}
-                  onFocus={(event) => event.target.select()}
-                  rows={12}
-                  style={{ width: "100%", minHeight: "260px", resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "0.82rem", lineHeight: 1.45 }}
-                />
-              </label>
+              {!cookieDomain ? (
+                <div style={{ display: "grid", gap: "10px" }}>
+                  <label style={{ display: "grid", gap: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website/cookie domain</span>
+                    <input className="input-field" aria-label="Website cookie domain" value={domainInput} onChange={(event) => setDomainInput(event.target.value)} placeholder="poweradspy.com or https://poweradspy.com/" autoFocus />
+                  </label>
+                  <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.45, margin: 0 }}>The hostname will be normalized and used exactly as entered. Cookies will be available on that hostname and its subdomains.</p>
+                  {domainError && <p role="alert" style={{ color: "var(--danger-color)", fontSize: "0.8rem", margin: 0 }}>{domainError}</p>}
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}><button type="button" className="btn-primary" onClick={generateSetupCode} disabled={savingDomain}>{savingDomain ? "Saving..." : "Validate and generate"}</button></div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gap: "4px", padding: "10px 12px", borderRadius: "8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.78rem" }}>Selected cookie domain</span>
+                    <code>{cookieDomain}</code>
+                  </div>
+                  <label style={{ display: "grid", gap: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website cookie function</span>
+                    <textarea className="input-field" readOnly aria-label="Cookie setup function" value={setupCode} onFocus={(event) => event.target.select()} rows={12} style={{ width: "100%", minHeight: "260px", resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "0.82rem", lineHeight: 1.45 }} />
+                  </label>
+                </>
+              )}
               {copyError && (
                 <p role="alert" style={{ color: "var(--danger-color)", fontSize: "0.8rem", margin: 0 }}>
                   Clipboard access is unavailable. Select the code above and copy it manually.
                 </p>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
-                <button type="button" className="btn-secondary" onClick={copySetupCode} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                <button type="button" className="btn-secondary" onClick={copySetupCode} disabled={!cookieDomain} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
                   {copied ? <Check size={16} /> : <Copy size={16} />}
                   {copied ? "Copied" : "Copy function"}
                 </button>

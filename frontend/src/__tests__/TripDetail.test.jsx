@@ -94,7 +94,7 @@
  * commit via ls + git status; no other agent touches this path).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { AuthContext } from '../App';
 
@@ -137,6 +137,7 @@ function makeTrip(overrides = {}) {
     tripCode: 'TMC-AND-2026-MUMBAI-G7',
     destination: 'Andaman',
     schoolContactId: 5001,
+    schoolName: 'The Modern Classroom',
     departDate: '2026-12-01T00:00:00.000Z',
     returnDate: '2026-12-08T00:00:00.000Z',
     pricePerStudent: 125000,
@@ -393,6 +394,13 @@ describe('<TripDetail /> — tab strip', () => {
     renderPage(101, { search: '?tab=microsite' });
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     expect(screen.getByRole('tab', { name: /Overview/i })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('restores the active tab from the trip URL after refresh', async () => {
+    renderPage(101, { search: '?tab=documents' });
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.getByRole('tab', { name: /Documents/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Documents to collect')).toBeInTheDocument();
   });
 
   it('uses preserved report result URL when opened from Reports drill-down', async () => {
@@ -1250,8 +1258,8 @@ describe('<TripDetail /> — StatusBadge fallback', () => {
 });
 
 describe('<TripDetail /> — dynamic document requirements', () => {
-  async function openDocumentsTab(trip = makeTrip()) {
-    installFetchMock({ trip });
+  async function openDocumentsTab(trip = makeTrip(), pendingRegs = []) {
+    installFetchMock({ trip, pendingRegs });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
@@ -1282,8 +1290,54 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     expect(screen.getByText(/PDF, DOCX · Required/)).toBeInTheDocument();
     expect(screen.getByText(/PDF, JPG \/ JPEG · Required/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /View document/ })).toBeInTheDocument();
+    expect(screen.getByTestId('trip-document-actions')).toHaveStyle({ justifyContent: 'flex-start', width: '100%' });
     expect(screen.getByText('Pending')).toBeInTheDocument();
     expect(screen.queryByText(/Passport|Aadhaar|Visa documents/i)).not.toBeInTheDocument();
+  });
+
+  it('opens participant details from the participant identity cell', async () => {
+    await openDocumentsTab(makeTrip({
+      participants: [{
+        id: 901,
+        fullName: 'Anaya Sharma',
+        parentName: 'Riya Sharma',
+        parentEmail: 'riya@example.com',
+        parentPhone: '+919876543210',
+        applicationStatus: 'approved',
+        reviewNotes: 'Verified with the school coordinator.',
+      }],
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'View details for Anaya Sharma' }));
+    const modal = await screen.findByRole('dialog', { name: 'Participant details' });
+    expect(within(modal).getAllByText('Anaya Sharma')).toHaveLength(2);
+    expect(within(modal).getByText('riya@example.com')).toBeInTheDocument();
+    expect(within(modal).getByText('+919876543210')).toBeInTheDocument();
+    expect(within(modal).getByText('The Modern Classroom')).toBeInTheDocument();
+    expect(within(modal).getByText('Approved')).toBeInTheDocument();
+    expect(within(modal).getByText('Verified with the school coordinator.')).toBeInTheDocument();
+
+    fireEvent.click(within(modal).getByRole('button', { name: 'Close participant details' }));
+    expect(screen.queryByRole('dialog', { name: 'Participant details' })).not.toBeInTheDocument();
+  });
+
+  it('shows school and registration fields for a pending participant', async () => {
+    await openDocumentsTab(makeTrip({ participants: [] }), [{
+        id: 9001,
+        status: 'OTP_VERIFIED',
+        studentName: 'Aarav Iyer',
+        studentSchool: 'Springfield School',
+        studentClass: 'Grade 8',
+        parentName: 'Rohan Iyer',
+        parentEmail: 'rohan@example.com',
+        parentPhone: '+919876543210',
+      }]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'View details for Aarav Iyer' }));
+    const modal = await screen.findByRole('dialog', { name: 'Participant details' });
+    expect(within(modal).getByText('Springfield School')).toBeInTheDocument();
+    expect(within(modal).getByText('Grade 8')).toBeInTheDocument();
+    expect(within(modal).getByText('rohan@example.com')).toBeInTheDocument();
   });
 
   it('opens an uploaded file from its participant-document cell', async () => {
@@ -1321,6 +1375,56 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     });
     expect(createObjectUrlSpy).toHaveBeenCalled();
     expect(openSpy).toHaveBeenCalledWith('blob:uploaded-document', '_blank', 'noopener,noreferrer');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+    await waitFor(() => {
+      expect(rawFetchMock).toHaveBeenCalledWith(
+        '/api/travel/trips/101/participants/901/parent-documents/501/file',
+        { headers: { Authorization: 'Bearer test-token' } },
+      );
+    });
+  });
+
+  it('presents accepted terms before submitted consent details', async () => {
+    await openDocumentsTab(makeTrip({
+      participants: [{
+        id: 901,
+        fullName: 'Anaya Sharma',
+        parentName: 'Riya Sharma',
+        parentEmail: 'parent@example.com',
+        parentDocuments: [{
+          id: 502,
+          documentRequirementId: 1,
+          documentType: 'Parent consent form',
+          captureMode: 'digital_consent',
+          answers: {
+            parentName: 'Riya Sharma',
+            participantName: 'Anaya Sharma',
+            relationship: 'Parent / Guardian',
+            signatureName: 'Riya Sharma',
+            notes: 'No medical restrictions.',
+          },
+          termsSnapshot: 'TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES 1. DEFINITIONS These terms apply to this trip. 2. ACCEPTANCE OF TERMS The parent accepts these terms. 14. TERM These terms remain in force. 15. REMOVAL FROM THE PROGRAMME A. The Company may remove a participant. 16. PRIVACY AND COMMUNICATIONS A. The parent consents to communication.',
+          agreedAt: '2026-06-01T10:00:00.000Z',
+        }],
+      }],
+      documentRequirements: [{ id: 1, docType: 'Parent consent form', captureMode: 'digital_consent', required: true }],
+    }));
+
+    const viewConsentButton = screen.getByRole('button', { name: 'View consent' });
+    expect(viewConsentButton).toHaveClass('trip-document-view-action');
+    fireEvent.click(viewConsentButton);
+    const modal = await screen.findByRole('dialog');
+    const modalText = modal.textContent;
+    expect(modalText.indexOf('Terms and conditions')).toBeLessThan(modalText.indexOf('Submitted details'));
+    expect(within(modal).getByRole('heading', { name: 'TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES' })).toBeInTheDocument();
+    expect(within(modal).getByRole('heading', { name: '1. DEFINITIONS' })).toBeInTheDocument();
+    expect(within(modal).getByRole('heading', { name: '14. TERM' })).toBeInTheDocument();
+    expect(within(modal).getByRole('heading', { name: '15. REMOVAL FROM THE PROGRAMME' })).toBeInTheDocument();
+    expect(within(modal).getByRole('heading', { name: '16. PRIVACY AND COMMUNICATIONS' })).toBeInTheDocument();
+    expect(within(modal).getByRole('heading', { name: 'Submitted details' })).toBeInTheDocument();
+    expect(within(modal).getByText('Parent name')).toBeInTheDocument();
+    expect(within(modal).getAllByText('Riya Sharma')).toHaveLength(2);
   });
 
   it('creates an admin-defined requirement with the selected file types', async () => {

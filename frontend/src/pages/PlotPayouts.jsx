@@ -37,9 +37,9 @@ function formatRupees(value) {
 }
 
 function statusTone(status) {
-  if (status === 'COMPLETED') return ['#dcfce7', '#166534'];
-  if (status === 'PENDING') return ['#fef3c7', '#92400e'];
-  return ['#eef2f7', '#475569'];
+  if (status === 'COMPLETED') return ['var(--status-success-bg, #dcfce7)', 'var(--status-success-text, #166534)'];
+  if (status === 'PENDING') return ['var(--status-warning-bg, #fef3c7)', 'var(--status-warning-text, #92400e)'];
+  return ['var(--status-neutral-bg, #eef2f7)', 'var(--status-neutral-text, #475569)'];
 }
 
 function displayStaffRole(member) {
@@ -253,9 +253,9 @@ function StaffConflictDialog({ conflicts, onCancel, onOverride }) {
   if (!conflicts?.length) return null;
   const uniqueConflicts = [...new Map(conflicts.map((conflict) => [`${conflict.staffId}:${conflict.previousRule}`, conflict])).values()];
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }} style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="staff-conflict-title" style={{ width: 'min(520px, 100%)', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="staff-conflict-title" style={{ width: 'min(520px, 100%)', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><h2 id="staff-conflict-title" style={{ margin: 0, fontSize: '1.15rem' }}>Staff already assigned</h2><p style={{ ...muted, margin: '7px 0 0', fontSize: 13 }}>Each staff member can belong to only one commission rule for a plot.</p></div><button type="button" className="btn-secondary" aria-label="Close staff conflict dialog" onClick={onCancel} style={{ padding: 7 }}><X size={16} /></button></div>
-      <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: '#fff7ed', color: '#9a3412', fontSize: 13 }}>{uniqueConflicts.map((conflict) => <div key={`${conflict.staffId}:${conflict.previousRule}`} style={{ marginTop: 5 }}>{conflict.staffName} is already applied to <strong>{conflict.previousRule}</strong>.</div>)}</div>
+      <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: 'var(--warn-bg, #fff7ed)', color: 'var(--status-warning-text, #92400e)', fontSize: 13 }}>{uniqueConflicts.map((conflict) => <div key={`${conflict.staffId}:${conflict.previousRule}`} style={{ marginTop: 5 }}>{conflict.staffName} is already applied to <strong>{conflict.previousRule}</strong>.</div>)}</div>
       <p style={{ ...muted, margin: '16px 0 0', fontSize: 13 }}>Do you want to override those assignments? Override will remove those staff from their previous rules and apply them to this rule.</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 9, marginTop: 20 }}><button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button><button type="button" className="btn-primary" onClick={onOverride}>Override assignment</button></div>
     </section>
@@ -411,7 +411,7 @@ function PaymentActionDialog({ action, busy, onClose, onSubmit }) {
   };
 
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="payment-action-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="payment-action-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><span style={{ ...muted, fontSize: 12, fontWeight: 700 }}>{isComplete ? 'Payment action' : 'Customer message'}</span><h2 id="payment-action-title" style={{ margin: '5px 0 0', fontSize: '1.2rem' }}>{isComplete ? 'Mark payment as completed' : 'Send payment message'}</h2><p style={{ ...muted, margin: '6px 0 0' }}>{record.plot.name}{record.plot.plotNumber ? ` · ${record.plot.plotNumber}` : ''}{contact?.name ? ` · ${contact.name}` : ''}</p></div><button type="button" className="btn-secondary" aria-label="Close payment action" onClick={onClose} disabled={busy} style={{ padding: 7 }}><X size={16} /></button></header>
       {isComplete && <div className="commission-payment-summary"><div><span>Amount to record</span><strong>{formatPaise(record.outstandingPaise)}</strong></div><div><span>Invoice</span><strong>Generated automatically</strong></div></div>}
       <form onSubmit={submit} style={{ display: 'grid', gap: 14, marginTop: 20 }}>
@@ -443,7 +443,7 @@ function AddInvoiceDialog({ action, busy, onClose, onSubmit }) {
   };
 
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="add-invoice-title" style={{ width: 'min(560px, 100%)', maxHeight: 'min(680px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="add-invoice-title" style={{ width: 'min(560px, 100%)', maxHeight: 'min(680px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><span style={{ ...muted, fontSize: 12, fontWeight: 700 }}>Invoice details</span><h2 id="add-invoice-title" style={{ margin: '5px 0 0', fontSize: '1.2rem' }}>Add invoice</h2><p style={{ ...muted, margin: '6px 0 0' }}>{record.plot.name}{record.plot.plotNumber ? ` · ${record.plot.plotNumber}` : ''}</p></div><button type="button" className="btn-secondary" aria-label="Close add invoice" onClick={onClose} disabled={busy} style={{ padding: 7 }}><X size={16} /></button></header>
       <form onSubmit={submit} style={{ display: 'grid', gap: 14, marginTop: 20 }}>
         <label>Invoice screenshot<input className="input-field" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setScreenshot(event.target.files?.[0] || null)} /></label>
@@ -461,7 +461,7 @@ function RuleDetailsDialog({ detail, onClose }) {
   const staffNames = rule.staffNames?.length ? rule.staffNames : rule.staff?.map((member) => member.name) || [];
   const basis = (rule.basis || rule.commissionBasis || 'COLLECTED_AMOUNT').replaceAll('_', ' ').toLowerCase();
   return <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(15, 23, 42, .48)' }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="commission-rule-details-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: '#ffffff', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="commission-rule-details-title" style={{ width: 'min(620px, 100%)', maxHeight: 'min(720px, calc(100vh - 40px))', overflowY: 'auto', borderRadius: 16, padding: 24, background: 'var(--modal-bg, #ffffff)', opacity: 1, boxShadow: '0 24px 70px rgba(15,23,42,.28)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}><div><span style={{ ...muted, fontSize: 12, fontWeight: 700 }}>Rule ID #{rule.id}</span><h2 id="commission-rule-details-title" style={{ margin: '5px 0 0', fontSize: '1.2rem' }}>{rule.name}</h2></div><button type="button" className="btn-secondary" aria-label="Close rule details" onClick={onClose} style={{ padding: 7 }}><X size={16} /></button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10, marginTop: 20 }}><div className="commission-rule-detail-item"><span>Plot</span><strong>{record.plot.name}{record.plot.plotNumber ? ` · ${record.plot.plotNumber}` : ''}</strong></div><div className="commission-rule-detail-item"><span>Actual plot amount</span><strong>{formatPaise(record.actualAmountPaise)}</strong></div><div className="commission-rule-detail-item"><span>Collectable threshold</span><strong>{formatPaise(record.collectionTargetPaise)}</strong></div><div className="commission-rule-detail-item"><span>Collected amount</span><strong>{formatPaise(record.collectedAmountPaise)}</strong></div><div className="commission-rule-detail-item"><span>Commission calculated on</span><strong>{basis}</strong></div><div className="commission-rule-detail-item"><span>Commission rate</span><strong>{rule.ratePercent}%</strong></div><div className="commission-rule-detail-item"><span>Current commission</span><strong>{formatPaise(rule.commissionPaise)}</strong></div><div className="commission-rule-detail-item"><span>Status</span><StatusBadge status={record.status} label={record.statusLabel} /></div></div>
       <div style={{ marginTop: 12 }} className="commission-rule-detail-item"><span>Assigned member name</span><strong>{staffNames.length ? staffNames.join(', ') : 'No staff assigned'}</strong></div>
@@ -798,7 +798,7 @@ export default function PlotPayouts() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  return <main className="finance-page" data-testid="commission-page" style={{ maxWidth: 1480, padding: 'clamp(16px, 2.5vw, 32px)' }}>
+  return <main className="finance-page commission-page" data-testid="commission-page">
     <section style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap', marginBottom: 22 }}>
       <div style={{ minWidth: 0 }}><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 38, height: 38, borderRadius: 12, display: 'grid', placeItems: 'center', background: 'var(--primary-color, var(--accent-color))', color: '#fff' }}><Coins size={20} /></span><div><h1 style={{ margin: 0, fontSize: 'clamp(1.45rem, 2.2vw, 2rem)' }}>Commissions</h1><p style={{ ...muted, margin: '5px 0 0' }}>Set plot collection thresholds, assign commission rules, and track collection progress from Finance.</p></div></div></div>
       <button type="button" className="btn-secondary" onClick={load} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh</button>

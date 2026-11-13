@@ -1365,6 +1365,15 @@ router.get(
         return res
           .status(404)
           .json({ error: "Trip not found", code: "NOT_FOUND" });
+      if (trip.schoolContactId) {
+        const schoolContact = await prisma.contact.findFirst({
+          where: { id: trip.schoolContactId, tenantId: req.travelTenant.id },
+          select: { id: true, name: true },
+        });
+        trip.schoolName = schoolContact?.name || null;
+      } else {
+        trip.schoolName = null;
+      }
       const participantPayments = await prisma.tripInstalmentPayment.findMany({
         where: { tripId: trip.id },
         select: { participantId: true, instalmentIndex: true, amount: true, paidAmount: true, status: true },

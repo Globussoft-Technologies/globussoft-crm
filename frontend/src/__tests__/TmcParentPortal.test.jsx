@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as renderWithTestingLibrary, screen, waitFor, within } from "@testing-library/react";
+import { BrowserRouter } from "react-router-dom";
 import TmcParentPortal from "../pages/travel/TmcParentPortal";
+
+function render(ui) {
+  return renderWithTestingLibrary(<BrowserRouter>{ui}</BrowserRouter>);
+}
 
 describe("TmcParentPortal", () => {
   let fetchSpy;
@@ -177,6 +182,16 @@ describe("TmcParentPortal", () => {
     expect(document.querySelector('[data-tmc-parent-shell="true"]')).toHaveStyle({ marginLeft: "236px" });
   });
 
+  it("clears the parent session and redirects to the main login page on sign out", async () => {
+    render(<TmcParentPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(localStorage.getItem("tmcParentPortalToken")).toBeNull();
+  });
+
   it("shows assigned trips and links parents to the registration landing page", async () => {
     render(<TmcParentPortal />);
 
@@ -220,6 +235,18 @@ describe("TmcParentPortal", () => {
     expect(labels).toEqual(["Dashboard", "Trips", "My Bookings", "Travel Documents", "Reviews"]);
   });
 
+  it("keeps document trip dropdowns aligned with the selected theme", async () => {
+    render(<TmcParentPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: /Travel Documents/ }));
+    const tripSelect = await screen.findByRole("combobox", { name: "Related trip" });
+
+    expect(tripSelect).toHaveStyle({ colorScheme: "light" });
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dark mode" }));
+    expect(tripSelect).toHaveStyle({ colorScheme: "dark" });
+  });
+
   it("restores the selected section from the URL after a refresh", async () => {
     window.history.replaceState({}, "", "/tmc/parent-portal?view=documents");
     render(<TmcParentPortal />);
@@ -245,7 +272,7 @@ describe("TmcParentPortal", () => {
     fireEvent.change(tripSelect, { target: { value: "7" } });
     const uploadedRequirement = screen.getAllByText("Travel insurance certificate", { exact: true })[0].closest("button");
     const pendingRequirement = screen.getByText("School medical clearance", { exact: true }).closest("button");
-    expect(uploadedRequirement).toHaveTextContent("Uploaded");
+    expect(uploadedRequirement).toHaveTextContent("Submitted");
     expect(pendingRequirement).toHaveTextContent("Pending");
     expect(screen.getByLabelText("Accepted file types")).toHaveTextContent(/Travel insurance certificate:\s*PDF, JPG \/ JPEG/);
     expect(screen.getByLabelText("Choose travel document")).toHaveAttribute("accept", expect.stringContaining("application/pdf"));
@@ -266,9 +293,10 @@ describe("TmcParentPortal", () => {
       expect(uploadCall[1].body.get("documentType")).toBeNull();
       expect(uploadCall[1].body.get("file").name).toBe("medical-clearance.docx");
     });
-    expect(await screen.findByText(/School medical clearance uploaded/)).toBeInTheDocument();
+    expect(await screen.findByText(/School medical clearance submitted successfully/)).toBeInTheDocument();
 
     const uploadedDocumentRow = document.querySelector('[data-tmc-parent-document="11"]');
+    expect(within(uploadedDocumentRow).getByText("Submitted")).toBeInTheDocument();
     fireEvent.click(uploadedDocumentRow.querySelector('button[aria-label="View insurance-certificate.pdf"]'));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
       "/api/portal/tmc/parent/documents/11/file",
@@ -280,12 +308,13 @@ describe("TmcParentPortal", () => {
 
   it("renders and submits an enabled digital consent form without a file input", async () => {
     const defaultFetchImplementation = fetchSpy.getMockImplementation();
+    let submittedDocument = null;
     fetchSpy.mockImplementation((url, options = {}) => {
       if (url === "/api/portal/tmc/parent/documents" && (!options.method || options.method === "GET")) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({
-            documents: [],
+            documents: submittedDocument ? [submittedDocument] : [],
             documentRequirements: [
               {
                 id: 103,
@@ -301,15 +330,46 @@ describe("TmcParentPortal", () => {
         });
       }
       if (url === "/api/portal/tmc/parent/consents" && options.method === "POST") {
+        submittedDocument = {
+          id: 103,
+          documentType: "Parent consent form",
+          filename: "digital-consent.json",
+          captureMode: "digital_consent",
+          status: "in_review",
+          tripId: 7,
+        };
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({
-            document: {
+            document: submittedDocument,
+          }),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/documents/103/file" || url === "/api/portal/tmc/parent/documents/103/file?download=1") {
+        return Promise.resolve({
+          ok: true,
+          blob: () => Promise.resolve(new Blob(["consent pdf"], { type: "application/pdf" })),
+        });
+      }
+      if (url === "/api/portal/tmc/parent/documents/103/consent") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            consent: {
               id: 103,
               documentType: "Parent consent form",
               captureMode: "digital_consent",
               status: "in_review",
               tripId: 7,
+              agreedAt: "2026-11-13T10:00:00.000Z",
+              termsSnapshot: "TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES These Terms apply to this trip. 1. DEFINITIONS These are definitions.",
+              answers: {
+                parentName: "Arijit Singh",
+                participantName: "Anaya Singh",
+                relationship: "Parent",
+                signatureName: "Arijit Singh",
+                notes: "No medical restrictions.",
+              },
             },
           }),
         });
@@ -342,6 +402,28 @@ describe("TmcParentPortal", () => {
       });
     });
     expect(await screen.findByText(/Parent consent form submitted/)).toBeInTheDocument();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.queryByText(/This consent form has already been submitted/)).not.toBeInTheDocument();
+
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    globalThis.URL.createObjectURL = vi.fn(() => "blob:parent-consent");
+    globalThis.URL.revokeObjectURL = vi.fn();
+    const consentRow = document.querySelector('[data-tmc-parent-document="103"]');
+    expect(consentRow.querySelector('button[aria-label="View digital-consent.json"]')).toBeInTheDocument();
+    expect(consentRow.querySelector('button[aria-label="Download digital-consent.json"]')).toBeInTheDocument();
+    fireEvent.click(consentRow.querySelector('button[aria-label="View digital-consent.json"]'));
+    expect(await screen.findByRole("dialog", { name: "Digital consent submission" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Terms and conditions" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Submitted details" })).toBeInTheDocument();
+    expect(screen.getByText("TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES")).toBeInTheDocument();
+    expect(screen.getByText("Anaya Singh")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download PDF" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/portal/tmc/parent/documents/103/file?download=1",
+      expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
+    ));
+    openSpy.mockRestore();
   });
 
   it("supports theme switching and opens the parent profile from the header", async () => {

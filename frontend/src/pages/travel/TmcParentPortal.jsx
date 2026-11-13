@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   CalendarDays,
   CheckCircle2,
@@ -27,6 +28,7 @@ import {
   Upload,
   UserRound,
   WalletCards,
+  X,
 } from "lucide-react";
 import {
   TRAVEL_PAYMENT_SYNC_CHANNEL,
@@ -132,6 +134,19 @@ const portalInteractionStyles = `
   [data-tmc-parent-portal="true"] input:focus-visible {
     outline: 3px solid rgba(200, 239, 36, 0.7);
     outline-offset: 2px;
+  }
+
+  [data-tmc-parent-portal="true"] select {
+    color-scheme: light;
+  }
+
+  [data-tmc-parent-portal="true"][data-theme-mode="dark"] select {
+    color-scheme: dark;
+  }
+
+  [data-tmc-parent-portal="true"] select option {
+    background-color: var(--tmc-parent-input-bg);
+    color: var(--tmc-parent-text);
   }
 
   [data-tmc-parent-portal="true"][data-theme-mode="dark"] button:not([disabled]):not([data-tmc-no-hover]):hover {
@@ -296,6 +311,17 @@ async function fetchParentDocumentFile(token, documentId, { download = false } =
   return response.blob();
 }
 
+async function fetchParentConsentDetails(token, documentId) {
+  const response = await fetch(`/api/portal/tmc/parent/documents/${documentId}/consent`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error(data.error || "Unable to load consent details"), { status: response.status, code: data.code });
+  }
+  return data.consent || null;
+}
+
 function readTheme() {
   try {
     return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
@@ -305,6 +331,7 @@ function readTheme() {
 }
 
 export default function TmcParentPortal() {
+  const navigate = useNavigate();
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [themeMode, setThemeMode] = useState(readTheme);
   const [contact, setContact] = useState(null);
@@ -345,7 +372,8 @@ export default function TmcParentPortal() {
     setSelectedBookingId(null);
     setActiveView("dashboard");
     setError(message);
-  }, []);
+    navigate("/login", { replace: true });
+  }, [navigate]);
 
   const load = useCallback(async (options = {}) => {
     if (!token) return;
@@ -545,8 +573,8 @@ export default function TmcParentPortal() {
           {activeView === "dashboard" && <DashboardView contact={contact} trips={trips} bookings={bookings} registrations={portalData.registrations} onNavigate={setActiveView} onOpenBooking={(id) => { setActiveView("bookings"); setSelectedBookingId(id); }} />}
           {activeView === "trips" && <TripsView trips={trips} loading={loading} />}
           {activeView === "bookings" && (selectedBooking ? <BookingDetail booking={selectedBooking} onBack={() => setSelectedBookingId(null)} /> : <BookingsView bookings={bookings} loading={loading} onSelect={setSelectedBookingId} />)}
-          {activeView === "documents" && <DynamicParentDocumentsView documents={portalData.documents} documentRequirements={portalData.documentRequirements} trips={trips} participants={portalData.participants} contact={contact} loading={loading} token={token} onRefresh={load} />}
-          {activeView === "reviews" && <ParentReviewsView trips={portalData.reviewTrips} loading={loading} token={token} onRefresh={load} />}
+          {activeView === "documents" && <DynamicParentDocumentsView documents={portalData.documents} documentRequirements={portalData.documentRequirements} trips={trips} participants={portalData.participants} contact={contact} loading={loading} token={token} onRefresh={load} themeMode={themeMode} />}
+          {activeView === "reviews" && <ParentReviewsView trips={portalData.reviewTrips} loading={loading} token={token} onRefresh={load} themeMode={themeMode} />}
           {activeView === "profile" && <ParentProfileView contact={contact} />}
         </main>
       </div>
@@ -711,6 +739,10 @@ function parseConsentTermsForDisplay(value) {
 
 function ConsentTermsDocument({ terms }) {
   const content = parseConsentTermsForDisplay(terms);
+  if (!content.title && !content.introduction && !content.sections.length) {
+    return <p style={styles.consentTermsEmpty}>No terms were recorded with this submission.</p>;
+  }
+
   return (
     <div style={styles.consentTermsDocument}>
       {content.title && <h3 style={styles.consentTermsTitle}>{content.title}</h3>}
@@ -727,10 +759,81 @@ function ConsentTermsDocument({ terms }) {
   );
 }
 
+function formatConsentDateTime(value) {
+  if (!value) return "Date unavailable";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "Date unavailable" : parsed.toLocaleString();
+}
+
+function ParentConsentPreviewModal({ consent, documentRecord, onClose, onDownload }) {
+  const answers = consent?.answers || {};
+  const details = [
+    ["Parent name", answers.parentName],
+    ["Participant name", answers.participantName],
+    ["Relationship", answers.relationship],
+    ["Signature name", answers.signatureName || consent?.signatureName],
+    ["Notes", answers.notes],
+  ];
+
+  return (
+    <div role="dialog" aria-modal="true" aria-labelledby="parent-consent-preview-title" style={styles.consentPreviewOverlay}>
+      <div style={styles.consentPreviewModal}>
+        <header style={styles.consentPreviewHeader}>
+          <div style={styles.consentPreviewHeaderIcon}><CheckCircle2 size={20} /></div>
+          <div style={styles.consentPreviewHeaderCopy}>
+            <h2 id="parent-consent-preview-title" style={styles.consentPreviewTitle}>Digital consent submission</h2>
+            <p style={styles.consentPreviewSubtitle}>{documentRecord?.documentType || "Consent form"} · {documentRecord?.trip?.destination || "School trip"}</p>
+          </div>
+          <button type="button" onClick={onClose} style={styles.consentPreviewClose} aria-label="Close consent preview"><X size={17} /></button>
+        </header>
+
+        <div style={styles.consentPreviewStatusRow}>
+          <span style={styles.consentPreviewStatus}><CheckCircle2 size={13} /> Submitted</span>
+          <span style={styles.consentPreviewStatusDate}>Submitted {formatConsentDateTime(consent?.agreedAt || consent?.uploadedAt)}</span>
+        </div>
+
+        <section style={styles.consentPreviewSection}>
+          <div style={styles.consentPreviewSectionHeader}>
+            <div>
+              <span style={styles.consentPreviewStep}>STEP 1</span>
+              <h3 style={styles.consentPreviewSectionTitle}>Terms and conditions</h3>
+              <p style={styles.consentPreviewSectionHint}>The exact terms accepted by the parent at the time of submission.</p>
+            </div>
+            <span style={styles.consentPreviewAccepted}>Terms accepted</span>
+          </div>
+          <div style={styles.consentPreviewTermsScroller}>
+            <ConsentTermsDocument terms={consent?.termsSnapshot} />
+          </div>
+        </section>
+
+        <section style={styles.consentPreviewSection}>
+          <div style={styles.consentPreviewSectionHeaderCopy}>
+            <span style={styles.consentPreviewStep}>STEP 2</span>
+            <h3 style={styles.consentPreviewSectionTitle}>Submitted details</h3>
+            <p style={styles.consentPreviewSectionHint}>Information provided and signed by the parent or guardian.</p>
+          </div>
+          <div data-tmc-consent-details-grid="true" style={styles.consentPreviewDetailsGrid}>
+            {details.filter(([, value]) => String(value || "").trim()).map(([label, value]) => (
+              <div key={label} style={styles.consentPreviewDetailCard}>
+                <span style={styles.consentPreviewDetailLabel}>{label}</span>
+                <span style={styles.consentPreviewDetailValue}>{value}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <footer style={styles.consentPreviewFooter}>
+          <button type="button" onClick={onDownload} style={styles.secondary}><Download size={14} /> Download PDF</button>
+          <button type="button" onClick={onClose} style={styles.primary}>Close</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 function documentStatusLabel(status) {
-  if (status === "approved") return "Approved";
   if (status === "rejected") return "Needs update";
-  return "In review";
+  return "Submitted";
 }
 
 function parentTripOption(row) {
@@ -850,7 +953,7 @@ function TripCard({ row }) {
   );
 }
 
-function ParentReviewsView({ trips, loading, token, onRefresh }) {
+function ParentReviewsView({ trips, loading, token, onRefresh, themeMode }) {
   const [selectedTripId, setSelectedTripId] = useState(null);
   const [rating, setRating] = useState(0);
   const [experience, setExperience] = useState("");
@@ -935,10 +1038,10 @@ function ParentReviewsView({ trips, loading, token, onRefresh }) {
                 aria-label="Select a trip to review"
                 value={selectedTripId == null ? "" : String(selectedTripId)}
                 onChange={(event) => setSelectedTripId(event.target.value)}
-                style={styles.reviewTripSelect}
+                style={{ ...styles.reviewTripSelect, colorScheme: themeMode }}
               >
-                <option value="" disabled>Select a completed trip</option>
-                {trips.map((trip) => <option key={trip.id} value={String(trip.id)}>{trip.destination || trip.tripCode || "School trip"}</option>)}
+                <option value="" disabled style={styles.selectOption}>Select a completed trip</option>
+                {trips.map((trip) => <option key={trip.id} value={String(trip.id)} style={styles.selectOption}>{trip.destination || trip.tripCode || "School trip"}</option>)}
               </select>
             </label>
           )}
@@ -1250,6 +1353,7 @@ const styles = {
   consentTermsSection: { display: "grid", gap: 6, paddingTop: 12, borderTop: "1px solid var(--tmc-parent-border-light)" },
   consentTermsSectionHeading: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 12, lineHeight: 1.45, fontWeight: 750 },
   consentTermsParagraph: { margin: 0, lineHeight: 1.7 },
+  consentTermsEmpty: { margin: 0, color: "var(--tmc-parent-muted)", fontSize: 12, lineHeight: 1.6 },
   consentAgreement: { display: "flex", alignItems: "flex-start", gap: 8, color: "var(--tmc-parent-text)", fontSize: 12, lineHeight: 1.45 },
   visaLettersInline: { marginTop: 18, paddingTop: 20, borderTop: "1px solid var(--tmc-parent-border-light)" },
   documentUploadGrid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 13 },
@@ -1281,6 +1385,30 @@ const styles = {
   documentNote: { color: "var(--tmc-parent-danger)", fontSize: 11 },
   documentActions: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 14, minWidth: 0 },
   documentStatus: { padding: "6px 9px", borderRadius: 999, background: "var(--tmc-parent-pending-bg)", color: "var(--tmc-parent-pending)", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  consentPreviewOverlay: { position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", overflowY: "auto", padding: 24, boxSizing: "border-box", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
+  consentPreviewModal: { width: "min(100%, 820px)", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxSizing: "border-box", padding: 24, border: "1px solid var(--tmc-parent-border)", borderRadius: 16, background: "var(--tmc-parent-surface)", boxShadow: "0 24px 70px rgba(18, 38, 71, 0.18)" },
+  consentPreviewHeader: { display: "flex", alignItems: "flex-start", gap: 12, minWidth: 0 },
+  consentPreviewHeaderIcon: { flex: "0 0 auto", display: "grid", placeItems: "center", width: 38, height: 38, border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 10, color: "var(--tmc-parent-success)" },
+  consentPreviewHeaderCopy: { display: "grid", gap: 4, minWidth: 0, flex: 1 },
+  consentPreviewTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 22, lineHeight: 1.2 },
+  consentPreviewSubtitle: { margin: 0, color: "var(--tmc-parent-muted)", fontSize: 12 },
+  consentPreviewClose: { flex: "0 0 auto", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-subtle)", cursor: "pointer" },
+  consentPreviewStatusRow: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 16 },
+  consentPreviewStatus: { display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 10px", border: "1px solid var(--tmc-parent-success)", borderRadius: 999, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 11, fontWeight: 750 },
+  consentPreviewStatusDate: { color: "var(--tmc-parent-muted)", fontSize: 12 },
+  consentPreviewSection: { display: "grid", gap: 14, marginTop: 18, padding: 16, border: "1px solid var(--tmc-parent-border)", borderRadius: 13, background: "var(--tmc-parent-surface-soft)" },
+  consentPreviewSectionHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
+  consentPreviewSectionHeaderCopy: { display: "grid", gap: 3 },
+  consentPreviewStep: { color: "var(--tmc-parent-primary)", fontSize: 10, fontWeight: 800, letterSpacing: 0.7, textTransform: "uppercase" },
+  consentPreviewSectionTitle: { margin: "5px 0 0", color: "var(--tmc-parent-heading)", fontSize: 16, lineHeight: 1.3 },
+  consentPreviewSectionHint: { margin: "5px 0 0", color: "var(--tmc-parent-muted)", fontSize: 12, lineHeight: 1.5 },
+  consentPreviewAccepted: { flex: "0 0 auto", padding: "6px 9px", borderRadius: 999, background: "var(--tmc-parent-success-bg)", color: "var(--tmc-parent-success)", fontSize: 10, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase" },
+  consentPreviewTermsScroller: { maxHeight: 390, overflowY: "auto", padding: "15px 16px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 10, background: "var(--tmc-parent-surface)" },
+  consentPreviewDetailsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: 10 },
+  consentPreviewDetailCard: { display: "grid", gap: 6, minWidth: 0, padding: "12px 13px", border: "1px solid var(--tmc-parent-border)", borderRadius: 9, background: "var(--tmc-parent-surface)" },
+  consentPreviewDetailLabel: { color: "var(--tmc-parent-muted)", fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase" },
+  consentPreviewDetailValue: { overflowWrap: "anywhere", color: "var(--tmc-parent-text)", fontSize: 13, lineHeight: 1.5 },
+  consentPreviewFooter: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 },
   pageIntro: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 },
   pageTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 25 },
   countPill: { flex: "0 0 auto", padding: "7px 11px", borderRadius: 999, background: "var(--tmc-parent-profile-bg)", color: "var(--tmc-parent-heading)", fontSize: 12, fontWeight: 700 },
@@ -1382,6 +1510,7 @@ const styles = {
   iconButton: { position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 35, height: 35, border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-heading)", cursor: "pointer" },
   label: { display: "grid", gap: 4, color: "var(--tmc-parent-subtle)", fontSize: 13, fontWeight: 700 },
   labelText: { display: "inline-flex", alignItems: "center", gap: 3, lineHeight: 1.2 },
+  selectOption: { backgroundColor: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)" },
   input: { width: "100%", boxSizing: "border-box", padding: "10px 12px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)", fontSize: 14 },
   authPage: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, boxSizing: "border-box", background: "var(--tmc-parent-bg)", color: "var(--tmc-parent-text)" },
   authCard: { width: "min(100%, 420px)", display: "grid", gap: 17, padding: 30, border: "1px solid var(--tmc-parent-border)", borderRadius: 16, background: "var(--tmc-parent-surface)", boxShadow: "var(--tmc-parent-shadow)" },
@@ -1407,7 +1536,7 @@ const styles = {
   profileLabel: { color: "var(--tmc-parent-muted)", fontSize: 12 },
   profileValue: { margin: "3px 0 0", color: "var(--tmc-parent-text)", fontSize: 14, fontWeight: 600 },
 };
-function DynamicParentDocumentsView({ documents, documentRequirements, trips, participants, contact, loading, token, onRefresh }) {
+function DynamicParentDocumentsView({ documents, documentRequirements, trips, participants, contact, loading, token, onRefresh, themeMode }) {
   const [tripId, setTripId] = useState("");
   const [requirementId, setRequirementId] = useState("");
   const [file, setFile] = useState(null);
@@ -1417,6 +1546,8 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [documentError, setDocumentError] = useState("");
+  const [consentPreview, setConsentPreview] = useState(null);
+  const [consentPreviewLoading, setConsentPreviewLoading] = useState(false);
 
   const requirementsByTripId = useMemo(() => {
     const grouped = new globalThis.Map();
@@ -1493,12 +1624,14 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
   };
 
   const chooseTrip = (event) => {
+    setConsentPreview(null);
     setTripId(event.target.value);
     setRequirementId("");
     resetUpload();
   };
 
   const chooseRequirement = (id) => {
+    setConsentPreview(null);
     setRequirementId(String(id));
     resetUpload();
   };
@@ -1549,7 +1682,7 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
       formData.append("documentRequirementId", String(selectedRequirement.id));
       await uploadParentDocument(token, formData);
       resetUpload();
-      setMessage(parentDocumentLabel(selectedRequirement.docType) + " uploaded. The travel team will review it shortly.");
+      setMessage(parentDocumentLabel(selectedRequirement.docType) + " submitted successfully.");
       await onRefresh({ silent: true });
     } catch (error) {
       setDocumentError(error.message || "Unable to upload this document.");
@@ -1578,7 +1711,7 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
           agreedToTerms: true,
         },
       });
-      setMessage(parentDocumentLabel(selectedRequirement.docType) + " submitted. The travel team will review it shortly.");
+      setMessage(parentDocumentLabel(selectedRequirement.docType) + " submitted successfully.");
       await onRefresh({ silent: true });
     } catch (error) {
       setDocumentError(error.message || "Unable to submit this consent form.");
@@ -1590,12 +1723,20 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
   const openDocument = async (documentRecord, download = false) => {
     setDocumentError("");
     try {
+      if (!download && isDigitalConsentRequirement(documentRecord)) {
+        setConsentPreviewLoading(true);
+        const consent = await fetchParentConsentDetails(token, documentRecord.id);
+        setConsentPreview({ consent, document: documentRecord });
+        return;
+      }
       const blob = await fetchParentDocumentFile(token, documentRecord.id, { download });
       const url = URL.createObjectURL(blob);
       if (download) {
         const anchor = document.createElement("a");
         anchor.href = url;
-        anchor.download = documentRecord.filename || "travel-document";
+        anchor.download = isDigitalConsentRequirement(documentRecord)
+          ? `consent-form-${documentRecord.id}.pdf`
+          : (documentRecord.filename || "travel-document");
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
@@ -1605,6 +1746,8 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
       window.setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch (error) {
       setDocumentError(error.message || "Unable to open this document.");
+    } finally {
+      setConsentPreviewLoading(false);
     }
   };
 
@@ -1635,9 +1778,9 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
         <form onSubmit={selectedRequirementIsDigitalConsent ? submitConsent : submit} style={styles.documentForm}>
           <label htmlFor="parent-document-trip" style={styles.label}>
             <span style={styles.labelText}>Select trip <span style={styles.requiredLabel}>*</span></span>
-            <select id="parent-document-trip" aria-label="Related trip" required value={tripId} onChange={chooseTrip} style={styles.input}>
-              <option value="">Select a trip</option>
-              {tripOptions.map((trip) => <option key={trip.id} value={String(trip.id)}>{trip.destination || trip.tripCode || "School trip"}</option>)}
+            <select id="parent-document-trip" aria-label="Related trip" required value={tripId} onChange={chooseTrip} style={{ ...styles.input, colorScheme: themeMode }}>
+              <option value="" style={styles.selectOption}>Select a trip</option>
+              {tripOptions.map((trip) => <option key={trip.id} value={String(trip.id)} style={styles.selectOption}>{trip.destination || trip.tripCode || "School trip"}</option>)}
             </select>
           </label>
           {!selectedTrip ? (
@@ -1655,7 +1798,7 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
                     <button key={requirement.id} type="button" onClick={() => chooseRequirement(requirement.id)} style={{ ...styles.requiredDocumentItem, ...(active ? styles.requiredDocumentItemActive : {}) }} aria-pressed={active}>
                       <CheckCircle2 size={15} color={uploaded ? styles.colors.success : styles.colors.primary} />
                       <span style={{ flex: 1, textAlign: "left" }}>{parentDocumentLabel(requirement.docType)}</span>
-                      <span style={{ color: uploaded ? (uploaded.status === "rejected" ? styles.colors.danger : styles.colors.success) : styles.colors.muted }}>{uploaded ? (isDigitalConsentRequirement(requirement) ? (uploaded.status === "rejected" ? "Needs update" : "Submitted") : "Uploaded") : "Pending"}</span>
+                      <span style={{ color: uploaded ? (uploaded.status === "rejected" ? styles.colors.danger : styles.colors.success) : styles.colors.muted }}>{uploaded ? (uploaded.status === "rejected" ? "Needs update" : "Submitted") : "Pending"}</span>
                     </button>
                   );
                 })}
@@ -1707,8 +1850,8 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
               </div>
             </div>
           )}
-          {selectedRequirement && selectedRequirementIsDigitalConsent && digitalConsentSubmitted && (
-            <div role="status" style={styles.successMessage}>This consent form has already been submitted. The travel team can review it from the trip participant list.</div>
+          {selectedRequirement && selectedRequirementIsDigitalConsent && digitalConsentSubmitted && !message && (
+            <div role="status" style={styles.successMessage}>This consent form has already been submitted successfully.</div>
           )}
           {selectedRequirement && !selectedRequirementIsDigitalConsent && (
             <>
@@ -1747,16 +1890,22 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
                 </div>
                 <div style={styles.documentActions}>
                   <span style={styles.documentStatus}>{isDigitalConsentRequirement(document) ? (document.status === "rejected" ? "Needs update" : "Submitted") : documentStatusLabel(document.status)}</span>
-                  {!isDigitalConsentRequirement(document) && <>
-                    <button type="button" onClick={() => openDocument(document)} style={styles.secondary} aria-label={"View " + document.filename}><Eye size={14} /> View</button>
-                    <button type="button" onClick={() => openDocument(document, true)} style={styles.secondary} aria-label={"Download " + document.filename}><Download size={14} /> Download</button>
-                  </>}
+                  <button type="button" onClick={() => openDocument(document)} style={styles.secondary} aria-label={"View " + document.filename} disabled={consentPreviewLoading}><Eye size={14} /> View</button>
+                  <button type="button" onClick={() => openDocument(document, true)} style={styles.secondary} aria-label={"Download " + document.filename}><Download size={14} /> Download</button>
                 </div>
               </div>
             ))}
           </div>
         )}
       </section>
+      {consentPreview && (
+        <ParentConsentPreviewModal
+          consent={consentPreview.consent}
+          documentRecord={consentPreview.document}
+          onClose={() => setConsentPreview(null)}
+          onDownload={() => openDocument(consentPreview.document, true)}
+        />
+      )}
     </div>
   );
 }

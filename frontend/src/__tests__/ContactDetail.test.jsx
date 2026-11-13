@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -88,6 +88,11 @@ function makeFetchImpl(overrides = {}) {
   };
 }
 
+function LeadsListStub() {
+  const location = useLocation();
+  return <div data-testid="leads-list-stub" data-search={location.search}>Leads list stub</div>;
+}
+
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyObj.error.mockReset();
@@ -97,15 +102,15 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts' } = {}) {
+function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts', search = '' } = {}) {
   const detailPath = `/${listType}/${contactId}`;
   const page = (
-    <MemoryRouter initialEntries={[state ? { pathname: detailPath, state } : detailPath]}>
+    <MemoryRouter initialEntries={[state ? { pathname: detailPath, search, state } : `${detailPath}${search}`]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/leads/:id" element={<ContactDetail />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
-        <Route path="/leads" element={<div data-testid="leads-list-stub">Leads list stub</div>} />
+        <Route path="/leads" element={<LeadsListStub />} />
         <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
       </Routes>
     </MemoryRouter>
@@ -180,6 +185,51 @@ describe('ContactDetail — current profile contract', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
     expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
+  });
+
+  it('keeps the URL page in the embedded Generic Leads list when profile state is stale', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ id: page, name: `Embedded page ${page}`, status: 'Lead' }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return baseFetch(url, opts);
+    });
+
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      search: '?page=2&limit=10',
+      state: {
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText('Embedded page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=1'),
+    )).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?page=2&limit=10',
+    );
   });
 
   it('keeps Generic CRM neighbor navigation in Leads and labels it as leads', async () => {

@@ -7,13 +7,13 @@
 //   Payment plan — upsert plan + materialised per-participant instalments
 
 import { useContext, useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { useLocation, useParams, Link } from "react-router-dom";
+import { useLocation, useNavigate, useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
   Link2, Download,
   MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
-  Sparkles, ArrowRight, X, Eye,
+  Sparkles, ArrowRight, X, Eye, Mail, Phone, GraduationCap, CalendarDays, UserRound,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -112,9 +112,12 @@ function getPaymentPlanDateMinimum(index, instalments) {
 export default function TripDetail() {
   const { id } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const notify = useNotify();
-  const requestedTab = location.state?.tab || new URLSearchParams(location.search).get("tab") || "overview";
-  const normalizedTab = requestedTab === "microsite" ? "overview" : requestedTab;
+  const requestedTab = new URLSearchParams(location.search).get("tab") || location.state?.tab || "overview";
+  const normalizedTab = requestedTab === "microsite" || !TABS.some((item) => item.key === requestedTab)
+    ? "overview"
+    : requestedTab;
   const [tab, setTab] = useState(() => normalizedTab);
   const [savedListUrl] = useState(getTripsListUrl);
   const [trip, setTrip] = useState(null);
@@ -143,6 +146,19 @@ export default function TripDetail() {
   useEffect(() => {
     setTab(normalizedTab);
   }, [normalizedTab]);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("tab") === normalizedTab) return;
+    params.set("tab", normalizedTab);
+    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true, state: location.state });
+  }, [location.pathname, location.search, location.state, navigate, normalizedTab]);
+
+  const selectTab = useCallback((nextTab) => {
+    const params = new URLSearchParams(location.search);
+    params.set("tab", nextTab);
+    setTab(nextTab);
+    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true, state: location.state });
+  }, [location.pathname, location.search, location.state, navigate]);
 
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
@@ -182,7 +198,7 @@ export default function TripDetail() {
               type="button"
               role="tab"
               aria-selected={active}
-              onClick={() => setTab(t.key)}
+              onClick={() => selectTab(t.key)}
               style={{
                 padding: "8px 16px", border: "none", background: "transparent",
                 fontWeight: 600, fontSize: 14, cursor: "pointer",
@@ -197,7 +213,7 @@ export default function TripDetail() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab trip={trip} onJump={setTab} notify={notify} />}
+      {tab === "overview" && <OverviewTab trip={trip} onJump={selectTab} notify={notify} />}
       {tab === "participants" && <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "documents" && <DocumentsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} />}
@@ -819,41 +835,211 @@ function DocumentStatusChips({ requirements, documents, onView, testIdPrefix }) 
   );
 }
 
+const CONSENT_ANSWER_LABELS = {
+  parentName: "Parent name",
+  participantName: "Participant name",
+  relationship: "Relationship",
+  signatureName: "Signature name",
+  notes: "Notes",
+};
+
+function consentAnswerLabel(key) {
+  return CONSENT_ANSWER_LABELS[key]
+    || String(key || "Field").replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function consentTermSections(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+
+  return normalized
+    .split(/(?=\b\d+\.\s+[A-Z][A-Z0-9 &'()/,-]{2,}\s)/g)
+    .filter(Boolean)
+    .map((chunk, index) => {
+      if (index === 0) {
+        const introMatch = chunk.match(/^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)(?=\s+[A-Z][a-z])\s+([\s\S]+)$/);
+        if (introMatch) return { heading: introMatch[1].trim(), body: introMatch[2].trim() };
+
+        const titleOnlyMatch = chunk.match(/^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)\s*$/);
+        if (titleOnlyMatch) return { heading: titleOnlyMatch[1].trim(), body: "" };
+      }
+      const match = chunk.match(/^(\d+\.\s+[A-Z][A-Z0-9 &'()/,-]*?)(?=\s+(?:[A-Z]\.|[A-Z][a-z]))\s+([\s\S]+)$/);
+      return match
+        ? { heading: match[1].trim(), body: match[2].trim() }
+        : { heading: "", body: chunk.trim() };
+    });
+}
+
+function ConsentTermsPreview({ terms }) {
+  const sections = consentTermSections(terms);
+  if (!sections.length) return <p style={consentReviewStyles.emptyTerms}>No terms were recorded with this submission.</p>;
+
+  return (
+    <div style={consentReviewStyles.termsContent}>
+      {sections.map((section, index) => (
+        <div key={`${section.heading || "introduction"}-${index}`} style={consentReviewStyles.termSection}>
+          {section.heading && <h4 style={consentReviewStyles.termHeading}>{section.heading}</h4>}
+          <p style={consentReviewStyles.termBody}>{section.body}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DigitalConsentReviewModal({ person, document, onClose }) {
+  const answerEntries = Object.entries(document?.answers || {})
+    .filter(([key]) => !["parentEmail", "parentPhone"].includes(key));
+  const submittedAt = document?.agreedAt ? new Date(document.agreedAt).toLocaleString() : "-";
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="digital-consent-details-title"
       onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 16, background: "rgba(6, 10, 18, 0.78)" }}
+      style={consentReviewStyles.overlay}
     >
-      <div onClick={(event) => event.stopPropagation()} style={{ width: "min(640px, 100%)", maxHeight: "90vh", overflowY: "auto", display: "grid", gap: 16, padding: 20, border: "1px solid var(--border-color)", borderRadius: 14, background: "var(--bg-color, #111318)", boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-          <div>
-            <h2 id="digital-consent-details-title" style={{ margin: 0, fontSize: 19 }}>Digital consent submission</h2>
-            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>{person?.name || "Participant"} Â· {documentRequirementLabel(document)}</p>
+      <div onClick={(event) => event.stopPropagation()} style={consentReviewStyles.modal}>
+        <div style={consentReviewStyles.header}>
+          <div style={consentReviewStyles.headerCopy}>
+            <div style={consentReviewStyles.titleRow}>
+              <span style={consentReviewStyles.titleIcon}><CheckCircle2 size={18} aria-hidden /></span>
+              <div>
+                <h2 id="digital-consent-details-title" style={consentReviewStyles.title}>Digital consent submission</h2>
+                <p style={consentReviewStyles.subtitle}>{person?.name || "Participant"} - {documentRequirementLabel(document)}</p>
+              </div>
+            </div>
+            <div style={consentReviewStyles.submissionMeta}>
+              <span style={consentReviewStyles.acceptedBadge}><CheckCircle2 size={13} aria-hidden /> Submitted</span>
+              <span>Submitted {submittedAt}</span>
+            </div>
           </div>
           <button type="button" onClick={onClose} style={iconBtn} aria-label="Close digital consent details"><X size={17} /></button>
         </div>
-        <div style={{ display: "grid", gap: 9 }}>
-          {Object.entries(document?.answers || {})
-            .filter(([key]) => !["parentEmail", "parentPhone"].includes(key))
-            .map(([key, value]) => (
-              <div key={key} style={{ display: "grid", gap: 3, paddingBottom: 8, borderBottom: "1px solid var(--border-color)" }}>
-                <span style={{ color: "var(--text-secondary)", fontSize: 11, fontWeight: 700 }}>{key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase())}</span>
-                <span style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{String(value || "—")}</span>
-              </div>
-            ))}
-        </div>
-        {document?.termsSnapshot && (
-          <div style={{ display: "grid", gap: 5, padding: 12, borderRadius: 9, background: "var(--subtle-bg, var(--surface-color))" }}>
-            <strong style={{ fontSize: 12 }}>Terms accepted</strong>
-            <span style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{document.termsSnapshot}</span>
+
+        <section style={consentReviewStyles.termsCard} aria-labelledby="digital-consent-terms-title">
+          <div style={consentReviewStyles.sectionHeader}>
+            <div>
+              <span style={consentReviewStyles.sectionEyebrow}>Step 1</span>
+              <h3 id="digital-consent-terms-title" style={consentReviewStyles.sectionTitle}>Terms and conditions</h3>
+              <p style={consentReviewStyles.sectionHint}>The exact terms accepted by the parent at the time of submission.</p>
+            </div>
+            <span style={consentReviewStyles.termsBadge}>Terms accepted</span>
           </div>
-        )}
-        <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-          Submitted {document?.agreedAt ? new Date(document.agreedAt).toLocaleString() : "—"}
+          <div style={consentReviewStyles.termsViewport}>
+            <ConsentTermsPreview terms={document?.termsSnapshot} />
+          </div>
+        </section>
+
+        <section style={consentReviewStyles.detailsCard} aria-labelledby="digital-consent-submitted-details-title">
+          <div style={consentReviewStyles.sectionHeader}>
+            <div>
+              <span style={consentReviewStyles.sectionEyebrow}>Step 2</span>
+              <h3 id="digital-consent-submitted-details-title" style={consentReviewStyles.sectionTitle}>Submitted details</h3>
+              <p style={consentReviewStyles.sectionHint}>Information provided and signed by the parent or guardian.</p>
+            </div>
+          </div>
+          {answerEntries.length ? (
+            <div style={consentReviewStyles.detailsGrid}>
+              {answerEntries.map(([key, value]) => (
+                <div key={key} style={{ ...consentReviewStyles.detailItem, ...(key === "notes" ? consentReviewStyles.detailItemWide : {}) }}>
+                  <span style={consentReviewStyles.detailLabel}>{consentAnswerLabel(key)}</span>
+                  <span style={consentReviewStyles.detailValue}>{String(value || "-")}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={consentReviewStyles.emptyDetails}>No submitted details are available.</p>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function formatParticipantStatus(value) {
+  return String(value || "")
+    .trim()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatParticipantDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
+}
+
+function participantDetailsRows(person, trip) {
+  const school = person?.studentSchool || trip?.schoolName || (trip?.schoolContactId ? `School contact #${trip.schoolContactId}` : "");
+  const rows = [
+    { label: "Participant name", value: person?.name || person?.fullName || person?.studentName, icon: UserRound },
+    { label: "Parent / guardian", value: person?.parentName },
+    { label: "Email", value: person?.parentEmail, icon: Mail },
+    { label: "Phone", value: person?.parentPhone || person?.otpPhone, icon: Phone },
+    { label: "School", value: school, icon: GraduationCap },
+    { label: "Class / grade", value: person?.studentClass },
+    { label: "Date of birth", value: formatParticipantDate(person?.studentDob), icon: CalendarDays },
+    { label: "Gender", value: person?.studentGender },
+    { label: "Parent relationship", value: person?.parentRelation },
+    { label: "Application status", value: formatParticipantStatus(person?.applicationStatus || person?.status) },
+    { label: "Passport number", value: person?.passportNumber },
+    { label: "Passport expiry", value: formatParticipantDate(person?.passportExpiry) },
+    { label: "Passport nationality", value: person?.passportNationality },
+    { label: "Passport place of issue", value: person?.passportPlaceOfIssue },
+    { label: "Review date", value: formatParticipantDate(person?.reviewedAt || person?.approvedAt || person?.rejectedAt) },
+    { label: "Consent captured", value: formatParticipantDate(person?.consentCapturedAt) },
+    { label: "Trip", value: trip?.tripCode },
+    { label: "Destination", value: trip?.destination, icon: MapPin },
+    { label: "Departure", value: formatParticipantDate(trip?.departDate) },
+    { label: "Return", value: formatParticipantDate(trip?.returnDate) },
+    { label: "Review notes", value: person?.reviewNotes, wide: true },
+  ];
+  return rows.filter((row) => row.value !== null && row.value !== undefined && String(row.value).trim() !== "");
+}
+
+function ParticipantDetailsModal({ person, trip, onClose }) {
+  const details = participantDetailsRows(person, trip);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="participant-details-title"
+      onClick={onClose}
+      style={participantDetailsStyles.overlay}
+    >
+      <div onClick={(event) => event.stopPropagation()} style={participantDetailsStyles.modal}>
+        <div style={participantDetailsStyles.header}>
+          <div style={participantDetailsStyles.titleRow}>
+            <span style={participantDetailsStyles.titleIcon}><UserRound size={18} aria-hidden /></span>
+            <div>
+              <h2 id="participant-details-title" style={participantDetailsStyles.title}>Participant details</h2>
+              <p style={participantDetailsStyles.subtitle}>{person?.name || "Participant"}</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close participant details">
+            <X size={17} />
+          </button>
+        </div>
+
+        <div style={participantDetailsStyles.detailsGrid}>
+          {details.length ? details.map(({ label, value, icon: Icon, wide }) => (
+            <div key={label} style={{ ...participantDetailsStyles.detailItem, ...(wide ? participantDetailsStyles.detailItemWide : {}) }}>
+              <span style={participantDetailsStyles.detailLabel}>{Icon && <Icon size={12} aria-hidden />} {label}</span>
+              <span style={participantDetailsStyles.detailValue}>{String(value)}</span>
+            </div>
+          )) : (
+            <p style={participantDetailsStyles.empty}>No additional participant details are available.</p>
+          )}
         </div>
       </div>
     </div>
@@ -1815,6 +2001,7 @@ function DocumentsTab({ trip, onChange, notify }) {
   const [captureMode, setCaptureMode] = useState("file");
   const [saving, setSaving] = useState(false);
   const [viewingConsent, setViewingConsent] = useState(null);
+  const [viewingParticipant, setViewingParticipant] = useState(null);
 
   const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
   const parentDocumentsByEmail = useMemo(() => new Map(
@@ -1843,6 +2030,7 @@ function DocumentsTab({ trip, onChange, notify }) {
   const pendingPeople = pendingRegs
     .filter((registration) => !["CONVERTED", "REJECTED"].includes(registration.status))
     .map((registration) => ({
+      ...registration,
       id: `registration-${registration.id}`,
       sourceId: registration.id,
       name: registration.studentName,
@@ -1852,6 +2040,7 @@ function DocumentsTab({ trip, onChange, notify }) {
       pathPrefix: "registrations",
     }));
   const participantPeople = (trip.participants || []).map((participant) => ({
+    ...participant,
     id: `participant-${participant.id}`,
     sourceId: participant.id,
     name: participant.fullName,
@@ -1940,17 +2129,37 @@ function DocumentsTab({ trip, onChange, notify }) {
     }
   };
 
-  const viewDocument = async (person, document) => {
+  const fetchDocumentBlob = async (person, documentRecord) => {
     const token = getAuthToken();
-    const response = await fetch(`/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${document.id}/file`, {
+    const response = await fetch(`/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${documentRecord.id}/file`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
       throw new Error(result.error || "Failed to open document");
     }
-    const url = URL.createObjectURL(await response.blob());
+    return response.blob();
+  };
+
+  const viewDocument = async (person, documentRecord) => {
+    const url = URL.createObjectURL(await fetchDocumentBlob(person, documentRecord));
     window.open(url, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+  };
+
+  const downloadDocument = async (person, documentRecord) => {
+    const url = URL.createObjectURL(await fetchDocumentBlob(person, documentRecord));
+    const filename = String(
+      isDigitalConsentRequirement(documentRecord)
+        ? `consent-form-${documentRecord.id}.pdf`
+        : documentRecord.filename || "travel-document",
+    ).replace(/[\\/:*?"<>|]/g, "_");
+    const anchor = globalThis.document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    globalThis.document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 30000);
   };
 
@@ -1965,42 +2174,18 @@ function DocumentsTab({ trip, onChange, notify }) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       {viewingConsent && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="digital-consent-details-title"
-          onClick={() => setViewingConsent(null)}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 16, background: "rgba(6, 10, 18, 0.78)" }}
-        >
-          <div onClick={(event) => event.stopPropagation()} style={{ width: "min(640px, 100%)", maxHeight: "90vh", overflowY: "auto", display: "grid", gap: 16, padding: 20, border: "1px solid var(--border-color)", borderRadius: 14, background: "var(--bg-color, #111318)", boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-              <div>
-                <h2 id="digital-consent-details-title" style={{ margin: 0, fontSize: 19 }}>Digital consent submission</h2>
-                <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>{viewingConsent.person?.name || "Participant"} · {documentRequirementLabel(viewingConsent.document)}</p>
-              </div>
-              <button type="button" onClick={() => setViewingConsent(null)} style={iconBtn} aria-label="Close digital consent details"><X size={17} /></button>
-            </div>
-            <div style={{ display: "grid", gap: 9 }}>
-              {Object.entries(viewingConsent.document?.answers || {})
-                .filter(([key]) => !["parentEmail", "parentPhone"].includes(key))
-                .map(([key, value]) => (
-                  <div key={key} style={{ display: "grid", gap: 3, paddingBottom: 8, borderBottom: "1px solid var(--border-color)" }}>
-                    <span style={{ color: "var(--text-secondary)", fontSize: 11, fontWeight: 700 }}>{key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase())}</span>
-                    <span style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{String(value || "—")}</span>
-                  </div>
-                ))}
-            </div>
-            {viewingConsent.document?.termsSnapshot && (
-              <div style={{ display: "grid", gap: 5, padding: 12, borderRadius: 9, background: "var(--subtle-bg, var(--surface-color))" }}>
-                <strong style={{ fontSize: 12 }}>Terms accepted</strong>
-                <span style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{viewingConsent.document.termsSnapshot}</span>
-              </div>
-            )}
-            <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-              Submitted {viewingConsent.document?.agreedAt ? new Date(viewingConsent.document.agreedAt).toLocaleString() : "—"}
-            </div>
-          </div>
-        </div>
+        <DigitalConsentReviewModal
+          person={viewingConsent.person}
+          document={viewingConsent.document}
+          onClose={() => setViewingConsent(null)}
+        />
+      )}
+      {viewingParticipant && (
+        <ParticipantDetailsModal
+          person={viewingParticipant}
+          trip={trip}
+          onClose={() => setViewingParticipant(null)}
+        />
       )}
       <section style={documentAdminCard}>
         <div style={documentAdminHeader}>
@@ -2105,16 +2290,53 @@ function DocumentsTab({ trip, onChange, notify }) {
               </div>
               {people.map((person) => (
                 <div key={person.id} style={{ ...documentMatrixGrid, gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))` }}>
-                  <div style={{ minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => setViewingParticipant(person)}
+                    style={participantIdentityButton}
+                    aria-label={`View details for ${person.name || "participant"}`}
+                    data-testid={`participant-details-trigger-${person.sourceId}`}
+                  >
                     <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{person.name || "Participant"}</strong>
                     <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{person.parentName || person.parentEmail || "Parent details unavailable"}</span>
-                  </div>
+                  </button>
                   {requirements.length ? requirements.map((requirement) => {
                     const document = person.documents.find((candidate) => documentMatchesRequirement(candidate, requirement));
                     return document ? (
-                      <button key={requirement.id} type="button" onClick={() => handleView(person, document)} style={matrixUploaded} title={`View ${document.filename || documentRequirementLabel(requirement)}`}>
-                        <Eye size={13} aria-hidden /> {isDigitalConsentRequirement(document) ? "View consent" : "View document"}
-                      </button>
+                      <div key={requirement.id} data-testid="trip-document-actions" style={matrixUploadedActions}>
+                        <span
+                          className="trip-document-view-action"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleView(person, document)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              handleView(person, document);
+                            }
+                          }}
+                          style={matrixUploaded}
+                          title={`View ${document.filename || documentRequirementLabel(requirement)}`}
+                        >
+                          <Eye size={13} aria-hidden /> {isDigitalConsentRequirement(document) ? "View consent" : "View document"}
+                        </span>
+                        <span
+                          className="trip-document-download-action"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => downloadDocument(person, document).catch((error) => notify.error(error.message || "Failed to download document"))}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              downloadDocument(person, document).catch((error) => notify.error(error.message || "Failed to download document"));
+                            }
+                          }}
+                          style={matrixUploaded}
+                          title={`Download ${document.filename || documentRequirementLabel(requirement)}`}
+                        >
+                          <Download size={13} aria-hidden /> Download
+                        </span>
+                      </div>
                     ) : <span key={requirement.id} style={matrixPending}><Clock size={13} aria-hidden /> Pending</span>;
                   }) : <span style={matrixPending}>No requirements</span>}
                 </div>
@@ -3557,10 +3779,18 @@ const documentMatrixGrid = {
   display: "grid", alignItems: "center", gap: 10, padding: "11px 12px",
   borderBottom: "1px solid var(--border-light, var(--border-color))", fontSize: 12,
 };
+const participantIdentityButton = {
+  display: "grid", gap: 3, width: "100%", minWidth: 0, padding: 0,
+  border: 0, background: "transparent", color: "var(--text-primary)",
+  textAlign: "left", cursor: "pointer", font: "inherit",
+};
 const matrixUploaded = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
-  padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(47,122,77,0.35)",
-  background: "rgba(47,122,77,0.10)", color: "#2F7A4D", cursor: "pointer", fontSize: 11, fontWeight: 700,
+  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+  minWidth: 0, padding: "4px 7px", border: "1px solid rgba(47,122,77,0.35)", borderRadius: 6,
+  background: "rgba(47,122,77,0.08)", color: "var(--primary-color, #2F7A4D)", cursor: "pointer", fontSize: 10, fontWeight: 700, textAlign: "center", whiteSpace: "nowrap",
+};
+const matrixUploadedActions = {
+  display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6, flexWrap: "wrap", width: "100%", minWidth: 0,
 };
 const matrixPending = {
   display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-secondary)", fontSize: 11,
@@ -3572,6 +3802,95 @@ const iconBtn = {
   padding: 6, borderRadius: 4,
   background: "transparent", color: "var(--text-secondary)",
   border: "none", cursor: "pointer",
+};
+const consentReviewStyles = {
+  overlay: {
+    position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 18,
+    background: "var(--bg-color, #0b0d14)", backdropFilter: "none",
+  },
+  modal: {
+    width: "min(760px, 100%)", maxHeight: "92vh", overflowY: "auto", display: "grid", gap: 16,
+    padding: 24, border: "1px solid var(--border-color)", borderRadius: 18,
+    background: "var(--surface-color, #fff)", color: "var(--text-primary)",
+    boxShadow: "0 28px 80px rgba(0, 0, 0, 0.32)",
+  },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 },
+  headerCopy: { display: "grid", gap: 12, minWidth: 0 },
+  titleRow: { display: "flex", alignItems: "center", gap: 11 },
+  titleIcon: {
+    display: "grid", placeItems: "center", flex: "0 0 auto", width: 36, height: 36, borderRadius: 10,
+    background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", color: "#2F7A4D",
+  },
+  title: { margin: 0, color: "var(--text-primary)", fontSize: 20, lineHeight: 1.2 },
+  subtitle: { margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 },
+  submissionMeta: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, color: "var(--text-secondary)", fontSize: 12 },
+  acceptedBadge: {
+    display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 999,
+    background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", color: "#2F7A4D", fontSize: 11, fontWeight: 750,
+  },
+  termsCard: {
+    display: "grid", gap: 14, padding: 16, border: "1px solid var(--border-color)",
+    borderRadius: 13, background: "var(--subtle-bg, var(--surface-color, #fff))",
+  },
+  detailsCard: {
+    display: "grid", gap: 14, padding: 16, border: "1px solid var(--border-color)",
+    borderRadius: 13, background: "var(--subtle-bg, #f7f8fa)",
+  },
+  sectionHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 },
+  sectionEyebrow: { display: "block", marginBottom: 4, color: "var(--text-secondary)", fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase" },
+  sectionTitle: { margin: 0, color: "var(--text-primary)", fontSize: 15, lineHeight: 1.3 },
+  sectionHint: { margin: "4px 0 0", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 },
+  termsBadge: {
+    flex: "0 0 auto", padding: "6px 9px", borderRadius: 999, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)",
+    color: "#2F7A4D", fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase",
+  },
+  termsViewport: {
+    maxHeight: 360, overflowY: "auto", padding: "16px 17px", border: "1px solid var(--border-color)",
+    borderRadius: 10, background: "var(--surface-color, #fff)", scrollbarGutter: "stable",
+  },
+  termsContent: { display: "grid", gap: 16, color: "var(--text-primary)" },
+  termSection: { display: "grid", gap: 5 },
+  termHeading: { margin: 0, color: "var(--text-primary)", fontSize: 12, lineHeight: 1.45, fontWeight: 800 },
+  termBody: { margin: 0, color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.7, whiteSpace: "pre-wrap" },
+  emptyTerms: { margin: 0, color: "var(--text-secondary)", fontSize: 12 },
+  detailsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 },
+  detailItem: { display: "grid", gap: 5, minWidth: 0, padding: "11px 12px", border: "1px solid var(--border-color)", borderRadius: 9, background: "var(--surface-color, #fff)" },
+  detailItemWide: { gridColumn: "1 / -1" },
+  detailLabel: { color: "var(--text-secondary)", fontSize: 10, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase" },
+  detailValue: { color: "var(--text-primary)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+  emptyDetails: { margin: 0, color: "var(--text-secondary)", fontSize: 12 },
+};
+const participantDetailsStyles = {
+  overlay: {
+    position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 18,
+    background: "var(--bg-color, #0b0d14)",
+  },
+  modal: {
+    width: "min(560px, 100%)", maxHeight: "86vh", overflowY: "auto", display: "grid", gap: 18,
+    padding: 22, border: "1px solid var(--border-color)", borderRadius: 16,
+    background: "var(--surface-color, #fff)", color: "var(--text-primary)",
+    boxShadow: "0 28px 80px rgba(0, 0, 0, 0.32)",
+  },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 },
+  titleRow: { display: "flex", alignItems: "center", gap: 11, minWidth: 0 },
+  titleIcon: {
+    display: "grid", placeItems: "center", flex: "0 0 auto", width: 36, height: 36, borderRadius: 10,
+    background: "var(--subtle-bg)", border: "1px solid var(--border-color)", color: "var(--primary-color, #4F46E5)",
+  },
+  title: { margin: 0, color: "var(--text-primary)", fontSize: 19, lineHeight: 1.2 },
+  subtitle: { margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 },
+  detailsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 },
+  detailItem: {
+    display: "grid", gap: 6, minWidth: 0, padding: "11px 12px", border: "1px solid var(--border-color)",
+    borderRadius: 9, background: "var(--subtle-bg, #f7f8fa)",
+  },
+  detailItemWide: { gridColumn: "1 / -1" },
+  detailLabel: {
+    display: "flex", alignItems: "center", gap: 5, color: "var(--text-secondary)", fontSize: 10,
+    fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
+  },
+  detailValue: { color: "var(--text-primary)", fontSize: 13, lineHeight: 1.45, overflowWrap: "anywhere" },
+  empty: { gridColumn: "1 / -1", margin: 0, color: "var(--text-secondary)", fontSize: 12 },
 };
 const importSchemaTh = {
   padding: "7px 9px",

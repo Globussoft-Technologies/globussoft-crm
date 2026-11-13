@@ -4,6 +4,7 @@ const { writeAudit } = require("../lib/audit");
 const { basisPointsAmount, rupeesToPaise, serializeMoneyObject } = require("../lib/plotPayoutEngine");
 const { lockBooking, successfulPaymentTotal, reconcilePlotBookingPaymentWithClient } = require("../lib/plotBookingPayments");
 const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
+const { applyPlotCommissionRule } = require("../lib/genericPlotCommission");
 const prisma = require("../lib/prisma");
 
 const router = express.Router();
@@ -479,6 +480,7 @@ router.put("/plots/:plotSiteId/rules", financeOnly, async (req, res) => {
       }
       return tx.plotCommissionPlan.findFirst({ where: { id: saved.id, tenantId }, include: { rules: { where: { isActive: true }, orderBy: { id: "asc" } } } });
     });
+    await applyPlotCommissionRule(prisma, tenantId, plotSiteId, plan);
     await writeAudit("PlotCommissionPlan", "UPSERT", plan.id, req.user.userId, tenantId, { plotSiteId, ruleCount: rules.length, targetPricePaise: String(markup.targetPricePaise) });
     return res.json({ plan: publicPlan(plan, staff) });
   } catch (error) {

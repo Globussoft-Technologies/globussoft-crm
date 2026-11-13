@@ -64,6 +64,11 @@ const CONTACT_TAG_CATALOG_KEY = 'generic.contactTagCatalog';
 const CONTACT_TAG_COLOR_RE = /^#[0-9a-f]{6}$/i;
 const CONTACT_TAG_DEFAULT_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#db2777', '#dc2626'];
 
+function canonicalAttachmentUrl(fileUrl) {
+  if (typeof fileUrl !== "string") return fileUrl;
+  return fileUrl.replace(/^\/uploads\/web-forms\//, "/api/uploads/web-forms/");
+}
+
 // Contacts pagination must be ordered in the database. Sorting a single page
 // in the browser produces a different order on every page and can hide the
 // actual first/last result. Keep this allowlist explicit so a query parameter
@@ -4617,12 +4622,14 @@ router.get("/:id/attachments", async (req, res) => {
     if (!contact) return res.status(404).json({ error: "Contact not found" });
     if (!(await canAccessLead(req, contact)))
       return res.status(404).json({ error: "Contact not found" });
-    res.json(
-      await prisma.contactAttachment.findMany({
-        where: { contactId: contact.id, tenantId: req.user.tenantId },
-        orderBy: { createdAt: "desc" },
-      }),
-    );
+    const attachments = await prisma.contactAttachment.findMany({
+      where: { contactId: contact.id, tenantId: req.user.tenantId },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(attachments.map((attachment) => ({
+      ...attachment,
+      fileUrl: canonicalAttachmentUrl(attachment.fileUrl),
+    })));
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch attachments" });
   }

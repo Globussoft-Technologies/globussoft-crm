@@ -1075,6 +1075,18 @@ function CalendarRedirect() {
   return <Navigate to="/calendar-sync" replace />;
 }
 
+function LeadsRouteLayout() {
+  return (
+    <RoleGuard
+      requiredPermission={{ module: "leads", action: "read" }}
+      feature="Leads"
+    >
+      <Leads />
+      <Outlet />
+    </RoleGuard>
+  );
+}
+
 export default function App() {
   useEffect(() => {
     applyDomainBranding();
@@ -2597,7 +2609,6 @@ export default function App() {
                         element={<Navigate to="/invoices" replace />}
                       />
                       <Route path="contacts" element={<Contacts />} />
-                      <Route path="leads/:id" element={<ContactDetail />} />
                       {/* Travel contact names use the preview drawer; this shared
                           route remains active for Generic and Wellness deep links. */}
                       <Route path="contacts/:id" element={<ContactDetail />} />
@@ -2842,15 +2853,13 @@ export default function App() {
                       <Route path="clients" element={<Clients />} />
                       <Route
                         path="leads"
-                        element={
-                          <RoleGuard
-                            requiredPermission={{ module: "leads", action: "read" }}
-                            feature="Leads"
-                          >
-                            <Leads />
-                          </RoleGuard>
-                        }
-                      />
+                        element={<LeadsRouteLayout />}
+                      >
+                        <Route
+                          path=":id"
+                          element={<ContactDetail renderBackdrop={false} />}
+                        />
+                      </Route>
                       <Route
                         path="sales-teams"
                         element={

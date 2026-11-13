@@ -11,7 +11,12 @@ const { cleanPickupAddress } = require("../lib/callifiedPickup");
 const { safeNotifyCustomerPickupPlotAssignments } = require("../lib/pickupPlotAssignmentWhatsApp");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { syncPlotBookingInvoice } = require("../lib/plotBookingInvoice");
-const { allocateCommissionAcrossPayments, syncPlotCommission } = require("../lib/genericPlotCommission");
+const {
+  allocateCommissionAcrossPayments,
+  commissionRuleForBroker,
+  effectiveBrokerCommission,
+  syncPlotCommission,
+} = require("../lib/genericPlotCommission");
 const { verifySelectionToken } = require("../lib/genericPickupPlotSelection");
 const callifiedClient = require("../services/callifiedClient");
 const { startBrowserCall } = require("../lib/callifiedAgentBridge");
@@ -142,12 +147,6 @@ function parsePrice(value) {
   if (value === "" || value === null || value === undefined) return null;
   const price = Number(value);
   return Number.isFinite(price) && price >= 0 ? price : NaN;
-}
-
-function parseCommission(value) {
-  if (value === "" || value === null || value === undefined) return null;
-  const commission = Number(value);
-  return Number.isFinite(commission) && commission >= 0 && commission <= 100 ? commission : NaN;
 }
 
 function isGoogleMapsLink(value) {
@@ -554,7 +553,10 @@ function attachTransportPlots(customers, transportPeople) {
 }
 
 function billingCanAccess(person, customerId, plotSiteId) {
-  return assignmentPairs(person).some((pair) => pair.customerId === Number(customerId));
+  return assignmentPairs(person).some((pair) => (
+    pair.customerId === Number(customerId)
+    && (plotSiteId == null || pair.plotSiteId === Number(plotSiteId))
+  ));
 }
 
 function isAdminWorkspaceOverview(req) {
@@ -979,7 +981,7 @@ function findCustomerTransportStatus(customerId, transportPeople) {
   return { status: "PICKUP_LOCATION_CAPTURED", statusUpdatedAt: null, transportPerson: null };
 }
 
-function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMap = new Map()) {
+function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMap = new Map(), commissionPlansByPlot = new Map()) {
   const transport = findCustomerTransportStatus(customerId, transportPeople);
   const transportPerson = transportPeople.find((row) => (
     assignmentPairs(row).some((pair) => pair.customerId === Number(customerId))
@@ -999,6 +1001,9 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
   const billingStatus = brokerStatus === "PLOT_SELECTED"
     ? normalizeBillingWorkflowStatus(saved)
     : "PENDING";
+  const commissionRule = broker
+    ? commissionRuleForBroker(broker, saved?.plotId || brokerPair?.plotSiteId, commissionPlansByPlot)
+    : null;
 
   let currentStage = "transport";
   let currentStatus = transport.status;
@@ -1033,7 +1038,13 @@ function findCustomerWorkflowStatus(customerId, transportPeople, brokers, plotMa
       broker: {
         status: brokerStatus,
         updatedAt: saved?.updatedAt || null,
-        assignee: broker ? { id: broker.id, name: broker.name, phone: broker.phone, commissionPercent: broker.commissionPercent == null ? null : Number(broker.commissionPercent) } : null,
+        assignee: broker ? {
+          id: broker.id,
+          name: broker.name,
+          phone: broker.phone,
+          commissionPercent: commissionRule?.ratePercent ?? null,
+          commissionRule,
+        } : null,
       },
       billing: {
         status: billingStatus,
@@ -1619,6 +1630,7 @@ function selfOperationalProfile(
   customerMap = new Map(),
   pickupLocationMap = new Map(),
   completedCustomerIds = new Set(),
+  commissionPlansByPlot = new Map(),
 ) {
   const pairs = assignmentPairs(person);
   const plotIds = parseStoredArray(person.plotSiteIdsJson).map(Number).filter(Number.isInteger);
@@ -1630,6 +1642,9 @@ function selfOperationalProfile(
   if (roleType === "transport" && pickupLocationIds.length === 0 && person.pickupLocationId) {
     pickupLocationIds.push(Number(person.pickupLocationId));
   }
+  const brokerCommission = roleType === "broker"
+    ? effectiveBrokerCommission(person, commissionPlansByPlot)
+    : {};
   return {
     roleType,
     profile: {
@@ -1638,7 +1653,9 @@ function selfOperationalProfile(
       vehicleType: person.vehicleType || null,
       vehicleNumber: person.vehicleNumber || null,
       agency: person.agency || null,
-      commissionPercent: person.commissionPercent ?? null,
+       commissionPercent: brokerCommission.commissionPercent ?? null,
+       commissionRateLabel: brokerCommission.commissionRateLabel || null,
+       commissionRules: brokerCommission.commissionRules || [],
       notes: person.notes || null,
       serviceAreas: roleType === "transport" ? parseStoredArray(person.serviceAreasJson) : [],
       isActive: person.isActive,
@@ -1790,6 +1807,12 @@ router.get("/people/me", async (req, res) => {
       linked.roleType,
       completedCustomerIds,
     );
+    const commissionPlans = linked.roleType === "broker" && prisma.plotCommissionPlan?.findMany
+      ? await prisma.plotCommissionPlan.findMany({
+          where: { tenantId: req.user.tenantId, isActive: true },
+          include: { rules: { where: { isActive: true }, orderBy: { id: "asc" } } },
+        })
+      : [];
     return res.json({ ...selfOperationalProfile(
       linked.person,
       linked.roleType,
@@ -1797,6 +1820,7 @@ router.get("/people/me", async (req, res) => {
       new Map(customers.map((row) => [row.id, row])),
       new Map(pickupLocations.map((row) => [row.id, row])),
       hiddenCustomerIds,
+      new Map(commissionPlans.map((plan) => [Number(plan.plotSiteId), plan])),
     ), plotOptions, ...(linked.roleType === "transport" ? { pickupLocationOptions } : {}) });
   } catch (error) {
     console.error("pickup-plot-inventory GET /people/me error:", error);
@@ -2349,6 +2373,13 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         tripMessage: "Trip completed",
       });
     }
+    const commissionPlans = brokers.some((row) => Number.isInteger(Number(row.userId))) && prisma.plotCommissionPlan?.findMany
+      ? await prisma.plotCommissionPlan.findMany({
+          where: { tenantId, isActive: true },
+          include: { rules: { where: { isActive: true }, orderBy: { id: "asc" } } },
+        })
+      : [];
+    const commissionPlansByPlot = new Map(commissionPlans.map((plan) => [Number(plan.plotSiteId), plan]));
     const broker = brokers[0] || null;
     return res.json({
       isAdminOverview: adminOverview,
@@ -2358,7 +2389,7 @@ router.get("/brokers/me", requirePermission("broker_workspace", "read"), async (
         phone: broker.phone,
         email: broker.email,
         agency: broker.agency,
-        commissionPercent: broker.commissionPercent,
+        ...effectiveBrokerCommission(broker, commissionPlansByPlot),
       },
       customers: rows,
       assignmentOptions: brokers.filter((row) => row.userId).map(assignedStaff),
@@ -3375,6 +3406,13 @@ router.get("/lead-status", async (req, res) => {
     }) : [];
     const workflowEvents = eventPages.flatMap((page) => page.events);
     const plotMap = new Map(plots.map((plot) => [Number(plot.id), plot]));
+    const commissionPlans = brokers.some((broker) => Number.isInteger(Number(broker.userId))) && prisma.plotCommissionPlan?.findMany
+      ? await prisma.plotCommissionPlan.findMany({
+          where: { tenantId, isActive: true },
+          include: { rules: { where: { isActive: true }, orderBy: { id: "asc" } } },
+        })
+      : [];
+    const commissionPlansByPlot = new Map(commissionPlans.map((plan) => [Number(plan.plotSiteId), plan]));
     const historyByCustomer = new Map();
     for (const event of workflowEvents) {
       const history = historyByCustomer.get(event.contactId) || [];
@@ -3399,7 +3437,7 @@ router.get("/lead-status", async (req, res) => {
     }
     const pickupContactIds = new Set(pickups.map((pickup) => Number(pickup.contactId)));
     const customers = pickups.map((pickup) => {
-      const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap);
+      const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap, commissionPlansByPlot);
       const bookingPlots = (bookingsByContact.get(Number(pickup.contactId)) || [])
         .map((booking) => plotMap.get(Number(booking.plotSiteId)))
         .filter(Boolean);
@@ -4232,105 +4270,12 @@ router.post("/customer-pickups/:contactId/initial-payment", adminOnly, async (re
   }
 });
 
-router.patch("/commissions/:id/rate", adminOnly, async (req, res) => {
-  try {
-    const tenantId = req.user.tenantId;
-    const commissionId = Number(req.params.id);
-    const commissionPercent = Math.round((Number(req.body?.commissionPercent) + Number.EPSILON) * 100) / 100;
-    if (!Number.isInteger(commissionId) || commissionId <= 0) {
-      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
-    }
-    if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
-      return res.status(400).json({ error: "Commission percentage must be between 0 and 100.", code: "INVALID_COMMISSION_PERCENT" });
-    }
-    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
-    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
-      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
-    }
-    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
-    if (!commission) return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
-    if (String(commission.status || "EARNED").toUpperCase() !== "EARNED") {
-      return res.status(409).json({ error: "Only an earned commission can be edited.", code: "COMMISSION_NOT_EDITABLE" });
-    }
-    const commissionAmount = Math.round((Number(commission.eligibleAmount || 0) * commissionPercent / 100 + Number.EPSILON) * 100) / 100;
-    const updated = await prisma.plotCommission.update({
-      where: { id: commission.id },
-      data: { commissionPercent, commissionAmount },
-    });
-    await appendWorkflowEvent(prisma, req, {
-      bookingId: commission.plotBookingId,
-      contactId: commission.contactId,
-      stage: "COMMISSION",
-      fromStatus: commission.status,
-      toStatus: "RATE_UPDATED",
-      metadata: { commissionId: commission.id, previousPercent: Number(commission.commissionPercent || 0), commissionPercent, commissionAmount },
-    });
-    return res.json({
-      ...updated,
-      commissionPercent: Number(updated.commissionPercent || 0),
-      eligibleAmount: Number(updated.eligibleAmount || 0),
-      commissionAmount: Number(updated.commissionAmount || 0),
-    });
-  } catch (error) {
-    console.error("pickup-plot-inventory PATCH /commissions/:id/rate error:", error);
-    return res.status(500).json({ error: "Failed to update commission percentage", code: "COMMISSION_RATE_UPDATE_FAILED" });
-  }
-});
-
-router.patch("/commissions/:id/amount", adminOnly, async (req, res) => {
-  try {
-    const tenantId = req.user.tenantId;
-    const commissionId = Number(req.params.id);
-    const commissionAmount = Number(req.body?.commissionAmount);
-    if (!Number.isInteger(commissionId) || commissionId <= 0) {
-      return res.status(400).json({ error: "Choose a valid commission entry.", code: "INVALID_COMMISSION_ID" });
-    }
-    if (!Number.isFinite(commissionAmount) || commissionAmount < 0) {
-      return res.status(400).json({ error: "Enter a valid commission amount.", code: "INVALID_COMMISSION_AMOUNT" });
-    }
-    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
-    if (String(tenant?.vertical || "").toLowerCase() !== "generic") {
-      return res.status(404).json({ error: "Commission tracking is available only for Generic CRM.", code: "GENERIC_CRM_ONLY" });
-    }
-    const commission = await prisma.plotCommission.findFirst({ where: { id: commissionId, tenantId } });
-    if (!commission) {
-      return res.status(404).json({ error: "Commission entry not found.", code: "COMMISSION_NOT_FOUND" });
-    }
-    if (String(commission.status || "EARNED").toUpperCase() !== "EARNED") {
-      return res.status(409).json({ error: "Only an earned commission can be edited.", code: "COMMISSION_NOT_EDITABLE" });
-    }
-    const eligibleAmount = Number(commission.eligibleAmount || 0);
-    if (commissionAmount > eligibleAmount) {
-      return res.status(400).json({ error: "Commission cannot be greater than the customer payment.", code: "COMMISSION_EXCEEDS_PAYMENT" });
-    }
-    const roundedAmount = Math.round((commissionAmount + Number.EPSILON) * 100) / 100;
-    const commissionPercent = eligibleAmount > 0
-      ? Math.round(((roundedAmount / eligibleAmount) * 100 + Number.EPSILON) * 100) / 100
-      : 0;
-    const updated = await prisma.plotCommission.update({
-      where: { id: commission.id },
-      data: { commissionAmount: roundedAmount, commissionPercent },
-    });
-    await appendWorkflowEvent(prisma, req, {
-      bookingId: commission.plotBookingId,
-      contactId: commission.contactId,
-      stage: "COMMISSION",
-      fromStatus: commission.status,
-      toStatus: "AMOUNT_UPDATED",
-      metadata: { commissionId: commission.id, previousAmount: Number(commission.commissionAmount || 0), commissionAmount: roundedAmount },
-    });
-    return res.json({
-      ...updated,
-      commissionPercent: Number(updated.commissionPercent || 0),
-      eligibleAmount: Number(updated.eligibleAmount || 0),
-      commissionAmount: Number(updated.commissionAmount || 0),
-      netPaymentAmount: Math.max(0, Number(updated.eligibleAmount || 0) - Number(updated.commissionAmount || 0)),
-    });
-  } catch (error) {
-    console.error("pickup-plot-inventory PATCH /commissions/:id/amount error:", error);
-    return res.status(500).json({ error: "Failed to update commission amount", code: "COMMISSION_AMOUNT_UPDATE_FAILED" });
-  }
-});
+for (const commissionValuePath of ["/commissions/:id/rate", "/commissions/:id/amount"]) {
+  router.patch(commissionValuePath, adminOnly, (_req, res) => res.status(403).json({
+    error: "Commission values can only be changed from Finance → Commissions.",
+    code: "COMMISSION_EDIT_ONLY_IN_FINANCE",
+  }));
+}
 
 router.patch("/commissions/:id/status", adminOnly, async (req, res) => {
   try {
@@ -4437,7 +4382,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
       }),
       prisma.plotBroker.findMany({
         where: { tenantId, isActive: true },
-        select: { id: true, name: true, phone: true, commissionPercent: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
+        select: { id: true, name: true, phone: true, userId: true, plotSiteId: true, commissionPercent: true, customerIdsJson: true, plotSiteIdsJson: true, assignmentPairsJson: true, workflowStatusJson: true },
       }),
       prisma.plotWorkflowEvent.findMany({
         where: { tenantId, ...assignmentScope },
@@ -4483,6 +4428,13 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         select: { id: true, name: true, address: true, googleMapsLink: true },
       }),
     ]);
+    const commissionPlans = brokers.some((broker) => Number.isInteger(Number(broker.userId))) && prisma.plotCommissionPlan?.findMany
+      ? await prisma.plotCommissionPlan.findMany({
+          where: { tenantId, isActive: true },
+          include: { rules: { where: { isActive: true }, orderBy: { id: "asc" } } },
+        })
+      : [];
+    const commissionPlansByPlot = new Map(commissionPlans.map((plan) => [Number(plan.plotSiteId), plan]));
     // Legacy person records contain tenant-wide assignment JSON. Trim it
     // before deriving workflow state so another plot for the same customer
     // cannot leak through a shared transport/broker profile.
@@ -4501,9 +4453,9 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
         }
       }
     }
+    const bookingMap = new Map(bookings.map((booking) => [Number(booking.id), booking]));
     let plotCommissions = [];
     if (req.user.role === "ADMIN") {
-      const bookingMap = new Map(bookings.map((booking) => [Number(booking.id), booking]));
       for (const payment of plotPayments) {
         if (String(payment.status || "").toUpperCase() !== "SUCCESS") continue;
         let metadata = {};
@@ -4528,12 +4480,15 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
     for (const commission of plotCommissions) {
       const rows = commissionsByBooking.get(Number(commission.plotBookingId)) || [];
       const broker = brokerMap.get(Number(commission.plotBrokerId));
+      const commissionBooking = bookingMap.get(Number(commission.plotBookingId));
+      const commissionRule = commissionRuleForBroker(broker, commissionBooking?.plotSiteId || null, commissionPlansByPlot);
       rows.push({
         ...commission,
         commissionPercent: Number(commission.commissionPercent || 0),
         eligibleAmount: Number(commission.eligibleAmount || 0),
         commissionAmount: Number(commission.commissionAmount || 0),
         brokerName: broker?.name || "Sales Executive",
+        commissionRule,
       });
       commissionsByBooking.set(Number(commission.plotBookingId), rows);
     }
@@ -4581,7 +4536,7 @@ router.get("/customer-pickups", requirePermission("billing_workspace", "read"), 
       historyByCustomer.set(event.contactId, history);
     }
     const customers = pickups.map((pickup) => {
-      const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap);
+      const workflowStatus = findCustomerWorkflowStatus(pickup.contactId, transportPeople, brokers, plotMap, commissionPlansByPlot);
       const customerBookings = bookings.filter((row) => (
         Number(row.contactId) === Number(pickup.contactId) && row.status !== "CANCELLED"
       ));
@@ -5774,6 +5729,13 @@ router.get("/brokers", adminOnly, async (req, res) => {
         select: { assignmentPairsJson: true, customerIdsJson: true, plotSiteIdsJson: true },
       }),
     ]);
+    const commissionPlans = brokers.some((broker) => Number.isInteger(Number(broker.userId))) && prisma.plotCommissionPlan?.findMany
+      ? await prisma.plotCommissionPlan.findMany({
+          where: { tenantId, isActive: true },
+          include: { rules: { where: { isActive: true }, orderBy: { id: "asc" } } },
+        })
+      : [];
+    const commissionPlansByPlot = new Map(commissionPlans.map((plan) => [Number(plan.plotSiteId), plan]));
     const claimOwners = startedCustomerOwners(brokers, "broker", "workflowStatusJson");
     const customers = markClaimedCustomers(attachTransportPlots(rawCustomers, transportPeople), claimOwners);
     const linkedUserIds = new Set(brokers.map((broker) => Number(broker.userId)).filter(Number.isInteger));
@@ -5790,9 +5752,14 @@ router.get("/brokers", adminOnly, async (req, res) => {
     const customerMap = new Map(customers.map((row) => [row.id, row]));
     const plotSiteMap = new Map(plots.map((row) => [row.id, row]));
     const pickupLocationMap = new Map(pickupLocations.map((row) => [row.id, row]));
-    const rows = brokers.map((broker) => keepOnlyOwnedClaims(
-      serializePlotBroker(broker, customerMap, plotSiteMap, pickupLocationMap, true), claimOwners,
-    ));
+    const rows = brokers.map((broker) => {
+      const serialized = serializePlotBroker(broker, customerMap, plotSiteMap, pickupLocationMap, true);
+      const owned = keepOnlyOwnedClaims(serialized, claimOwners);
+      return {
+        ...owned,
+        ...effectiveBrokerCommission(broker, commissionPlansByPlot),
+      };
+    });
     return res.json({
       brokers: rows,
       plots,
@@ -5832,14 +5799,11 @@ async function brokerData(req, existing = null) {
   if (claimError) return claimError;
   const pairs = await transportLockedAssignmentPairs(req.user.tenantId, customerIds, plotSiteIds);
   if (!Array.isArray(pairs)) return { error: pairs.error, code: "INVALID_ASSIGNMENT" };
-  const commissionPercent = parseCommission(req.body?.commissionPercent);
   const validationError = firstError(
     validatePersonName(req.body?.name),
     validatePhone(req.body?.phone),
     validateEmail(req.body?.email),
     validateOptionalText(req.body?.agency, "Agency", 150),
-    validateMoney(req.body?.commissionPercent, "Commission"),
-    Number.isNaN(commissionPercent) ? "Commission must be between 0 and 100." : null,
     validateOptionalText(req.body?.notes, "Notes", 4000),
   );
   if (validationError) return { error: validationError, code: "VALIDATION_ERROR" };
@@ -5851,7 +5815,6 @@ async function brokerData(req, existing = null) {
       phone,
       email: text(req.body?.email, 320),
       agency: text(req.body?.agency, 150),
-      commissionPercent,
       customerIdsJson: customerIds.length ? sanitizeJsonForStringColumn(customerIds) : null,
       plotSiteIdsJson: plotSiteIds.length ? sanitizeJsonForStringColumn(plotSiteIds) : null,
       pickupLocationIdsJson: pickupLocationIds.length ? sanitizeJsonForStringColumn(pickupLocationIds) : null,

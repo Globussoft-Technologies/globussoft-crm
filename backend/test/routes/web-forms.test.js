@@ -33,6 +33,9 @@ emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true });
 
 const s3Service = requireCJS('../../services/s3Service');
 s3Service.uploadImage = vi.fn();
+s3Service.uploadFile = vi.fn();
+s3Service.deleteFile = vi.fn();
+s3Service.extractKeyFromUrl = vi.fn();
 s3Service.isOciUrl = vi.fn();
 s3Service.isLocalUrl = vi.fn();
 
@@ -187,6 +190,11 @@ beforeEach(() => {
   axios.post.mockReset();
   s3Service.uploadImage.mockReset();
   s3Service.uploadImage.mockResolvedValue('https://objectstorage.example.com/n/ns/b/forms/o/travel/web-forms/11/logos/logo.png');
+  s3Service.uploadFile.mockReset();
+  s3Service.uploadFile.mockResolvedValue('/api/uploads/web-forms/generic/11/attachments/abc123.pdf');
+  s3Service.deleteFile.mockReset();
+  s3Service.extractKeyFromUrl.mockReset();
+  s3Service.extractKeyFromUrl.mockReturnValue(null);
   s3Service.isOciUrl.mockReset();
   s3Service.isOciUrl.mockReturnValue(true);
   s3Service.isLocalUrl.mockReset();
@@ -1342,12 +1350,49 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
       expect(response.status).toBe(400);
       expect(response.body).toMatchObject({ code: 'CAPTCHA_FAILED' });
-      expect(writeFile).not.toHaveBeenCalled();
+      expect(s3Service.uploadFile).not.toHaveBeenCalled();
       expect(prisma.contact.create).not.toHaveBeenCalled();
       expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
     } finally {
       writeFile.mockRestore();
     }
+  });
+
+  test('stores attachments through shared storage and persists canonical download URLs', async () => {
+    mockCaptchaForm({ withFile: true });
+    axios.post.mockResolvedValue({ data: { success: true } });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/protected-form/submit?scope=generic')
+      .field('name', 'Attachment Customer')
+      .field('recaptchaToken', 'browser-token')
+      .attach('resume', Buffer.from('%PDF-test'), {
+        filename: 'resume.pdf',
+        contentType: 'application/pdf',
+      });
+
+    expect(response.status).toBe(201);
+    expect(s3Service.uploadFile).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      expect.stringMatching(/\.pdf$/),
+      'application/pdf',
+      'web-forms/generic/11/attachments',
+      { contentDisposition: 'attachment; filename="resume.pdf"' },
+    );
+    expect(prisma.contactAttachment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        fileUrl: '/api/uploads/web-forms/generic/11/attachments/abc123.pdf',
+        filename: 'resume.pdf',
+      }),
+    }));
+
+    const submissionData = prisma.webFormSubmission.create.mock.calls[0][0].data;
+    expect(JSON.parse(submissionData.filesJson)).toEqual([
+      expect.objectContaining({
+        originalName: 'resume.pdf',
+        url: '/api/uploads/web-forms/generic/11/attachments/abc123.pdf',
+      }),
+    ]);
   });
 
   test('rejects more than five attachments before loading the public form', async () => {

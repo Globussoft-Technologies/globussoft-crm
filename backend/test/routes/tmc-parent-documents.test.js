@@ -141,6 +141,10 @@ describe("TMC parent travel documents", () => {
         documentRequirementId: 101,
         documentType: "Travel insurance certificate",
         filename: "insurance.pdf",
+        fileUrl: "/api/uploads/visa-docs/parent-document.pdf",
+        storage: "disk",
+        storageKey: "parent-document.pdf",
+        fileBlob: null,
         status: "in_review",
       }),
     }));
@@ -333,6 +337,88 @@ describe("TMC parent travel documents", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toMatch(/image\/png/);
     expect(response.body.toString()).toBe("signed image");
+  });
+
+  test("renders an authenticated submitted digital consent form", async () => {
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 103,
+      captureMode: "digital_consent",
+      documentType: "Parent consent form",
+      tripId: 7,
+      answersJson: JSON.stringify({
+        parentName: "Arijit Singh",
+        participantName: "Anaya Singh",
+        relationship: "Parent",
+        signatureName: "Arijit Singh",
+      }),
+      termsSnapshot: "I agree to the Darjeeling trip terms.",
+      signatureName: "Arijit Singh",
+      agreedAt: new Date("2026-11-13T10:00:00.000Z"),
+      uploadedAt: new Date("2026-11-13T10:00:00.000Z"),
+      fileBlob: null,
+      fileUrl: null,
+      storage: null,
+      storageKey: null,
+      mimeType: "application/json",
+      filename: "digital-consent.json",
+    });
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/parent/documents/103/file?download=1")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toMatch(/application\/pdf/);
+    expect(response.headers["content-disposition"]).toContain("attachment");
+    expect(response.headers["content-disposition"]).toContain("consent-form-103.pdf");
+    expect(response.body.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(visaDocStore.readDocBuffer).not.toHaveBeenCalled();
+  });
+
+  test("returns the authenticated parent's digital consent details for preview", async () => {
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 103,
+      documentType: "Parent consent form",
+      captureMode: "digital_consent",
+      status: "in_review",
+      tripId: 7,
+      answersJson: JSON.stringify({
+        parentName: "Arijit Singh",
+        participantName: "Anaya Singh",
+        relationship: "Parent",
+        signatureName: "Arijit Singh",
+        notes: "No medical restrictions.",
+        parentEmail: "arijit@example.com",
+        parentPhone: "555-0100",
+      }),
+      termsSnapshot: "TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES 1. DEFINITIONS These are definitions.",
+      signatureName: "Arijit Singh",
+      agreedAt: new Date("2026-11-13T10:00:00.000Z"),
+      uploadedAt: new Date("2026-11-13T10:00:00.000Z"),
+    });
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/parent/documents/103/consent")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.consent).toMatchObject({
+      id: 103,
+      captureMode: "digital_consent",
+      termsSnapshot: expect.stringContaining("TERMS AND CONDITIONS"),
+      answers: {
+        parentName: "Arijit Singh",
+        participantName: "Anaya Singh",
+        relationship: "Parent",
+        signatureName: "Arijit Singh",
+        notes: "No medical restrictions.",
+      },
+    });
+    expect(response.body.consent.answers.parentEmail).toBeUndefined();
+    expect(response.body.consent.answers.parentPhone).toBeUndefined();
+    expect(prisma.tmcParentDocument.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 103, tenantId: 1, parentContactId: 55 },
+    }));
   });
 
   test("streams an OCI-backed parent document with the canonical storage descriptor", async () => {

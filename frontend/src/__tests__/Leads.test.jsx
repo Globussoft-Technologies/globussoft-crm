@@ -37,7 +37,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import Leads from '../pages/Leads';
 import { AuthContext } from '../App';
 
@@ -79,12 +79,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function RouterProbe() {
+  const location = useLocation();
+
+  return (
+    <div
+      data-testid="router-location"
+      data-pathname={location.pathname}
+      data-search={location.search}
+      data-state={JSON.stringify(location.state || null)}
+    />
+  );
+}
+
 function renderLeads(authValue = null, initialEntries = ['/']) {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={authValue}>
         <Leads />
       </AuthContext.Provider>
+      <RouterProbe />
     </MemoryRouter>,
   );
 }
@@ -1413,10 +1427,16 @@ describe('Leads Freshsales-style list UI affordances', () => {
     renderLeads(authValue);
 
     const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
-    expect(aliceLink).toHaveAttribute('href', '/leads/101');
+    expect(aliceLink).toHaveAttribute('href', '/leads/101?page=1&limit=10');
 
     fireEvent.click(aliceLink);
-    expect(navigateMock).toHaveBeenCalledWith('/leads/101');
+    const location = screen.getByTestId('router-location');
+    expect(location).toHaveAttribute('data-pathname', '/leads/101');
+    expect(location).toHaveAttribute('data-search', '?page=1&limit=10');
+    expect(JSON.parse(location.getAttribute('data-state'))).toEqual(expect.objectContaining({
+      leadsListState: { pageIndex: 0, pageSize: 10 },
+    }));
+    expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
   });
 
@@ -3255,6 +3275,108 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(fetchApiMock.mock.calls.some(([url]) =>
       typeof url === 'string' && url.includes('q=alice') && url.includes('page=2'),
     )).toBe(false);
+  });
+
+  it('preserves the current Generic Leads page while opening and closing a lead detail', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `Lead page ${page}` }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const firstRender = renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Lead page 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(screen.getByText('Lead page 2')).toBeInTheDocument());
+
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('link', { name: 'Lead page 2' }));
+    const location = screen.getByTestId('router-location');
+    expect(location).toHaveAttribute('data-pathname', '/leads/2');
+    expect(location).toHaveAttribute('data-search', '?page=2&limit=10');
+    const detailState = JSON.parse(location.getAttribute('data-state'));
+    expect(detailState).toEqual(expect.objectContaining({
+      leadsListState: { pageIndex: 1, pageSize: 10 },
+    }));
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    firstRender.unmount();
+    fetchApiMock.mockClear();
+    renderLeads(ADMIN_AUTH, [{ pathname: '/leads', state: detailState }]);
+    await waitFor(() => expect(screen.getByText('Lead page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+  });
+
+  it('restores the Generic Leads page from the list URL without route state', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `URL page ${page}` }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH, ['/leads?page=2&limit=10']);
+    await waitFor(() => expect(screen.getByText('URL page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+  });
+
+  it('uses the Generic Leads URL page over stale profile route state', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: [{ ...SAMPLE_LEADS[0], id: page, name: `Canonical page ${page}` }],
+          total: 30,
+          page,
+          limit: 10,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH, [{
+      pathname: '/leads',
+      search: '?page=2&limit=10',
+      state: {
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+      },
+    }]);
+
+    await waitFor(() => expect(screen.getByText('Canonical page 2')).toBeInTheDocument());
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2'),
+    )).toBe(true);
+    expect(screen.getByRole('link', { name: 'Canonical page 2' })).toHaveAttribute(
+      'href',
+      '/leads/2?page=2&limit=10',
+    );
   });
 
   it('applies Generic drill-down filters through the paginated API', async () => {

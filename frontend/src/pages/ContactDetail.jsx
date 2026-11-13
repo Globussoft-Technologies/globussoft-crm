@@ -77,6 +77,7 @@ const PIPELINE_SEGS = [
 
 const GENERIC_LIFECYCLE_SETTING_KEY = 'generic.contactLifecycleStages';
 const GENERIC_LIFECYCLE_DRAFT_PREFIX = 'crm:generic-lifecycle-draft:v1';
+const GENERIC_LEADS_PAGINATION_STORAGE_PREFIX = 'globuscrm.leads.pagination.v1';
 const cloneLifecycleSegments = (segments) => segments.map((segment) => ({
   ...segment,
   options: segment.options.map((option) => ({ ...option })),
@@ -281,7 +282,7 @@ function ReadValue({ contact, field, onEmailClick }) {
   return <span>{String(raw)}</span>;
 }
 
-export default function ContactDetail() {
+export default function ContactDetail({ renderBackdrop = true } = {}) {
   const { id } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -293,7 +294,8 @@ export default function ContactDetail() {
   const canAssignOwner = permissionsReady &&
     (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const isGeneric = !isWellness && !isTravel;
-  const showGenericLeadsBackdrop = isGeneric && location.pathname.startsWith('/leads/');
+  const isGenericLeadsDetail = isGeneric && location.pathname.startsWith('/leads/');
+  const showGenericLeadsBackdrop = renderBackdrop && isGenericLeadsDetail;
   const lifecycleDraftStorageKey = `${GENERIC_LIFECYCLE_DRAFT_PREFIX}:${tenant?.id || user?.tenantId || 'generic'}:${user?.id || user?.userId || 'current'}`;
   const [genericLifecycleSegments, setGenericLifecycleSegments] = useState(() => cloneLifecycleSegments(PIPELINE_SEGS));
   const [lifecycleDraft, setLifecycleDraft] = useState(() => cloneLifecycleSegments(PIPELINE_SEGS));
@@ -303,17 +305,77 @@ export default function ContactDetail() {
   const pendingLifecycleStageIdRef = useRef(null);
   const lifecycleSegments = isWellness ? WELLNESS_PIPELINE_SEGS : isTravel ? TRAVEL_PIPELINE_SEGS : genericLifecycleSegments;
   const defaultListPath = location.pathname.startsWith('/leads/') ? '/leads' : '/contacts';
-  const requestedBackTo = location.state?.returnTo || location.state?.backTo;
+  const detailParams = new URLSearchParams(location.search);
+  const queryDetailPage = Number(detailParams.get('page'));
+  const queryDetailPageSize = Number(detailParams.get('limit'));
+  const stateListPageIndex = Number(location.state?.leadsListState?.pageIndex);
+  const stateListPageSize = Number(location.state?.leadsListState?.pageSize);
+  const leadPaginationStorageKey = `${GENERIC_LEADS_PAGINATION_STORAGE_PREFIX}.${tenant?.id || 'tenant'}.${user?.userId || user?.id || 'user'}`;
+  const storedLeadsListState = useMemo(() => {
+    if (!isGenericLeadsDetail || typeof window === 'undefined') return null;
+    try {
+      const stored = JSON.parse(window.sessionStorage.getItem(leadPaginationStorageKey) || 'null');
+      const pageIndex = Number(stored?.pageIndex);
+      const pageSize = Number(stored?.pageSize);
+      if (!Number.isInteger(pageIndex) || pageIndex < 0 || !Number.isInteger(pageSize) || pageSize < 1) {
+        return null;
+      }
+      return { pageIndex, pageSize };
+    } catch {
+      return null;
+    }
+  }, [isGenericLeadsDetail, leadPaginationStorageKey]);
+  // The detail URL is authoritative when it carries page information. State
+  // remains a compatibility fallback for profiles opened before the URL-based
+  // pagination handoff was added.
+  const detailPage = Number.isInteger(queryDetailPage) && queryDetailPage >= 1
+    ? queryDetailPage
+    : Number.isInteger(stateListPageIndex) && stateListPageIndex >= 0
+      ? stateListPageIndex + 1
+      : storedLeadsListState
+        ? storedLeadsListState.pageIndex + 1
+        : null;
+  const detailPageSize = Number.isInteger(queryDetailPageSize) && queryDetailPageSize >= 1
+    ? queryDetailPageSize
+    : Number.isInteger(stateListPageSize) && stateListPageSize >= 1
+      ? stateListPageSize
+      : storedLeadsListState?.pageSize || 10;
+  const withLeadPage = (returnTo) => {
+    if (typeof returnTo !== 'string' || !returnTo.startsWith('/') || returnTo.startsWith('//')) {
+      return null;
+    }
+    if (!detailPage) return returnTo;
+    const hashIndex = returnTo.indexOf('#');
+    const hash = hashIndex >= 0 ? returnTo.slice(hashIndex) : '';
+    const withoutHash = hashIndex >= 0 ? returnTo.slice(0, hashIndex) : returnTo;
+    const queryIndex = withoutHash.indexOf('?');
+    const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+    const params = new URLSearchParams(queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : '');
+    params.set('page', String(detailPage));
+    params.set('limit', String(detailPageSize));
+    return `${pathname}?${params.toString()}${hash}`;
+  };
+  const detailLeadsReturnTo = isGenericLeadsDetail && detailPage
+    ? `/leads?page=${detailPage}&limit=${detailPageSize}`
+    : null;
+  const requestedBackTo = isGenericLeadsDetail
+    ? withLeadPage(location.state?.returnTo || location.state?.backTo) || detailLeadsReturnTo
+    : location.state?.returnTo || location.state?.backTo || detailLeadsReturnTo;
+  const leadsBackdropListState = showGenericLeadsBackdrop && detailPage
+    ? { pageIndex: detailPage - 1, pageSize: detailPageSize }
+    : null;
   const closePath = typeof requestedBackTo === 'string'
     && requestedBackTo.startsWith('/')
     && !requestedBackTo.startsWith('//')
     ? requestedBackTo
     : defaultListPath;
-  const listPath = closePath;
   const closeLabel = typeof (location.state?.returnLabel || location.state?.backLabel) === 'string'
     ? (location.state.returnLabel || location.state.backLabel)
     : `Back to ${defaultListPath === '/leads' ? 'Leads' : 'Contacts'}`;
-  const closeProfile = () => navigate(closePath, { replace: Boolean(requestedBackTo) });
+  const closeProfile = useCallback(() => navigate(closePath, {
+    replace: Boolean(requestedBackTo),
+    state: location.state,
+  }), [closePath, location.state, navigate, requestedBackTo]);
   const [contact, setContact] = useState(null);
   const [overviewActivities, setOverviewActivities] = useState([]);
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
@@ -563,10 +625,10 @@ export default function ContactDetail() {
 
   useEffect(() => {
     if (modal || dealModal.open || seqPicker || confirmAction || isCustomizing || overviewEditOpen || lifecycleHistoryOpen) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') navigate(closePath); };
+    const onKey = (e) => { if (e.key === 'Escape') closeProfile(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [modal, dealModal.open, seqPicker, confirmAction, isCustomizing, overviewEditOpen, lifecycleHistoryOpen, navigate, closePath]);
+  }, [modal, dealModal.open, seqPicker, confirmAction, isCustomizing, overviewEditOpen, lifecycleHistoryOpen, closeProfile]);
 
   useEffect(() => {
     if (!overviewEditOpen) return undefined;
@@ -716,20 +778,24 @@ export default function ContactDetail() {
   const goNeighbor = async (dir) => {
     try {
       const list = await fetchApi(
-        showGenericLeadsBackdrop ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
+        isGenericLeadsDetail ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
         { silent: true },
       );
       const arr = Array.isArray(list) ? list : list?.data || [];
       const idx = arr.findIndex((c) => String(c.id) === String(id));
       const target = idx >= 0 ? arr[idx + dir] : null;
       if (target) {
-        navigate(`${showGenericLeadsBackdrop ? '/leads' : '/contacts'}/${target.id}`, { state: location.state });
+        const targetBase = `${isGenericLeadsDetail ? '/leads' : '/contacts'}/${target.id}`;
+        const targetPath = isGenericLeadsDetail && detailPage
+          ? `${targetBase}?page=${detailPage}&limit=${detailPageSize}`
+          : targetBase;
+        navigate(targetPath, { state: location.state });
       } else {
-        const recordLabel = showGenericLeadsBackdrop ? 'lead' : 'contact';
+        const recordLabel = isGenericLeadsDetail ? 'lead' : 'contact';
         notify.info(dir > 0 ? `This is the last ${recordLabel}.` : `This is the first ${recordLabel}.`);
       }
     } catch {
-      notify.error(`Could not load ${showGenericLeadsBackdrop ? 'leads' : 'contacts'}.`);
+      notify.error(`Could not load ${isGenericLeadsDetail ? 'leads' : 'contacts'}.`);
     }
   };
 
@@ -821,11 +887,11 @@ export default function ContactDetail() {
       if (key === 'delete') {
         await fetchApi(`/api/contacts/${contact.id}`, { method: 'DELETE' });
         notify.success('Contact deleted.');
-        navigate(listPath);
+        closeProfile();
       } else if (key === 'forget') {
         await fetchApi(`/api/gdpr/contact/${contact.id}`, { method: 'DELETE' });
         notify.success('Contact data erased (GDPR).');
-        navigate(listPath);
+        closeProfile();
       }
     } catch { /* fetchApi surfaces the error toast */ }
   };
@@ -1227,7 +1293,13 @@ export default function ContactDetail() {
 
   const shell = (content) => (
     <div className="cp-slide-root">
-      <div className="cp-slide-bg">{showGenericLeadsBackdrop ? <Leads /> : <Contacts />}</div>
+      {renderBackdrop && (
+        <div className="cp-slide-bg">
+          {showGenericLeadsBackdrop
+            ? <Leads initialListState={leadsBackdropListState} />
+            : <Contacts />}
+        </div>
+      )}
       <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
       <aside className="cp-slide-panel" aria-label="Contact profile">
         <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
@@ -1245,7 +1317,7 @@ export default function ContactDetail() {
   if (loading) return shell(<p style={{ color: 'var(--text-secondary)' }}>Loading contact…</p>);
   if (!contact) {
     return shell(
-      <div className="cp-soon"><h3>Contact not found</h3><button className="cp-action-btn" onClick={() => navigate(closePath)}>{closeLabel}</button></div>,
+      <div className="cp-soon"><h3>Contact not found</h3><button className="cp-action-btn" onClick={closeProfile}>{closeLabel}</button></div>,
     );
   }
 
@@ -1648,8 +1720,8 @@ export default function ContactDetail() {
         <div className="cp-header-right">
           <button type="button" className="cp-action-btn" onClick={() => setActiveTab('details')}><FileText size={13} /> See all details</button>
           <div className="cp-nav-btns">
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`} aria-label={`Previous ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title={`Next ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`} aria-label={`Next ${showGenericLeadsBackdrop ? 'lead' : 'contact'}`}><ChevronRight size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title={`Next ${isGenericLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Next ${isGenericLeadsDetail ? 'lead' : 'contact'}`}><ChevronRight size={14} /></button>
           </div>
         </div>
       </div>

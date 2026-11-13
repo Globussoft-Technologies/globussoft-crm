@@ -138,7 +138,6 @@ export function validateBrokerForm(form) {
     validatePhoneNumber(form.phone),
     email && (email.length > 320 || !EMAIL_PATTERN.test(email)) ? 'Enter a valid email address.' : null,
     optionalText(form.agency, 'Agency', 150),
-    money(form.commissionPercent, 'Commission', 100),
     optionalText(form.notes, 'Notes', 4000),
   );
 }

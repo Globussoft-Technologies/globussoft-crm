@@ -1,8 +1,8 @@
 .field-config-page {
   min-height: 100%;
   padding: 2rem clamp(1rem, 3vw, 3rem) 4rem;
-  background: #edf1f5;
-  color: #102b49;
+  background: var(--bg-color, #edf1f5);
+  color: var(--text-primary, #102b49);
   animation: fadeIn 0.2s ease;
 }
 
@@ -33,16 +33,16 @@
   width: min(100%, 520px);
   height: 36px;
   overflow: hidden;
-  border: 1px solid #c9d3df;
+  border: 1px solid var(--border-color, #c9d3df);
   border-radius: 4px;
-  background: #fff;
+  background: var(--input-bg, var(--surface-color, #fff));
 }
 
 .field-config-page .field-config-toolbar .field-config-search > svg {
   position: static;
   flex: 0 0 17px;
   margin-left: 0.8rem;
-  color: #263f5d;
+  color: var(--text-secondary, #263f5d);
   pointer-events: none;
 }
 
@@ -57,15 +57,15 @@
   border: 0 !important;
   border-radius: 0;
   background: transparent;
-  color: #102b49;
+  color: var(--text-primary, #102b49);
   font: inherit;
   outline: none;
   box-shadow: none !important;
 }
 
 .field-config-search:focus-within {
-  border-color: #4d55cc;
-  box-shadow: 0 0 0 2px rgba(77, 85, 204, 0.12);
+  border-color: var(--accent-color, #4d55cc);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4d55cc) 12%, transparent);
 }
 
 .field-config-toolbar-actions,
@@ -85,10 +85,10 @@
   gap: 0.4rem;
   min-height: 34px;
   padding: 0.42rem 0.72rem;
-  border: 1px solid #c9d3df;
+  border: 1px solid var(--border-color, #c9d3df);
   border-radius: 4px;
-  background: #fff;
-  color: #102b49;
+  background: var(--surface-color, #fff);
+  color: var(--text-primary, #102b49);
   font: inherit;
   font-size: 0.84rem;
   font-weight: 600;
@@ -97,12 +97,12 @@
 
 .field-config-button:hover,
 .field-config-icon-button:hover {
-  border-color: #6872da;
-  background: #f8f9ff;
+  border-color: var(--accent-color, #6872da);
+  background: var(--subtle-bg, var(--surface-color, #f8f9ff));
 }
 
 .field-config-button > svg:first-child {
-  color: #4c50cf;
+  color: var(--accent-color, #4c50cf);
 }
 
 .field-config-button:disabled,
@@ -140,14 +140,14 @@
   padding: 0.3rem 0;
   border: 0;
   background: transparent;
-  color: #102b49;
+  color: var(--text-primary, #102b49);
   font: inherit;
   cursor: pointer;
 }
 
 .field-config-group-title > svg:first-child {
-  fill: #ffe16a;
-  color: #e8c535;
+  fill: var(--warning-color, #ffe16a);
+  color: var(--warning-color, #e8c535);
 }
 
 .field-config-group-title > svg:last-child {
@@ -165,9 +165,9 @@
 
 .field-config-row {
   overflow: hidden;
-  border: 1px solid #e2e7ed;
-  background: #fff;
-  box-shadow: 0 2px 5px rgba(28, 46, 66, 0.14);
+  border: 1px solid var(--border-color, #e2e7ed);
+  background: var(--surface-color, #fff);
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--text-primary, #1c2e42) 14%, transparent);
 }
 
 .field-config-row-main {
@@ -186,7 +186,7 @@
 .field-config-type-icon {
   display: inline-flex;
   align-items: center;
-  color: #173958;
+  color: var(--text-secondary, #173958);
 }
 
 button.field-config-drag {
@@ -216,7 +216,7 @@ button.field-config-drag:disabled {
   padding: 0.5rem 0.4rem;
   border: 0;
   background: transparent;
-  color: #4248d4;
+  color: var(--primary-color, var(--accent-color, #4248d4));
   font: inherit;
   font-size: 0.86rem;
   text-align: left;
@@ -231,8 +231,8 @@ button.field-config-drag:disabled {
   gap: 0.45rem;
   min-width: 0;
   padding-left: 0.75rem;
-  border-left: 1px solid #e7ebf0;
-  color: #102b49;
+  border-left: 1px solid var(--border-color, #e7ebf0);
+  color: var(--text-primary, #102b49);
   font-size: 0.84rem;
   white-space: nowrap;
 }
@@ -241,7 +241,7 @@ button.field-config-drag:disabled {
   width: 18px;
   height: 18px;
   margin: 0;
-  accent-color: #5054ce;
+  accent-color: var(--accent-color, #5054ce);
 }
 
 .field-config-check input:disabled:not(:checked) {
@@ -254,7 +254,7 @@ button.field-config-drag:disabled {
   min-width: 0;
   gap: 0.45rem;
   padding-left: 0.9rem;
-  border-left: 1px solid #e7ebf0;
+  border-left: 1px solid var(--border-color, #e7ebf0);
   font-size: 0.78rem;
 }
 
@@ -266,21 +266,21 @@ button.field-config-drag:disabled {
   overflow: hidden;
   padding: 0.18rem 0.4rem;
   border-radius: 4px;
-  background: #edf2f7;
-  color: #173958;
+  background: var(--subtle-bg, #edf2f7);
+  color: var(--text-secondary, #173958);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .field-config-chip.is-muted {
-  color: #8b9aae;
+  color: var(--text-secondary, #8b9aae);
 }
 
 .field-config-inline-action {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #4148cb;
+  color: var(--primary-color, var(--accent-color, #4148cb));
   font: inherit;
   font-size: 0.78rem;
   cursor: pointer;
@@ -298,7 +298,7 @@ button.field-config-drag:disabled {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #173958;
+  color: var(--text-secondary, #173958);
   cursor: pointer;
 }
 
@@ -317,18 +317,18 @@ button.field-config-drag:disabled {
   gap: 1rem;
   min-height: 70px;
   padding: 0.55rem 1rem 0.85rem 3.7rem;
-  border-top: 1px solid #eef1f4;
+  border-top: 1px solid var(--border-color, #eef1f4);
 }
 
 .field-config-row-details code {
   display: block;
   margin-top: 0.25rem;
-  color: #53677d;
+  color: var(--text-secondary, #53677d);
   font-size: 0.78rem;
 }
 
 .field-config-detail-label {
-  color: #8a99aa;
+  color: var(--text-secondary, #8a99aa);
   font-size: 0.72rem;
   text-transform: uppercase;
 }
@@ -338,15 +338,15 @@ button.field-config-drag:disabled {
   margin-top: 0.35rem;
   padding: 0.12rem 0.4rem;
   border-radius: 3px;
-  background: #eef0ff;
-  color: #4248d4;
+  background: color-mix(in srgb, var(--accent-color, #4248d4) 12%, var(--surface-color, #fff));
+  color: var(--primary-color, var(--accent-color, #4248d4));
   font-size: 0.72rem;
 }
 
 .field-config-system-note,
 .field-config-empty,
 .field-config-loading {
-  color: #718196;
+  color: var(--text-secondary, #718196);
   font-size: 0.82rem;
 }
 
@@ -354,16 +354,16 @@ button.field-config-drag:disabled {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  color: #718196;
+  color: var(--text-secondary, #718196);
   font-size: 0.78rem;
 }
 
 .field-config-group-select select {
   min-height: 32px;
-  border: 1px solid #c9d3df;
+  border: 1px solid var(--border-color, #c9d3df);
   border-radius: 4px;
-  background: #fff;
-  color: #102b49;
+  background: var(--input-bg, var(--surface-color, #fff));
+  color: var(--text-primary, #102b49);
 }
 
 .field-config-modal-backdrop {
@@ -388,8 +388,8 @@ button.field-config-drag:disabled {
 .field-config-empty,
 .field-config-loading {
   padding: 1rem;
-  background: #fff;
-  border: 1px dashed #cfd8e2;
+  background: var(--surface-color, #fff);
+  border: 1px dashed var(--border-color, #cfd8e2);
 }
 
 .field-config-loading {
@@ -434,9 +434,9 @@ button.field-config-drag:disabled {
 .lead-field-type-menu {
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid #767676;
-  background: #fff;
-  color: #111;
+  border: 1px solid var(--border-color, #767676);
+  background: var(--surface-color, #fff);
+  color: var(--text-primary, #111);
 }
 
 .lead-field-type-option {
@@ -446,8 +446,8 @@ button.field-config-drag:disabled {
   padding: 3px 14px;
   border: 0;
   border-radius: 0;
-  background: #fff;
-  color: #111;
+  background: var(--surface-color, #fff);
+  color: var(--text-primary, #111);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -455,8 +455,8 @@ button.field-config-drag:disabled {
 
 .lead-field-type-option:hover,
 .lead-field-type-option[data-active="true"] {
-  background: #4058cf;
-  color: #fff;
+  background: var(--primary-color, var(--accent-color, #4058cf));
+  color: var(--accent-text, #fff);
 }
 
 .field-config-create {
@@ -468,10 +468,10 @@ button.field-config-drag:disabled {
   max-height: calc(100vh - 3rem);
   overflow: hidden;
   padding: 1rem;
-  border: 1px solid #cbd4df;
+  border: 1px solid var(--border-color, #cbd4df);
   border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 24px 70px rgba(16, 43, 73, 0.3);
+  background: var(--modal-bg, var(--surface-color, #fff));
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--text-primary, #102b49) 30%, transparent);
   transform: translate(-50%, -50%);
 }
 

@@ -79,6 +79,17 @@ function formatDateTimeLocal(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function formatCompletedTimestamp(value) {
+  if (!value) return 'Completion time unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Completion time unavailable';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function taskLeadLabel(task) {
+  return task.contact?.name || task.contact?.email || (task.contactId ? `Lead #${task.contactId}` : 'Lead unavailable');
+}
+
 // Tags + description are encoded together in the Task.notes field so the
 // schema needs no migration. Format: JSON prefix sentinel + envelope.
 // Falls back gracefully for old plain-text notes.
@@ -1145,7 +1156,7 @@ export default function Tasks() {
         </div>
 
         {/* Completed Log */}
-        {!isGeneric && <div className="card" style={{ padding: '2rem', opacity: 0.75 }}>
+        {!isGeneric && <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <CheckCircle2 size={20} color="var(--success-color)" /> Completed Log
           </h3>
@@ -1155,14 +1166,16 @@ export default function Tasks() {
             ) : completedTasks.slice(0, 8).map(t => {
               const decoded = decodeNotes(t.notes);
               return (
-              <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', padding: '0.85rem 1rem', background: 'var(--subtle-bg-2, var(--surface-color))', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                 <div style={{ minWidth: 0 }}>
-                  <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
-                  {decoded.resolutionNote && (
-                    <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 720 }}>
-                      Note: {decoded.resolutionNote}
-                    </p>
-                  )}
+                  <div style={{ fontWeight: 650, color: 'var(--text-primary)', fontSize: '0.9rem' }}>{t.title}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Clock size={12} /> Completed {formatCompletedTimestamp(t.completedAt || t.updatedAt || t.createdAt)}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Search size={12} /> {taskLeadLabel(t)}{t.contact?.email && t.contact?.name ? ` · ${t.contact.email}` : ''}</span>
+                  </div>
+                  <p style={{ margin: '0.55rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: 720 }}>
+                    {decoded.resolutionNote || 'No resolution note was added.'}
+                  </p>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                   <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -1190,8 +1203,8 @@ export default function Tasks() {
               padding: '1.25rem', background: 'rgba(15, 23, 42, 0.55)',
             }}
           >
-            <div className="card" style={{ width: 'min(900px, 100%)', maxHeight: 'min(720px, 90vh)', overflow: 'auto', padding: '1.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
+            <div className="card" style={{ width: 'min(900px, 100%)', height: 'min(720px, calc(100vh - 3rem))', maxHeight: 'calc(100vh - 3rem)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--modal-bg, #fff)', padding: '1.5rem' }}>
+              <div style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
                 <h2 id="task-history-title" style={{ fontSize: '1.2rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
                   <CheckCircle2 size={20} color="var(--success-color)" /> Completed Log
                 </h2>
@@ -1199,20 +1212,22 @@ export default function Tasks() {
                   <X size={16} />
                 </button>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0, flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', overflowX: 'hidden', paddingRight: '0.35rem' }}>
                 {completedTasks.length === 0 ? (
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No completed tasks yet.</p>
                 ) : completedTasks.slice(0, 8).map(t => {
                   const decoded = decodeNotes(t.notes);
                   return (
-                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
-                      <div style={{ minWidth: 0 }}>
-                        <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
-                        {decoded.resolutionNote && (
-                          <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 720 }}>
-                            Note: {decoded.resolutionNote}
-                          </p>
-                        )}
+                    <div key={t.id} style={{ display: 'flex', width: '100%', boxSizing: 'border-box', minWidth: 0, justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', padding: '0.85rem 1rem', background: 'var(--subtle-bg-2, var(--surface-color))', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 650, color: 'var(--text-primary)', fontSize: '0.9rem' }}>{t.title}</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Clock size={12} /> Completed {formatCompletedTimestamp(t.completedAt || t.updatedAt || t.createdAt)}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Search size={12} /> {taskLeadLabel(t)}{t.contact?.email && t.contact?.name ? ` · ${t.contact.email}` : ''}</span>
+                        </div>
+                        <p style={{ margin: '0.55rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: 720 }}>
+                          {decoded.resolutionNote || 'No resolution note was added.'}
+                        </p>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                         <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -1238,7 +1253,7 @@ export default function Tasks() {
             onClick={(e) => { if (e.target === e.currentTarget) setShowTaskRules(false); }}
             style={{ position: 'fixed', inset: 0, zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(15, 23, 42, 0.55)' }}
           >
-            <div className="card" style={{ width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: '1.5rem' }}>
+            <div className="card task-rules-modal" style={{ width: 'min(760px, 100%)', maxHeight: '90vh', boxSizing: 'border-box', overflowY: 'auto', overflowX: 'hidden', background: 'var(--modal-bg, #fff)', padding: '1.5rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
                 <div>
                   <h2 id="task-rules-title" style={{ margin: 0, fontSize: '1.2rem' }}>Task assignment rules</h2>
@@ -1249,12 +1264,12 @@ export default function Tasks() {
               <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '1rem' }}>
                 <strong style={{ display: 'block', marginBottom: '0.65rem', fontSize: '0.85rem' }}>{taskRules.some((rule) => rule.id === taskRuleDraft.id) ? 'Edit assignment rule' : 'Add assignment rule'}</strong>
                 <input value={taskRuleDraft.name} onChange={(e) => setTaskRuleDraft({ ...taskRuleDraft, name: e.target.value })} placeholder="Rule name" style={{ ...modalInputStyle, width: '100%', boxSizing: 'border-box', marginBottom: '0.6rem' }} />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.35rem' }}><span>Who can assign</span><span>Whom can assign</span><span /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>{taskRuleDraft.mappings.map((mapping, index) => <div key={`draft-mapping-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', alignItems: 'center' }}><select value={mapping.assignerRole} onChange={(e) => updateTaskRuleMapping(index, 'assignerRole', e.target.value)} style={modalInputStyle}>{genericRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><select value={mapping.assigneeRole} onChange={(e) => updateTaskRuleMapping(index, 'assigneeRole', e.target.value)} style={modalInputStyle}>{genericTargetRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" onClick={() => removeTaskRuleMapping(index)} className="btn-secondary" aria-label="Remove role mapping" style={{ padding: '0.4rem', color: '#ef4444' }} disabled={taskRuleDraft.mappings.length === 1}><Trash2 size={13} /></button></div>)}</div>
+                <div className="task-rule-mapping-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.35rem' }}><span>Who can assign</span><span>Whom can assign</span><span /></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>{taskRuleDraft.mappings.map((mapping, index) => <div className="task-rule-mapping-grid" key={`draft-mapping-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', alignItems: 'center' }}><select value={mapping.assignerRole} onChange={(e) => updateTaskRuleMapping(index, 'assignerRole', e.target.value)} style={modalInputStyle}>{genericRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><select value={mapping.assigneeRole} onChange={(e) => updateTaskRuleMapping(index, 'assigneeRole', e.target.value)} style={modalInputStyle}>{genericTargetRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" onClick={() => removeTaskRuleMapping(index)} className="btn-secondary" aria-label="Remove role mapping" style={{ padding: '0.4rem', color: '#ef4444' }} disabled={taskRuleDraft.mappings.length === 1}><Trash2 size={13} /></button></div>)}</div>
                 <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.6rem' }}><button type="button" onClick={addTaskRuleMapping} className="btn-secondary" style={{ whiteSpace: 'nowrap' }}><Plus size={14} /> Add mapping</button><button type="button" onClick={addTaskRule} className="btn-secondary" style={{ whiteSpace: 'nowrap' }}>{taskRules.some((rule) => rule.id === taskRuleDraft.id) ? <><Save size={14} /> Update rule mapping</> : <><Save size={14} /> Save rule mapping</>}</button></div>
                 {taskRules.some((rule) => rule.id === taskRuleDraft.id) && <button type="button" onClick={() => setTaskRuleDraft({ id: `task-rule-${Date.now()}`, name: '', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }], isActive: true, isDefault: false })} className="btn-secondary" style={{ marginTop: '0.55rem', fontSize: '0.75rem' }}>Cancel edit</button>}
               </div>
-              <div style={{ padding: '0.8rem 1rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'rgba(99,102,241,0.06)', marginBottom: '1rem' }}>
+              <div style={{ padding: '0.8rem 1rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--subtle-bg-2, var(--surface-color))', marginBottom: '1rem' }}>
                 <strong style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.55rem' }}>Default rule — current behavior</strong>
                 <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '0.5rem', fontSize: '0.75rem' }}>
                   <span style={{ fontWeight: 700 }}>Rule name</span><span style={{ fontWeight: 700 }}>Who can assign</span><span style={{ fontWeight: 700 }}>Whom can assign</span>
@@ -1957,14 +1972,87 @@ export default function Tasks() {
       )}
 
       <style>{`
+        .tasks-page { container-type: inline-size; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         /* #480 / #893: with the form moved to a drawer the main grid is now a single column.
            Keep the mobile padding adjustment in place so the page still breathes on narrow
            viewports; the drawer itself is full-width on mobile via maxWidth: 520 + width: 100%. */
         @media (max-width: 768px) {
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tasks-page) { overflow-y: auto !important; overflow-x: hidden !important; }
+          body[data-vertical="generic"] .tasks-page { height: auto; min-height: 100%; overflow: visible; }
+          body[data-vertical="generic"] .tasks-content-stack { flex: 0 0 auto; }
           .tasks-page { padding: 1rem !important; }
           .tasks-page .card { padding: 1.25rem !important; }
           .tasks-page h3 { white-space: normal !important; }
+          .tasks-page > header { flex-direction: column; align-items: stretch !important; gap: 1rem !important; }
+          .tasks-page > header > div:last-child { width: 100%; justify-content: flex-start; }
+          .tasks-page > header > div:last-child > button { flex: 1 1 auto; min-width: 0; }
+          .tasks-filterbar { align-items: stretch; }
+          .tasks-filterbar .input-field { flex: 1 1 10rem; min-width: min(100%, 10rem); }
+          .tasks-queue-item { flex-direction: column !important; align-items: stretch !important; gap: 0.85rem !important; }
+          .tasks-queue-item__main { width: 100%; }
+          .tasks-queue-item__actions { width: 100%; margin-left: 0 !important; justify-content: flex-end; }
+          .tasks-queue-item__title { overflow-wrap: anywhere; }
+          .tasks-queue-item__meta { overflow-wrap: anywhere; }
+          body[data-vertical="generic"] .tasks-active-queue-card { height: clamp(320px, calc(100dvh - 18rem), 560px); }
+          .task-rules-modal .task-rule-mapping-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto !important; }
+        }
+        @media (min-width: 769px) and (max-width: 900px) {
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tasks-page) { overflow-y: auto !important; overflow-x: hidden !important; }
+          body[data-vertical="generic"] .tasks-page { height: auto; min-height: 100%; overflow: visible; padding: 1.25rem !important; }
+          body[data-vertical="generic"] .tasks-content-stack { flex: 0 0 auto; }
+          .tasks-page > header { flex-direction: column; align-items: stretch !important; gap: 1rem !important; }
+          .tasks-page > header > div:last-child { width: 100%; justify-content: flex-start; }
+          .tasks-page > header > div:last-child > button { flex: 1 1 auto; min-width: 0; }
+          .tasks-summary-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
+          .tasks-summary-card { min-height: 100px; padding: 0.8rem; }
+          .tasks-filterbar { align-items: stretch; }
+          .tasks-filterbar__search { flex: 1 1 100%; max-width: none; }
+          .tasks-filterbar .input-field { flex: 1 1 10rem; min-width: 0; }
+          .tasks-queue-item { flex-direction: column !important; align-items: stretch !important; gap: 0.85rem !important; }
+          .tasks-queue-item__main { width: 100%; }
+          .tasks-queue-item__actions { width: 100%; margin-left: 0 !important; justify-content: flex-end; }
+          .tasks-queue-item__title, .tasks-queue-item__meta { overflow-wrap: anywhere; }
+          body[data-vertical="generic"] .tasks-active-queue-card { height: clamp(360px, calc(100dvh - 19rem), 600px); }
+        }
+        @media (max-width: 520px) {
+          .tasks-page > header > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
+          .tasks-page > header > div:last-child > button:last-child { grid-column: 1 / -1; }
+          .tasks-filterbar .input-field { flex-basis: calc(50% - 0.3rem); min-width: 0; }
+          .tasks-queue-item__actions { justify-content: stretch; }
+          .tasks-queue-item__actions button { flex: 1 1 0; }
+          .task-rules-modal .task-rule-mapping-grid { grid-template-columns: 1fr auto !important; }
+          .task-rules-modal .task-rule-mapping-grid > span:nth-child(2) { grid-column: 1 / -1; }
+          .task-rules-modal .task-rule-mapping-grid > select:nth-child(2) { grid-column: 1; }
+        }
+        @container (max-width: 720px) {
+          .tasks-page > header { flex-direction: column; align-items: stretch !important; gap: 1rem !important; }
+          .tasks-page > header > div:last-child { width: 100%; justify-content: flex-start; }
+          .tasks-page > header > div:last-child > button { flex: 1 1 auto; min-width: 0; }
+          .tasks-summary-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
+          .tasks-summary-card { min-height: 100px; padding: 0.8rem; }
+          .tasks-filterbar { align-items: stretch; }
+          .tasks-filterbar__search { flex: 1 1 100%; max-width: none; }
+          .tasks-filterbar .input-field { flex: 1 1 10rem; min-width: 0; }
+          .tasks-queue-item { flex-direction: column !important; align-items: stretch !important; gap: 0.85rem !important; }
+          .tasks-queue-item__main { width: 100%; }
+          .tasks-queue-item__actions { width: 100%; margin-left: 0 !important; justify-content: flex-end; }
+          .tasks-queue-item__title, .tasks-queue-item__meta { overflow-wrap: anywhere; }
+          body[data-vertical="generic"] .tasks-content-stack { flex: 0 0 auto; }
+          body[data-vertical="generic"] .tasks-active-queue-card { height: clamp(360px, calc(100dvh - 19rem), 600px); }
+        }
+        @container (max-width: 560px) {
+          .tasks-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @container (max-width: 360px) {
+          .tasks-summary-cards { grid-template-columns: 1fr; }
+        }
+        @media (max-height: 700px) {
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tasks-page) { overflow-y: auto !important; overflow-x: hidden !important; }
+          body[data-vertical="generic"] .tasks-page { height: auto; min-height: 100%; overflow-y: auto; }
+          body[data-vertical="generic"] .tasks-content-stack { flex: 0 0 auto; }
+          body[data-vertical="generic"] .tasks-active-queue-card { height: auto !important; min-height: 0; flex: 0 0 auto !important; }
+          body[data-vertical="generic"] .tasks-active-queue-list { flex: 0 0 auto; max-height: clamp(220px, calc(100dvh - 23rem), 420px); }
         }
       `}</style>
     </div>

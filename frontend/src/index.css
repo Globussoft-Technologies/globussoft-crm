@@ -6051,6 +6051,85 @@ table.leads-table thead th {
   }
 }
 
+/* Import dialogs can be rendered above the page container when opened from
+   Generic CRM Leads. Keep their tables responsive even when they are outside
+   the generic-main container used by the density rules. */
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-history-title"] > .glass,
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-contacts-title"] > .glass,
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-action-title"] > .glass,
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-errors-title"] > .glass {
+  width: min(1200px, calc(100vw - 2rem)) !important;
+  max-width: calc(100vw - 2rem) !important;
+  max-height: calc(100dvh - 2rem) !important;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-history-title"] .csv-import-data-table,
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-contacts-title"] .csv-import-data-table,
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-action-title"] .csv-import-data-table,
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-errors-title"] .csv-import-data-table {
+  display: table !important;
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-history-title"] .csv-import-data-table :is(th, td),
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-contacts-title"] .csv-import-data-table :is(th, td),
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-action-title"] .csv-import-data-table :is(th, td),
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-errors-title"] .csv-import-data-table :is(th, td) {
+  min-width: 120px !important;
+  max-width: 240px !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  overflow-wrap: anywhere;
+  text-overflow: clip !important;
+}
+
+@media (max-width: 600px) {
+  body[data-vertical="generic"]
+    [role="dialog"][aria-labelledby="import-history-title"] > .glass,
+  body[data-vertical="generic"]
+    [role="dialog"][aria-labelledby="import-contacts-title"] > .glass,
+  body[data-vertical="generic"]
+    [role="dialog"][aria-labelledby="import-action-title"] > .glass,
+  body[data-vertical="generic"]
+    [role="dialog"][aria-labelledby="import-errors-title"] > .glass {
+    width: calc(100vw - 1.5rem) !important;
+    max-width: calc(100vw - 1.5rem) !important;
+    max-height: calc(100dvh - 1.5rem) !important;
+  }
+}
+
+/* Generic CRM import dialogs use a clear backdrop so the page does not look
+   washed out while the dialog is open. */
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="recent-import-title"],
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-history-title"],
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-contacts-title"],
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-action-title"],
+body[data-vertical="generic"]
+  [role="dialog"][aria-labelledby="import-errors-title"] {
+  background: transparent !important;
+  backdrop-filter: none !important;
+}
+
 .leads-split-table--no-topbar::-webkit-scrollbar {
   width: 12px;
   height: 12px;
@@ -9021,7 +9100,8 @@ body[data-vertical="generic"] .tasks-page {
   flex-direction: column;
   height: 100%;
   min-height: 0 !important;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 body[data-vertical="generic"] .tasks-page > header,
@@ -11925,4 +12005,59 @@ body[data-vertical="generic"] .developer-api-data-scroll {
 .travel-payment-participant-row {
   box-sizing: border-box;
   padding: 14px 18px;
+}
+.travel-lead-note-composer{display:flex;align-items:center;gap:14px}.travel-lead-note-input-wrap{display:flex;align-items:center;gap:14px;min-width:0;flex:1;height:50px;padding:0 16px;border:1px solid var(--border-color);border-radius:12px;background:var(--surface-color);color:var(--text-secondary)}.travel-lead-note-input-wrap input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--text-primary);font:inherit;font-size:14px}.travel-lead-note-input-wrap input::placeholder{color:var(--text-secondary)}.travel-lead-add-note-button{min-width:150px;height:50px;border-radius:12px;font-size:14px}.travel-lead-note-list{display:grid;gap:14px}.travel-lead-note-card{display:flex;align-items:flex-start;gap:16px;padding:20px;border:1px solid var(--border-color);border-radius:14px;background:var(--surface-color)}.travel-lead-note-avatar{display:flex;align-items:center;justify-content:center;flex:0 0 42px;width:42px;height:42px;border-radius:50%;background:#eee9ff;color:#5b21e6;font-size:14px;font-weight:800}.travel-lead-note-content{min-width:0;flex:1;color:var(--text-primary);font-size:14px;line-height:1.5}.travel-lead-note-meta{display:flex;align-items:center;gap:8px;margin-bottom:5px;color:var(--text-secondary);font-size:12px}.travel-lead-note-meta strong{color:var(--text-primary);font-size:14px}
+.travel-lead-note-actions{display:flex;gap:8px;margin-left:auto}.travel-lead-note-actions button,.travel-lead-note-cancel{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid var(--border-color);border-radius:10px;background:var(--surface-color);color:var(--text-secondary);cursor:pointer}.travel-lead-note-actions button:hover,.travel-lead-note-cancel:hover{color:var(--primary-color,var(--accent-color));border-color:var(--primary-color,var(--accent-color))}.travel-lead-note-cancel{flex:0 0 38px}
+.travel-lead-note-input-wrap:has(input.is-editing){border-color:var(--primary-color,var(--accent-color));background:color-mix(in srgb,var(--primary-color,var(--accent-color)) 7%,var(--surface-color));box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-color,var(--accent-color)) 14%,transparent)}.travel-lead-note-input-wrap input.is-editing{font-weight:600}
+.csv-import-modal-backdrop,
+[role="dialog"][aria-labelledby="import-history-title"],
+[role="dialog"][aria-labelledby="import-contacts-title"],
+[role="dialog"][aria-labelledby="import-action-title"],
+[role="dialog"][aria-labelledby="import-errors-title"] {
+  box-sizing: border-box;
+}
+
+[role="dialog"][aria-labelledby="import-history-title"] > .glass,
+[role="dialog"][aria-labelledby="import-contacts-title"] > .glass,
+[role="dialog"][aria-labelledby="import-action-title"] > .glass,
+[role="dialog"][aria-labelledby="import-errors-title"] > .glass {
+  box-sizing: border-box;
+  width: min(1200px, calc(100vw - 2rem)) !important;
+  max-width: 100%;
+  max-height: calc(100dvh - 2rem);
+  min-height: 0;
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
+}
+
+[role="dialog"][aria-labelledby="import-history-title"] > .glass > div:nth-child(2),
+[role="dialog"][aria-labelledby="import-contacts-title"] > .glass > div:nth-child(2),
+[role="dialog"][aria-labelledby="import-action-title"] > .glass > div:nth-child(2),
+[role="dialog"][aria-labelledby="import-errors-title"] > .glass > div:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 600px) {
+  [role="dialog"][aria-labelledby="import-history-title"],
+  [role="dialog"][aria-labelledby="import-contacts-title"],
+  [role="dialog"][aria-labelledby="import-action-title"],
+  [role="dialog"][aria-labelledby="import-errors-title"] {
+    align-items: flex-start !important;
+    padding: 0.75rem !important;
+  }
+
+  [role="dialog"][aria-labelledby="import-history-title"] > .glass,
+  [role="dialog"][aria-labelledby="import-contacts-title"] > .glass,
+  [role="dialog"][aria-labelledby="import-action-title"] > .glass,
+  [role="dialog"][aria-labelledby="import-errors-title"] > .glass {
+    width: 100% !important;
+    max-height: calc(100dvh - 1.5rem);
+    padding: 0.9rem !important;
+  }
 }

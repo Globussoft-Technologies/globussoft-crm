@@ -48,7 +48,7 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
   body[data-vertical="generic"]
     .app-main
     > main.generic-page-content
-    :is(table, .data-table, [role="table"]):not(.estimates-ledger-table) {
+    :is(table, .data-table, [role="table"]):not(.estimates-ledger-table):not(.csv-import-data-table) {
     width: 100% !important;
     max-width: 100%;
     min-width: 0 !important;
@@ -58,7 +58,7 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
   body[data-vertical="generic"]
     .app-main
     > main.generic-page-content
-    :is(table, .data-table, [role="table"])
+    :is(table, .data-table, [role="table"]):not(.csv-import-data-table)
     :is(th, td, [role="cell"], [role="columnheader"]) {
     min-width: 0 !important;
     max-width: 100%;
@@ -71,7 +71,7 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
   body[data-vertical="generic"]
     .app-main
     > main.generic-page-content
-    :is(table, .data-table, [role="table"])
+    :is(table, .data-table, [role="table"]):not(.csv-import-data-table)
     :is(th, td)
     > :is(span, div, p, a) {
     min-width: 0;
@@ -79,6 +79,38 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .csv-import-data-table {
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .csv-import-data-table :is(th, td) {
+  width: 140px;
+  min-width: 120px;
+  max-width: 240px !important;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .csv-import-data-table :is(th, td):first-child {
+  width: 80px;
+  min-width: 80px;
+  max-width: 100px !important;
 }
 
 /* Dimensional density follows the same viewport curve as the type scale.
@@ -214,6 +246,41 @@ body[data-vertical="generic"]
   height: clamp(1.75rem, 2.8vw, 2.5rem) !important;
 }
 
+/* Keep the Generic Inbox row content inside a readable, non-clipped row. */
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-email-row {
+  height: auto !important;
+  min-height: 6rem !important;
+  overflow: visible !important;
+  align-items: start;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-email-row
+  > div:nth-child(2) {
+  height: auto !important;
+  min-height: 0;
+  overflow: visible !important;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .inbox-email-row__preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  max-height: 3em;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* Ticket tables keep every column inside the available card width. The
    Actions column gets a real share of the shrinking table instead of being
    clipped by the card's overflow boundary. */
@@ -233,7 +300,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table {
   width: 100% !important;
-  min-width: 0 !important;
+  min-width: 1180px !important;
   table-layout: fixed;
   font-size: var(--generic-ui-cell) !important;
 }
@@ -244,7 +311,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(1) {
-  width: 6% !important;
+  width: 4% !important;
 }
 body[data-vertical="generic"]
   .app-main
@@ -252,7 +319,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(2) {
-  width: 28% !important;
+  width: 21% !important;
 }
 body[data-vertical="generic"]
   .app-main
@@ -260,7 +327,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(3) {
-  width: 14% !important;
+  width: 12% !important;
 }
 body[data-vertical="generic"]
   .app-main
@@ -268,7 +335,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(4) {
-  width: 11% !important;
+  width: 16% !important;
 }
 body[data-vertical="generic"]
   .app-main
@@ -276,7 +343,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(5) {
-  width: 14% !important;
+  width: 9% !important;
 }
 body[data-vertical="generic"]
   .app-main
@@ -284,7 +351,7 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(6) {
-  width: 13% !important;
+  width: 7% !important;
 }
 body[data-vertical="generic"]
   .app-main
@@ -292,7 +359,31 @@ body[data-vertical="generic"]
   .tickets-page
   .tickets-table
   col:nth-child(7) {
-  width: 14% !important;
+  width: 11% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(8) {
+  width: 7% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(9) {
+  width: 7% !important;
+}
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  col:nth-child(10) {
+  width: 6% !important;
 }
 
 body[data-vertical="generic"]
@@ -313,14 +404,37 @@ body[data-vertical="generic"]
   > main.generic-page-content
   .tickets-page
   .tickets-table
-  td:nth-child(3)
+  td:nth-child(4) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  td:nth-child(2) {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table
+  td:nth-child(5)
   select,
 body[data-vertical="generic"]
   .app-main
   > main.generic-page-content
   .tickets-page
   .tickets-table
-  td:nth-child(7)
+  td:nth-child(10)
   button {
   max-width: 100%;
   min-width: 0;
@@ -789,4 +903,630 @@ body[data-vertical="generic"]
     :is(h1, h2, h3, h4, h5, h6, button, input, select, textarea, th, td)
   )[style*="font-size"] {
   font-size: calc(1em * clamp(0.86, calc(0.7 + 0.02vw), 1)) !important;
+}
+
+/* Generic CRM ticket table: keep the table wider than a phone viewport so
+   its ten columns remain readable inside the existing horizontal scroll
+   viewport. This rule is intentionally placed after the shared scaling rules
+   so they cannot collapse the table to the card width. */
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table-scroll {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table {
+  width: 1180px !important;
+  min-width: 1180px !important;
+  max-width: none !important;
+  table-layout: fixed !important;
+}
+
+/* Some compact Generic layouts do not keep the ticket page directly under
+   generic-page-content. Keep this direct scope as the final safeguard so the
+   ticket table cannot collapse into ten unreadable columns. */
+body[data-vertical="generic"] .tickets-page .tickets-table {
+  width: 1180px !important;
+  min-width: 1180px !important;
+  max-width: none !important;
+  table-layout: fixed !important;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow-x: scroll !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td) {
+  font-size: 0.72rem !important;
+}
+
+/* Keep ticket rows below the column header while the inner table scrolls. */
+body[data-vertical="generic"] .tickets-page .tickets-table thead {
+  position: relative;
+  z-index: 5;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table thead th {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 6 !important;
+  background: var(--table-header-bg, var(--surface-color, #fff)) !important;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table tbody td:last-child {
+  z-index: 1 !important;
+}
+
+/* Keep the header in normal table flow so ticket rows cannot slide beneath
+   or overlap the headings while the table viewport scrolls. */
+body[data-vertical="generic"] .tickets-page .tickets-table thead,
+body[data-vertical="generic"] .tickets-page .tickets-table thead th {
+  position: static !important;
+  top: auto !important;
+  z-index: auto !important;
+}
+
+/* Match the reference table treatment: every Generic CRM ticket column and
+   row has a clear, consistent separation line. */
+body[data-vertical="generic"] .tickets-page .tickets-table thead th {
+  border-top: 1px solid var(--border-color) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  border-right: 1px solid var(--border-color) !important;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table tbody td {
+  border-bottom: 1px solid var(--border-color) !important;
+  border-right: 1px solid var(--border-color) !important;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):last-child {
+  border-right: 0 !important;
+}
+
+/* Phone layout: a ten-column table cannot remain legible at handset width.
+   Keep every value and action visible by presenting each row as a compact
+   labelled card. This is limited to Generic CRM phone widths. */
+@media (max-width: 720px) {
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: auto !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table thead {
+    display: none !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody,
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody tr,
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody tr {
+    margin-bottom: 0.65rem;
+    padding: 0.45rem 0;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 8px;
+    background: var(--surface-color, #fff);
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td {
+    position: static !important;
+    display: flex !important;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0 !important;
+    padding: 0.38rem 0.55rem !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td::before {
+    flex: 0 0 5.25rem;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td > :not(:is(select, button)) {
+    min-width: 0;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(1)::before { content: "ID"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(2)::before { content: "Subject"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(3)::before { content: "Lead name"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(4)::before { content: "Lead email"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(5)::before { content: "Status"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(6)::before { content: "Priority"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(7)::before { content: "Assignee"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(8)::before { content: "Created"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(9)::before { content: "Last updated"; }
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td:nth-child(10)::before { content: "Actions"; }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td > :is(select, button) {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+/* Keep the original table on small Generic CRM screens; use horizontal
+   scrolling instead of collapsing each row into a card. */
+@media (max-width: 720px) {
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    display: table !important;
+    width: 1180px !important;
+    min-width: 1180px !important;
+    max-width: none !important;
+    table-layout: fixed !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table thead {
+    display: table-header-group !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody {
+    display: table-row-group !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody tr {
+    display: table-row !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border-color) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td) {
+    display: table-cell !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    position: static !important;
+    padding: 0.55rem 0.35rem !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    vertical-align: middle;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td::before {
+    display: none !important;
+    content: none !important;
+  }
+
+  /* Match the earlier mobile selector specificity explicitly. */
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody,
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody tr,
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td {
+    display: table-row-group !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody tr {
+    display: table-row !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table tbody td {
+    display: table-cell !important;
+  }
+}
+
+/* Compact Generic CRM screens: preserve readable column widths and expose
+   the table's horizontal scrollbar instead of wrapping the data into narrow
+   cells. Desktop widths above this breakpoint are unchanged. */
+@media (max-width: 1100px) {
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    min-width: 0 !important;
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    width: max-content !important;
+    min-width: 1180px !important;
+    max-width: none !important;
+    table-layout: auto !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table col {
+    width: auto !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(8),
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(9) {
+    width: 180px !important;
+    min-width: 180px !important;
+    white-space: nowrap !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(10) {
+    width: 110px !important;
+    min-width: 110px !important;
+    white-space: nowrap !important;
+  }
+}
+
+/* Short Generic CRM viewports: prevent the flex layout from reducing the
+   ticket-row viewport to a single header line. */
+@media (max-height: 700px) {
+  body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tickets-page) {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 100%;
+    overflow: visible !important;
+  }
+
+  body[data-vertical="generic"] .tickets-list-card {
+    height: auto !important;
+    min-height: 500px !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    flex: 0 0 350px !important;
+    height: 350px !important;
+    min-height: 350px !important;
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+  }
+}
+
+/* iPad Mini / compact tablet only: the inline percentage colgroup otherwise
+   compresses Created, Last Updated, and Actions. Keep those columns readable
+   and let the existing table viewport scroll horizontally. */
+@media (min-width: 721px) and (max-width: 800px) {
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+    min-width: 0 !important;
+    scrollbar-gutter: stable;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    width: 2200px !important;
+    min-width: 2200px !important;
+    max-width: none !important;
+    table-layout: fixed !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table col:nth-child(8) {
+    width: 220px !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table col:nth-child(9) {
+    width: 220px !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table col:nth-child(10) {
+    width: 140px !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(8),
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(9),
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(10) {
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(8),
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(9) {
+    width: 320px !important;
+    min-width: 320px !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(10) {
+    width: 180px !important;
+    min-width: 180px !important;
+  }
+
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table
+    td:nth-child(8),
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table
+    td:nth-child(9) {
+    width: 320px !important;
+    min-width: 320px !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    overflow-wrap: normal !important;
+    text-overflow: clip !important;
+  }
+
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table
+    td:nth-child(10) {
+    width: 180px !important;
+    min-width: 180px !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+  }
+}
+
+/* Phone-sized Generic CRM screens: keep columns readable and expose the
+   full table through horizontal scrolling instead of squeezing all columns
+   into the first viewport. */
+@media (max-width: 720px) {
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    width: max-content !important;
+    min-width: 1800px !important;
+    max-width: none !important;
+    table-layout: auto !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table col {
+    width: auto !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td) {
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(1) { width: 70px !important; min-width: 70px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(2) { width: 360px !important; min-width: 360px !important; white-space: normal !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(3) { width: 220px !important; min-width: 220px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(4) { width: 280px !important; min-width: 280px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(5) { width: 160px !important; min-width: 160px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(6) { width: 130px !important; min-width: 130px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(7) { width: 220px !important; min-width: 220px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(8) { width: 180px !important; min-width: 180px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(9) { width: 180px !important; min-width: 180px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(10) { width: 180px !important; min-width: 180px !important; }
+}
+
+/* Final high-specificity phone override: the shared Generic table rule must
+   not reset the ticket table to the viewport width. */
+@media (max-width: 720px) {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table-scroll {
+    width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+  }
+
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table {
+    width: 1800px !important;
+    min-width: 1800px !important;
+    max-width: none !important;
+    table-layout: fixed !important;
+  }
+
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table
+    :is(th, td):nth-child(8),
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table
+    :is(th, td):nth-child(9) {
+    width: 220px !important;
+    min-width: 220px !important;
+    white-space: nowrap !important;
+  }
+
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table
+    :is(th, td):nth-child(10) {
+    width: 150px !important;
+    min-width: 150px !important;
+    white-space: nowrap !important;
+  }
+}
+
+/* Phone preview/device scaling can make a merely wide table appear compressed.
+   Use explicit content widths so the first viewport stays readable and the
+   remaining columns are reached through the horizontal scrollbar. */
+@media (max-width: 720px) {
+  body[data-vertical="generic"]
+    .app-main
+    > main.generic-page-content
+    .tickets-page
+    .tickets-table {
+    width: 4000px !important;
+    min-width: 4000px !important;
+    table-layout: fixed !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(1) { width: 100px !important; min-width: 100px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(2) { width: 700px !important; min-width: 700px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(3) { width: 500px !important; min-width: 500px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(4) { width: 600px !important; min-width: 600px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(5) { width: 300px !important; min-width: 300px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(6) { width: 250px !important; min-width: 250px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(7) { width: 450px !important; min-width: 450px !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(8) { width: 350px !important; min-width: 350px !important; white-space: nowrap !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(9) { width: 350px !important; min-width: 350px !important; white-space: nowrap !important; }
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(10) { width: 250px !important; min-width: 250px !important; white-space: nowrap !important; }
+}
+
+/* The table itself carries the Generic marker from Tickets.jsx. Keeping the
+   final contract on that marker makes the behavior reliable even while the
+   tenant attribute is being applied during route changes. The table stays a
+   real table at handset widths; the viewport pans horizontally instead of
+   shrinking columns until their contents overlap. */
+.tickets-table[data-generic-ticket-table="true"] {
+  display: table !important;
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+.tickets-table-scroll--generic {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-x: scroll !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tickets-table-scroll--generic::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+/* Override the shared Generic table normalization, which otherwise applies
+   `width: 100% !important` with higher specificity and silently collapses
+   this table back into the phone viewport. */
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content
+  .tickets-page
+  .tickets-table[data-generic-ticket-table="true"] {
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+/* Final DOM-chain guard: some responsive table rules are more specific than
+   the vertical selector above. Scope this only to the rendered Generic
+   ticket table so its intrinsic width cannot be reset to the viewport. */
+.app-shell
+  .app-main
+  > main
+  > .tickets-page
+  > .tickets-grid
+  > .tickets-list-card
+  > .tickets-table-scroll
+  > table.tickets-table[data-generic-ticket-table="true"] {
+  display: table !important;
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+.tickets-table[data-generic-ticket-table="true"] col { width: auto !important; }
+
+.app-shell
+  .app-main
+  > main
+  > .tickets-page
+  > .tickets-grid
+  > .tickets-list-card
+  > .tickets-table-scroll
+  > table.tickets-table[data-generic-ticket-table="true"]
+  col {
+  width: auto !important;
+}
+
+.app-shell
+  .app-main
+  > main
+  > .tickets-page
+  > .tickets-grid
+  > .tickets-list-card
+  > .tickets-table-scroll
+  > table.tickets-table[data-generic-ticket-table="true"]
+  :is(th, td) {
+  width: auto !important;
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+.tickets-table[data-generic-ticket-table="true"] :is(th, td) {
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  vertical-align: middle !important;
+}
+
+.tickets-table[data-generic-ticket-table="true"] td:nth-child(2) {
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+@media (max-width: 720px) {
+  .tickets-page:has(.tickets-table[data-generic-ticket-table="true"]) .tickets-table-scroll {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: scroll !important;
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+    -webkit-overflow-scrolling: touch;
+  }
 }

@@ -148,19 +148,39 @@ const parseCsvReport = (text) => {
   return rows.map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] || ""])));
 };
 
-const buildAvailableMappingFields = (mappingFields, dynamicLeadFields) => (
-  [
+const buildAvailableMappingFields = (mappingFields, dynamicLeadFields, includeAutomaticFields = false) => {
+  const fields = [
     // Built-in tracking columns are system-populated and are not valid CSV
     // import destinations. Tenant-defined lead fields are different: even if
     // an admin gave one an automatic-looking key such as "utm_term", it is a
     // real LeadCustomFieldDefinition and must remain selectable so imports can
     // reuse it instead of trying to create a duplicate field.
-    ...mappingFields.filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id)),
+    ...(includeAutomaticFields
+      ? mappingFields
+      : mappingFields.filter((field) => !AUTOMATIC_CRM_FIELD_KEYS.has(field.fieldKey || field.key || field.id))),
     ...dynamicLeadFields,
-  ].filter((field, index, fields) => fields.findIndex(
-    (item) => (item.fieldKey || item.key || item.id) === (field.fieldKey || field.key || field.id),
-  ) === index)
-);
+  ];
+  const byIdentity = new Map();
+  fields.forEach((field) => {
+    const rawIdentity = field.fieldKey || field.key || field.id;
+    const identity = String(rawIdentity).replace(/^cf_/, "");
+    if (!identity) return;
+    const existing = byIdentity.get(identity);
+    // The live custom-field response contains the authoritative field type.
+    // Keep catalog labels/keys, but let that response fill or replace stale
+    // metadata instead of allowing a catalog fallback of `text` to win.
+    byIdentity.set(identity, existing
+      ? {
+          ...existing,
+          ...field,
+          fieldKey: existing.fieldKey || field.fieldKey,
+          key: existing.key || field.key,
+          fieldType: field.fieldType || existing.fieldType,
+        }
+      : field);
+  });
+  return [...byIdentity.values()];
+};
 
 const findAvailableMappingField = (fields, value) => {
   const normalized = normalizeMappingIdentity(value);
@@ -169,6 +189,8 @@ const findAvailableMappingField = (fields, value) => {
     mobile: "phone",
     mobilenumber: "phone",
     mobilephone: "phone",
+    workphone: "phone",
+    workmobile: "phone",
     phonenumber: "phone",
     jobtitle: "title",
   };
@@ -309,7 +331,7 @@ export default function CsvImportExportToolbar({
     const hasActionDetails = contacts.some((contact) => contact.action);
     const actionCount = action === "created" ? item.inserted : action === "updated" ? item.updated : item[action];
     const storedRows = action === "skipped" || action === "errors"
-      ? (item.errorRows || []).map((row) => ({ ...row.data, rowNumber: row.rowNumber, field: row.field || "row", reason: row.reason || "Import failed", action: row.action || "rejected" }))
+      ? (item.errorRows || []).map((row) => ({ ...row.data, rowNumber: row.rowNumber, field: row.field || "row", reason: row.reason || "Import failed", action: action === "errors" ? "error" : "skipped" }))
       : (hasActionDetails ? contacts : []).filter((contact) => contact.action === action);
     const rows = storedRows.length || !actionCount ? storedRows : [{
       rowNumber: "—",
@@ -516,7 +538,7 @@ export default function CsvImportExportToolbar({
         <div role="dialog" aria-modal="true" aria-labelledby="import-action-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setActionImport(null)}>
           <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-action-title" style={{ margin: 0, fontSize: "1.05rem" }}>{actionImport.action === "errors" ? "Errors" : `${actionImport.action[0].toUpperCase()}${actionImport.action.slice(1)} records`} from {actionImport.fileName}</h2><button type="button" aria-label="Close import action data" onClick={() => setActionImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
-            {actionImport.rows.length ? <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(actionImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead><tbody>{actionImport.rows.map((row, index) => <tr key={`${row.id || row.rowNumber || "row"}-${index}`} style={{ color: actionImport.action === "skipped" || actionImport.action === "errors" ? "#dc2626" : actionImport.action === "updated" ? "#b45309" : "inherit" }}>{Object.keys(actionImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", minWidth: heading === "reason" ? 260 : 100 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>{actionImport.expectedCount ? "Detailed row data was not stored for this older import." : "No records in this category."}</p>}
+            {actionImport.rows.length ? <div style={{ overflowX: "auto", maxWidth: "100%" }}><table className="csv-import-data-table" style={{ width: "max-content", minWidth: "100%", tableLayout: "auto", borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(actionImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", minWidth: heading === "reason" ? 260 : 120 }}>{heading}</th>)}</tr></thead><tbody>{actionImport.rows.map((row, index) => <tr key={`${row.id || row.rowNumber || "row"}-${index}`} style={{ color: actionImport.action === "skipped" || actionImport.action === "errors" ? "#dc2626" : actionImport.action === "updated" ? "#b45309" : "inherit" }}>{Object.keys(actionImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: heading === "reason" ? 260 : 120 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>{actionImport.expectedCount ? "Detailed row data was not stored for this older import." : "No records in this category."}</p>}
           </div>
         </div>
       )}
@@ -525,7 +547,7 @@ export default function CsvImportExportToolbar({
         <div role="dialog" aria-modal="true" aria-labelledby="import-errors-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setErrorsImport(null)}>
           <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-errors-title" style={{ margin: 0, fontSize: "1.05rem" }}>Import errors from {errorsImport.fileName}</h2><button type="button" aria-label="Close import errors" onClick={() => setErrorsImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
-            {errorsImport.rows.length ? <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(errorsImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead><tbody>{errorsImport.rows.map((row, index) => <tr key={`${row.rowNumber || "row"}-${index}`}>{Object.keys(errorsImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", minWidth: heading === "reason" ? 220 : 100 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No error details were recorded for this import.</p>}
+            {errorsImport.rows.length ? <div style={{ overflowX: "auto", maxWidth: "100%" }}><table className="csv-import-data-table" style={{ width: "max-content", minWidth: "100%", tableLayout: "auto", borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(errorsImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", minWidth: heading === "reason" ? 260 : 120 }}>{heading}</th>)}</tr></thead><tbody>{errorsImport.rows.map((row, index) => <tr key={`${row.rowNumber || "row"}-${index}`}>{Object.keys(errorsImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: heading === "reason" ? 260 : 120 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No error details were recorded for this import.</p>}
           </div>
         </div>
       )}
@@ -616,7 +638,7 @@ function ImportModal({
 
   const optionFieldTypes = new Set(["dropdown", "radio", "multiselect"]);
 
-  const availableMappingFields = buildAvailableMappingFields(mappingFields, dynamicLeadFields);
+  const availableMappingFields = buildAvailableMappingFields(mappingFields, dynamicLeadFields, genericLeadWizard);
 
   const findMappingField = (value) => {
     return findAvailableMappingField(availableMappingFields, value);
@@ -732,7 +754,7 @@ function ImportModal({
   // has already chosen.
   useEffect(() => {
     if (!genericLeadWizard || !previewHeaders.length) return;
-    const fields = buildAvailableMappingFields(mappingFields, dynamicLeadFields);
+    const fields = buildAvailableMappingFields(mappingFields, dynamicLeadFields, genericLeadWizard);
     setMappingSelections((current) => {
       const next = { ...current };
       let changed = false;
@@ -956,7 +978,7 @@ function ImportModal({
               if (error?.code !== "DUPLICATE_FIELD_KEY" && error?.status !== 409) throw error;
               const latest = await fetchApi("/api/lead-custom-fields", { silent: true });
               const latestFields = Array.isArray(latest) ? latest : (latest?.fields || latest?.customFields || []);
-              knownFields = buildAvailableMappingFields(mappingFields, latestFields);
+              knownFields = buildAvailableMappingFields(mappingFields, latestFields, genericLeadWizard);
               field = findAvailableMappingField(knownFields, header);
               if (!field) throw error;
             }
@@ -975,6 +997,102 @@ function ImportModal({
         }
         setMappingSelections(resolvedMappings);
         setMappingFieldTypes(resolvedFieldTypes);
+      }
+
+      // Generic CRM uses the synchronous contacts endpoint. Split large demo
+      // imports into bounded requests so one slow/invalid row cannot time out
+      // the whole file or prevent later rows from being checked.
+      const genericRows = importRowsRef.current;
+      const genericChunkSize = 250;
+      if (genericLeadWizard && genericRows.length > genericChunkSize) {
+        const aggregate = {
+          imported: 0,
+          updated: 0,
+          skipped: 0,
+          errors: [],
+          importedContacts: [],
+        };
+        const headers = previewHeaders;
+
+        for (let offset = 0; offset < genericRows.length; offset += genericChunkSize) {
+          const chunkRows = genericRows.slice(offset, offset + genericChunkSize);
+          const csv = [
+            headers.map(csvCell).join(","),
+            ...chunkRows.map((row) => headers.map((header) => csvCell(row?.[header])).join(",")),
+          ].join("\n");
+          const chunkFile = new File([csv], file.name.replace(/\.(xlsx?|xls)$/i, ".csv"), { type: "text/csv" });
+          const chunkForm = new FormData();
+          chunkForm.append("file", chunkFile);
+          chunkForm.append("mapping", JSON.stringify(resolvedMappings));
+          chunkForm.append("mappingFieldTypes", JSON.stringify(resolvedFieldTypes));
+
+          try {
+            const token = getAuthToken();
+            const chunkResponse = await fetch(endpoint, {
+              method: "POST",
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+              body: chunkForm,
+            });
+            const chunkBody = await chunkResponse.json().catch(() => ({}));
+            if (!chunkResponse.ok) {
+              const reason = chunkBody.error || chunkBody.message || `Import chunk failed (${chunkResponse.status})`;
+              chunkRows.forEach((row, index) => {
+                aggregate.errors.push({
+                  row: offset + index + 2,
+                  column: "row",
+                  value: "",
+                  message: reason,
+                  data: row,
+                });
+              });
+              aggregate.skipped += chunkRows.length;
+              continue;
+            }
+            aggregate.imported += Number(chunkBody.imported ?? chunkBody.inserted ?? 0);
+            aggregate.updated += Number(chunkBody.updated ?? 0);
+            aggregate.skipped += Number(chunkBody.skipped ?? 0);
+            aggregate.importedContacts.push(...(chunkBody.importedContacts || []));
+            aggregate.errors.push(...(chunkBody.errors || []).map((error) => ({
+              ...error,
+              row: Number(error.row ?? error.rowNumber ?? 0) + offset,
+              column: error.column ?? error.field ?? "",
+              value: error.value ?? "",
+              message: error.message ?? error.reason ?? "Invalid row",
+            })));
+          } catch (error) {
+            chunkRows.forEach((row, index) => {
+              aggregate.errors.push({
+                row: offset + index + 2,
+                column: "row",
+                value: "",
+                message: error.message || "Import chunk failed",
+                data: row,
+              });
+            });
+            aggregate.skipped += chunkRows.length;
+          }
+        }
+
+        const normalizedResult = {
+          ...aggregate,
+          createdFields: fieldsCreatedDuringImport,
+          inserted: aggregate.imported,
+        };
+        setResult(normalizedResult);
+        if (normalizedResult.imported || normalizedResult.updated) {
+          notify.success(
+            `Imported: ${normalizedResult.imported} new, ${normalizedResult.updated} updated${normalizedResult.errors.length
+              ? `, ${normalizedResult.errors.length} errors`
+              : ""
+            }`,
+          );
+          onImported({ ...normalizedResult, fileName: file.name });
+          onClose();
+        } else if (normalizedResult.errors.length) {
+          notify.error(`Import had ${normalizedResult.errors.length} row error(s).`);
+        }
+        setSubmitting(false);
+        return;
       }
 
       const fd = new FormData();

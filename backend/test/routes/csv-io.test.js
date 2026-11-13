@@ -359,15 +359,19 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.body.errors[0]).toMatchObject({
       rowNumber: 2,
       field: 'phone',
+      value: '+919876543210',
       reason: expect.stringMatching(/ambiguous phone/),
+      data: { name: 'Shared Number', phone: '+919876543210' },
     });
     expect(prisma.genericImportHistory.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         errorRows: [expect.objectContaining({
           rowNumber: 2,
           field: 'phone',
-          action: 'skipped',
+          action: 'error',
           reason: expect.stringMatching(/ambiguous phone/),
+          value: '+919876543210',
+          data: { name: 'Shared Number', phone: '+919876543210' },
         })],
       }),
     }));

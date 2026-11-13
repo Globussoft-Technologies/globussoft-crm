@@ -665,7 +665,7 @@ describe('PUT /:id/complete', () => {
     expect(res.body.status).toBe('Completed');
     expect(prisma.task.update).toHaveBeenCalledWith({
       where: { id: 8 },
-      data: { status: 'Completed' },
+      data: { status: 'Completed', completedAt: expect.any(Date) },
     });
     expect(emitEventMock).toHaveBeenCalledWith(
       'task.completed',

@@ -13,8 +13,8 @@
  *   2. Initial mount fires GET /api/tasks AND GET /api/staff.
  *   3. Active queue renders one row per non-Completed task, sorted by the
  *      priority order (Critical → High → Medium → Low).
- *   4. Completed log renders only tasks with status=Completed (with the
- *      title struck-through).
+ *   4. Completed log renders only tasks with status=Completed and presents
+ *      completion metadata, resolution notes, and assignee details.
  *   5. Empty-active state renders the "Queue is empty. Excellent work."
  *      message via the #empty-queue-msg id.
  *   6. Overdue heuristic: a Pending task with a past dueDate gets the
@@ -132,6 +132,12 @@ const sampleTasks = [
     priority: 'Medium',
     status: 'Completed',
     dueDate: futureISO,
+    completedAt: '2026-11-12T14:30:00.000Z',
+    notes: '__task_meta__{"t":[],"d":"Initial onboarding","r":"Walkthrough completed and access confirmed."}',
+    userId: 7,
+    user: { name: 'Rajesh Sharma', email: 'rajesh@example.com' },
+    contactId: 44,
+    contact: { name: 'Anita Sharma', email: 'anita@example.com' },
   },
 ];
 
@@ -258,15 +264,15 @@ describe('<Tasks /> — page surface', () => {
     expect(idxMedium).toBeLessThan(idxLow);
   });
 
-  it('Completed log lists Completed tasks only (with line-through styling)', async () => {
+  it('Completed log shows a polished completion timestamp, note, and lead details', async () => {
     renderTasks();
     fireEvent.click(screen.getByRole('button', { name: 'Task History' }));
     await waitFor(() => {
       expect(screen.getByText('Completed onboarding')).toBeInTheDocument();
     });
-    const completedLabel = screen.getByText('Completed onboarding');
-    // The completed log applies text-decoration: line-through inline.
-    expect(completedLabel).toHaveStyle({ textDecoration: 'line-through' });
+    expect(screen.getAllByText(/Completed/i).some((element) => element.textContent.includes('2026'))).toBe(true);
+    expect(screen.getByText('Walkthrough completed and access confirmed.')).toBeInTheDocument();
+    expect(screen.getAllByText(/Anita Sharma · anita@example.com/).length).toBeGreaterThanOrEqual(1);
     // "Resolved" badge appears next to the completed entry.
     expect(screen.getAllByText(/Resolved/i).length).toBeGreaterThanOrEqual(1);
   });

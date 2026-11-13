@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
+import { AuthContext } from '../appContexts';
 import { Ticket, Plus, Trash2, AlertTriangle, X, MessageCircle } from 'lucide-react';
 import './Tickets.css';
 
@@ -38,6 +39,18 @@ const DEFAULT_PAGE_SIZE = 10;
 
 export default function Tickets() {
   const notify = useNotify();
+  const { tenant } = React.useContext(AuthContext);
+  const [isGenericVertical, setIsGenericVertical] = useState(() => (
+    typeof document !== 'undefined' && document.body?.dataset.vertical === 'generic'
+  ));
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const updateVertical = () => setIsGenericVertical(document.body?.dataset.vertical === 'generic');
+    updateVertical();
+    const observer = new MutationObserver(updateVertical);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-vertical'] });
+    return () => observer.disconnect();
+  }, []);
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -58,6 +71,10 @@ export default function Tickets() {
   const [resolutionEmailTemplate, setResolutionEmailTemplate] = useState('');
   const [isResolutionTemplateGenerated, setIsResolutionTemplateGenerated] = useState(false);
   const [isConversationModalOpen, setIsConversationModalOpen] = useState(false);
+  const [resolutionPromptTicket, setResolutionPromptTicket] = useState(null);
+  const [resolutionPromptNotes, setResolutionPromptNotes] = useState('');
+  const [resolutionPromptSaving, setResolutionPromptSaving] = useState(false);
+  const ticketsTableScrollRef = useRef(null);
   const isResolvedGenericTicketWithoutQuestions = Boolean(
     ticketDetail?.sourceConversationId
     && String(ticketDetail.status || '').toLowerCase() === 'resolved'
@@ -131,14 +148,37 @@ export default function Tickets() {
       const current = tickets.find((ticket) => ticket.id === id);
       const payload = { status };
       if (status === 'Resolved' && current?.sourceConversationId) {
-        const notes = window.prompt('Enter the answer to send to the visitor:', current.resolutionNotes || '');
-        if (notes === null) return;
-        payload.resolutionNotes = notes;
+        setResolutionPromptTicket(current);
+        setResolutionPromptNotes(current.resolutionNotes || '');
+        return;
       }
       await fetchApi(`/api/tickets/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
       loadData(page);
     } catch (err) {
       console.error('Failed to update ticket status:', err);
+    }
+  };
+
+  const submitResolutionPrompt = async (event) => {
+    event.preventDefault();
+    if (!resolutionPromptTicket || !resolutionPromptNotes.trim()) {
+      notify.error('Enter the answer before resolving this ticket.');
+      return;
+    }
+    setResolutionPromptSaving(true);
+    try {
+      await fetchApi(`/api/tickets/${resolutionPromptTicket.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'Resolved', resolutionNotes: resolutionPromptNotes.trim() }),
+      });
+      setResolutionPromptTicket(null);
+      setResolutionPromptNotes('');
+      await loadData(page);
+    } catch (err) {
+      console.error('Failed to resolve ticket:', err);
+      notify.error(err?.message || 'Failed to resolve ticket.');
+    } finally {
+      setResolutionPromptSaving(false);
     }
   };
 
@@ -281,6 +321,22 @@ export default function Tickets() {
   const showPagination = totalTickets > pageSize;
   const startItem = totalTickets === 0 ? 0 : ((page - 1) * pageSize) + 1;
   const endItem = Math.min(page * pageSize, totalTickets);
+  // Tickets is a Generic CRM surface unless a vertical-specific tenant is
+  // explicitly active. This avoids the first mobile render briefly falling
+  // back to the fluid ten-column layout before the tenant/body metadata is
+  // hydrated.
+  const genericTicketLayout = tenant?.vertical !== 'wellness'
+    && tenant?.vertical !== 'travel';
+  const genericTicketColumnWidths = [
+    'auto', 'auto', 'auto', 'auto', 'auto',
+    'auto', 'auto', 'auto', 'auto', 'auto',
+  ];
+
+  useEffect(() => {
+    if (genericTicketLayout && ticketsTableScrollRef.current) {
+      ticketsTableScrollRef.current.scrollLeft = 0;
+    }
+  }, [genericTicketLayout, tickets]);
 
   return (
     <div className="tickets-page" style={{ padding: '2rem', minHeight: '100%', animation: 'fadeIn 0.5s ease-out' }}>
@@ -390,6 +446,60 @@ export default function Tickets() {
               Submit Ticket
             </button>
           </form>
+          </div>
+        </div>
+      )}
+
+      {resolutionPromptTicket && (
+        <div
+          className="tickets-modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !resolutionPromptSaving) setResolutionPromptTicket(null);
+          }}
+        >
+          <div className="card tickets-create-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-resolution-prompt-title">
+            <div className="tickets-modal-header">
+              <h2 id="ticket-resolution-prompt-title">
+                <MessageCircle size={20} color="var(--accent-color)" /> Answer visitor
+              </h2>
+              <button
+                type="button"
+                className="tickets-modal-close"
+                aria-label="Close answer dialog"
+                onClick={() => setResolutionPromptTicket(null)}
+                disabled={resolutionPromptSaving}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <form onSubmit={submitResolutionPrompt} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Enter the answer to send to the visitor before resolving “{resolutionPromptTicket.subject}”.
+              </p>
+              <label htmlFor="ticket-resolution-prompt-notes" style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 600 }}>
+                Answer
+              </label>
+              <textarea
+                id="ticket-resolution-prompt-notes"
+                rows="6"
+                autoFocus
+                required
+                value={resolutionPromptNotes}
+                onChange={(e) => setResolutionPromptNotes(e.target.value)}
+                placeholder="Write the answer for the visitor..."
+                className="input-field"
+                style={{ resize: 'vertical', minHeight: 130 }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button type="button" className="btn-secondary" onClick={() => setResolutionPromptTicket(null)} disabled={resolutionPromptSaving}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={resolutionPromptSaving || !resolutionPromptNotes.trim()}>
+                  {resolutionPromptSaving ? 'Resolving...' : 'Resolve ticket'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -537,22 +647,30 @@ export default function Tickets() {
               No tickets found. Create one to get started.
             </p>
           ) : (
-            <div className="tickets-table-scroll" style={{ overflowX: 'auto' }}>
+            <div
+              className={`tickets-table-scroll${genericTicketLayout ? ' tickets-table-scroll--generic' : ''}`}
+              ref={ticketsTableScrollRef}
+              style={{
+                overflowX: genericTicketLayout ? 'scroll' : 'auto',
+                minWidth: 0,
+                width: '100%',
+              }}
+            >
               {/* #633: stable-table — pins tableLayout=fixed so row hover never jumps column widths. */}
-              <table className="stable-table tickets-table" style={{ borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+              <table className={`stable-table tickets-table${genericTicketLayout ? ' tickets-table--generic' : ''}`} style={{
+                borderCollapse: 'collapse',
+                fontSize: '0.875rem',
+                ...(genericTicketLayout ? { width: 'max-content', minWidth: '100%', maxWidth: 'none', tableLayout: 'auto' } : {}),
+              }}>
                 <colgroup>
                   {/* Keep the fixed table widths within 100% so the card does
                       not create an avoidable horizontal overflow. */}
-                  <col style={{ width: '5%' }} />
-                  <col style={{ width: '20%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '8%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '8%' }} />
-                  <col style={{ width: '8%' }} />
+                  {[4, 21, 12, 16, 9, 7, 11, 7, 7, 6].map((percentage, index) => (
+                    <col
+                      key={`ticket-column-${index}`}
+                      style={{ width: genericTicketLayout ? genericTicketColumnWidths[index] : `${percentage}%` }}
+                    />
+                  ))}
                 </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -567,8 +685,12 @@ export default function Tickets() {
                 <tbody>
                   {tickets.map(ticket => (
                     <tr key={ticket.id} onClick={() => openTicketDetails(ticket)} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s', cursor: 'pointer' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      onMouseEnter={e => {
+                        if (!isGenericVertical) e.currentTarget.style.background = 'var(--subtle-bg-2)';
+                      }}
+                      onMouseLeave={e => {
+                        if (!isGenericVertical) e.currentTarget.style.background = 'transparent';
+                      }}
                     >
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>#{ticket.id}</td>
                       <td title={ticket.subject} style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{ticket.subject}</td>

@@ -825,6 +825,8 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     // gap #17: capture prior status BEFORE the update so task.completed can be
     // gated idempotently — re-saving an already-Completed task must not re-fire.
     const wasCompleted = existing.status === "Completed";
+    if (normalizedStatus === "Completed" && !wasCompleted) data.completedAt = new Date();
+    if (normalizedStatus && normalizedStatus !== "Completed") data.completedAt = null;
 
     const task = await prisma.task.update({
       where: { id: existing.id },
@@ -903,7 +905,7 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
 
     // gap #17: same idempotency gate as PUT /:id - don't re-fire if already complete.
     const wasCompleted = existing.status === "Completed";
-    const data = { status: "Completed" };
+    const data = { status: "Completed", completedAt: wasCompleted ? existing.completedAt : new Date() };
     if (req.body && Object.prototype.hasOwnProperty.call(req.body, "notes")) {
       data.notes = req.body.notes || null;
     }

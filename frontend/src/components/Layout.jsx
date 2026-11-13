@@ -206,7 +206,10 @@ const Layout = () => {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const mql = window.matchMedia(`(max-width: ${DRAWER_BREAKPOINT_PX - 1}px)`);
+    // Touch tablets use the same drawer shell as phones so equivalent tablet
+    // devices do not switch between a sidebar layout and a hamburger layout
+    // solely because their CSS viewport widths differ.
+    const mql = window.matchMedia(`(max-width: ${DRAWER_BREAKPOINT_PX - 1}px), (hover: none) and (pointer: coarse) and (max-width: 1100px)`);
     const update = () => setIsMobileViewport(mql.matches);
     update();
     // matchMedia change events: addEventListener is the modern API; some

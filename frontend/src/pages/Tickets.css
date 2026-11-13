@@ -476,11 +476,14 @@ body[data-vertical="generic"] main.generic-page-content .tickets-page .tickets-t
 }
 
 .tickets-page .tickets-table td:nth-child(2) {
-  overflow-wrap: break-word;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .tickets-page .tickets-table {
-  min-width: 700px;
+  min-width: 1180px;
 }
 
 /* Keep the generic CRM ticket panel stable when the selected page size changes.
@@ -548,6 +551,22 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
   box-shadow: 0 1px 0 var(--border-color);
 }
 
+/* Generic CRM ticket rows stay visually stable when the pointer moves across
+   them. Other verticals retain their existing row hover treatment. */
+body[data-vertical="generic"] .tickets-page .tickets-table tbody tr:hover,
+body[data-vertical="generic"] .tickets-page .tickets-table tbody tr:hover td {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.tickets-table--generic tbody tr:hover,
+.tickets-table--generic tbody tr:hover td {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
 [data-theme="light"] body[data-vertical="generic"] .tickets-page .tickets-table thead th {
   background: #f8f9fb;
 }
@@ -558,7 +577,14 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
   text-overflow: clip;
 }
 
-.tickets-page .tickets-table td:nth-child(3) select {
+.tickets-page .tickets-table td:nth-child(4) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.tickets-page .tickets-table td:nth-child(5) select,
+.tickets-page .tickets-table td:nth-child(7) select {
   max-width: 100%;
   font-size: 0.7rem !important;
   padding-inline: 0.35rem;
@@ -571,16 +597,19 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
   }
 
   .tickets-page .tickets-table {
-    min-width: 0;
+    min-width: 1180px;
   }
 
   .tickets-page .tickets-table col:nth-child(1) { width: 4% !important; }
-  .tickets-page .tickets-table col:nth-child(2) { width: 36% !important; }
-  .tickets-page .tickets-table col:nth-child(3) { width: 14% !important; }
-  .tickets-page .tickets-table col:nth-child(4) { width: 10% !important; }
-  .tickets-page .tickets-table col:nth-child(5) { width: 14% !important; }
-  .tickets-page .tickets-table col:nth-child(6) { width: 12% !important; }
-  .tickets-page .tickets-table col:nth-child(7) { width: 10% !important; }
+  .tickets-page .tickets-table col:nth-child(2) { width: 21% !important; }
+  .tickets-page .tickets-table col:nth-child(3) { width: 12% !important; }
+  .tickets-page .tickets-table col:nth-child(4) { width: 16% !important; }
+  .tickets-page .tickets-table col:nth-child(5) { width: 9% !important; }
+  .tickets-page .tickets-table col:nth-child(6) { width: 7% !important; }
+  .tickets-page .tickets-table col:nth-child(7) { width: 11% !important; }
+  .tickets-page .tickets-table col:nth-child(8) { width: 7% !important; }
+  .tickets-page .tickets-table col:nth-child(9) { width: 7% !important; }
+  .tickets-page .tickets-table col:nth-child(10) { width: 6% !important; }
 
   .tickets-page .tickets-table :is(th, td),
   body[data-vertical="generic"] main.generic-page-content .tickets-page .tickets-table :is(th, td) {
@@ -589,21 +618,29 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
     white-space: nowrap;
   }
 
-  .tickets-page .tickets-table td:nth-child(2) {
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .tickets-page .tickets-table td:nth-child(4) {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
-  .tickets-page .tickets-table td:nth-child(3) select {
+  .tickets-page .tickets-table td:nth-child(2) {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .tickets-page .tickets-table td:nth-child(5) select,
+  .tickets-page .tickets-table td:nth-child(7) select {
     font-size: 0.65rem !important;
   }
 
-  .tickets-page .tickets-table td:nth-child(4) span {
+  .tickets-page .tickets-table td:nth-child(6) span {
     font-size: 0.65rem !important;
     padding: 0.15rem 0.35rem !important;
   }
 
-  .tickets-page .tickets-table td:nth-child(7) button {
+  .tickets-page .tickets-table td:nth-child(10) button {
     font-size: 0.65rem !important;
     padding: 0.25rem 0.3rem !important;
     gap: 0.2rem !important;
@@ -632,7 +669,7 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
   }
 
   .tickets-page .tickets-table {
-    min-width: 0;
+    min-width: 1180px;
   }
 
   .tickets-page .tickets-table :is(th, td),
@@ -643,17 +680,23 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
     white-space: nowrap;
   }
 
-  .tickets-page .tickets-table td:nth-child(3) select {
+  .tickets-page .tickets-table td:nth-child(4) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .tickets-page .tickets-table td:nth-child(5) select,
+  .tickets-page .tickets-table td:nth-child(7) select {
     font-size: 0.58rem !important;
     padding-inline: 0.2rem !important;
   }
 
-  .tickets-page .tickets-table td:nth-child(4) span {
+  .tickets-page .tickets-table td:nth-child(6) span {
     font-size: 0.58rem !important;
     padding: 0.1rem 0.25rem !important;
   }
 
-  .tickets-page .tickets-table td:nth-child(7) button {
+  .tickets-page .tickets-table td:nth-child(10) button {
     font-size: 0.58rem !important;
     padding: 0.2rem 0.25rem !important;
   }
@@ -676,7 +719,7 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
   }
 
   .tickets-page .tickets-table {
-    min-width: 640px;
+    min-width: 1180px;
     display: table;
     overflow: visible;
   }
@@ -775,5 +818,155 @@ body[data-vertical="generic"] .tickets-page .tickets-table thead th {
 @media (max-width: 720px) {
   .tickets-summary-cards {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Keep the Generic CRM table title and column header in their own space so
+   the scrolling rows never overlap them. */
+body[data-vertical="generic"] .tickets-list-card > h3 {
+  flex: 0 0 auto;
+  min-height: 1.75rem;
+  margin: 0 0 1.25rem !important;
+  padding: 0.1rem 0;
+}
+
+body[data-vertical="generic"] .tickets-list-card .tickets-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table thead th {
+  padding: 0.75rem 0.5rem !important;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+
+body[data-vertical="generic"] .tickets-page .tickets-table tbody td {
+  padding: 0.7rem 0.5rem !important;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+/* Generic CRM only: let the page frame grow on short/tablet viewports so the
+   summary, ticket surface, table rows, and pager remain reachable. The table
+   keeps its existing column layout and owns horizontal scrolling when ten
+   columns cannot fit in the available width. */
+@media (max-width: 1100px) {
+  body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tickets-page) {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page {
+    height: auto;
+    max-height: none;
+    min-height: 100%;
+    overflow: visible;
+    padding: clamp(1rem, 3vw, 2rem) !important;
+  }
+
+  body[data-vertical="generic"] .tickets-list-card {
+    height: clamp(420px, calc(100dvh - 300px), 720px);
+  }
+}
+
+@media (max-width: 720px) {
+  body[data-vertical="generic"] .tickets-page-header {
+    gap: 0.85rem;
+    margin-bottom: 1.25rem !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page-header h1 {
+    font-size: clamp(1.45rem, 7vw, 2rem) !important;
+  }
+
+  body[data-vertical="generic"] .tickets-summary-cards {
+    gap: 0.7rem;
+    margin-bottom: 1rem;
+  }
+
+  body[data-vertical="generic"] .tickets-summary-card {
+    min-height: 96px;
+    padding: 0.85rem 1rem;
+  }
+
+  body[data-vertical="generic"] .tickets-list-card {
+    height: min(620px, calc(100dvh - 240px));
+    min-height: 420px;
+    padding: 1rem !important;
+  }
+
+  body[data-vertical="generic"] .tickets-list-card > h3 {
+    margin-bottom: 0.85rem !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    overflow-x: auto !important;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    min-width: 1180px !important;
+  }
+}
+
+/* Keep every Generic CRM ticket heading readable. On compact screens the
+   table remains the same table and can be panned horizontally; it must not
+   shrink its last columns until their headings become ellipses. */
+@media (max-width: 1100px) {
+  body[data-vertical="generic"] .tickets-page .tickets-table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto !important;
+    overflow-y: auto;
+    padding-bottom: 0.35rem;
+    scrollbar-gutter: stable both-edges;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table {
+    width: 1180px !important;
+    max-width: none !important;
+    min-width: 1180px !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table thead th {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(8),
+  body[data-vertical="generic"] .tickets-page .tickets-table :is(th, td):nth-child(9) {
+    white-space: normal !important;
+    overflow: visible !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+  }
+
+  /* Keep the primary row action available while the user pans through the
+     remaining columns on a narrow viewport. */
+  body[data-vertical="generic"] .tickets-page .tickets-table th:last-child,
+  body[data-vertical="generic"] .tickets-page .tickets-table td:last-child {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    min-width: 82px;
+    background: var(--surface-color, #fff);
+    box-shadow: -6px 0 8px -8px rgba(15, 23, 42, 0.45);
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table thead th:last-child {
+    z-index: 3;
+    background: var(--table-header-bg, var(--surface-color, #fff));
+  }
+
+  body[data-vertical="generic"] .tickets-page .tickets-table td:last-child button {
+    min-width: 76px;
+    justify-content: center;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
   }
 }

@@ -240,6 +240,30 @@ function isEmpty(v) {
   return v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
 }
 
+// Excel/CSV imports can leave large Generic CRM identifiers in scientific
+// notation (for example, "4.02E+11"). Keep the stored value unchanged, but
+// render the complete number so users can read and copy it accurately.
+function expandScientificNumber(value) {
+  if (value === null || value === undefined) return value;
+  const text = String(value).trim();
+  const match = text.match(/^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return value;
+
+  const sign = match[1] === '-' ? '-' : '';
+  const integerPart = match[2];
+  const fractionPart = match[3] || '';
+  const exponent = Number(match[4]);
+  if (!Number.isInteger(exponent)) return value;
+
+  const digits = `${integerPart}${fractionPart}`;
+  const decimalIndex = integerPart.length + exponent;
+  if (decimalIndex <= 0) return `${sign}0.${'0'.repeat(Math.abs(decimalIndex))}${digits}`;
+  if (decimalIndex >= digits.length) return `${sign}${digits}${'0'.repeat(decimalIndex - digits.length)}`;
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`
+    .replace(/(\.\d*?)0+$/, '$1')
+    .replace(/\.$/, '');
+}
+
 function timeAgo(v) {
   if (!v) return null;
   const d = new Date(v).getTime();
@@ -265,21 +289,22 @@ function linkDisplay(raw, type, onClick) {
   return undefined;
 }
 
-function ReadValue({ contact, field, onEmailClick }) {
+function ReadValue({ contact, field, onEmailClick, isGeneric = false }) {
   const raw = field.value !== undefined ? field.value : contact[field.key === 'tags' ? 'tags' : field.key];
   if (isEmpty(raw)) return <span style={{ color: 'var(--text-secondary)' }}>Not available</span>;
-  if (field.type === 'email' || field.type === 'phone' || field.type === 'url') return <span>{linkDisplay(raw, field.type, field.type === 'email' ? onEmailClick : undefined)}</span>;
-  if (field.type === 'date') return <span>{formatDate(raw)}</span>;
-  if (field.type === 'datetime') return <span>{formatDateTime(raw)}</span>;
-  if (field.type === 'relative') return <span>{timeAgo(raw) || formatDate(raw)}</span>;
-  if (field.type === 'money') return <span>{formatMoney(raw)}</span>;
-  if (field.type === 'boolean') return <span>{raw ? 'Yes' : 'No'}</span>;
-  if (field.type === 'status') return <span className="cp-pill">{String(raw)}</span>;
+  const displayRaw = isGeneric ? expandScientificNumber(raw) : raw;
+  if (field.type === 'email' || field.type === 'phone' || field.type === 'url') return <span>{linkDisplay(displayRaw, field.type, field.type === 'email' ? onEmailClick : undefined)}</span>;
+  if (field.type === 'date') return <span>{formatDate(displayRaw)}</span>;
+  if (field.type === 'datetime') return <span>{formatDateTime(displayRaw)}</span>;
+  if (field.type === 'relative') return <span>{timeAgo(displayRaw) || formatDate(displayRaw)}</span>;
+  if (field.type === 'money') return <span>{formatMoney(displayRaw)}</span>;
+  if (field.type === 'boolean') return <span>{displayRaw ? 'Yes' : 'No'}</span>;
+  if (field.type === 'status') return <span className="cp-pill">{String(displayRaw)}</span>;
   if (field.type === 'tags') {
-    const arr = Array.isArray(raw) ? raw : [raw];
+    const arr = Array.isArray(displayRaw) ? displayRaw : [displayRaw];
     return <span>{arr.map((t) => <span key={String(t)} className="cp-chip">{String(t)}</span>)}</span>;
   }
-  return <span>{String(raw)}</span>;
+  return <span>{String(displayRaw)}</span>;
 }
 
 export default function ContactDetail({ renderBackdrop = true } = {}) {
@@ -1501,7 +1526,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
         />
       );
     }
-    return <ReadValue contact={contact} field={f} onEmailClick={openTravelEmail} />;
+    return <ReadValue contact={contact} field={f} onEmailClick={openTravelEmail} isGeneric={isGeneric} />;
   };
 
   const overviewText = (raw) => (isEmpty(raw) ? (

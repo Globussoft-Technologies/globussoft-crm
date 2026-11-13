@@ -473,60 +473,26 @@ const TRAVEL_LEAD_COLUMN_KEYS = new Set([
   "createdAt",
 ]);
 const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set();
-// These columns are system-populated and must not be offered as CSV import
-// destinations. The remaining Customize Table catalog entries are valid CRM
-// field choices for generic lead imports.
-const CSV_IMPORT_AUTOMATIC_COLUMN_KEYS = new Set([
-  "lifecycleStage",
-  "pageUrl",
-  "pageTitle",
-  "pageSource",
-  "referrerUrl",
-  "landingPageUrl",
-  "currentDomain",
-  "formName",
-  "location",
-  "utm_source",
-  "utm_medium",
-  "utm_campaign",
-  "utm_id",
-  "utm_term",
-  "utm_content",
-  "gbraid",
-  "wbraid",
-  "campaign_id",
-  "adset_id",
-  "ad_id",
-  "campaign_name",
-  "adset_name",
-  "ad_name",
-  "placement",
-  "site_source_name",
-  "gclid",
-  "fbclid",
-  "fbc",
-  "fbp",
-  "submittedAt",
-  "browser",
-  "operatingSystem",
-  "deviceType",
-  "createdAt",
-  "lastUpdated",
-  "webForm",
-  "actions",
-  "campaign",
-  "callStatus",
-  "callifiedAi",
-  "callifiedScore",
-]);
 const CSV_IMPORT_FIELD_TYPES = {
   aiScore: "number",
+  callifiedScore: "number",
+  companySize: "number",
+  employeeCount: "number",
+  noOfEmployee: "number",
+  monthlyBudget: "number",
   status: "dropdown",
   lifecycleStage: "dropdown",
+  callStatus: "dropdown",
   birthDate: "date",
   anniversary: "date",
+  createdAt: "date",
+  lastUpdated: "date",
+  submittedAt: "date",
   website: "url",
   linkedin: "url",
+  pageUrl: "url",
+  referrerUrl: "url",
+  landingPageUrl: "url",
   description: "textarea",
 };
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
@@ -9259,12 +9225,13 @@ const Leads = ({ initialListState = null } = {}) => {
               onImported={isGeneric ? refreshAll : undefined}
               mappingFields={
                 isGeneric
-                  ? leadColumnCatalog
-                      .filter(
-                        (field) =>
-                          !CSV_IMPORT_AUTOMATIC_COLUMN_KEYS.has(field.key) ||
-                          field.key === "lifecycleStage",
-                      )
+                  ? [
+                      // The exported contact id is a stable system column,
+                      // not a tenant custom field. Keep it in the mapping
+                      // catalog so imports never propose a duplicate field.
+                      { key: "id", label: "Id", fieldType: "text" },
+                      ...leadColumnCatalog,
+                    ]
                       .map((catalogField) => {
                         const key = catalogField.key;
                         const customField = customFieldByKey.get(key);
@@ -9281,8 +9248,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             key.replace(/^cf_/, ""),
                           fieldType:
                             customField?.fieldType ||
-                            CSV_IMPORT_FIELD_TYPES[key] ||
-                            "text",
+                            CSV_IMPORT_FIELD_TYPES[key],
                         };
                       })
                   : []

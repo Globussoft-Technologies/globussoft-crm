@@ -455,6 +455,46 @@ describe('<Tickets /> — page surface', () => {
     });
   });
 
+  it('uses an internal answer dialog before resolving visitor tickets', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/tickets') && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve({
+          tickets: [{ ...sampleTickets[0], sourceConversationId: 'conversation-101', resolutionNotes: '' }],
+          total: 1,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          openCount: 1,
+          urgentCount: 1,
+        });
+      }
+      if (url === '/api/auth/users') return Promise.resolve(sampleUsers);
+      return Promise.resolve({});
+    });
+
+    renderTickets();
+    const statusSelect = await waitFor(() => {
+      const select = screen.getAllByRole('combobox').find((element) => element.value === 'Open');
+      expect(select).toBeTruthy();
+      return select;
+    });
+    fireEvent.change(statusSelect, { target: { value: 'Resolved' } });
+
+    expect(await screen.findByRole('dialog', { name: /Answer visitor/i })).toBeInTheDocument();
+    const answer = screen.getByRole('textbox', { name: 'Answer' });
+    fireEvent.change(answer, { target: { value: 'Your request has been completed.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve ticket' }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(([u, o]) => u === '/api/tickets/101' && o?.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      expect(JSON.parse(putCall[1].body)).toEqual({
+        status: 'Resolved',
+        resolutionNotes: 'Your request has been completed.',
+      });
+    });
+  });
+
   it('clicking Delete + confirming fires DELETE /api/tickets/:id', async () => {
     notifyConfirm.mockImplementation(() => Promise.resolve(true));
     renderTickets();

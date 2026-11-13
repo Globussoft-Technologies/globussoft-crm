@@ -260,7 +260,7 @@ router.get("/contacts/import-history/:id/report", async (req, res) => {
       : [{
         rowNumber: "—",
         field: "Unavailable",
-        action: "rejected",
+        action: "error",
         reason: `${history.errors} rejected row(s) from this legacy import; the original row and field details were not stored.`,
         data: {},
       }];
@@ -281,7 +281,7 @@ router.get("/contacts/import-history/:id/report", async (req, res) => {
     const rows = reportRows.map((row) => ({
       rowNumber: row.rowNumber,
       field: row.field || "row",
-      action: row.action || "rejected",
+      action: "error",
       reason: row.reason || "Import failed",
       ...Object.fromEntries(columns.map((key) => [`data.${key}`, row?.data?.[key] ?? ""])),
     }));
@@ -625,6 +625,10 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
       // legacy mapped-row behavior.
       const row = isGeneric ? { ...sourceRow, ...mappedRow } : (Object.keys(mapping).length ? mappedRow : sourceRow);
       const rowNumber = i + 2;
+      const recordImportError = (field, reason, value = "") => {
+        errors.push({ rowNumber, field, value, reason, data: sourceRow });
+        skipped++;
+      };
       try {
         const name = String(getSpreadsheetValue(row, ["name", "Name"])).trim();
         const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
@@ -642,18 +646,15 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
             allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
         );
         if (!isGeneric && !email) {
-          errors.push({ rowNumber, field: "email", reason: "missing email" });
-          skipped++;
+          recordImportError("email", "missing email", email);
           continue;
         }
         if (email && !CONTACT_EMAIL_RE.test(email)) {
-          errors.push({ rowNumber, field: "email", reason: `invalid email (${email})` });
-          skipped++;
+          recordImportError("email", `invalid email (${email})`, email);
           continue;
         }
         if (!status) {
-          errors.push({ rowNumber, field: "status", reason: `invalid status "${rawStatus}"` });
-          skipped++;
+          recordImportError("status", `invalid status "${rawStatus}"`, rawStatus);
           continue;
         }
 
@@ -662,8 +663,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           ? resolveGenericLifecycleStage(lifecycleStageRaw, lifecycleOptions)
           : null;
         if (isGeneric && lifecycleStageRaw && !lifecycleStageKey) {
-          errors.push({ rowNumber, field: "lifecycleStageKey", reason: `invalid lifecycle stage "${lifecycleStageRaw}"` });
-          skipped++;
+          recordImportError("lifecycleStageKey", `invalid lifecycle stage "${lifecycleStageRaw}"`, lifecycleStageRaw);
           continue;
         }
 
@@ -744,8 +744,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
             take: 2,
           });
           if (matches.length > 1) {
-            errors.push({ rowNumber, field: "phone", reason: "ambiguous phone: multiple contacts match; supply email" });
-            skipped++;
+            recordImportError("phone", "ambiguous phone: multiple contacts match; supply email", phone);
             continue;
           }
           existing = matches[0] || null;
@@ -799,8 +798,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         if (wasExisting) updated++;
         else imported++;
       } catch (rowErr) {
-        errors.push({ rowNumber, field: "row", reason: rowErr.message });
-        skipped++;
+        recordImportError("row", rowErr.message || "Import failed");
       }
     }
 
@@ -813,8 +811,8 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
       try {
         const errorRows = errors.map((error) => ({
           ...error,
-          action: "skipped",
-          data: rows[Math.max(0, Number(error.rowNumber || 1) - 2)] || {},
+          action: "error",
+          data: error.data || rows[Math.max(0, Number(error.rowNumber || 1) - 2)] || {},
         }));
         await prisma.genericImportHistory.create({
           data: {

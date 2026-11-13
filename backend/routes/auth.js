@@ -10,7 +10,8 @@ const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const emailOtp = require("../lib/emailOtp");
-const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
+const emailSender = require("../lib/emailSender");
+const portalResetTokens = require("../lib/portalResetTokens");
 const phoneOtp = require("../lib/phoneOtp");
 const {
   registerLimiter,
@@ -487,7 +488,7 @@ async function sendPasswordResetEmail(
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const FROM_EMAIL =
     process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
-  const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
+  const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}${options.portal ? "&portal=1" : ""}`;
   const subject = `Reset your ${brandName} password`;
   const text = `Click this link to reset your ${brandName} password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`;
   const html = `<p>Click the link below to reset your ${brandName} password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>`;
@@ -504,7 +505,7 @@ async function sendPasswordResetEmail(
     }
   }
   if (String(vertical || "").toLowerCase() === "travel") {
-    await sendTenantEmail({
+    await emailSender.sendEmail({
       tenantId: options.tenantId,
       to: toEmail,
       subject,
@@ -677,6 +678,30 @@ router.post("/email-otp/request", otpRequestLimiter, async (req, res) => {
         code: "INVALID_PURPOSE",
       });
     }
+    let emailTenantId = null;
+    const rawRegistrationTenantId = (req.body || {}).registrationTenantId;
+    if (purpose === "customer-register" && rawRegistrationTenantId !== undefined) {
+      const registrationTenantId = Number(rawRegistrationTenantId);
+      if (!Number.isInteger(registrationTenantId) || registrationTenantId <= 0) {
+        return res.status(400).json({
+          error: "A valid registration tenant is required",
+          code: "INVALID_TENANT",
+        });
+      }
+      const registrationTenant = await prisma.tenant.findFirst({
+        where: { id: registrationTenantId, isActive: true },
+        select: { id: true, vertical: true },
+      });
+      if (!registrationTenant) {
+        return res.status(400).json({
+          error: "Registration tenant was not found",
+          code: "INVALID_TENANT",
+        });
+      }
+      if (registrationTenant.vertical === "travel") {
+        emailTenantId = registrationTenant.id;
+      }
+    }
     // Light rate-limit: at most one code per (email, purpose) per 60s.
     const recent = await prisma.emailVerificationOtp.findFirst({
       where: {
@@ -701,7 +726,9 @@ router.post("/email-otp/request", otpRequestLimiter, async (req, res) => {
         expiresAt: new Date(Date.now() + emailOtp.OTP_TTL_MS),
       },
     });
-    const result = await emailOtp.sendOtpEmail(email, code, purpose);
+    const result = await emailOtp.sendOtpEmail(email, code, purpose, {
+      tenantId: emailTenantId,
+    });
     // Only expose devCode when SendGrid is genuinely absent (no key configured
     // at all). A real send failure must never leak the code to the HTTP response.
     const devCode =
@@ -2113,6 +2140,39 @@ router.post("/forgot-password", async (req, res) => {
       if (candidates.length === 1) [user] = candidates;
     }
 
+    let portalContact = null;
+    if (!user) {
+      if (hasTenantScope) {
+        portalContact = await prisma.contact.findFirst({
+          where: {
+            email,
+            tenantId: parsedTenantId,
+            deletedAt: null,
+            portalPasswordHash: { not: null },
+            tenant: { isActive: true, vertical: "travel" },
+          },
+          include: { tenant: true },
+        });
+      } else {
+        // Portal recovery intentionally spans tenants only to find one unique
+        // active Travel identity. Ambiguous addresses receive no reset email.
+        /* eslint-disable gbscrm/tenant-scope-finder-heuristic -- intentional unambiguous recovery lookup */
+        const portalCandidates = await prisma.contact.findMany({
+          where: {
+            email,
+            deletedAt: null,
+            portalPasswordHash: { not: null },
+            tenant: { isActive: true, vertical: "travel" },
+          },
+          include: { tenant: true },
+          orderBy: { id: "asc" },
+          take: 2,
+        });
+        /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
+        if (portalCandidates.length === 1) [portalContact] = portalCandidates;
+      }
+    }
+
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
       // Persist (DB, memory-fallback) — fire-and-forget to preserve the
@@ -2150,6 +2210,30 @@ router.post("/forgot-password", async (req, res) => {
         frontendBase,
         isTmcOrigin ? "The Modern Classroom" : "Globussoft CRM",
         { tenantId: user.tenantId, vertical: user.tenant?.vertical },
+      ).catch(() => {});
+    } else if (portalContact) {
+      const token = crypto.randomBytes(32).toString("hex");
+      portalResetTokens.issuePortalResetToken(
+        token,
+        portalContact.id,
+        new Date(Date.now() + 3600000),
+      );
+      const frontendBase = (
+        process.env.FRONTEND_URL ||
+        `https://${req.headers.host || "crm.globusdemos.com"}`
+      )
+        .replace(/\/+$/, "")
+        .replace(/\/api$/i, "");
+      sendPasswordResetEmail(
+        portalContact.email,
+        token,
+        frontendBase,
+        "Globussoft CRM",
+        {
+          tenantId: portalContact.tenantId,
+          vertical: "travel",
+          portal: true,
+        },
       ).catch(() => {});
     }
 

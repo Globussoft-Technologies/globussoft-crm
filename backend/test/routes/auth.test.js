@@ -78,6 +78,7 @@ prisma.tenant = {
 };
 prisma.contact = {
   findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
   findUnique: vi.fn().mockResolvedValue(null),
   create: vi.fn(),
   update: vi.fn(),
@@ -105,6 +106,11 @@ prisma.webForm = {
 };
 prisma.webFormSubmission = {
   create: vi.fn(),
+};
+prisma.emailVerificationOtp = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn(),
+  update: vi.fn(),
 };
 // T37 / Class B6 — RBAC self-heal seam. /login (inline self-heal block
 // at routes/auth.js:521-535) AND /signup + /register (call
@@ -148,6 +154,10 @@ const requireCJS = createRequire(import.meta.url);
 // at call time.
 const emailOtp = requireCJS('../../lib/emailOtp');
 emailOtp.enforceRegistrationOtp = vi.fn().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
+emailOtp.sendOtpEmail = vi.fn().mockResolvedValue({ sent: true });
+const emailSender = requireCJS('../../lib/emailSender');
+emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true, source: 'tenant' });
+const portalResetTokens = requireCJS('../../lib/portalResetTokens');
 const phoneOtp = requireCJS('../../lib/phoneOtp');
 phoneOtp.isValidPhone = vi.fn().mockReturnValue(false);
 phoneOtp.checkVerifiedPhoneToken = vi.fn().mockReturnValue(false);
@@ -188,6 +198,7 @@ beforeEach(() => {
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.create.mockReset();
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
@@ -202,10 +213,16 @@ beforeEach(() => {
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
   prisma.webForm.upsert.mockReset();
   prisma.webFormSubmission.create.mockReset();
+  prisma.emailVerificationOtp.findFirst.mockReset().mockResolvedValue(null);
+  prisma.emailVerificationOtp.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.emailVerificationOtp.update.mockReset();
   delete process.env.PUBLIC_LEAD_TENANT_SLUG;
   delete process.env.SENDGRID_API_KEY;
   delete process.env.FRONTEND_URL;
   emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
+  emailOtp.sendOtpEmail.mockReset().mockResolvedValue({ sent: true });
+  emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
+  portalResetTokens.resetTokens.clear();
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
   prisma.userRole.findUnique.mockReset().mockResolvedValue(null);
@@ -317,6 +334,52 @@ describe('POST /api/auth/public/lead-inquiry', () => {
 });
 
 // ── POST /api/auth/login ─────────────────────────────────────────────
+
+describe('POST /api/auth/email-otp/request', () => {
+  test('routes customer-registration OTP through the selected Travel tenant sender', async () => {
+    prisma.tenant.findFirst.mockResolvedValue({ id: 73, vertical: 'travel' });
+
+    const res = await request(makeApp())
+      .post('/api/auth/email-otp/request')
+      .send({
+        email: 'traveller@example.com',
+        purpose: 'customer-register',
+        registrationTenantId: 73,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
+      where: { id: 73, isActive: true },
+      select: { id: true, vertical: true },
+    });
+    expect(emailOtp.sendOtpEmail).toHaveBeenCalledWith(
+      'traveller@example.com',
+      expect.stringMatching(/^\d{6}$/),
+      'customer-register',
+      { tenantId: 73 },
+    );
+  });
+
+  test('keeps non-Travel customer-registration OTP on the backend sender', async () => {
+    prisma.tenant.findFirst.mockResolvedValue({ id: 1, vertical: 'wellness' });
+
+    const res = await request(makeApp())
+      .post('/api/auth/email-otp/request')
+      .send({
+        email: 'patient@example.com',
+        purpose: 'customer-register',
+        registrationTenantId: 1,
+      });
+
+    expect(res.status).toBe(201);
+    expect(emailOtp.sendOtpEmail).toHaveBeenCalledWith(
+      'patient@example.com',
+      expect.stringMatching(/^\d{6}$/),
+      'customer-register',
+      { tenantId: null },
+    );
+  });
+});
 
 describe('POST /api/auth/login', () => {
   test('happy path: returns { token, user, tenant } and writes LOGIN audit', async () => {
@@ -1364,6 +1427,62 @@ describe('POST /api/auth/forgot-password', () => {
       where: { email_tenantId: { email: 'admin@example.com', tenantId: 9 } },
       include: { tenant: true },
     });
+  });
+
+  test('sends a Travel tenant password reset through its configured sender', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7,
+      email: 'advisor@travel.example',
+      tenantId: 73,
+      tenant: { id: 73, isActive: true, vertical: 'travel' },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/forgot-password')
+      .send({ email: 'advisor@travel.example', resetTenantId: 73 });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(emailSender.sendEmail).toHaveBeenCalledOnce());
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 73,
+      to: 'advisor@travel.example',
+      subject: 'Reset your Globussoft CRM password',
+    }));
+  });
+
+  test('sends a Travel portal customer reset through the tenant sender', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 81,
+      email: 'customer@travel.example',
+      tenantId: 73,
+      portalPasswordHash: 'existing-hash',
+      tenant: { id: 73, isActive: true, vertical: 'travel' },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/forgot-password')
+      .send({ email: 'customer@travel.example', resetTenantId: 73 });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(emailSender.sendEmail).toHaveBeenCalledOnce());
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: {
+        email: 'customer@travel.example',
+        tenantId: 73,
+        deletedAt: null,
+        portalPasswordHash: { not: null },
+        tenant: { isActive: true, vertical: 'travel' },
+      },
+      include: { tenant: true },
+    });
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 73,
+      to: 'customer@travel.example',
+      subject: 'Reset your Globussoft CRM password',
+      html: expect.stringContaining('&portal=1'),
+    }));
+    expect(portalResetTokens.resetTokens.size).toBe(1);
   });
 
   test('does not choose an arbitrary account when an unscoped reset email is duplicated', async () => {

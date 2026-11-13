@@ -1398,7 +1398,7 @@ export default function Inbox({
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {isGeneric && isRichTextMarkup(email.body) ? <RichText as="span" value={email.body} /> : email.body}
+                      {getInboxPreviewText(email.body)}
                     </p>
                   </div>
 
@@ -2360,7 +2360,7 @@ export default function Inbox({
                 }}
               >
                 {detail.body ? (
-                  isGeneric && isRichTextMarkup(detail.body) ? <RichText value={detail.body} /> : renderTextWithLinks(detail.body)
+                  isRichTextMarkup(detail.body) ? <RichText value={detail.body} /> : renderTextWithLinks(detail.body)
                 ) : (
                   <em style={{ color: "var(--text-secondary)" }}>(empty body)</em>
                 )}

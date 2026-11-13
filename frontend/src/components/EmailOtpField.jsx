@@ -31,6 +31,7 @@ export default function EmailOtpField({
   required = true,
   disabled = false,
   registrationVertical,
+  registrationTenantId,
 }) {
   const [requested, setRequested] = useState(false);
   const [code, setCode] = useState("");
@@ -104,7 +105,11 @@ export default function EmailOtpField({
       const r = await fetch("/api/auth/email-otp/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: value.trim(), purpose }),
+        body: JSON.stringify({
+          email: value.trim(),
+          purpose,
+          ...(registrationTenantId ? { registrationTenantId: Number(registrationTenantId) } : {}),
+        }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {

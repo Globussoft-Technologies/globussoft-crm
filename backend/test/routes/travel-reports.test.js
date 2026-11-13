@@ -97,6 +97,10 @@ prisma.payment = {
   ...(prisma.payment || {}),
   findMany: vi.fn(),
 };
+prisma.tripInstalmentPayment = {
+  ...(prisma.tripInstalmentPayment || {}),
+  findMany: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
@@ -159,6 +163,7 @@ function installDefaults() {
   prisma.travelQuoteSnapshot.findMany.mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockResolvedValue([]);
   prisma.payment.findMany.mockResolvedValue([]);
+  prisma.tripInstalmentPayment.findMany.mockResolvedValue([]);
   prisma.auditLog.findMany.mockResolvedValue([]);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.contact.findMany.mockResolvedValue([]);
@@ -180,6 +185,7 @@ beforeEach(() => {
   prisma.travelQuoteSnapshot.findMany.mockReset();
   prisma.travelInvoice.findMany.mockReset();
   prisma.payment.findMany.mockReset();
+  prisma.tripInstalmentPayment.findMany.mockReset();
   prisma.auditLog.findMany.mockReset();
   prisma.user.findMany.mockReset();
   prisma.contact.findMany.mockReset();
@@ -375,6 +381,26 @@ describe('GET /api/travel/reports/tmc — happy path', () => {
       { destination: 'Bali', revenue: 4000 },
     ]);
     expect(res.body.revenue.currency).toBe('INR');
+  });
+
+  test('uses paid instalment ledger totals for destination revenue', async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([
+      { id: 101, destination: 'Australia', pricePerStudent: null, schoolContactId: 1 },
+    ]);
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { tripId: 101, paidAmount: 200000 },
+      { tripId: 101, paidAmount: 300000 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.revenue.total).toBe(500000);
+    expect(res.body.revenue.topDestinations).toEqual([
+      { destination: 'Australia', revenue: 500000 },
+    ]);
   });
 
   test('repeat-school detection: schools with ≥2 trips count toward repeat + repeatRatePct', async () => {

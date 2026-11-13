@@ -32,7 +32,7 @@
     padding: var(--viewport-card-padding) !important;
   }
 
-  .app-shell .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, button, input, select, textarea) {
+  .app-shell .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, button:not(.travel-payment-participant-row), input, select, textarea) {
     padding-block: var(--viewport-control-y) !important;
     padding-inline: var(--viewport-control-x) !important;
   }
@@ -90,7 +90,7 @@
     padding: var(--viewport-card-padding) !important;
   }
 
-  .app-shell .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, button, input, select, textarea) {
+  .app-shell .app-main > main :is(.btn-primary, .btn-secondary, .btn-danger, button:not(.travel-payment-participant-row), input, select, textarea) {
     padding-block: var(--viewport-control-y) !important;
     padding-inline: var(--viewport-control-x) !important;
   }

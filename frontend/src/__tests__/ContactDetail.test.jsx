@@ -219,6 +219,15 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('85', { exact: true })).toBeInTheDocument();
   });
 
+  it('keeps full overview values available when the compact drawer truncates them', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+
+    expect(document.querySelector('.cp-email-value')).toHaveAttribute('title', BASE_CONTACT.email);
+    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Move to Interested / Unqualified');
+  });
+
   it('does not render an orphan title/company separator when both values are empty', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({
       contact: { kind: 'ok', data: { ...BASE_CONTACT, title: '', company: '' } },

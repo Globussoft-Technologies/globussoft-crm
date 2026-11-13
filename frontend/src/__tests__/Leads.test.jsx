@@ -3626,16 +3626,14 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     notifyError.mockReset();
   });
 
-  it('opens the travel lead preview when clicking a name in the Name column', async () => {
+  it('opens the travel lead detail page when clicking a name in the Name column', async () => {
     renderLeads(TRAVEL_AUTH);
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
-    expect(lilyLink).toHaveAttribute('href', '#lead-preview');
+    expect(lilyLink).toHaveAttribute('href', '/travel/leads/50');
 
     fireEvent.click(lilyLink);
-    expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Lily' })).toBeInTheDocument();
-    expect(navigateMock).not.toHaveBeenCalledWith('/travel/leads/50');
-    expect(screen.getByLabelText('Edit Name for Lily')).toHaveAttribute('type', 'button');
+    expect(navigateMock).toHaveBeenCalledWith('/travel/leads/50');
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).toBeNull();
   });
 
   it('keeps travel lead name editing behind the Name column edit icon', async () => {

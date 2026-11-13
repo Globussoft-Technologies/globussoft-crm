@@ -92,6 +92,8 @@ import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
+const emailSender = requireCJS('../../lib/emailSender');
+emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true, source: 'tenant' });
 const staffRouter = requireCJS('../../routes/staff');
 const { clearAllCache } = requireCJS('../../middleware/requirePermission');
 
@@ -136,6 +138,7 @@ beforeEach(() => {
   prisma.$executeRawUnsafe.mockClear();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({});
+  emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
   // Clear in-memory token stores between tests so cardinality assertions
   // (size after issue) are deterministic.
   staffRouter.__testHooks.adminResetTokens.clear();
@@ -534,6 +537,27 @@ describe('POST /:id/reset-password', () => {
 
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
     expect(prisma.auditLog.create.mock.calls[0][0].data.action).toBe('PASSWORD_RESET');
+  });
+
+  test('uses the Travel tenant sender even when an older session lacks a vertical claim', async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: 22, tenantId: 1, email: 'advisor@travel.example', role: 'USER',
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+
+    const res = await request(makeApp()).post('/api/staff/22/reset-password').send({});
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(emailSender.sendEmail).toHaveBeenCalledOnce());
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: 1 },
+      select: { vertical: true },
+    });
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 1,
+      to: 'advisor@travel.example',
+      subject: 'Your Globussoft CRM password has been reset',
+    }));
   });
 
   test('cross-tenant id returns 404', async () => {

@@ -555,6 +555,7 @@ export default function CustomerRegister() {
               inputClassName="input-field"
               beforeRequest={checkEmailAvailability}
               disabled={isLoading}
+              registrationTenantId={form.tenantId}
               key={form.tenantId || "no-tenant"}
             />
             {errors.email && (

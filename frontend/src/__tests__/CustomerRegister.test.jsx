@@ -135,6 +135,13 @@ describe('<CustomerRegister /> organization autocomplete', () => {
       expect(screen.getByTestId('otp-box')).toBeInTheDocument();
     });
 
+    const otpRequestCall = global.fetch.mock.calls.find(([url]) => String(url).startsWith('/api/auth/email-otp/request'));
+    expect(JSON.parse(otpRequestCall[1].body)).toMatchObject({
+      email: 'jane@example.com',
+      purpose: 'customer-register',
+      registrationTenantId: 11,
+    });
+
     fireEvent.change(screen.getByTestId('otp-code'), { target: { value: '123456' } });
     fireEvent.click(screen.getByTestId('otp-verify'));
 

@@ -829,17 +829,20 @@ export default function LandingPageBuilder() {
               </button>
               {tripPickerOpen && (
                 <div style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.18)', zIndex: 300, width: 280, overflow: 'hidden' }}>
-                  <div style={{ padding: '8px 8px 6px', borderBottom: '1px solid var(--border-color)', position: 'relative' }}>
-                    <Search size={13} aria-hidden style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 8px 6px', borderBottom: '1px solid var(--border-color)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, width: '100%', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg, var(--surface-color))', paddingLeft: 8 }}>
+                    <Search size={13} aria-hidden style={{ color: 'var(--text-secondary)', flex: '0 0 auto' }} />
                     <input
                       autoFocus
-                      type="search"
+                      type="text"
+                      role="searchbox"
                       value={tripSearch}
                       onChange={(e) => setTripSearch(e.target.value)}
                       placeholder="Search trips..."
                       aria-label="Search trips"
-                      style={{ width: '100%', padding: '5px 8px 5px 26px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-color))', color: 'var(--text-primary)', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                      style={{ flex: '1 1 auto', minWidth: 0, width: '100%', padding: '5px 8px', border: 0, outline: 0, background: 'transparent', color: 'var(--text-primary)', fontSize: '0.78rem', boxSizing: 'border-box' }}
                     />
+                  </div>
                   </div>
                   <ul role="listbox" onMouseDown={(e) => e.preventDefault()} style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 220, overflowY: 'auto' }}>
                     <li

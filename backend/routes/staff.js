@@ -20,7 +20,7 @@ const {
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { sendEmail: sendTenantEmail } = require("../lib/emailSender");
+const emailSender = require("../lib/emailSender");
 // Wellness-role catalog lookup. Wellness tenants validate wellnessRole
 // against their per-tenant WellnessRoleType catalog (admins can add
 // custom roles like "nurse" from Settings). Generic tenants fall back
@@ -264,8 +264,20 @@ function resolveFrontendBase(req) {
 // the two modules stay independently testable; promoting both into a shared
 // lib/sendgrid.js is a separate cleanup tracked in TODOS).
 async function sendEmail(toEmail, subject, plainText, html, options = {}) {
-  if (String(options.vertical || "").toLowerCase() === "travel") {
-    return sendTenantEmail({
+  let vertical = options.vertical;
+  if (!vertical && options.tenantId) {
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: options.tenantId },
+        select: { vertical: true },
+      });
+      vertical = tenant?.vertical;
+    } catch (_error) {
+      // Preserve the platform-managed recovery path if tenant lookup fails.
+    }
+  }
+  if (String(vertical || "").toLowerCase() === "travel") {
+    return emailSender.sendEmail({
       tenantId: options.tenantId,
       to: toEmail,
       subject,

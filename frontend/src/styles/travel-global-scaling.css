@@ -309,10 +309,10 @@
 }
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-  button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row):not(.travel-lead-lifecycle-button):not(.wanderlux-theme-choice-card),
+  button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row):not(.travel-lead-lifecycle-button):not(.travel-payment-participant-row):not(.wanderlux-theme-choice-card),
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
   select,
-  textarea,
+  textarea:not(.meeting-confirmation-email-body),
   .input-field:not(.landing-pages-search),
   .btn-primary,
   .btn-secondary,
@@ -328,6 +328,23 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   line-height: 1.2;
 }
 
+/* Confirmation copy is a long-form editor, not a single-line control. */
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-confirmation-email-body {
+  min-height: 180px !important;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-font-search-input {
+  padding-left: 34px !important;
+  text-indent: 24px !important;
+}
+
+/* TripCombobox owns its leading search icon; keep the placeholder clear of it
+   after the travel control-density rule applies its !important inline padding. */
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .trip-search-input {
+  padding-left: 34px !important;
+  text-indent: 24px !important;
+}
+
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame input.brochure-place-input {
   padding-left: 36px !important;
 }
@@ -337,7 +354,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame input.broch
    textareas remain content-sized. */
 @media (min-width: 900px) {
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
-    button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row):not(.travel-lead-lifecycle-button):not(.wanderlux-theme-choice-card),
+    button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row):not(.travel-lead-lifecycle-button):not(.travel-payment-participant-row):not(.wanderlux-theme-choice-card),
     input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
     select,
     .btn-primary,

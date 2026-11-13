@@ -11182,18 +11182,13 @@ const Leads = () => {
                                 disableTruncation
                                 renderValue={(name) => (
                                   <a
-                                    href={
-                                      isTravel ? "#lead-preview" : leadDetailPath(lead)
-                                    }
+                                    href={leadDetailPath(lead)}
                                     onClick={(e) => {
                                       e.preventDefault();
                                       e.stopPropagation();
-                                      if (isTravel) setPreviewLead(lead);
-                                      else navigate(leadDetailPath(lead));
+                                      navigate(leadDetailPath(lead));
                                     }}
-                                    title={
-                                      isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
-                                    }
+                                    title={`Open profile for ${lead.name || "lead"}`}
                                     style={{
                                       minWidth: 0,
                                       overflow: "visible",
@@ -11474,18 +11469,13 @@ const Leads = () => {
                                   disableTruncation
                                   renderValue={(name) => (
                                     <a
-                                      href={
-                                        isTravel ? "#lead-preview" : leadDetailPath(lead)
-                                      }
+                                      href={leadDetailPath(lead)}
                                       onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        if (isTravel) setPreviewLead(lead);
-                                        else navigate(leadDetailPath(lead));
+                                        navigate(leadDetailPath(lead));
                                       }}
-                                      title={
-                                        isTravel ? `Preview ${lead.name || "lead"}` : `Open profile for ${lead.name || "lead"}`
-                                      }
+                                      title={`Open profile for ${lead.name || "lead"}`}
                                       style={{
                                         minWidth: 0,
                                         overflow: "visible",

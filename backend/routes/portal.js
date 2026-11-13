@@ -30,6 +30,8 @@ const {
   clearTmcRegistrationContext,
 } = require("../lib/tmcRegistrationContext");
 const { hardDeleteContact } = require("../lib/contactHardDelete");
+const emailSender = require("../lib/emailSender");
+const portalResetTokens = require("../lib/portalResetTokens");
 const { getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
 const {
   TRIP_PAYMENT_KINDS,
@@ -67,9 +69,6 @@ const avatarUploadHandler = (req, res, next) => {
 
 const { JWT_SECRET } = require("../config/secrets");
 const PORTAL_TOKEN_TTL = "7d";
-
-// In-memory reset token store: token -> { contactId, expiresAt }
-const resetTokens = new Map();
 
 // ─── Inline portal JWT middleware ───────────────────────────────────────────
 const verifyPortalToken = (req, res, next) => {
@@ -366,23 +365,72 @@ router.post("/set-password", async (req, res) => {
   }
 });
 
-// POST /api/portal/forgot — { email }
+// POST /api/portal/forgot — { email, resetTenantId? }
+function portalResetFrontendBase() {
+  return (process.env.FRONTEND_URL || "https://crm.globusdemos.com")
+    .replace(/\/+$/, "")
+    .replace(/\/api$/i, "");
+}
+
 router.post("/forgot", async (req, res) => {
   try {
-    const { email } = req.body;
+    const rawEmail = req.body?.email;
+    const email =
+      typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
     if (!email) return res.status(400).json({ error: "email is required" });
 
-    // findFirst not findUnique — Contact.email isn't unique in schema.
-    const contact = await prisma.contact.findFirst({ where: { email } });
+    // Contact.email is tenant-scoped rather than globally unique.
+    const parsedTenantId = Number(req.body?.resetTenantId);
+    const hasTenantScope =
+      Number.isInteger(parsedTenantId) && parsedTenantId > 0;
+    let contact = null;
+    if (hasTenantScope) {
+      contact = await prisma.contact.findFirst({
+        where: {
+          email,
+          tenantId: parsedTenantId,
+          deletedAt: null,
+          portalPasswordHash: { not: null },
+          tenant: { isActive: true, vertical: "travel" },
+        },
+      });
+    } else {
+      // Contact.email is not globally unique. Only issue a reset when the
+      // normalized address identifies exactly one active Travel portal user.
+      /* eslint-disable gbscrm/tenant-scope-finder-heuristic -- intentional unambiguous recovery lookup */
+      const candidates = await prisma.contact.findMany({
+        where: {
+          email,
+          deletedAt: null,
+          portalPasswordHash: { not: null },
+          tenant: { isActive: true, vertical: "travel" },
+        },
+        orderBy: { id: "asc" },
+        take: 2,
+      });
+      /* eslint-enable gbscrm/tenant-scope-finder-heuristic */
+      if (candidates.length === 1) [contact] = candidates;
+    }
     // Always return success to prevent enumeration
     if (contact) {
       const token = crypto.randomBytes(32).toString("hex");
-      resetTokens.set(token, {
-        contactId: contact.id,
-        expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour
-      });
-      // In production this would email the link to the contact
-      console.log(`[Portal][forgot] Reset token for ${email}: ${token}`);
+      portalResetTokens.issuePortalResetToken(
+        token,
+        contact.id,
+        new Date(Date.now() + 60 * 60 * 1000),
+      );
+      const resetUrl = `${portalResetFrontendBase()}/reset-password?token=${encodeURIComponent(token)}&portal=1`;
+      emailSender
+        .sendEmail({
+          tenantId: contact.tenantId,
+          to: contact.email || email,
+          subject: "Reset your Globussoft CRM password",
+          text: `Click this link to reset your Globussoft CRM password (valid 1 hour):\n\n${resetUrl}\n\nIf you didn't request this, you can safely ignore this email.`,
+          html: `<p>Click the link below to reset your Globussoft CRM password (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can safely ignore this email.</p>`,
+        })
+        .catch((err) => {
+          console.error("[Portal][forgot] reset email failed:", err.message);
+        });
     }
     res.json({ status: "ack", code: "RESET_LINK_REQUESTED" }); // #550
   } catch (err) {
@@ -402,9 +450,8 @@ router.post("/reset", async (req, res) => {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
-    const entry = resetTokens.get(token);
-    if (!entry || entry.expiresAt < Date.now()) {
-      resetTokens.delete(token);
+    const entry = portalResetTokens.getPortalResetToken(token);
+    if (!entry) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
@@ -413,8 +460,7 @@ router.post("/reset", async (req, res) => {
       where: { id: entry.contactId },
       data: { portalPasswordHash: hash },
     });
-    resetTokens.delete(token);
-
+    portalResetTokens.revokePortalResetToken(token);
     res.json({ status: "ok", code: "PASSWORD_RESET_OK" }); // #550
   } catch (err) {
     console.error("[Portal][reset]", err);

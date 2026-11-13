@@ -9,6 +9,7 @@
 
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+const emailSender = require("./emailSender");
 
 const OTP_TTL_MS = 10 * 60 * 1000; // codes valid 10 minutes
 const VERIFY_TOKEN_TTL = "30m"; // verified-email token valid 30 minutes
@@ -27,7 +28,7 @@ function isValidEmail(email) {
 // Send the code via SendGrid. Returns { sent, reason? }. When SENDGRID_API_KEY
 // is unset it logs (and the caller may surface a dev code in non-prod) rather
 // than throwing — so the flow is exercisable locally / in CI without keys.
-async function sendOtpEmail(to, code, purpose) {
+async function sendOtpEmail(to, code, purpose, { tenantId = null } = {}) {
   const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
   const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
   const what = purpose === "signup" ? "create your organization" : "create your account";
@@ -36,6 +37,19 @@ async function sendOtpEmail(to, code, purpose) {
     `Your verification code is ${code}.\n\n` +
     `Enter it to ${what}. The code expires in 10 minutes.\n\n` +
     `If you didn't request this, you can safely ignore this email.`;
+
+  // Customer registration knows which existing Travel tenant the customer
+  // selected. Route those OTPs through the same tenant-aware sender as every
+  // other Travel email so an active BYOK identity is never bypassed.
+  if (tenantId) {
+    return emailSender.sendEmail({
+      tenantId,
+      to,
+      subject,
+      text: body,
+      html: body.replace(/\n/g, "<br>"),
+    });
+  }
 
   if (!SENDGRID_API_KEY) {
     console.log(`[EmailOTP] SendGrid not configured — code for ${to} is ${code} (dev log only)`);

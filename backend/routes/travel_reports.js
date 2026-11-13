@@ -107,6 +107,47 @@ async function travelQuotePayments(tenantId, dateRange = null) {
     .filter(Boolean);
 }
 
+// TMC revenue can be recorded either in the per-participant instalment
+// ledger or in the shared Payment table. The instalment ledger is preferred:
+// a successful gateway payment is reconciled into paidAmount there, so using
+// both sources would double-count the same customer payment.
+async function travelTripRevenue(tenantId, tripIds, dateRange = null) {
+  const totals = new Map();
+  const tripIdSet = new Set(tripIds);
+  if (tripIds.length && prisma.tripInstalmentPayment?.findMany) {
+    try {
+      const rows = await prisma.tripInstalmentPayment.findMany({
+        where: {
+          tripId: { in: tripIds },
+          status: { in: ["paid", "partial"] },
+          ...(dateRange ? { OR: [{ paidAt: dateRange }, { createdAt: dateRange }] } : {}),
+        },
+        select: { tripId: true, paidAmount: true },
+      });
+      for (const row of rows) {
+        const amount = Number(row.paidAmount || 0);
+        if (amount > 0) totals.set(row.tripId, (totals.get(row.tripId) || 0) + amount);
+      }
+    } catch (_e) { /* fall back to shared successful payments */ }
+  }
+
+  if (tripIds.length && prisma.payment?.findMany) {
+    try {
+      const payments = await prisma.payment.findMany({
+        where: { tenantId, status: "SUCCESS", ...paymentDateWhere(dateRange) },
+        select: { amount: true, metadata: true, status: true },
+      });
+      for (const payment of payments) {
+        if (String(payment.status || "SUCCESS").toUpperCase() !== "SUCCESS") continue;
+        const tripId = Number(safeJsonParse(payment.metadata, {}).tripId);
+        if (!tripIdSet.has(tripId) || totals.has(tripId)) continue;
+        totals.set(tripId, (totals.get(tripId) || 0) + Number(payment.amount || 0));
+      }
+    } catch (_e) { /* retain estimate fallback below */ }
+  }
+  return totals;
+}
+
 const REPORT_COLORS = {
   navy: "#26365e",
   teal: "#26365e",
@@ -703,6 +744,11 @@ async function buildTmcReport(tenantId, dateRange = null) {
     for (const row of participantCountsByTrip) {
       participantByTrip[row.tripId] = row._count?._all ?? 0;
     }
+    const paidRevenueByTrip = await travelTripRevenue(
+      tenantId,
+      activeTrips.map((trip) => trip.id),
+      dateRange,
+    );
 
     // Revenue by destination = SUM(pricePerStudent × participantCount).
     // Tracked schools = set of schoolContactId for repeat-school detection.
@@ -712,7 +758,9 @@ async function buildTmcReport(tenantId, dateRange = null) {
     for (const trip of activeTrips) {
       const headcount = participantByTrip[trip.id] || 0;
       const price = trip.pricePerStudent ? Number(trip.pricePerStudent) : 0;
-      const tripRevenue = price * headcount;
+      const tripRevenue = paidRevenueByTrip.has(trip.id)
+        ? paidRevenueByTrip.get(trip.id)
+        : price * headcount;
       revByDest[trip.destination] = (revByDest[trip.destination] || 0) + tripRevenue;
       totalRevenue += tripRevenue;
       schoolTripCount[trip.schoolContactId] = (schoolTripCount[trip.schoolContactId] || 0) + 1;
@@ -761,7 +809,9 @@ async function buildTmcReport(tenantId, dateRange = null) {
           // key containing "participants" as PII leakage.
           pax,
           pricePerStudent,
-          revenue: pricePerStudent * pax,
+          revenue: paidRevenueByTrip.has(trip.id)
+            ? paidRevenueByTrip.get(trip.id)
+            : pricePerStudent * pax,
           updatedAt: trip.updatedAt,
         };
       })
@@ -1419,13 +1469,20 @@ async function tmcSummary(req, allowed, dateRange) {
   for (const row of participantCountsByTrip) {
     participantByTrip[row.tripId] = row._count?._all ?? 0;
   }
+  const paidRevenueByTrip = await travelTripRevenue(
+    tenantId,
+    activeTrips.map((trip) => trip.id),
+    dateRange,
+  );
 
   let totalRevenue = 0;
   const schoolTripCount = {};
   for (const trip of activeTrips) {
     const headcount = participantByTrip[trip.id] || 0;
     const price = trip.pricePerStudent ? Number(trip.pricePerStudent) : 0;
-    totalRevenue += price * headcount;
+    totalRevenue += paidRevenueByTrip.has(trip.id)
+      ? paidRevenueByTrip.get(trip.id)
+      : price * headcount;
     schoolTripCount[trip.schoolContactId] =
       (schoolTripCount[trip.schoolContactId] || 0) + 1;
   }

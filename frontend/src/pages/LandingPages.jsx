@@ -53,7 +53,7 @@ function getLandingPageCardStyle(isDarkTheme) {
       : '0 18px 42px rgba(15, 23, 42, 0.08)',
     backdropFilter: 'blur(12px)',
     WebkitBackdropFilter: 'blur(12px)',
-    borderRadius: '18px',
+    borderRadius: '14px',
   };
 }
 
@@ -719,16 +719,17 @@ export default function LandingPages() {
         <>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: '1 1 560px', minWidth: 0 }}>
-              <div style={{ position: 'relative', flex: '1 1 320px', maxWidth: '420px', minWidth: '240px' }}>
-                <Search size={15} aria-hidden style={{ position: 'absolute', left: '0.8rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flex: '1 1 320px', maxWidth: '420px', minWidth: 'min(240px, 100%)', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--input-bg)', paddingLeft: '0.75rem' }}>
+                <Search size={15} aria-hidden style={{ color: 'var(--text-secondary)', flex: '0 0 auto' }} />
                 <input
-                  type="search"
+                  type="text"
+                  role="searchbox"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search landing pages"
                   aria-label="Search landing pages"
                   className="input-field landing-pages-search"
-                  style={{ width: '100%', paddingLeft: '2.5rem', paddingRight: searchQuery ? '2.2rem' : '0.9rem' }}
+                  style={{ flex: '1 1 auto', minWidth: 0, width: '100%', border: 'none', outline: 'none', background: 'transparent', padding: '0.8rem 0.5rem 0.8rem 0' }}
                 />
                 {searchQuery && (
                   <button
@@ -736,10 +737,6 @@ export default function LandingPages() {
                     onClick={() => setSearchQuery('')}
                     aria-label="Clear search"
                     style={{
-                      position: 'absolute',
-                      right: '0.45rem',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
                       border: 'none',
                       background: 'transparent',
                       color: 'var(--text-secondary)',
@@ -747,6 +744,8 @@ export default function LandingPages() {
                       alignItems: 'center',
                       justifyContent: 'center',
                       padding: 0,
+                      flex: '0 0 auto',
+                      marginRight: '0.45rem',
                     }}
                   >
                     <X size={14} aria-hidden />
@@ -806,7 +805,7 @@ export default function LandingPages() {
               No landing pages match the current search or filters.
             </div>
           ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '1rem' }}>
           {visiblePages.map(page => {
             const sc = STATUS_COLORS[page.status] || STATUS_COLORS.DRAFT;
             // #639 — keep the raw numeric so formatPercent renders consistently
@@ -816,7 +815,7 @@ export default function LandingPages() {
             return (
               <div key={page.id} className="card" style={{
                 ...cardSurfaceStyle,
-                padding: '1.5rem',
+                padding: '0.85rem',
                 ...(page.isFeatured && page.status === 'PUBLISHED' ? {
                   border: '1.5px solid rgba(200,154,78,0.45)',
                   boxShadow: isDarkTheme
@@ -831,14 +830,14 @@ export default function LandingPages() {
                     Pinned · Active Trip
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', gap: '0.5rem' }}>
-                  <h3 style={{ fontWeight: '600', fontSize: '1.1rem', flex: 1 }}>{page.title}</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.65rem', gap: '0.4rem' }}>
+                  <h3 style={{ fontWeight: '600', fontSize: '0.82rem', lineHeight: 1.35, flex: 1, minWidth: 0, margin: 0 }}>{page.title}</h3>
                   <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {page.isFeatured && (
                       <span
                         title="This page is currently shown on /trips"
                         style={{
-                          padding: '0.2rem 0.55rem',
+                          padding: '0.18rem 0.45rem',
                           borderRadius: '4px',
                           fontSize: '0.7rem',
                           fontWeight: '600',
@@ -852,25 +851,25 @@ export default function LandingPages() {
                         <Star size={11} fill="currentColor" /> Featured
                       </span>
                     )}
-                    <span style={{ padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '600', background: sc.bg, color: sc.color }}>{page.status}</span>
+                    <span style={{ padding: '0.18rem 0.45rem', borderRadius: '4px', fontSize: '0.62rem', fontWeight: '700', background: sc.bg, color: sc.color, whiteSpace: 'nowrap' }}>{page.status}</span>
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.55rem', marginBottom: '0.75rem' }}>
                   <div style={metricTileStyle}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: '600' }}>{page.visits}</div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Visits</div>
+                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{page.visits}</div>
+                    <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Visits</div>
                   </div>
                   <div style={metricTileStyle}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: '600' }}>{page.submissions}</div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Leads</div>
+                    <div style={{ fontSize: '1rem', fontWeight: '600' }}>{page.submissions}</div>
+                    <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Leads</div>
                   </div>
                   <div style={metricTileStyle}>
-                    <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#10b981' }}>{formatPercent(convRate)}</div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conv.</div>
+                    <div style={{ fontSize: '1rem', fontWeight: '600', color: '#10b981' }}>{formatPercent(convRate)}</div>
+                    <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conv.</div>
                   </div>
                 </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <Link to={`/landing-pages/builder/${page.id}`} state={builderNavigationState} className="btn-primary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}>
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center', minWidth: 0, maxWidth: '100%' }}>
+                  <Link to={`/landing-pages/builder/${page.id}`} state={builderNavigationState} className="btn-primary" style={{ padding: '0.35rem 0.5rem', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem', textDecoration: 'none', whiteSpace: 'nowrap' }}>
                     <FileEdit size={13} /> Edit
                   </Link>
                   {/* View button removed — the hardcoded :5173→:5000 host
@@ -889,7 +888,7 @@ export default function LandingPages() {
                         ? 'Take this page down — its public URL will no longer serve it'
                         : `Publish this page and make it live at ${getLandingPageSharePath({ ...page, status: 'PUBLISHED', isFeatured: Boolean(page.isFeatured) })}`
                     }
-                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer' }}
+                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer', whiteSpace: 'nowrap' }}
                   >
                     <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
                   </button>
@@ -898,15 +897,15 @@ export default function LandingPages() {
                       onClick={() => handleFeature(page)}
                       disabled={featuringId === page.id}
                       title={page.isFeatured ? 'Remove this trip from /trips' : 'Make this trip the featured /trips page'}
-                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: page.isFeatured ? 'rgba(245, 158, 11, 0.08)' : 'none', color: page.isFeatured ? '#f59e0b' : '#10b981', cursor: featuringId === page.id ? 'wait' : 'pointer' }}
+                      style={{ padding: '0.35rem 0.5rem', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: page.isFeatured ? 'rgba(245, 158, 11, 0.08)' : 'none', color: page.isFeatured ? '#f59e0b' : '#10b981', cursor: featuringId === page.id ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
                     >
                       <Star size={13} /> {page.isFeatured ? 'Unfeature' : 'Feature'}
                     </button>
                   )}
-                  <button onClick={() => handleDuplicate(page.id)} title="Duplicate" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <button onClick={() => handleDuplicate(page.id)} title="Duplicate" style={{ padding: '0.35rem 0.45rem', fontSize: '0.68rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'inline-flex' }}>
                     <Copy size={13} />
                   </button>
-                  <button onClick={() => handleDelete(page.id)} title="Delete" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: '#ef4444', cursor: 'pointer' }}>
+                  <button onClick={() => handleDelete(page.id)} title="Delete" style={{ padding: '0.35rem 0.45rem', fontSize: '0.68rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: '#ef4444', cursor: 'pointer', display: 'inline-flex' }}>
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -914,7 +913,7 @@ export default function LandingPages() {
                 {/* Public link share panel — only for published pages */}
                 {page.status === 'PUBLISHED' && (
                   <div style={{ marginTop: '1rem', paddingTop: '0.9rem', borderTop: '1px solid var(--border-color)' }}>
-                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+                    <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem' }}>
                       Public Link
                     </div>
                     {/* URL + copy + open */}

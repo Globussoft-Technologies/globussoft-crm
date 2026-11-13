@@ -3146,7 +3146,7 @@ function PaymentTab({ trip, notify }) {
           </button>
         )}
       </div>
-      <div style={listShell}>
+      <div style={{ ...listShell, background: "var(--surface-color, var(--bg-color, #111318))" }}>
         {instalments.length === 0 ? (
           <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             <Users size={24} aria-hidden style={{ opacity: 0.4 }} />
@@ -3179,27 +3179,28 @@ function PaymentTab({ trip, notify }) {
                 {/* Accordion Header */}
                 <button
                   type="button"
+                  className="travel-payment-participant-row"
                   onClick={() => setExpandedParticipant(isExpanded ? null : Number(participantId))}
                   style={{
-                    width: "100%", padding: "14px", background: "transparent", border: "none",
+                    width: "100%", background: "var(--surface-color, transparent)", border: "none",
                     cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center",
-                    gap: 12, fontFamily: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text-primary)",
+                    gap: 16, fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: "var(--text-primary)",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
                     <ChevronDown
-                      size={16}
+                      size={15}
                       style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}
                       aria-hidden
                     />
                     <div style={{ textAlign: "left", minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{name}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+                      <div style={{ fontSize: 13, lineHeight: 1.2, fontWeight: 650, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                      <div style={{ fontSize: 11.5, lineHeight: 1.2, color: "var(--text-secondary)", marginTop: 3 }}>
                         ₹{totalDue.toLocaleString()} total · {pendingCount} pending
                       </div>
                     </div>
                   </div>
-                  <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+                  <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", paddingLeft: 12 }}>
                     ₹{(totalDue - totalPaid).toLocaleString()} due
                   </div>
                 </button>

@@ -171,21 +171,17 @@ function InstallmentAction({ installment, onInitiate }) {
   return <span className="pickup-muted">{status === "PAID" ? "Paid" : "No action"}</span>;
 }
 
-function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate }) {
+function CommissionSection({ customer, updatingId, onUpdateStatus }) {
   const commissions = Array.isArray(customer.commissions) ? customer.commissions : [];
-  const [rates, setRates] = useState({});
   const [commissionHistoryOpen, setCommissionHistoryOpen] = useState(false);
   const successfulPayments = (Array.isArray(customer.payments) ? customer.payments : []).filter(
     (payment) => String(payment.status || "").toUpperCase() === "SUCCESS",
   );
   const hasSuccessfulPayment = successfulPayments.length > 0;
   const configuredRate = customer.workflow?.broker?.assignee?.commissionPercent;
-  const commissionRate = Number(configuredRate == null ? 10 : configuredRate);
+  const commissionRate = Number(configuredRate || 0);
   const displayedCommissions = commissions.map((commission) => {
-    const status = String(commission.status || "EARNED").toUpperCase();
-    const displayedRate = status === "EARNED"
-      ? Number(rates[commission.id] ?? commission.commissionPercent)
-      : Number(commission.commissionPercent || 0);
+    const displayedRate = Number(commission.commissionPercent || 0);
     const commissionAmount = Number(commission.eligibleAmount || 0) * (Number.isFinite(displayedRate) ? displayedRate : 0) / 100;
     let remaining = commissionAmount;
     const allocations = (commission.allocations || []).map((allocation) => {
@@ -221,7 +217,7 @@ function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate 
           <tbody>{displayedCommissions.map((commission) => { const status = String(commission.status || "EARNED").toUpperCase(); return <tr key={commission.id}>
             <td>{commission.brokerName || customer.workflow?.broker?.assignee?.name || "Sales Executive"}</td>
             <td style={{ whiteSpace: "nowrap" }}><strong>{formatMoney(commission.eligibleAmount, commission.currency)}</strong><small className="pickup-muted" style={{ display: "block" }}>Full deal amount</small></td>
-            <td>{status === "EARNED" ? <div className="pickup-commission-rate-control"><input className="input-field" type="number" min="0" max="100" step="0.01" aria-label={`Commission percentage for ${commission.brokerName || "Sales Executive"}`} value={rates[commission.id] ?? commission.commissionPercent} onChange={(event) => setRates((current) => ({ ...current, [commission.id]: event.target.value }))} /><span aria-hidden="true">%</span><button type="button" className="btn-secondary" disabled={updatingId === commission.id || !Number.isFinite(commission.displayedRate) || commission.displayedRate < 0 || commission.displayedRate > 100} onClick={() => onUpdateRate(commission.id, commission.displayedRate)}>Save</button></div> : `${Number(commission.commissionPercent || 0)}%`}</td>
+            <td>{`${Number(commission.commissionPercent || 0)}%`}<small className="pickup-muted" style={{ display: "block" }}>Finance rule</small></td>
             <td style={{ whiteSpace: "nowrap" }}><strong>{formatMoney(commission.commissionAmount, commission.currency)}</strong><small className="pickup-muted" style={{ display: "block", minWidth: 210 }}>{formatMoney(commission.eligibleAmount, commission.currency)} × {Number.isFinite(commission.displayedRate) ? commission.displayedRate : 0}%</small></td>
             <td style={{ whiteSpace: "nowrap" }}>{formatMoney(commission.commissionDeducted, commission.currency)}</td>
             <td style={{ whiteSpace: "nowrap" }}>{formatMoney(commission.commissionOutstanding, commission.currency)}</td>
@@ -229,13 +225,13 @@ function CommissionSection({ customer, updatingId, onUpdateStatus, onUpdateRate 
             <td>{status === "EARNED" ? <button type="button" className="btn-secondary" disabled={updatingId === commission.id || Number(commission.commissionOutstanding || 0) > 0} title={Number(commission.commissionOutstanding || 0) > 0 ? "Commission must be fully deducted before approval" : undefined} onClick={() => onUpdateStatus(commission.id, "APPROVED")}>Approve</button> : status === "APPROVED" ? <button type="button" className="btn-primary" disabled={updatingId === commission.id} onClick={() => onUpdateStatus(commission.id, "PAID")}>Mark paid</button> : <span className="pickup-muted">No action</span>}</td>
           </tr>; })}</tbody>
         </table></div>
-      </> : <div className="pickup-payment-empty"><strong>No commission earned yet</strong><span>{commissionRate > 0 ? `${commissionRate}% will accrue automatically when a payment succeeds.` : "Set a commission percentage for the assigned Sales Executive to start tracking."}</span></div>}
+       </> : <div className="pickup-payment-empty"><strong>No commission earned yet</strong><span>{commissionRate > 0 ? `${commissionRate}% from the Finance rule will accrue automatically when a payment succeeds.` : "Assign a Finance commission rule to the Sales Executive before payment is recorded."}</span></div>}
       {commissionHistoryOpen && createPortal(<div role="presentation" className="pickup-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCommissionHistoryOpen(false); }}><div role="dialog" aria-modal="true" aria-labelledby="commission-history-dialog-title" className="card pickup-edit-dialog pickup-history-dialog"><div className="pickup-dialog-header"><div><h2 id="commission-history-dialog-title">Commission history</h2><p className="pickup-muted">Commission deductions from each successful payment.</p></div><button type="button" className="btn-secondary" aria-label="Close commission history" onClick={() => setCommissionHistoryOpen(false)}><X size={17} /></button></div><div className="pickup-payment-table-wrap"><table className="pickup-payment-table pickup-plot-leads-table pickup-plot-no-row-hover" aria-label="Commission history"><thead><tr><th>Payment date</th><th>Gross payment</th><th>Commission deducted</th><th>Net after commission</th></tr></thead><tbody>{commissionHistory.length ? commissionHistory.map(({ commission, allocation }) => <tr key={`${commission.id}-${allocation.paymentId}`}><td>{formatPickupStatusDate(allocation.paidAt)}</td><td>{formatMoney(allocation.grossAmount, commission.currency)}</td><td>{formatMoney(allocation.commissionDeduction, commission.currency)}</td><td>{formatMoney(allocation.netPaymentAmount, commission.currency)}</td></tr>) : <tr><td colSpan="4" className="pickup-empty-cell">No commission deductions recorded yet.</td></tr>}</tbody></table></div></div></div>, document.body)}
     </section>
   );
 }
 
-function PaymentSection({ customer, selectedPlot, isAdmin, commissionUpdatingId, onUpdateCommission, onUpdateCommissionRate, onGeneratePayment, onAddInstallment, onEditInstallments, onInitiateInstallment }) {
+function PaymentSection({ customer, selectedPlot, isAdmin, commissionUpdatingId, onUpdateCommission, onGeneratePayment, onAddInstallment, onEditInstallments, onInitiateInstallment }) {
   const [paymentHistoryOpen, setPaymentHistoryOpen] = useState(false);
   const payments = Array.isArray(customer.payments) ? customer.payments : [];
   const firstSuccessfulPayment = payments.find(
@@ -271,12 +267,12 @@ function PaymentSection({ customer, selectedPlot, isAdmin, commissionUpdatingId,
         )}
       </section>
       {paymentHistoryOpen && createPortal(<div role="presentation" className="pickup-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaymentHistoryOpen(false); }}><div role="dialog" aria-modal="true" aria-labelledby="payment-history-dialog-title" className="card pickup-edit-dialog pickup-history-dialog"><div className="pickup-dialog-header"><div><h2 id="payment-history-dialog-title">Future installment payment history</h2><p className="pickup-muted">Payments recorded after the initial deposit.</p></div><button type="button" className="btn-secondary" aria-label="Close payment history" onClick={() => setPaymentHistoryOpen(false)}><X size={17} /></button></div><PaymentTable label="Future installment payment history" payments={installments} scrollable />{!installments.length && <p className="pickup-muted">No future installment payment has been recorded yet.</p>}</div></div>, document.body)}
-      {isAdmin && customer.booking && <CommissionSection customer={customer} updatingId={commissionUpdatingId} onUpdateStatus={onUpdateCommission} onUpdateRate={onUpdateCommissionRate} />}
+      {isAdmin && customer.booking && <CommissionSection customer={customer} updatingId={commissionUpdatingId} onUpdateStatus={onUpdateCommission} />}
     </div>
   );
 }
 
-function CustomerDetails({ customer, isAdmin, commissionUpdatingId, onUpdateCommission, onUpdateCommissionRate, onEdit, onAssignPlots, onViewAssignedPlots, onViewStatus, onGeneratePayment, onAddInstallment, onEditInstallments, onInitiateInstallment }) {
+function CustomerDetails({ customer, isAdmin, commissionUpdatingId, onUpdateCommission, onEdit, onAssignPlots, onViewAssignedPlots, onViewStatus, onGeneratePayment, onAddInstallment, onEditInstallments, onInitiateInstallment }) {
   const brokerStatus = String(customer.workflow?.broker?.status || '').toUpperCase();
   const currentStage = String(customer.currentStage || '').toUpperCase();
   const currentStatus = String(customer.currentStatus || '').toUpperCase();
@@ -332,7 +328,7 @@ function CustomerDetails({ customer, isAdmin, commissionUpdatingId, onUpdateComm
           <DetailTable label="Selected plot details" rows={plotRows(selectedPlot)} />
         </div> : <div className="pickup-payment-empty"><strong>No plot selected</strong><span>Plot details will appear after the Sales Executive confirms a selection.</span></div>}
       </section>
-      <PaymentSection customer={customer} selectedPlot={selectedPlot} isAdmin={isAdmin} commissionUpdatingId={commissionUpdatingId} onUpdateCommission={onUpdateCommission} onUpdateCommissionRate={onUpdateCommissionRate} onGeneratePayment={onGeneratePayment} onAddInstallment={onAddInstallment} onEditInstallments={onEditInstallments} onInitiateInstallment={onInitiateInstallment} />
+      <PaymentSection customer={customer} selectedPlot={selectedPlot} isAdmin={isAdmin} commissionUpdatingId={commissionUpdatingId} onUpdateCommission={onUpdateCommission} onGeneratePayment={onGeneratePayment} onAddInstallment={onAddInstallment} onEditInstallments={onEditInstallments} onInitiateInstallment={onInitiateInstallment} />
     </article>
   );
 }
@@ -431,22 +427,6 @@ export default function PickupCustomers() {
       await load();
     } catch (error) {
       notify.error(error.message || "Could not update the commission.");
-    } finally {
-      setCommissionUpdatingId(null);
-    }
-  };
-
-  const updateCommissionRate = async (commissionId, commissionPercent) => {
-    setCommissionUpdatingId(commissionId);
-    try {
-      await fetchApi(`/api/pickup-plot-inventory/commissions/${commissionId}/rate`, {
-        method: "PATCH",
-        body: JSON.stringify({ commissionPercent }),
-      });
-      notify.success("Commission percentage updated.");
-      await load();
-    } catch (error) {
-      notify.error(error.message || "Could not update the commission percentage.");
     } finally {
       setCommissionUpdatingId(null);
     }
@@ -869,7 +849,7 @@ export default function PickupCustomers() {
           </div>
         </aside>
         <section className="card pickup-plot-table-scroll pickup-detail-pane" aria-live="polite">
-          {loading ? <div className="pickup-detail-placeholder">Loading customer details…</div> : selectedCustomer ? <CustomerDetails key={selectedCustomer.id} customer={selectedCustomer} isAdmin={isAdmin} commissionUpdatingId={commissionUpdatingId} onUpdateCommission={updateCommissionStatus} onUpdateCommissionRate={updateCommissionRate} onEdit={() => openEdit(selectedCustomer)} onAssignPlots={() => openPlotAssignment(selectedCustomer)} onViewAssignedPlots={() => setViewingAssignedPlots(selectedCustomer)} onViewStatus={() => setViewingCustomer(selectedCustomer)} onGeneratePayment={() => openPayment(selectedCustomer)} onAddInstallment={() => openInstallment(selectedCustomer)} onEditInstallments={() => openInstallment(selectedCustomer, true)} onInitiateInstallment={(installment) => openPayment(selectedCustomer, installment)} /> : <div className="pickup-detail-placeholder"><UserRound size={34} /><strong>Select a customer</strong><span>Their details will appear here.</span></div>}
+          {loading ? <div className="pickup-detail-placeholder">Loading customer details…</div> : selectedCustomer ? <CustomerDetails key={selectedCustomer.id} customer={selectedCustomer} isAdmin={isAdmin} commissionUpdatingId={commissionUpdatingId} onUpdateCommission={updateCommissionStatus} onEdit={() => openEdit(selectedCustomer)} onAssignPlots={() => openPlotAssignment(selectedCustomer)} onViewAssignedPlots={() => setViewingAssignedPlots(selectedCustomer)} onViewStatus={() => setViewingCustomer(selectedCustomer)} onGeneratePayment={() => openPayment(selectedCustomer)} onAddInstallment={() => openInstallment(selectedCustomer)} onEditInstallments={() => openInstallment(selectedCustomer, true)} onInitiateInstallment={(installment) => openPayment(selectedCustomer, installment)} /> : <div className="pickup-detail-placeholder"><UserRound size={34} /><strong>Select a customer</strong><span>Their details will appear here.</span></div>}
           {refreshNoticeVisible && <span className="pickup-refresh-status" role="status" aria-label="Refreshing customer billing data">Refreshing billing data…</span>}
         </section>
       </div>

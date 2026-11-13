@@ -27,6 +27,7 @@ const {
   PDF_MIME_TYPE,
   convertTmcConsentTemplateToPdf,
   pdfFilename,
+  renderTmcDigitalConsentPdf,
 } = require("../lib/tmcConsentPdf");
 const {
   validateParentSubmission,
@@ -255,6 +256,35 @@ function projectTmcParentDocument(document, trip = null) {
           returnDate: trip.returnDate,
         }
       : null,
+  };
+}
+
+function projectTmcParentConsentDocument(document) {
+  let answers = {};
+  try {
+    const parsed = JSON.parse(String(document?.answersJson || "{}"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) answers = parsed;
+  } catch (_err) {
+    answers = {};
+  }
+
+  return {
+    id: document.id,
+    documentType: document.documentType,
+    captureMode: normalizeCaptureMode(document.captureMode),
+    status: document.status,
+    tripId: document.tripId,
+    signatureName: document.signatureName || answers.signatureName || null,
+    agreedAt: document.agreedAt || null,
+    uploadedAt: document.uploadedAt || null,
+    termsSnapshot: document.termsSnapshot || "",
+    answers: {
+      parentName: answers.parentName || "",
+      participantName: answers.participantName || "",
+      relationship: answers.relationship || "",
+      signatureName: answers.signatureName || document.signatureName || "",
+      notes: answers.notes || document.notes || "",
+    },
   };
 }
 
@@ -3333,6 +3363,49 @@ router.get(
   },
 );
 
+router.get(
+  "/parent/documents/:documentId/consent",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireParent,
+  async (req, res) => {
+    try {
+      const documentId = Number(req.params.documentId);
+      if (!Number.isInteger(documentId) || documentId <= 0) {
+        return res.status(400).json({ error: "documentId must be a positive integer", code: "INVALID_DOCUMENT_ID" });
+      }
+      const document = await prisma.tmcParentDocument.findFirst({
+        where: {
+          id: documentId,
+          tenantId: Number(req.portal.tenantId),
+          parentContactId: Number(req.tmcContact.id),
+        },
+        select: {
+          id: true,
+          documentType: true,
+          captureMode: true,
+          status: true,
+          notes: true,
+          answersJson: true,
+          termsSnapshot: true,
+          signatureName: true,
+          agreedAt: true,
+          uploadedAt: true,
+          tripId: true,
+        },
+      });
+      if (!document) return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      if (normalizeCaptureMode(document.captureMode) !== "digital_consent") {
+        return res.status(400).json({ error: "This document is not a digital consent form", code: "NOT_DIGITAL_CONSENT" });
+      }
+      return res.json({ consent: projectTmcParentConsentDocument(document) });
+    } catch (err) {
+      console.error("[tmc-portal][parent/documents:consent]", err);
+      return res.status(500).json({ error: "Failed to load consent details" });
+    }
+  },
+);
+
 router.post(
   "/parent/documents",
   verifyPortalToken,
@@ -3463,9 +3536,34 @@ router.get(
           tenantId: Number(req.portal.tenantId),
           parentContactId: Number(req.tmcContact.id),
         },
-        select: { id: true, fileBlob: true, fileUrl: true, storage: true, storageKey: true, mimeType: true, filename: true },
+        select: {
+          id: true,
+          captureMode: true,
+          documentType: true,
+          fileBlob: true,
+          fileUrl: true,
+          storage: true,
+          storageKey: true,
+          mimeType: true,
+          filename: true,
+          answersJson: true,
+          termsSnapshot: true,
+          signatureName: true,
+          agreedAt: true,
+          uploadedAt: true,
+          tripId: true,
+        },
       });
       if (!document) return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      if (normalizeCaptureMode(document.captureMode) === "digital_consent") {
+        const buffer = await renderTmcDigitalConsentPdf(document);
+        res.setHeader("Content-Type", PDF_MIME_TYPE);
+        res.setHeader(
+          "Content-Disposition",
+          `${req.query.download === "1" ? "attachment" : "inline"}; filename="consent-form-${document.id}.pdf"`,
+        );
+        return res.send(buffer);
+      }
       const buffer = document.fileBlob
         ? Buffer.from(document.fileBlob)
         : await visaDocStore.readDocBuffer({

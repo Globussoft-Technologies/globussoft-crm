@@ -17,7 +17,17 @@ html[data-theme="dark"] .login-logo--tmc-dark {
 :root {
   --bg-color: #0b0c10;
   --surface-color: rgba(22, 24, 29, 0.4);
+  /* Secondary panels must stay dark when a component asks for a muted
+     surface. Keep this token explicit instead of relying on light-mode
+     fallbacks in page-level inline styles. */
+  --surface-muted: #171a21;
   --surface-hover: rgba(35, 40, 48, 0.6);
+  --status-success-bg: rgba(16, 185, 129, 0.16);
+  --status-success-text: #86efac;
+  --status-warning-bg: rgba(245, 158, 11, 0.16);
+  --status-warning-text: #fcd34d;
+  --status-neutral-bg: rgba(148, 163, 184, 0.14);
+  --status-neutral-text: #cbd5e1;
   --text-primary: #ffffff;
   --text-secondary: #d1d5db;
   --accent-color: #3b82f6;
@@ -106,7 +116,14 @@ html[data-theme="dark"] .login-logo--tmc-dark {
   --bg-color: #f0f2f5;
   --popover-bg: #ffffff;
   --surface-color: rgba(255, 255, 255, 0.7);
+  --surface-muted: #f6f8fb;
   --surface-hover: rgba(235, 238, 245, 0.8);
+  --status-success-bg: #dcfce7;
+  --status-success-text: #166534;
+  --status-warning-bg: #fef3c7;
+  --status-warning-text: #92400e;
+  --status-neutral-bg: #eef2f7;
+  --status-neutral-text: #475569;
   --text-primary: #1a1a2e;
   --text-secondary: #4b5563;
   --accent-color: #2563eb;
@@ -173,7 +190,14 @@ html[data-theme="dark"] .login-logo--tmc-dark {
 [data-theme="dark"] {
   --bg-color: #0b0c10;
   --surface-color: rgba(22, 24, 29, 0.6);
+  --surface-muted: #171a21;
   --surface-hover: rgba(35, 40, 48, 0.8);
+  --status-success-bg: rgba(16, 185, 129, 0.16);
+  --status-success-text: #86efac;
+  --status-warning-bg: rgba(245, 158, 11, 0.16);
+  --status-warning-text: #fcd34d;
+  --status-neutral-bg: rgba(148, 163, 184, 0.14);
+  --status-neutral-text: #cbd5e1;
   --text-primary: #ffffff;
   --text-secondary: #d1d5db;
   --accent-color: #3b82f6;
@@ -436,6 +460,14 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
 
 .commission-records-card {
   overflow: visible;
+}
+
+/* Generic Commissions uses the shared finance shell but owns its responsive
+   inset. Keep the workspace padded without letting the shared shell's fixed
+   24px inset override the page's fluid spacing. */
+.finance-page.commission-page {
+  max-width: 1480px !important;
+  padding: clamp(16px, 2.5vw, 32px) !important;
 }
 
 .commission-records-filters {

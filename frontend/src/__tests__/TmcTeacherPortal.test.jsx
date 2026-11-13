@@ -170,6 +170,17 @@ describe("TmcTeacherPortal", () => {
     expect(document.querySelector('[data-tmc-teacher-shell="true"]')).toHaveStyle({ marginLeft: "250px" });
   });
 
+  it("clears the teacher session and redirects to the main login page on sign out", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(localStorage.getItem("tmcTeacherPortalToken")).toBeNull();
+  });
+
   it.each([
     ["Assigned trips", "Your trips"],
     ["Diagnostic reports", "Teacher diagnostic"],

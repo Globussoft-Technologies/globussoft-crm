@@ -37,4 +37,16 @@ describe('Finance module UI contract', () => {
     const css = read('styles/finance.css');
     expect(css).toMatch(/\.finance-page__title\s*\{[\s\S]*?color:\s*var\(--text-primary\)\s*!important/);
   });
+
+  it('keeps generic commission surfaces and spacing theme-aware', () => {
+    const css = read('index.css');
+    const page = read('pages/PlotPayouts.jsx');
+
+    expect(css).toMatch(/\[data-theme="light"\]\s*\{[\s\S]*?--surface-muted:\s*#f6f8fb;/);
+    expect(css).toMatch(/\[data-theme="dark"\]\s*\{[\s\S]*?--surface-muted:\s*#171a21;/);
+    expect(css).toContain('.finance-page.commission-page');
+    expect(css).toContain('padding: clamp(16px, 2.5vw, 32px) !important;');
+    expect(page).toContain('className="finance-page commission-page"');
+    expect(page).toContain('var(--modal-bg, #ffffff)');
+  });
 });

@@ -611,6 +611,29 @@ describe('GET /api/travel/trips/:id', () => {
     );
   });
 
+  test('decorates the trip with its tenant-scoped school name', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'bali2026',
+      tenantId: 1,
+      schoolContactId: 55,
+      participants: [],
+      documentRequirements: [],
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 55, name: 'The Modern Classroom' });
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.schoolName).toBe('The Modern Classroom');
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 55, tenantId: 1 },
+      select: { id: true, name: true },
+    });
+  });
+
   test('adds completed or pending payment status from all participant instalments', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({
       id: 100,

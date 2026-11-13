@@ -44,7 +44,7 @@ const CONFIG = {
   },
   broker: {
     title: 'Sales Executives',
-    description: 'Maintain sales executive contacts, commission rates, and their plot or site assignments.',
+    description: 'Maintain sales executive contacts, Finance commission assignments, and their plot or site assignments.',
     addLabel: 'Add Sales Executive',
     singular: 'sales executive',
     endpoint: '/api/pickup-plot-inventory/brokers',
@@ -52,7 +52,7 @@ const CONFIG = {
     optionsKey: 'plots',
     icon: Handshake,
     empty: {
-      name: '', phone: '', email: '', agency: '', commissionPercent: '',
+      name: '', phone: '', email: '', agency: '',
       plotSiteId: '', plotSiteIds: [], pickupLocationIds: [], customerIds: [], assignments: [], serviceAreas: [],
       accountMode: 'create', staffUserId: '', password: '', notes: '', isActive: true,
     },
@@ -538,7 +538,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
           row.notes,
         ]
         : [
-          row.name, row.phone, row.email, row.agency, row.commissionPercent,
+          row.name, row.phone, row.email, row.agency, row.commissionRateLabel,
           row.plotSite?.name, ...(row.plots || []).map((plot) => plot.name), row.notes,
         ];
       return searchableValues.some((value) => String(value ?? '').toLowerCase().includes(query));
@@ -655,7 +655,7 @@ export default function PickupPlotPeopleDirectory({ type }) {
                   </> : <>
                     <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}>{row.agency || 'Independent'}</td>
                     <td style={{ padding: '.55rem .65rem', width: 'auto', overflowWrap: 'anywhere' }}><PlotAssignmentsCell plots={(row.plots || []).length ? row.plots : row.plotSite ? [row.plotSite] : []} /></td>
-                    <td style={{ padding: '.55rem .65rem', width: 'auto' }}>{row.commissionPercent === null || row.commissionPercent === undefined ? '10% (default)' : `${Number(row.commissionPercent)}%`}</td>
+                    <td style={{ padding: '.55rem .65rem', width: 'auto' }} title="Managed from Finance → Commissions">{row.commissionRateLabel || 'Not configured'}</td>
                   </>}
                   <td style={{ padding: '.55rem .65rem', width: 'auto', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.notes || '—'}</td>
                   <td style={{ padding: '.55rem .65rem', width: 'auto' }}><StatusPill active={row.isActive} /></td>

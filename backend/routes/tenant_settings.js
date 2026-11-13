@@ -79,6 +79,17 @@ function defaultCategoryFor(key) {
 // { ok: true } or { ok: false, code, error } so callers can return 400
 // with a canonical envelope before touching the DB.
 function validateTenantSettingValue(key, rawValue) {
+  if (key === KEYS.GENERIC_TRACKING_COOKIE_DOMAINS) {
+    let domains;
+    try {
+      domains = JSON.parse(String(rawValue));
+    } catch {
+      return { ok: false, code: "INVALID_TRACKING_COOKIE_DOMAINS", error: "Tracking cookie domains must be valid JSON." };
+    }
+    if (!domains || typeof domains !== "object" || Array.isArray(domains) || String(rawValue).length > 20000) {
+      return { ok: false, code: "INVALID_TRACKING_COOKIE_DOMAINS", error: "Tracking cookie domains must be a JSON object smaller than 20 KB." };
+    }
+  }
   if (key === KEYS.GENERIC_FIELD_CONFIG) {
     let config;
     try {

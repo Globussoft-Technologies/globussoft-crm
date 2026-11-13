@@ -322,8 +322,12 @@ describe("<Settings /> — page shell + representative card pin", () => {
     }));
     expect(screen.getByRole("dialog", { name: "Cookie setup function" })).toBeInTheDocument();
     expect(
-      screen.getByText(/add this function once to your website header or footer/i),
+      screen.getByText(/choose the website domain first/i),
     ).toBeInTheDocument();
+    const domainInput = screen.getByRole("textbox", { name: "Website cookie domain" });
+    await user.type(domainInput, "https://poweradspy.com/landing");
+    await user.click(screen.getByRole("button", { name: "Validate and generate" }));
+    expect(screen.getByText("poweradspy.com")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Cookie setup function" }).value)
       .toContain("function saveGlobussoftTrackingCookies()");
 
@@ -335,6 +339,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(copiedCode).toContain('"utm_source"');
     expect(copiedCode).toContain('"gclid"');
     expect(copiedCode).toContain('"gbs_" + key');
+    expect(copiedCode).toContain("Domain=poweradspy.com");
     expect(copiedCode).toContain("90 * 24 * 60 * 60");
     expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Done" }));

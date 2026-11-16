@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ShieldCheck, RotateCw, Plus, Trash2, Copy, Check, X, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { createPortal } from 'react-dom';
 import { useNotify } from '../utils/notify';
 
 // Per-tenant HMAC signing credential management — generate / rotate / revoke
@@ -16,7 +17,7 @@ import { useNotify } from '../utils/notify';
 // server-side (402 → surfaced as a toast).
 const API = '/api/settings/webhook-credential';
 
-export default function WebhookSigningCredential() {
+export default function WebhookSigningCredential({ portalDialogs = false }) {
   const notify = useNotify();
   // GET /api/settings/webhook-credential response. null until loaded / when the
   // endpoint 403s (non-admin) — the panel then renders nothing.
@@ -83,6 +84,7 @@ export default function WebhookSigningCredential() {
   };
 
   if (!cred) return null;
+  const renderDialog = (content) => portalDialogs ? createPortal(content, document.body) : content;
 
   return (
     <>
@@ -196,8 +198,9 @@ export default function WebhookSigningCredential() {
 
       {/* One-time secret reveal — centered modal so the full 64-char key is
           visible + copyable (replaces the old clipped corner toast). */}
-      {revealed && (
+      {revealed && renderDialog(
         <div
+          className={portalDialogs ? 'gs-dialog' : undefined}
           role="dialog"
           aria-modal="true"
           aria-label="Webhook signing secret"

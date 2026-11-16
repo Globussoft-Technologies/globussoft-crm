@@ -2,8 +2,8 @@
  * Settings.test.jsx — vitest + RTL coverage for the tenant-admin Organization
  * Settings page (frontend/src/pages/Settings.jsx, 987 LOC).
  *
- * What this SUT actually is: a single-page card-grid layout (NOT a tabbed
- * page). The Settings page renders a 2-column grid of cards: Organization,
+ * Generic tenants use grouped settings navigation; other verticals retain
+ * the original card grid. Both layouts reuse the same controls: Organization,
  * Appearance (theme radio group), Email Messages (retention toggle — already
  * pinned by Settings.emailRetention.test.jsx), Branding (logo + brand color),
  * Pipeline Stages, Invite User, Notification Preferences, plus a wellness-only
@@ -66,7 +66,7 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -106,6 +106,7 @@ vi.mock("../App", async () => {
 
 import Settings from "../pages/Settings";
 import { AuthContext } from "../App";
+import { ActiveSubBrandProvider } from "../utils/subBrand";
 
 function renderSettings({ authValue } = {}) {
   const page = (
@@ -213,6 +214,231 @@ describe("<Settings /> — page shell + representative card pin", () => {
   });
 
   // 1 — Smoke render
+  it.each(["generic", "travel", "wellness"])("groups only the existing %s controls and keeps other verticals out", async (vertical) => {
+    const tenant = { ...baseTenant, id: 40, vertical };
+    fetchApiMock.mockImplementation(buildDefaultFetch({ tenant }));
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    await screen.findByDisplayValue("Acme Corp");
+    if (vertical === "wellness") await screen.findByTestId("consent-templates-card");
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).queryByRole("button", { name: "Website hosting" }) !== null).toBe(vertical === "travel");
+    expect(within(nav).queryByRole("button", { name: "Consent templates" }) !== null).toBe(vertical === "wellness");
+    expect(within(nav).queryByRole("button", { name: "Clinical role types" }) !== null).toBe(vertical === "wellness");
+    expect(screen.queryByTestId("travel-email-provider-card") !== null).toBe(vertical === "travel");
+    expect(screen.queryByTestId("travel-promotional-website-card") !== null).toBe(vertical === "travel");
+    expect(screen.queryByTestId("wellness-role-types-card") !== null).toBe(vertical === "wellness");
+    expect(screen.queryByTestId("generic-twilio-settings") !== null).toBe(vertical === "generic");
+    expect(screen.queryByTestId("generic-web-form-automatic-tracking") !== null).toBe(vertical === "generic");
+    expect(document.querySelector(".gs-panels > .card")).toBeNull();
+
+    for (const button of within(nav).getAllByRole("button")) {
+      fireEvent.click(button);
+      const activeSection = button.getAttribute("aria-current");
+      expect(activeSection).toBe("page");
+      if (button.textContent === "Integrations") expect(screen.getByLabelText("Available integrations")).toBeVisible();
+      else expect(document.querySelectorAll(".gs-section:not([hidden])").length).toBeGreaterThan(0);
+      if (button.textContent !== "General") expect(screen.queryByRole("heading", { name: "Pipeline Stages" })).not.toBeInTheDocument();
+    }
+    fireEvent.click(within(nav).getByRole("button", { name: "Integrations" }));
+    const directory = screen.getByLabelText("Available integrations");
+    expect(within(directory).queryByRole("button", { name: /Callified/ }) !== null).toBe(vertical !== "travel");
+    expect(screen.queryByRole("heading", { name: "Callified Integration", hidden: true }) !== null).toBe(vertical !== "travel");
+    expect(within(directory).queryByRole("button", { name: /SendGrid/ }) !== null).toBe(vertical === "travel");
+    expect(within(directory).queryByRole("button", { name: /Google Maps/ }) !== null).toBe(vertical === "generic");
+    expect(within(directory).queryByRole("button", { name: /WhatsApp \/ Meta/ }) !== null).toBe(vertical === "generic");
+    for (const [label, path] of [["Gmail", "/gmail"], ["Google Drive", "/travel/trip-knowledge"], ["Google Calendar", "/calendar-sync"], ["WhatsApp Web", "/travel/whatsapp"]]) {
+      const tile = within(directory).queryByRole("link", { name: new RegExp(label) });
+      if (vertical === "travel") expect(tile).toHaveAttribute("href", path);
+      else expect(tile).not.toBeInTheDocument();
+    }
+    if (vertical !== "wellness") {
+      expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/wellness/consent-templates" || url === "/api/wellness/role-types")).toBe(false);
+    }
+    if (vertical !== "travel") {
+      expect(directory.querySelectorAll(".gs-app-connection")).toHaveLength(vertical === "generic" ? 5 : 2);
+      expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/travel/email-provider" || url === "/api/travel/promotional-website" || url === "/api/brand-kits" || url === "/api/travel/dashboard/readiness")).toBe(false);
+    }
+  });
+
+  it.each(["travel", "wellness"])("keeps restricted %s settings out for users without manage permission", async (vertical) => {
+    const tenant = { ...baseTenant, vertical };
+    fetchApiMock.mockImplementation(buildDefaultFetch({ tenant }));
+    renderSettings({ authValue: { tenant, user: { role: "USER", permissions: [] }, setTenant: vi.fn() } });
+    await screen.findByDisplayValue("Acme Corp");
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).queryByRole("button", { name: "Website hosting" })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "AI & generation" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("travel-email-provider-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("travel-promotional-website-card")).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/travel/email-provider" || url === "/api/travel/promotional-website")).toBe(false);
+  });
+
+  it("preserves Wellness consent drafts and clinical role save payloads in their own sections", async () => {
+    const tenant = { ...baseTenant, vertical: "wellness" };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/wellness/role-types" && !opts?.method) return Promise.resolve([{ id: 9, key: "nurse", label: "Nurse", canTakeVisits: true, isActive: true }]);
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(await screen.findByRole("button", { name: "Consent templates" }));
+    fireEvent.change(screen.getByPlaceholderText(/Key \(e.g. paediatric\)/), { target: { value: "paediatric" } });
+    fireEvent.change(screen.getByPlaceholderText(/Label \(e.g. Paediatric Consent\)/), { target: { value: "Paediatric Consent" } });
+    fireEvent.click(screen.getByRole("button", { name: "Clinical role types" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Hide from calendar" }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/wellness/role-types/9", expect.objectContaining({ method: "PUT", body: JSON.stringify({ canTakeVisits: false }) })));
+    fireEvent.click(screen.getByRole("button", { name: "Consent templates" }));
+    expect(screen.getByPlaceholderText(/Key \(e.g. paediatric\)/)).toHaveValue("paediatric");
+    fireEvent.click(screen.getByRole("button", { name: "Add Template" }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/wellness/consent-templates", expect.objectContaining({ method: "POST", body: JSON.stringify({ key: "paediatric", label: "Paediatric Consent", body: "" }) })));
+  });
+
+  it("keeps Travel sub-brand color saves and the portaled brand dialog on BrandKit endpoints", async () => {
+    const tenant = { ...baseTenant, id: 37, vertical: "travel" };
+    const kit = { id: 71, subBrand: "tmc", primaryColor: "#334455", logoUrl: null };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/brand-kits?isActive=true") return Promise.resolve({ brandKits: [kit] });
+      if (url === "/api/brand-kits/effective/tmc") return Promise.resolve({ ...kit, source: "brandKit" });
+      if (url === "/api/brand-kits/71" && opts?.method === "PUT") return Promise.resolve({ ...kit, ...JSON.parse(opts.body) });
+      return defaults(url, opts);
+    });
+    sessionStorage.setItem("travel.activeSubBrand", "tmc");
+    const view = render(<MemoryRouter><AuthContext.Provider value={{ tenant, user: { role: "ADMIN" }, setTenant: vi.fn() }}><ActiveSubBrandProvider><Settings /></ActiveSubBrandProvider></AuthContext.Provider></MemoryRouter>);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Branding" }));
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Brand color hex" })).toHaveValue("#334455"));
+      fireEvent.change(screen.getByRole("textbox", { name: "Brand color hex" }), { target: { value: "#123456" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Save color" })[0]);
+      await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/brand-kits/71", expect.objectContaining({ method: "PUT", body: JSON.stringify({ primaryColor: "#123456" }) })));
+      expect(fetchApiMock.mock.calls.some(([url, opts]) => url === "/api/wellness/branding/color" && opts?.method === "PUT")).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Add Another Brand" }));
+      const dialog = screen.getByRole("dialog", { name: "Add another brand" });
+      expect(dialog.parentElement).toBe(document.body);
+      fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "rfu" } });
+      fireEvent.change(within(dialog).getByPlaceholderText("#3b82f6"), { target: { value: "#445566" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save Brand" }));
+      await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/brand-kits", expect.objectContaining({ method: "POST", body: JSON.stringify({ subBrand: "rfu", logoUrl: null, primaryColor: "#445566", isActive: true }) })));
+    } finally {
+      view.unmount();
+      sessionStorage.removeItem("travel.activeSubBrand");
+    }
+  });
+
+  it.each([
+    [true, true, false, "Connected", "Connected"],
+    [false, false, false, "Not connected", "Not connected"],
+    [false, false, true, "Not connected", "Connected"],
+  ])("shows saved Travel AdsGPT and SendGrid badges (%s, %s, fallback %s)", async (adsReady, sendgridReady, fallbackReady, adsLabel, sendgridLabel) => {
+    const tenant = { ...baseTenant, vertical: "travel" };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/integrations/adsgpt/config") return Promise.resolve({ configured: adsReady, adsgptLogin: adsReady ? "saved@example.test" : "" });
+      if (url === "/api/travel/email-provider") return Promise.resolve({ configured: sendgridReady, fallback: { configured: fallbackReady } });
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    const ads = screen.getByRole("button", { name: /AdsGPT.*Manage integration/i });
+    const sendgrid = screen.getByRole("button", { name: /SendGrid.*Manage integration/i });
+    expect(await within(ads).findByText(adsLabel)).toBeInTheDocument();
+    expect(await within(sendgrid).findByText(sendgridLabel)).toBeInTheDocument();
+    if (fallbackReady) expect(within(sendgrid).getByText("Connected")).toHaveAttribute("title", "Using the backend default SendGrid account");
+  });
+
+  it.each([["generic", true], ["generic", false], ["wellness", true], ["wellness", false]])("shows each %s integration badge from its saved status (connected %s)", async (vertical, connected) => {
+    const tenant = { ...baseTenant, vertical };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/integrations/adsgpt/config") return Promise.resolve({ configured: connected, adsgptLogin: connected ? "saved@example.test" : "" });
+      if (url === "/api/integrations/callified/config") return Promise.resolve({ isActive: connected });
+      if (url === "/api/settings/google-maps") return Promise.resolve({ configured: connected, enabled: connected });
+      if (url === "/api/sms/config") return Promise.resolve([{ provider: "twilio", isActive: connected, apiKey: { configured: connected }, authToken: { configured: connected }, senderId: "+15551234567" }]);
+      if (url === "/api/whatsapp/config/status") return Promise.resolve({ configured: true, status: { status: connected ? "CONNECTED" : "DISCONNECTED" }, config: {}, ours: {} });
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    const names = vertical === "generic" ? ["AdsGPT", "Callified", "WhatsApp / Meta", "Twilio", "Google Maps"] : ["AdsGPT", "Callified"];
+    for (const name of names) {
+      const tile = screen.getByRole("button", { name: new RegExp(`${name}.*Manage integration`, "i") });
+      expect(await within(tile).findByText(connected ? "Connected" : "Not connected")).toBeInTheDocument();
+    }
+    for (const endpoint of ["/api/settings/google-maps", "/api/sms/config", "/api/whatsapp/config/status"]) {
+      expect(fetchApiMock.mock.calls.filter(([url]) => url === endpoint)).toHaveLength(vertical === "generic" ? 1 : 0);
+    }
+  });
+
+  it("keeps Generic integration badges unknown when configuration requests fail", async () => {
+    const tenant = baseTenant;
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (["/api/integrations/adsgpt/config", "/api/integrations/callified/config", "/api/settings/google-maps", "/api/sms/config", "/api/whatsapp/config/status"].includes(url)) return Promise.reject(new Error("Unavailable"));
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    const directory = screen.getByLabelText("Available integrations");
+    await waitFor(() => expect(within(directory).getAllByText("Status unavailable")).toHaveLength(5));
+    expect(within(directory).queryByText("Not connected")).not.toBeInTheDocument();
+  });
+
+  it("updates the AdsGPT badge only after a successful save, not while typing a draft", async () => {
+    const tenant = { ...baseTenant, vertical: "travel" };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/integrations/adsgpt/config" && !opts?.method) return Promise.resolve({ configured: false, adsgptLogin: "" });
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    const adsTile = () => screen.getByRole("button", { name: /AdsGPT.*Manage integration/i });
+    await within(adsTile()).findByText("Not connected");
+    fireEvent.click(adsTile());
+    fireEvent.change(screen.getByPlaceholderText(/Username or email/), { target: { value: "saved@example.test" } });
+    fireEvent.click(screen.getByRole("button", { name: "All integrations" }));
+    expect(within(adsTile()).getByText("Not connected")).toBeInTheDocument();
+    fireEvent.click(adsTile());
+    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/integrations/adsgpt/config", expect.objectContaining({ method: "PUT", body: JSON.stringify({ adsgptLogin: "saved@example.test" }) })));
+    fireEvent.click(screen.getByRole("button", { name: "All integrations" }));
+    expect(await within(adsTile()).findByText("Connected")).toBeInTheDocument();
+  });
+
+  it.each([false, true])("refreshes the SendGrid badge after removing tenant credentials (backend default %s)", async (fallbackReady) => {
+    const tenant = { ...baseTenant, vertical: "travel" };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/travel/email-provider") return Promise.resolve(opts?.method === "DELETE" ? { configured: false, fallback: { configured: fallbackReady } } : { configured: true, fromEmail: "sender@example.test", fromName: "Travel team" });
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    const tile = () => screen.getByRole("button", { name: /SendGrid.*Manage integration/i });
+    await within(tile()).findByText("Connected");
+    fireEvent.click(tile());
+    fireEvent.click(screen.getByRole("button", { name: "Use Backend Default" }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/travel/email-provider", { method: "DELETE" }));
+    fireEvent.click(screen.getByRole("button", { name: "All integrations" }));
+    expect(await within(tile()).findByText(fallbackReady ? "Connected" : "Not connected")).toBeInTheDocument();
+  });
+
+  it("shows unknown badge status when Travel integration configuration fails to load", async () => {
+    const tenant = { ...baseTenant, vertical: "travel" };
+    const defaults = buildDefaultFetch({ tenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/integrations/adsgpt/config" || url === "/api/travel/email-provider") return Promise.reject(new Error("Unavailable"));
+      return defaults(url, opts);
+    });
+    renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    for (const name of [/AdsGPT.*Manage integration/i, /SendGrid.*Manage integration/i]) {
+      const tile = screen.getByRole("button", { name });
+      expect(await within(tile).findByText("Status unavailable")).toBeInTheDocument();
+      expect(within(tile).queryByText("Not connected")).not.toBeInTheDocument();
+    }
+  });
+
   it('renders the page header "Organization Settings" + subtitle', async () => {
     renderSettings();
     expect(
@@ -250,6 +476,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       },
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Forms & tracking" }));
     const recaptchaHeading = await screen.findByRole("heading", {
       name: "Web Form reCAPTCHA",
     });
@@ -317,6 +544,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       },
     });
 
+    await user.click(screen.getByRole("button", { name: "Forms & tracking" }));
     await user.click(await screen.findByRole("button", {
       name: "Get cookie setup function",
     }));
@@ -377,12 +605,15 @@ describe("<Settings /> — page shell + representative card pin", () => {
       },
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Integrations", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /WhatsApp \/ Meta.*Manage integration/i }));
     const heading = await screen.findByRole("heading", {
       name: /WhatsApp \/ Meta Configuration/i,
     });
     const card = heading.closest(".card");
     expect(card).toBeInTheDocument();
-    expect(card?.parentElement).toHaveClass("settings-grid");
+    expect(card?.parentElement).toHaveClass("gs-section");
+    expect(card).toBeVisible();
   });
 
   it("shows Twilio settings only in Generic CRM", async () => {
@@ -417,6 +648,8 @@ describe("<Settings /> — page shell + representative card pin", () => {
         setTenant: vi.fn(),
       },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Integrations", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /Google Maps.*Manage integration/i }));
     expect(await screen.findByRole("heading", { name: "Google Maps Address Search" })).toBeInTheDocument();
     genericView.unmount();
 
@@ -479,6 +712,29 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(password).toHaveAttribute("autocomplete", "new-password");
     expect(password).toHaveAttribute("data-1p-ignore", "true");
     expect(email.closest("form")).toHaveAttribute("autocomplete", "off");
+  });
+
+  it("preserves all five Generic Callified inputs and their save payload after section changes", async () => {
+    renderSettings({ authValue: { tenant: baseTenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
+    await screen.findByDisplayValue("Acme Corp");
+    fireEvent.click(screen.getByRole("button", { name: "Integrations", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /Callified.*Manage integration/i }));
+    const form = screen.getByRole("heading", { name: "Callified Integration" }).closest(".card").querySelector("form");
+    const inputs = [...form.querySelectorAll("input")];
+    expect(inputs).toHaveLength(5);
+    const values = ["ck_example_test_key", "https://calls.example.test", "agent@example.test", "example-password", "example-webhook-secret"];
+    inputs.forEach((input, index) => fireEvent.change(input, { target: { value: values[index] } }));
+    fireEvent.click(screen.getByRole("button", { name: "General", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Integrations", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /Callified.*Manage integration/i }));
+    inputs.forEach((input, index) => expect(input).toHaveValue(values[index]));
+    expect(fetchApiMock.mock.calls.filter(([url]) => url === "/api/integrations/callified/config")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Connect to Callified" }));
+    await waitFor(() => {
+      const saved = fetchApiMock.mock.calls.find(([url, options]) => url === "/api/integrations/callified/config" && options?.method === "PUT");
+      expect(saved).toBeDefined();
+      expect(JSON.parse(saved[1].body)).toEqual({ apiKey: values[0], baseUrl: values[1], email: values[2], password: values[3], webhookSecret: values[4] });
+    });
   });
 
   it("omits blank masked fallback credentials when updating another Callified field", async () => {
@@ -584,6 +840,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       screen.getByText(/New publishes will sync automatically/i),
     ).toBeInTheDocument();
 
+    await user.click(screen.getByRole("button", { name: "Website hosting" }));
     const host = screen.getByLabelText("Host");
     await user.clear(host);
     await user.type(host, "sftp.updated.example.com");
@@ -669,6 +926,8 @@ describe("<Settings /> — page shell + representative card pin", () => {
         screen.getByTestId("travel-email-provider-card"),
       ).toBeInTheDocument(),
     );
+    await user.click(screen.getByRole("button", { name: "Integrations" }));
+    await user.click(screen.getByRole("button", { name: /SendGrid.*Manage integration/i }));
     expect(screen.getByLabelText("SendGrid API key")).toHaveValue("");
     expect(screen.getByLabelText("SendGrid API key")).toHaveAttribute(
       "type",
@@ -704,6 +963,8 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(notifyObj.success).toHaveBeenCalledWith(
       expect.stringMatching(/Travel SendGrid settings saved/i),
     );
+    fireEvent.click(screen.getByRole("button", { name: "All integrations" }));
+    expect(await within(screen.getByRole("button", { name: /SendGrid.*Manage integration/i })).findByText("Connected")).toBeInTheDocument();
   });
 
   it("switches the transfer form to FTP and uses port 21", async () => {
@@ -849,6 +1110,26 @@ describe("<Settings /> — page shell + representative card pin", () => {
   });
 
   // 6 — Pipeline stages loaded list
+  it("keeps pipeline stages in General and preserves the draft across other settings sections", async () => {
+    renderSettings({
+      authValue: { tenant: baseTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+    const heading = await screen.findByRole("heading", { name: "Pipeline Stages" });
+    await screen.findByText("Prospecting");
+    const stageInput = screen.getByPlaceholderText(/Stage name/i);
+    fireEvent.change(stageInput, { target: { value: "Unsaved stage" } });
+
+    for (const section of ["Branding", "Appearance & tours", "Notifications", "Members", "Integrations", "AI & generation", "Forms & tracking", "API & webhooks"]) {
+      fireEvent.click(screen.getByRole("button", { name: section }));
+      expect(heading).not.toBeVisible();
+      expect(stageInput).not.toBeVisible();
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    expect(heading).toBeVisible();
+    expect(stageInput).toHaveValue("Unsaved stage");
+  });
+
   it("renders loaded pipeline stages with their names + position labels", async () => {
     renderSettings();
     await waitFor(() =>

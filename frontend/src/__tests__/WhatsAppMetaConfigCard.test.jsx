@@ -36,15 +36,43 @@ describe("<WhatsAppMetaConfigCard />", () => {
     });
   });
 
-  it("shows every required generic-CRM Meta credential and masks saved secrets", async () => {
-    render(<WhatsAppMetaConfigCard />);
+  it.each([false, true])("shows required Meta credentials and masks saved secrets with compactHints=%s", async (compactHints) => {
+    render(<WhatsAppMetaConfigCard compactHints={compactHints} />);
 
-    expect(await screen.findByLabelText(/Meta App ID/)).toHaveValue("1144255987952419");
-    expect(screen.getByLabelText(/Meta App Secret/)).toHaveValue("****8cd7");
-    expect(screen.getByLabelText(/Access token/)).toHaveValue("****UOan");
-    expect(screen.getByLabelText(/Webhook verify token/)).toHaveValue("****oken");
+    expect(await screen.findByLabelText(/Meta App ID/, { selector: "input" })).toHaveValue("1144255987952419");
+    expect(screen.getByLabelText(/Meta App Secret/, { selector: "input" })).toHaveValue("****8cd7");
+    expect(screen.getByLabelText(/Access token/, { selector: "input" })).toHaveValue("****UOan");
+    expect(screen.getByLabelText(/Webhook verify token/, { selector: "input" })).toHaveValue("****oken");
+    expect(screen.getByLabelText(/Webhook verify token/, { selector: "input" })).toBeRequired();
+    expect(screen.getByText("Webhook verify token")).toHaveTextContent("*");
     expect(screen.getByText("Meta App ID").parentElement).toHaveTextContent("*");
     expect(screen.getByText("Meta App Secret").parentElement).toHaveTextContent("*");
+  });
+
+  it("reports inactive saved WhatsApp credentials as not connected", async () => {
+    const onConnectionStatusChange = vi.fn();
+    render(<WhatsAppMetaConfigCard onConnectionStatusChange={onConnectionStatusChange} />);
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: false, loading: false }));
+  });
+
+  it("refreshes reported status after a WhatsApp disconnect", async () => {
+    const user = userEvent.setup();
+    const onConnectionStatusChange = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let connected = true;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/whatsapp/config/status") return Promise.resolve({ ...savedState, status: { ...savedState.status, status: connected ? "CONNECTED" : "DISCONNECTED" } });
+      if (url === "/api/whatsapp/config/meta_cloud/disconnect") connected = false;
+      return Promise.resolve({});
+    });
+    try {
+      render(<WhatsAppMetaConfigCard onConnectionStatusChange={onConnectionStatusChange} />);
+      await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: true, loading: false }));
+      await user.click(screen.getByRole("button", { name: "Disconnect" }));
+      await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: false, loading: false }));
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it("submits App ID and App Secret through the tenant connect endpoint", async () => {

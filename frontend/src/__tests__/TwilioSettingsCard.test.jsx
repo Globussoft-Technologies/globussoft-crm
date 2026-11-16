@@ -44,6 +44,19 @@ describe("<TwilioSettingsCard />", () => {
     expect(screen.getByRole("checkbox", { name: "Enable" })).toBeChecked();
   });
 
+  it("opens the generic settings dialog outside the narrow content pane without saving on cancel", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<TwilioSettingsCard portalDialogs />);
+    await screen.findByDisplayValue("+17372508034");
+    await user.click(screen.getByRole("button", { name: "Rotate Auth Token" }));
+    const dialog = screen.getByRole("dialog");
+    expect(document.body).toContainElement(dialog);
+    expect(container).not.toContainElement(dialog);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([, options]) => options?.method === "PUT")).toBe(false);
+  });
+
   it("saves the phone and enabled state through the existing Twilio endpoint", async () => {
     const user = userEvent.setup();
     render(<TwilioSettingsCard />);
@@ -62,6 +75,30 @@ describe("<TwilioSettingsCard />", () => {
         isActive: true,
       });
     });
+  });
+
+  it("reports saved Twilio state without treating draft changes as disconnected", async () => {
+    const user = userEvent.setup();
+    const onConnectionStatusChange = vi.fn();
+    let stored = { ...savedConfig };
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === "/api/sms/config") return Promise.resolve([stored]);
+      if (url === "/api/sms/config/twilio" && options?.method === "PUT") stored = { ...stored, ...JSON.parse(options.body) };
+      return Promise.resolve({});
+    });
+    render(<TwilioSettingsCard onConnectionStatusChange={onConnectionStatusChange} />);
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: true, loading: false }));
+    await user.click(screen.getByRole("checkbox", { name: "Enable" }));
+    expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: true, loading: false });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: false, loading: false }));
+  });
+
+  it("reports unknown status when the Twilio configuration cannot be loaded", async () => {
+    const onConnectionStatusChange = vi.fn();
+    fetchApiMock.mockRejectedValue(new Error("Unavailable"));
+    render(<TwilioSettingsCard onConnectionStatusChange={onConnectionStatusChange} />);
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: null, loading: false }));
   });
 
   it("rotates only the selected secret credential", async () => {

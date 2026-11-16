@@ -2603,12 +2603,297 @@ router.get(
           parentPhone: true,
           consentCapturedAt: true,
           createdAt: true,
+          pendingRegistration: {
+            select: {
+              studentDob: true,
+              studentSchool: true,
+              studentClass: true,
+              studentGender: true,
+              parentRelation: true,
+            },
+          },
         },
       });
-      res.json({ trip, participants });
+      res.json({
+        trip,
+        participants: participants.map((participant) => ({
+          ...participant,
+          studentDob: participant.pendingRegistration?.studentDob || null,
+          studentSchool: participant.pendingRegistration?.studentSchool || null,
+          studentClass: participant.pendingRegistration?.studentClass || null,
+          studentGender: participant.pendingRegistration?.studentGender || null,
+          parentRelation: participant.pendingRegistration?.parentRelation || null,
+          pendingRegistration: undefined,
+        })),
+      });
     } catch (err) {
       console.error("[tmc-portal][teacher/participants]", err);
       res.status(500).json({ error: "Failed to load participants" });
+    }
+  },
+);
+
+// Trip-management data is deliberately exposed through the portal-token
+// surface instead of reusing the staff JWT routes. loadTeacherTrip scopes every
+// operation to both the tenant and the logged-in teacher's assignment.
+const TEACHER_ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+
+function parseTeacherParticipantIds(value) {
+  if (!Array.isArray(value)) return null;
+  const ids = value.map((item) => Number(item));
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) return null;
+  return [...new Set(ids)];
+}
+
+async function validateTeacherRoomParticipants(tripId, participantIds) {
+  if (!participantIds.length) return true;
+  const count = await prisma.tripParticipant.count({
+    // The parent trip is tenant + teacher scoped by loadTeacherTrip.
+    where: { id: { in: participantIds }, tripId },
+  });
+  return count === participantIds.length;
+}
+
+async function teacherRoomParticipantConflict(tripId, participantIds, excludedRoomId = null) {
+  if (!participantIds.length) return null;
+  const existing = await prisma.roomingAssignment.findMany({
+    where: {
+      tripId,
+      ...(excludedRoomId ? { id: { not: excludedRoomId } } : {}),
+    },
+    select: { participantIds: true },
+  });
+  const requested = new Set(participantIds);
+  for (const room of existing) {
+    let ids = [];
+    try { ids = JSON.parse(room.participantIds || "[]"); } catch (_err) { ids = []; }
+    const conflict = ids.find((id) => requested.has(Number(id)));
+    if (conflict != null) return Number(conflict);
+  }
+  return null;
+}
+
+router.get(
+  "/teacher/trips/:tripId/payment-plan",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const plan = await prisma.tripPaymentPlan.findUnique({ where: { tripId: trip.id } });
+      if (!plan) return res.status(404).json({ error: "Payment plan not found", code: "NOT_FOUND" });
+      return res.json(plan);
+    } catch (err) {
+      console.error("[tmc-portal][teacher/payment-plan]", err);
+      return res.status(500).json({ error: "Failed to load payment plan" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/trips/:tripId/instalments",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const where = { tripId: trip.id };
+      if (req.query.participantId) {
+        const participantId = Number.parseInt(req.query.participantId, 10);
+        if (Number.isInteger(participantId)) where.participantId = participantId;
+      }
+      const instalments = await prisma.tripInstalmentPayment.findMany({
+        where,
+        orderBy: [{ participantId: "asc" }, { instalmentIndex: "asc" }],
+        take: 500,
+      });
+      return res.json({ instalments });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/instalments]", err);
+      return res.status(500).json({ error: "Failed to load instalments" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/trips/:tripId/rooming",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      // RoomingAssignment has no tenantId; loadTeacherTrip scopes its trip FK.
+      const rooming = await prisma.roomingAssignment.findMany({
+        // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+        where: { tripId: trip.id },
+        orderBy: { roomNumber: "asc" },
+      });
+      return res.json({ rooming });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming]", err);
+      return res.status(500).json({ error: "Failed to load rooming" });
+    }
+  },
+);
+
+router.post(
+  "/teacher/trips/:tripId/rooming",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const roomNumber = String(req.body?.roomNumber || "").trim();
+      const roomType = String(req.body?.roomType || "").trim().toLowerCase();
+      const participantIds = parseTeacherParticipantIds(req.body?.participantIds);
+      if (!roomNumber || !roomType || !participantIds) {
+        return res.status(400).json({ error: "roomNumber, roomType, participantIds[] required", code: "MISSING_FIELDS" });
+      }
+      const capacity = TEACHER_ROOM_CAPACITY[roomType];
+      if (!capacity) return res.status(400).json({ error: "invalid roomType", code: "INVALID_ROOM_TYPE" });
+      if (participantIds.length > capacity) return res.status(400).json({ error: `roomType "${roomType}" allows at most ${capacity} participants`, code: "ROOM_CAPACITY_EXCEEDED" });
+      if (!(await validateTeacherRoomParticipants(trip.id, participantIds))) return res.status(400).json({ error: "one or more participants are not on this trip", code: "PARTICIPANTS_OFF_TRIP" });
+      const duplicateRoom = await prisma.roomingAssignment.findFirst({ where: { tripId: trip.id, roomNumber }, select: { id: true } });
+      if (duplicateRoom) return res.status(409).json({ error: `Room number ${roomNumber} already exists on this trip`, code: "DUPLICATE_ROOM_NUMBER" });
+      const conflict = await teacherRoomParticipantConflict(trip.id, participantIds);
+      if (conflict != null) return res.status(409).json({ error: `Participant #${conflict} is already assigned to another room`, code: "DUPLICATE_ASSIGNMENT" });
+      const room = await prisma.roomingAssignment.create({ data: { tripId: trip.id, roomNumber, roomType, participantIds: JSON.stringify(participantIds) } });
+      return res.status(201).json(room);
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-create]", err);
+      return res.status(500).json({ error: "Failed to create room" });
+    }
+  },
+);
+
+router.patch(
+  "/teacher/trips/:tripId/rooming/:roomId",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const roomId = Number.parseInt(req.params.roomId, 10);
+      if (!Number.isInteger(roomId)) return res.status(400).json({ error: "roomId must be a number", code: "INVALID_ROOM_ID" });
+      const existing = await prisma.roomingAssignment.findFirst({ where: { id: roomId, tripId: trip.id } });
+      if (!existing) return res.status(404).json({ error: "Room not found", code: "ROOM_NOT_FOUND" });
+      const data = {};
+      if (req.body?.roomNumber !== undefined) {
+        const roomNumber = String(req.body.roomNumber || "").trim();
+        if (!roomNumber) return res.status(400).json({ error: "roomNumber is required", code: "INVALID_ROOM_NUMBER" });
+        const duplicateRoom = await prisma.roomingAssignment.findFirst({ where: { tripId: trip.id, roomNumber, NOT: { id: roomId } }, select: { id: true } });
+        if (duplicateRoom) return res.status(409).json({ error: `Room number ${roomNumber} already exists on this trip`, code: "DUPLICATE_ROOM_NUMBER" });
+        data.roomNumber = roomNumber;
+      }
+      const nextType = String(req.body?.roomType ?? existing.roomType).trim().toLowerCase();
+      if (!TEACHER_ROOM_CAPACITY[nextType]) return res.status(400).json({ error: "invalid roomType", code: "INVALID_ROOM_TYPE" });
+      data.roomType = nextType;
+      if (req.body?.participantIds !== undefined) {
+        const participantIds = parseTeacherParticipantIds(req.body.participantIds);
+        if (!participantIds) return res.status(400).json({ error: "participantIds must be an array of positive integers", code: "INVALID_PARTICIPANTS" });
+        if (participantIds.length > TEACHER_ROOM_CAPACITY[nextType]) return res.status(400).json({ error: `roomType "${nextType}" allows at most ${TEACHER_ROOM_CAPACITY[nextType]} participants`, code: "ROOM_CAPACITY_EXCEEDED" });
+        if (!(await validateTeacherRoomParticipants(trip.id, participantIds))) return res.status(400).json({ error: "one or more participants are not on this trip", code: "PARTICIPANTS_OFF_TRIP" });
+        const conflict = await teacherRoomParticipantConflict(trip.id, participantIds, roomId);
+        if (conflict != null) return res.status(409).json({ error: `Participant #${conflict} is already assigned to another room`, code: "DUPLICATE_ASSIGNMENT" });
+        data.participantIds = JSON.stringify(participantIds);
+      }
+      const room = await prisma.roomingAssignment.update({ where: { id: roomId }, data });
+      return res.json(room);
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-update]", err);
+      return res.status(500).json({ error: "Failed to update room" });
+    }
+  },
+);
+
+router.delete(
+  "/teacher/trips/:tripId/rooming/:roomId",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const roomId = Number.parseInt(req.params.roomId, 10);
+      if (!Number.isInteger(roomId)) return res.status(400).json({ error: "roomId must be a number", code: "INVALID_ROOM_ID" });
+      const existing = await prisma.roomingAssignment.findFirst({ where: { id: roomId, tripId: trip.id }, select: { id: true } });
+      if (!existing) return res.status(404).json({ error: "Room not found", code: "ROOM_NOT_FOUND" });
+      await prisma.roomingAssignment.delete({ where: { id: roomId } });
+      return res.json({ deleted: true, id: roomId });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-delete]", err);
+      return res.status(500).json({ error: "Failed to delete room" });
+    }
+  },
+);
+
+router.post(
+  "/teacher/trips/:tripId/rooming/auto",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const requestedTypes = Array.isArray(req.body?.roomTypes) ? req.body.roomTypes : ["twin", "quad"];
+      const roomTypes = requestedTypes.map((value) => String(value).toLowerCase()).filter((value) => TEACHER_ROOM_CAPACITY[value]);
+      const types = roomTypes.length ? roomTypes : ["twin", "quad"];
+      const startRoom = Number(req.body?.startingRoomNumber) || 101;
+      const [participants, rooms] = await Promise.all([
+        // TripParticipant has no tenantId; loadTeacherTrip scopes the parent.
+        prisma.tripParticipant.findMany({
+          // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+          where: { tripId: trip.id },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        }),
+        // RoomingAssignment has no tenantId; loadTeacherTrip scopes the parent.
+        prisma.roomingAssignment.findMany({
+          // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+          where: { tripId: trip.id },
+          select: { participantIds: true },
+        }),
+      ]);
+      const assigned = new Set();
+      for (const room of rooms) {
+        try { const ids = JSON.parse(room.participantIds || "[]"); if (Array.isArray(ids)) ids.forEach((id) => assigned.add(Number(id))); } catch (_err) { /* ignore malformed legacy data */ }
+      }
+      const unassigned = participants.filter((participant) => !assigned.has(participant.id));
+      if (unassigned.length === 0) return res.status(201).json({ created: 0, skipped: 0, warnings: ["All participants already assigned"] });
+      const toCreate = [];
+      let roomNumber = startRoom;
+      let typeIndex = 0;
+      let current = [];
+      for (const participant of unassigned) {
+        const roomType = types[typeIndex % types.length];
+        current.push(participant.id);
+        if (current.length === TEACHER_ROOM_CAPACITY[roomType]) {
+          toCreate.push({ tripId: trip.id, roomNumber: String(roomNumber++), roomType, participantIds: JSON.stringify(current) });
+          current = [];
+          typeIndex += 1;
+        }
+      }
+      if (current.length) {
+        const roomType = types[typeIndex % types.length];
+        toCreate.push({ tripId: trip.id, roomNumber: String(roomNumber), roomType, participantIds: JSON.stringify(current) });
+      }
+      const result = await prisma.roomingAssignment.createMany({ data: toCreate });
+      return res.status(201).json({ created: result.count, skipped: 0, warnings: [] });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-auto]", err);
+      return res.status(500).json({ error: "Failed to auto-allocate rooming" });
     }
   },
 );

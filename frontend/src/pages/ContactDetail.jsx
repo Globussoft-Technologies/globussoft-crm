@@ -4,7 +4,7 @@ import {
   Mail, Phone, MessageSquare, StickyNote, CheckSquare,
   Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap, Image as ImageIcon,
-  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight,
+  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight, Maximize2,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -78,6 +78,20 @@ const PIPELINE_SEGS = [
 const GENERIC_LIFECYCLE_SETTING_KEY = 'generic.contactLifecycleStages';
 const GENERIC_LIFECYCLE_DRAFT_PREFIX = 'crm:generic-lifecycle-draft:v1';
 const GENERIC_LEADS_PAGINATION_STORAGE_PREFIX = 'globuscrm.leads.pagination.v1';
+const GENERIC_STATUS_BAR_WIDTH_STORAGE_KEY = 'crm:generic-status-bar-width:v1';
+const GENERIC_STATUS_BAR_MIN_WIDTH = 40;
+const GENERIC_STATUS_BAR_MAX_WIDTH = 100;
+const clampStatusBarWidth = (value) => Math.max(
+  GENERIC_STATUS_BAR_MIN_WIDTH,
+  Math.min(GENERIC_STATUS_BAR_MAX_WIDTH, Number(value) || GENERIC_STATUS_BAR_MAX_WIDTH),
+);
+const readStatusBarWidth = () => {
+  try {
+    return clampStatusBarWidth(localStorage.getItem(GENERIC_STATUS_BAR_WIDTH_STORAGE_KEY));
+  } catch (_error) {
+    return GENERIC_STATUS_BAR_MAX_WIDTH;
+  }
+};
 const cloneLifecycleSegments = (segments) => segments.map((segment) => ({
   ...segment,
   options: segment.options.map((option) => ({ ...option })),
@@ -320,6 +334,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const isGeneric = !isWellness && !isTravel;
   const isGenericLeadsDetail = isGeneric && location.pathname.startsWith('/leads/');
+  const renderStandaloneLeadPage = isGenericLeadsDetail
+    && !renderBackdrop
+    && (!location.state?.leadsListState || location.state?.openFullPage);
   const showGenericLeadsBackdrop = renderBackdrop && isGenericLeadsDetail;
   const lifecycleDraftStorageKey = `${GENERIC_LIFECYCLE_DRAFT_PREFIX}:${tenant?.id || user?.tenantId || 'generic'}:${user?.id || user?.userId || 'current'}`;
   const [genericLifecycleSegments, setGenericLifecycleSegments] = useState(() => cloneLifecycleSegments(PIPELINE_SEGS));
@@ -345,14 +362,19 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       if (!Number.isInteger(pageIndex) || pageIndex < 0 || !Number.isInteger(pageSize) || pageSize < 1) {
         return null;
       }
-      return { pageIndex, pageSize };
+      const returnTo = typeof stored?.returnTo === 'string'
+        && stored.returnTo.startsWith('/')
+        && !stored.returnTo.startsWith('//')
+        ? stored.returnTo
+        : null;
+      return { pageIndex, pageSize, returnTo };
     } catch {
       return null;
     }
   }, [isGenericLeadsDetail, leadPaginationStorageKey]);
-  // The detail URL is authoritative when it carries page information. State
-  // remains a compatibility fallback for profiles opened before the URL-based
-  // pagination handoff was added.
+  // The detail URL carries the page from which this lead was opened. Prefer
+  // that value over router/session snapshots, which may lag behind a recent
+  // pagination change while the list is rendering.
   const detailPage = Number.isInteger(queryDetailPage) && queryDetailPage >= 1
     ? queryDetailPage
     : Number.isInteger(stateListPageIndex) && stateListPageIndex >= 0
@@ -365,42 +387,102 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     : Number.isInteger(stateListPageSize) && stateListPageSize >= 1
       ? stateListPageSize
       : storedLeadsListState?.pageSize || 10;
-  const withLeadPage = (returnTo) => {
+  const withLeadPage = (returnTo, pageOverride = detailPage, pageSizeOverride = detailPageSize) => {
     if (typeof returnTo !== 'string' || !returnTo.startsWith('/') || returnTo.startsWith('//')) {
       return null;
     }
-    if (!detailPage) return returnTo;
+    if (!pageOverride) return returnTo;
     const hashIndex = returnTo.indexOf('#');
     const hash = hashIndex >= 0 ? returnTo.slice(hashIndex) : '';
     const withoutHash = hashIndex >= 0 ? returnTo.slice(0, hashIndex) : returnTo;
     const queryIndex = withoutHash.indexOf('?');
     const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
     const params = new URLSearchParams(queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : '');
-    params.set('page', String(detailPage));
-    params.set('limit', String(detailPageSize));
+    params.set('page', String(pageOverride));
+    params.set('limit', String(pageSizeOverride));
     return `${pathname}?${params.toString()}${hash}`;
   };
+  const storedLeadReturnTo = storedLeadsListState?.returnTo
+    ? withLeadPage(storedLeadsListState.returnTo, detailPage, detailPageSize)
+    : null;
   const detailLeadsReturnTo = isGenericLeadsDetail && detailPage
     ? `/leads?page=${detailPage}&limit=${detailPageSize}`
     : null;
   const requestedBackTo = isGenericLeadsDetail
-    ? withLeadPage(location.state?.returnTo || location.state?.backTo) || detailLeadsReturnTo
+    ? withLeadPage(location.state?.returnTo || location.state?.backTo)
+      || storedLeadReturnTo
+      || detailLeadsReturnTo
     : location.state?.returnTo || location.state?.backTo || detailLeadsReturnTo;
+  const returnListPage = renderStandaloneLeadPage
+    && Number.isInteger(stateListPageIndex)
+    && stateListPageIndex >= 0
+    ? stateListPageIndex + 1
+    : detailPage;
+  const returnListPageSize = renderStandaloneLeadPage
+    && Number.isInteger(stateListPageSize)
+    && stateListPageSize >= 1
+    ? stateListPageSize
+    : detailPageSize;
+  // Derive the Leads return URL from the originating list snapshot for a
+  // standalone profile, and from the detail URL for direct/drawer profiles.
+  // Either way, the back target is rebuilt with an explicit page and limit.
+  const canonicalLeadClosePath = isGenericLeadsDetail && detailPage
+    ? withLeadPage(requestedBackTo || '/leads', returnListPage, returnListPageSize)
+    : null;
   const leadsBackdropListState = showGenericLeadsBackdrop && detailPage
     ? { pageIndex: detailPage - 1, pageSize: detailPageSize }
     : null;
-  const closePath = typeof requestedBackTo === 'string'
+  const closePath = canonicalLeadClosePath || (typeof requestedBackTo === 'string'
     && requestedBackTo.startsWith('/')
     && !requestedBackTo.startsWith('//')
     ? requestedBackTo
-    : defaultListPath;
+    : defaultListPath);
   const closeLabel = typeof (location.state?.returnLabel || location.state?.backLabel) === 'string'
     ? (location.state.returnLabel || location.state.backLabel)
     : `Back to ${defaultListPath === '/leads' ? 'Leads' : 'Contacts'}`;
+  const closeNavigationState = useMemo(() => {
+    const { openFullPage: _openFullPage, ...rest } = location.state && typeof location.state === 'object'
+      ? location.state
+      : {};
+    if (!isGenericLeadsDetail || !returnListPage) {
+      return Object.keys(rest).length ? rest : undefined;
+    }
+
+    // The detail URL is the authoritative source for the originating Leads
+    // page. Keep the router snapshot in sync as well, so returning from a
+    // standalone profile cannot restore an older page index from stale state.
+    const pageIndex = returnListPage - 1;
+    const pageSize = returnListPageSize;
+    const leadsListState = {
+      ...(rest.leadsListState && typeof rest.leadsListState === 'object'
+        ? rest.leadsListState
+        : {}),
+      pageIndex,
+      pageSize,
+    };
+    const leadsTableState = rest.leadsTableState && typeof rest.leadsTableState === 'object'
+      ? { ...rest.leadsTableState, pageIndex, pageSize }
+      : rest.leadsTableState;
+
+    return {
+      ...rest,
+      returnTo: closePath,
+      leadsListState,
+      ...(leadsTableState ? { leadsTableState } : {}),
+    };
+  }, [closePath, isGenericLeadsDetail, location.state, returnListPage, returnListPageSize]);
   const closeProfile = useCallback(() => navigate(closePath, {
     replace: Boolean(requestedBackTo),
-    state: location.state,
-  }), [closePath, location.state, navigate, requestedBackTo]);
+    state: closeNavigationState,
+  }), [closeNavigationState, closePath, navigate, requestedBackTo]);
+  const openStandaloneProfile = useCallback(() => {
+    navigate(`${location.pathname}${location.search}`, {
+      state: {
+        ...(location.state && typeof location.state === 'object' ? location.state : {}),
+        openFullPage: true,
+      },
+    });
+  }, [location.pathname, location.search, location.state, navigate]);
   const [contact, setContact] = useState(null);
   const [overviewActivities, setOverviewActivities] = useState([]);
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
@@ -453,6 +535,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const [lifecycleHistoryLoading, setLifecycleHistoryLoading] = useState(false);
   const [lifecycleHistory, setLifecycleHistory] = useState([]);
   const [lifecycleStageSelections, setLifecycleStageSelections] = useState({});
+  const [genericStatusBarWidth, setGenericStatusBarWidth] = useState(readStatusBarWidth);
   const [moreOpen, setMoreOpen] = useState(false);
   const [seqPicker, setSeqPicker] = useState(false);
   const [sequences, setSequences] = useState([]);
@@ -463,7 +546,63 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const notesRef = useRef(null);
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
+  const statusBarResizeRef = useRef(null);
+  const statusBarResizeActiveRef = useRef(false);
   const contactTagManagerEnabled = isGeneric;
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    try {
+      localStorage.setItem(GENERIC_STATUS_BAR_WIDTH_STORAGE_KEY, String(genericStatusBarWidth));
+    } catch (_error) {
+      // A blocked storage context should not prevent the profile from working.
+    }
+    return undefined;
+  }, [genericStatusBarWidth, isGeneric]);
+
+  const updateStatusBarWidthFromPointer = useCallback((clientX) => {
+    const resizeHandle = statusBarResizeRef.current;
+    const row = resizeHandle?.closest('.cp-lifecycle-row--generic');
+    if (!row) return;
+    const bounds = row.getBoundingClientRect();
+    const computed = window.getComputedStyle(row);
+    const leftInset = Number.parseFloat(computed.paddingLeft) || 0;
+    const rightInset = Number.parseFloat(computed.paddingRight) || 0;
+    const usableWidth = Math.max(1, bounds.width - leftInset - rightInset);
+    const nextWidth = ((clientX - bounds.left - leftInset) / usableWidth) * 100;
+    setGenericStatusBarWidth(clampStatusBarWidth(nextWidth));
+  }, []);
+
+  const handleStatusBarResizeStart = useCallback((event) => {
+    event.preventDefault();
+    statusBarResizeActiveRef.current = true;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    updateStatusBarWidthFromPointer(event.clientX);
+  }, [updateStatusBarWidthFromPointer]);
+
+  const handleStatusBarResizeEnd = useCallback((event) => {
+    statusBarResizeActiveRef.current = false;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  const handleStatusBarResizeKeyDown = useCallback((event) => {
+    const keySteps = {
+      ArrowLeft: -5,
+      ArrowDown: -5,
+      ArrowRight: 5,
+      ArrowUp: 5,
+    };
+    if (event.key === 'Home') {
+      event.preventDefault();
+      setGenericStatusBarWidth(GENERIC_STATUS_BAR_MIN_WIDTH);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setGenericStatusBarWidth(GENERIC_STATUS_BAR_MAX_WIDTH);
+    } else if (keySteps[event.key]) {
+      event.preventDefault();
+      setGenericStatusBarWidth((current) => clampStatusBarWidth(current + keySteps[event.key]));
+    }
+  }, []);
 
   useEffect(() => {
     if (!isGeneric) return undefined;
@@ -1316,28 +1455,48 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     }
   };
 
-  const shell = (content) => (
-    <div className="cp-slide-root">
-      {renderBackdrop && (
-        <div className="cp-slide-bg">
-          {showGenericLeadsBackdrop
-            ? <Leads initialListState={leadsBackdropListState} />
-            : <Contacts />}
-        </div>
-      )}
-      <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
-      <aside className="cp-slide-panel" aria-label="Contact profile">
-        <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
-          <X size={15} />
-        </button>
-        <div className="cp-slide-scroll">
-          <div className="cp-wrap">
-            {content}
+  const shell = (content) => {
+    if (renderStandaloneLeadPage) {
+      return (
+        <section className="cp-full-page" aria-label="Contact profile">
+          <div className="cp-full-page-toolbar">
+            <button type="button" className="cp-back" onClick={closeProfile} aria-label={closeLabel}>
+              <ChevronLeft size={16} />
+              {closeLabel}
+            </button>
           </div>
-        </div>
-      </aside>
-    </div>
-  );
+          <div className="cp-full-page-scroll">
+            <div className="cp-wrap">
+              {content}
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <div className="cp-slide-root">
+        {renderBackdrop && (
+          <div className="cp-slide-bg">
+            {showGenericLeadsBackdrop
+              ? <Leads initialListState={leadsBackdropListState} />
+              : <Contacts />}
+          </div>
+        )}
+        <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
+        <aside className="cp-slide-panel" aria-label="Contact profile">
+          <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
+            <X size={15} />
+          </button>
+          <div className="cp-slide-scroll">
+            <div className="cp-wrap">
+              {content}
+            </div>
+          </div>
+        </aside>
+      </div>
+    );
+  };
 
   if (loading) return shell(<p style={{ color: 'var(--text-secondary)' }}>Loading contact…</p>);
   if (!contact) {
@@ -1743,6 +1902,11 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
           </div>
         </div>
         <div className="cp-header-right">
+          {isGenericLeadsDetail && !renderStandaloneLeadPage && (
+            <button type="button" className="cp-action-btn" onClick={openStandaloneProfile}>
+              <Maximize2 size={13} /> Open full page
+            </button>
+          )}
           <button type="button" className="cp-action-btn" onClick={() => setActiveTab('details')}><FileText size={13} /> See all details</button>
           <div className="cp-nav-btns">
             <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
@@ -1992,11 +2156,15 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                   </div>
                   <div className="cp-lifecycle-current">{activeStage}</div>
                 </div>
-                <div className="cp-lifecycle-right">
+                <div
+                  className={`cp-lifecycle-right${isGeneric ? ' cp-lifecycle-right--resizable' : ''}`}
+                  ref={isGeneric ? statusBarResizeRef : undefined}
+                  style={isGeneric ? { width: `${genericStatusBarWidth}%` } : undefined}
+                >
                   <div className="cp-lifecycle-status-head">
                     <div className="cp-label">Status</div>
                   </div>
-                  <div className="cp-pipeline" role="group" aria-label="Lifecycle stage">
+                  <div className="cp-pipeline" role="group" aria-label={isGeneric ? 'Lead status stages' : 'Lifecycle stage'}>
                     {lifecycleSegments.map((seg) => {
                       const i = lifecycleSegments.indexOf(seg);
                       const selectedSegmentOption = isGeneric
@@ -2043,6 +2211,29 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                       );
                     })}
                   </div>
+                  {isGeneric && (
+                    <div
+                      className="cp-status-resize-handle"
+                      role="separator"
+                      aria-label="Resize status bar"
+                      aria-orientation="vertical"
+                      aria-valuemin={GENERIC_STATUS_BAR_MIN_WIDTH}
+                      aria-valuemax={GENERIC_STATUS_BAR_MAX_WIDTH}
+                      aria-valuenow={genericStatusBarWidth}
+                      aria-valuetext={`${genericStatusBarWidth}% of available width`}
+                      tabIndex={0}
+                      title="Drag to resize the status bar"
+                      onPointerDown={handleStatusBarResizeStart}
+                      onPointerMove={(event) => {
+                        if (statusBarResizeActiveRef.current) {
+                          updateStatusBarWidthFromPointer(event.clientX);
+                        }
+                      }}
+                      onPointerUp={handleStatusBarResizeEnd}
+                      onPointerCancel={handleStatusBarResizeEnd}
+                      onKeyDown={handleStatusBarResizeKeyDown}
+                    />
+                  )}
                 </div>
               </div>
               ) : null}

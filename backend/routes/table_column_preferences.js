@@ -48,8 +48,21 @@ router.use(async (req, res, next) => {
 });
 
 const VALID_TABLE_KEYS = new Set(["leads", "contacts"]);
-function normalizeVisibleColumnsForTable(tableKey, visible) {
-  return Array.isArray(visible) ? [...visible] : [];
+function normalizeVisibleColumnsForTable(visible, available) {
+  const availableColumns = Array.isArray(available) ? available : [];
+  const availableKeys = new Set(availableColumns.map((column) => column.key));
+  const unique = [];
+  for (const rawKey of Array.isArray(visible) ? visible : []) {
+    const key = String(rawKey);
+    if (availableKeys.has(key) && !unique.includes(key)) unique.push(key);
+  }
+  const lockedKeys = availableColumns
+    .filter((column) => column.lockedVisible)
+    .map((column) => column.key);
+  const firstLocked = lockedKeys.includes("name") ? ["name"] : [];
+  const middle = unique.filter((key) => !lockedKeys.includes(key));
+  const trailingLocked = lockedKeys.filter((key) => key !== "name");
+  return [...firstLocked, ...middle, ...trailingLocked];
 }
 // Built-in columns per table — key + label. Kept in one place so the
 // frontend doesn't need to hardcode its own copy; the API is the source of
@@ -243,8 +256,6 @@ router.get("/:tableKey", async (req, res) => {
     }
 
     const available = await getAvailableColumns(tableKey, req.user.tenantId, res.locals.tenantVertical);
-    const availableKeys = new Set(available.map((c) => c.key));
-
     const pref = await prisma.tableColumnPreference.findUnique({
       where: { userId_tableKey: { userId: req.user.userId, tableKey } },
     });
@@ -259,24 +270,7 @@ router.get("/:tableKey", async (req, res) => {
       }
       // Drop any saved key that no longer exists (deleted custom field) —
       // read-time filter only, doesn't rewrite the stored preference.
-      visible = normalizeVisibleColumnsForTable(
-        tableKey,
-        saved.filter((k) => availableKeys.has(k)),
-      );
-      // Restore genuinely locked columns on read as well as write.
-      const lockedKeys = getBuiltinColumns(tableKey, res.locals.tenantVertical)
-        .filter((column) => column.lockedVisible)
-        .map((column) => column.key);
-      for (const lockedKey of lockedKeys) {
-        if (visible.includes(lockedKey)) continue;
-        if (lockedKey === "name") {
-          visible.unshift(lockedKey);
-        } else {
-          const actionsIndex = visible.indexOf("actions");
-          if (lockedKey !== "actions" && actionsIndex >= 0) visible.splice(actionsIndex, 0, lockedKey);
-          else visible.push(lockedKey);
-        }
-      }
+      visible = normalizeVisibleColumnsForTable(saved, available);
     } else {
       // First-ever load for this user/table — default to every builtin
       // column visible, no custom-field columns (opt-in, matches the
@@ -306,24 +300,12 @@ router.put("/:tableKey", async (req, res) => {
     }
 
     const available = await getAvailableColumns(tableKey, req.user.tenantId, res.locals.tenantVertical);
-    const availableKeys = new Set(available.map((c) => c.key));
-    const cleanVisible = visible
-      .map((k) => String(k))
-      .filter((k) => availableKeys.has(k));
+    const cleanVisible = normalizeVisibleColumnsForTable(visible, available);
 
     // Locked columns (identity `name`, always-on `actions`) can't be hidden —
     // silently restore them if the caller's payload dropped them, rather
     // than rejecting the whole save. `name` stays first; any other locked
     // column is appended in catalog order (matches the table layout).
-    const lockedKeys = getBuiltinColumns(tableKey, res.locals.tenantVertical)
-      .filter((c) => c.lockedVisible)
-      .map((c) => c.key);
-    const [firstLocked, ...restLocked] = lockedKeys;
-    if (firstLocked && !cleanVisible.includes(firstLocked)) cleanVisible.unshift(firstLocked);
-    for (const k of restLocked) {
-      if (!cleanVisible.includes(k)) cleanVisible.push(k);
-    }
-
     await prisma.tableColumnPreference.upsert({
       where: { userId_tableKey: { userId: req.user.userId, tableKey } },
       create: {

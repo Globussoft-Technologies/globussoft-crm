@@ -690,11 +690,11 @@ describe('POST /api/travel/flyer-templates/upload (FR-3.2.2 image upload)', () =
   });
 
   test('happy path stores the image + returns 201 with a url', async () => {
-    // Mock BOTH storage paths so the result is deterministic regardless of
-    // whether AWS_S3_BUCKET_NAME happens to be set in the run env.
+    // Mock both storage paths so the result is deterministic regardless of
+    // whether object-storage credentials happen to be set in the run env.
     const mkdir = vi.spyOn(fs.promises, 'mkdir').mockResolvedValue(undefined);
     const writeFile = vi.spyOn(fs.promises, 'writeFile').mockResolvedValue(undefined);
-    const uploadImage = vi.spyOn(s3Mod, 'uploadImage').mockResolvedValue('https://s3.example/flyer-assets/x.png');
+    const uploadImage = vi.spyOn(s3Mod, 'uploadImage').mockResolvedValue('https://objectstorage.ap-mumbai-1.oraclecloud.com/n/ns/b/bucket/o/flyer-assets/x.png');
     try {
       const png = Buffer.from('89504e470d0a1a0a', 'hex'); // PNG magic bytes
       const res = await request(makeApp())

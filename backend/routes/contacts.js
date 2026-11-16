@@ -584,7 +584,7 @@ const FILTERABLE_FIELDS = {
   lifecycleStageKey: {
     column: "lifecycleStageKey",
     kind: "enum",
-    label: "Lifecycle Stage",
+    label: "Status",
     verticals: ["generic"],
   },
   medium: { column: "medium", kind: "text", label: "Medium", verticals: ["generic"] },
@@ -708,6 +708,7 @@ const FILTER_OPERATORS = [
   "is_not_empty",
   "between",
 ];
+const UNASSIGNED_FILTER_VALUE = "unassigned";
 
 // NOTE: there is deliberately NO "has-data" gate on the field list.
 //
@@ -853,13 +854,31 @@ function buildFilterClause(fieldDef, operator, values) {
   );
   if (list.length === 0) return null;
   if (kind === "id" || kind === "external") {
+    const includesUnassigned = list.some(
+      (value) => String(value) === UNASSIGNED_FILTER_VALUE,
+    );
     const ids = list
+      .filter((value) => String(value) !== UNASSIGNED_FILTER_VALUE)
       .map((v) => parseInt(v, 10))
       .filter((n) => !Number.isNaN(n));
+    if (operator === "not_contains") {
+      if (!includesUnassigned) {
+        return ids.length > 0 ? { [column]: { notIn: ids } } : null;
+      }
+      if (ids.length === 0) return { [column]: { not: null } };
+      return {
+        AND: [
+          { [column]: { notIn: ids } },
+          { [column]: { not: null } },
+        ],
+      };
+    }
+    if (includesUnassigned && ids.length > 0) {
+      return { OR: [{ [column]: { in: ids } }, { [column]: null }] };
+    }
+    if (includesUnassigned) return { [column]: null };
     if (ids.length === 0) return null;
-    return operator === "not_contains"
-      ? { [column]: { notIn: ids } }
-      : { [column]: { in: ids } };
+    return { [column]: { in: ids } };
   }
   if (kind === "number") {
     const nums = list.map((v) => Number(v)).filter((n) => Number.isFinite(n));
@@ -2234,10 +2253,13 @@ router.get("/filter-values/:field", async (req, res) => {
         orderBy: { name: "asc" },
       });
       return res.json({
-        values: users.map((u) => ({
-          value: String(u.id),
-          label: u.name || u.email,
-        })),
+        values: [
+          { value: UNASSIGNED_FILTER_VALUE, label: "Unassigned" },
+          ...users.map((u) => ({
+            value: String(u.id),
+            label: u.name || u.email,
+          })),
+        ],
       });
     }
     if (req.params.field === "callifiedCampaignId") {

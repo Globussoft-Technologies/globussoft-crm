@@ -90,7 +90,15 @@ function makeFetchImpl(overrides = {}) {
 
 function LeadsListStub() {
   const location = useLocation();
-  return <div data-testid="leads-list-stub" data-search={location.search}>Leads list stub</div>;
+  return (
+    <div
+      data-testid="leads-list-stub"
+      data-search={location.search}
+      data-state={JSON.stringify(location.state || null)}
+    >
+      Leads list stub
+    </div>
+  );
 }
 
 beforeEach(() => {
@@ -102,13 +110,13 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts', search = '' } = {}) {
+function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts', search = '', renderBackdrop = true } = {}) {
   const detailPath = `/${listType}/${contactId}`;
   const page = (
     <MemoryRouter initialEntries={[state ? { pathname: detailPath, search, state } : `${detailPath}${search}`]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
-        <Route path="/leads/:id" element={<ContactDetail />} />
+        <Route path="/leads/:id" element={<ContactDetail renderBackdrop={renderBackdrop} />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
         <Route path="/leads" element={<LeadsListStub />} />
         <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
@@ -185,6 +193,157 @@ describe('ContactDetail — current profile contract', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
     expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
+  });
+
+  it('renders a direct Generic Leads URL as a full-page responsive profile', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=1&limit=10',
+    });
+
+    const profile = await screen.findByRole('region', { name: 'Contact profile' });
+    expect(profile).toHaveClass('cp-full-page');
+    expect(profile.querySelector('.cp-slide-panel')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close profile' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to Leads' })).toBeInTheDocument();
+  });
+
+  it('returns a direct page-3 lead URL to page 3 of Leads', async () => {
+    window.sessionStorage.clear();
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=3&limit=10',
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?page=3&limit=10',
+    );
+  });
+
+  it('returns to the router list page instead of a stale detail URL page', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=1&limit=10',
+      state: {
+        returnTo: '/leads?page=2&limit=10',
+        leadsListState: { pageIndex: 1, pageSize: 10 },
+        openFullPage: true,
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    const leadsList = await screen.findByTestId('leads-list-stub');
+    expect(leadsList).toHaveAttribute(
+      'data-search',
+      '?page=2&limit=10',
+    );
+    expect(JSON.parse(leadsList.getAttribute('data-state'))).not.toHaveProperty('openFullPage');
+  });
+
+  it('preserves the saved Leads return query when opening a direct detail URL', async () => {
+    const storageKey = 'globuscrm.leads.pagination.v1.tenant.user';
+    window.sessionStorage.setItem(storageKey, JSON.stringify({
+      pageIndex: 1,
+      pageSize: 10,
+      returnTo: '/leads?assignedToId=unassigned&page=2&limit=10',
+    }));
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=2&limit=10',
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?assignedToId=unassigned&page=2&limit=10',
+    );
+    window.sessionStorage.removeItem(storageKey);
+  });
+
+  it('keeps the wide profile drawer for in-app lead navigation state', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    expect(document.querySelector('.cp-slide-panel')).toBeInTheDocument();
+    expect(document.querySelector('.cp-full-page')).toBeNull();
+  });
+
+  it('lets an in-app lead drawer switch to the full-page profile', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Open full page/i }));
+
+    expect(await screen.findByRole('region', { name: 'Contact profile' })).toHaveClass('cp-full-page');
+    expect(screen.queryByRole('button', { name: /Open full page/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the originating Leads page after opening full page and returning', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=3&limit=10',
+      state: {
+        returnTo: '/leads?page=3&limit=10',
+        leadsListState: { pageIndex: 2, pageSize: 10 },
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Open full page/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?page=3&limit=10',
+    );
+  });
+
+  it('lets users resize and keyboard-adjust the Generic CRM status bar', async () => {
+    window.localStorage.removeItem('crm:generic-status-bar-width:v1');
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    const resizeHandle = await screen.findByRole('separator', { name: 'Resize status bar' });
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '100');
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowLeft' });
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '95');
+    fireEvent.keyDown(resizeHandle, { key: 'End' });
+    expect(resizeHandle).toHaveAttribute('aria-valuenow', '100');
   });
 
   it('keeps the URL page in the embedded Generic Leads list when profile state is stale', async () => {

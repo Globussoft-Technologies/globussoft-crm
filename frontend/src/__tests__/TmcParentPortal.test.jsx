@@ -111,6 +111,14 @@ describe("TmcParentPortal", () => {
           }),
         });
       }
+      if (url === "/api/portal/tmc/parent/documents/11/view-url") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            url: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/insurance-certificate.pdf?sig=parent-view",
+          }),
+        });
+      }
       if (url === "/api/portal/tmc/parent/documents/11/file") {
         return Promise.resolve({
           ok: true,
@@ -299,10 +307,15 @@ describe("TmcParentPortal", () => {
     expect(within(uploadedDocumentRow).getByText("Submitted")).toBeInTheDocument();
     fireEvent.click(uploadedDocumentRow.querySelector('button[aria-label="View insurance-certificate.pdf"]'));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/portal/tmc/parent/documents/11/file",
+      "/api/portal/tmc/parent/documents/11/view-url",
       expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
     ));
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith("blob:parent-document", "_blank", "noopener,noreferrer"));
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(
+      "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/insurance-certificate.pdf?sig=parent-view",
+      "_blank",
+      "noopener,noreferrer",
+    ));
+    expect(globalThis.URL.createObjectURL).not.toHaveBeenCalled();
     openSpy.mockRestore();
   });
 

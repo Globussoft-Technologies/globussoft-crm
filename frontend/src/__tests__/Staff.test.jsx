@@ -417,6 +417,14 @@ describe('<Staff /> — Invite modal (#891)', () => {
     const createModal = screen.getByTestId('staff-create-modal');
     expect(createModal).toHaveStyle({ justifyContent: 'center', padding: '1rem' });
     expect(createModal.querySelector('.card')).toHaveStyle({ maxHeight: 'calc(100vh - 2rem)', borderRadius: '16px' });
+    const temporaryPassword = within(createModal).getByTestId('staff-create-password');
+    expect(temporaryPassword).toHaveAttribute('type', 'password');
+    expect(within(createModal).getByRole('button', { name: /show temporary password/i })).toBeInTheDocument();
+    fireEvent.click(within(createModal).getByRole('button', { name: /show temporary password/i }));
+    expect(temporaryPassword).toHaveAttribute('type', 'text');
+    expect(within(createModal).getByRole('button', { name: /hide temporary password/i })).toBeInTheDocument();
+    fireEvent.click(within(createModal).getByRole('button', { name: /hide temporary password/i }));
+    expect(temporaryPassword).toHaveAttribute('type', 'password');
     const tmc = within(createModal).getByText('TMC (School trips)').closest('button');
     const rfu = within(createModal).getByText('RFU (Umrah)').closest('button');
     const travelStall = within(createModal).getByText('Travel Stall (Family)').closest('button');

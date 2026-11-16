@@ -16,7 +16,6 @@ import IntlTelInput from "@intl-tel-input/react";
 import "intl-tel-input/styles";
 import {
   Link,
-  Outlet,
   useLocation,
   useNavigate,
   useSearchParams,
@@ -76,6 +75,7 @@ import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolba
 import DuplicateContactModal from "../components/DuplicateContactModal";
 import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
+import { richTextToPlainText } from "../utils/richText";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
 import "./Leads.css";
@@ -221,6 +221,7 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
 ]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
+const LEADS_COLUMN_ORDER_STORAGE_PREFIX = "globuscrm.leads.columnOrder.v1";
 const LEADS_PAGINATION_STORAGE_PREFIX = "globuscrm.leads.pagination.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
@@ -286,6 +287,20 @@ const readLeadsPaginationState = (storageKey) => {
       pageIndex: Number(stored.pageIndex),
       pageSize: Number(stored.pageSize),
     };
+  } catch {
+    return null;
+  }
+};
+
+const readLeadsColumnOrder = (storageKey) => {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = JSON.parse(
+      window.sessionStorage.getItem(storageKey) || "null",
+    );
+    return Array.isArray(stored)
+      ? stored.filter((key) => typeof key === "string")
+      : null;
   } catch {
     return null;
   }
@@ -1245,6 +1260,18 @@ const stripDangerousTags = (str) => {
     /<(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
   const stripped = str.replace(DANGEROUS_TAG_RE, "");
   return { value: stripped, stripped: stripped !== str };
+};
+
+const plainTextLeadNote = (value) => {
+  const input = String(value ?? "");
+  if (!input) return "";
+  return richTextToPlainText(
+    input
+      .replace(/<br\s*\/?\s*>/gi, " ")
+      .replace(/<\/(?:blockquote|div|h[1-6]|li|p)>/gi, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
 };
 
 const COUNTRY_CODES = [
@@ -2587,7 +2614,18 @@ const Leads = ({ initialListState = null } = {}) => {
   const focusedLeadSearch = isGeneric
     ? String(drillParams.get("leadSearch") || "").trim()
     : "";
+  const leadsPaginationStorageKey = `${LEADS_PAGINATION_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const restoredLeadsTableState = (() => {
+    try {
+      return location.state?.leadsTableState
+        || JSON.parse(window.sessionStorage.getItem(leadsPaginationStorageKey) || "null")?.tableState
+        || {};
+    } catch {
+      return location.state?.leadsTableState || {};
+    }
+  })();
   const [leadTableDensity, setLeadTableDensity] = useState(() => {
+    if (restoredLeadsTableState.leadTableDensity) return restoredLeadsTableState.leadTableDensity;
     if (!isGeneric || typeof window === "undefined") return "comfortable";
     try {
       return window.localStorage.getItem(LEADS_TABLE_DENSITY_STORAGE_KEY) ===
@@ -2743,13 +2781,12 @@ const Leads = ({ initialListState = null } = {}) => {
   const [services, setServices] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState(focusedLeadSearch);
+  const [searchTerm, setSearchTerm] = useState(restoredLeadsTableState.searchTerm ?? focusedLeadSearch);
   const leadRequestSequenceRef = useRef(0);
   const genericPhoneCountryUserChangedRef = useRef(false);
   const genericPhoneCountryDetectionRunRef = useRef(false);
   const fetchLeadsRef = useRef(null);
   const classifyVisibleLeadsRef = useRef(null);
-  const leadsPaginationStorageKey = `${LEADS_PAGINATION_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
   const storedLeadsListState = readLeadsPaginationState(
     leadsPaginationStorageKey,
   );
@@ -2799,6 +2836,21 @@ const Leads = ({ initialListState = null } = {}) => {
   const [pageInput, setPageInput] = useState(String(initialLeadsPage + 1));
   const [selectedLeads, setSelectedLeads] = useState([]);
 
+  // Keep router pagination authoritative when the list is remounted after a
+  // detail view. This also repairs a transient page-one state if another
+  // mount effect runs before the first page-2 request completes.
+  useEffect(() => {
+    if (!isGeneric || location.pathname !== "/leads") return;
+    const queryState = readLeadsPaginationStateFromQuery(location.search);
+    if (!queryState) return;
+    setLeadsPage((current) => (
+      current === queryState.pageIndex ? current : queryState.pageIndex
+    ));
+    setGenericLeadsPageSize((current) => (
+      current === queryState.pageSize ? current : queryState.pageSize
+    ));
+  }, [isGeneric, location.pathname, location.search]);
+
   // Keep the current Generic Leads page available even when the detail route
   // is opened without React Router location state (for example from a stale
   // browser history entry or a direct profile link). The URL is the primary
@@ -2812,9 +2864,25 @@ const Leads = ({ initialListState = null } = {}) => {
       Math.max(1, genericLeadsPageSize),
     );
     try {
+      const stored = JSON.parse(
+        window.sessionStorage.getItem(leadsPaginationStorageKey) || "null",
+      );
+      const storedReturnTo = typeof stored?.returnTo === "string"
+        && stored.returnTo.startsWith("/")
+        && !stored.returnTo.startsWith("//")
+        ? stored.returnTo
+        : null;
+      const returnTo = location.pathname === "/leads"
+        ? buildLeadsListPath(location.search, pageIndex, pageSize)
+        : storedReturnTo;
       window.sessionStorage.setItem(
         leadsPaginationStorageKey,
-        JSON.stringify({ pageIndex, pageSize }),
+        JSON.stringify({
+          pageIndex,
+          pageSize,
+          ...(returnTo ? { returnTo } : {}),
+          ...(stored?.tableState ? { tableState: stored.tableState } : {}),
+        }),
       );
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
@@ -2835,6 +2903,7 @@ const Leads = ({ initialListState = null } = {}) => {
     leadsPage,
     leadsPaginationStorageKey,
     location.pathname,
+    location.search,
     setDrillParams,
   ]);
 
@@ -2957,12 +3026,12 @@ const Leads = ({ initialListState = null } = {}) => {
   );
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
-  const [nameStartsWith, setNameStartsWith] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("");
+  const [nameStartsWith, setNameStartsWith] = useState(restoredLeadsTableState.nameStartsWith || "");
+  const [sourceFilter, setSourceFilter] = useState(restoredLeadsTableState.sourceFilter || "");
   const [subBrandFilter, setSubBrandFilter] = useState(
     isTravel ? activeSubBrand || "" : "",
   );
-  const [stageFilter, setStageFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState(restoredLeadsTableState.stageFilter || "");
 
   useEffect(() => {
     setSavedCreateLeadFieldPrefs(
@@ -2987,11 +3056,11 @@ const Leads = ({ initialListState = null } = {}) => {
   const [viewingPickupStatus, setViewingPickupStatus] = useState(null);
   const [savingPickupLocationId, setSavingPickupLocationId] = useState(null);
   // Generic CRM Callified filters
-  const [campaignFilter, setCampaignFilter] = useState("");
-  const [leadStatusFilter, setLeadStatusFilter] = useState("");
-  const [assigneeFilter, setAssigneeFilter] = useState("");
-  const [scoreMin, setScoreMin] = useState("");
-  const [scoreMax, setScoreMax] = useState("");
+  const [campaignFilter, setCampaignFilter] = useState(restoredLeadsTableState.campaignFilter || "");
+  const [leadStatusFilter, setLeadStatusFilter] = useState(restoredLeadsTableState.leadStatusFilter || "");
+  const [assigneeFilter, setAssigneeFilter] = useState(restoredLeadsTableState.assigneeFilter || "");
+  const [scoreMin, setScoreMin] = useState(restoredLeadsTableState.scoreMin || "");
+  const [scoreMax, setScoreMax] = useState(restoredLeadsTableState.scoreMax || "");
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
   // dynamic field-picker + operator + checkbox-values panel that also
   // surfaces admin-defined Lead custom fields (Settings > Lead Fields),
@@ -3004,6 +3073,7 @@ const Leads = ({ initialListState = null } = {}) => {
     : "";
   const [advancedFilters, setAdvancedFilters] = useState(() => {
     if (!isGeneric || typeof window === "undefined") return [];
+    if (Array.isArray(restoredLeadsTableState.advancedFilters)) return restoredLeadsTableState.advancedFilters;
     try {
       const saved = JSON.parse(
         window.sessionStorage.getItem(leadFiltersStorageKey) || "[]",
@@ -3298,14 +3368,39 @@ const Leads = ({ initialListState = null } = {}) => {
   // (personal per-user preference  see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column" so the table never
   // flashes empty while the preference GET is in flight.
-  const [visibleColumns, setVisibleColumns] = useState(null);
+  const leadsColumnOrderStorageKey = `${LEADS_COLUMN_ORDER_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const [visibleColumns, setVisibleColumns] = useState(() =>
+    readLeadsColumnOrder(leadsColumnOrderStorageKey),
+  );
   const [leadColumnCatalog, setLeadColumnCatalog] = useState([]);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [draggedLeadColumnKey, setDraggedLeadColumnKey] = useState(null);
+  const [dropLeadColumnKey, setDropLeadColumnKey] = useState(null);
+  const [sortConfig, setSortConfig] = useState(restoredLeadsTableState.sortConfig || { key: null, direction: null });
   const [headerMenuState, setHeaderMenuState] = useState(null);
   const [headerMenuSubmenu, setHeaderMenuSubmenu] = useState(null);
   const [headerMenuSearch, setHeaderMenuSearch] = useState("");
   const [headerFilterRequest, setHeaderFilterRequest] = useState(null);
   const [renameFieldState, setRenameFieldState] = useState(null);
+
+  // Keep the last known order available while pagination requests are in
+  // flight and if the Leads route is remounted for a different page. The
+  // server preference remains authoritative; this snapshot only prevents a
+  // transient/default layout from replacing the user's saved order.
+  useEffect(() => {
+    if (!supportsColumnCustomization || !Array.isArray(visibleColumns)) return;
+    try {
+      window.sessionStorage.setItem(
+        leadsColumnOrderStorageKey,
+        JSON.stringify(visibleColumns),
+      );
+    } catch {
+      // Storage can be unavailable in privacy-restricted browser contexts.
+    }
+  }, [
+    leadsColumnOrderStorageKey,
+    supportsColumnCustomization,
+    visibleColumns,
+  ]);
 
   // Drill-down entry from the Lead Reports cluster: a report row links here
   // with the filter it represents, e.g.
@@ -4782,6 +4877,8 @@ const Leads = ({ initialListState = null } = {}) => {
     isGeneric,
     searchTerm,
     sourceFilter,
+    stageFilter,
+    subBrandFilter,
     campaignFilter,
     leadStatusFilter,
     assigneeFilter,
@@ -6390,7 +6487,12 @@ const Leads = ({ initialListState = null } = {}) => {
           : filterFieldAlias || columnKey);
       fieldsByKey.set(filterFieldKey, {
         field: filterFieldKey,
-        label: catalogColumn?.label || customField?.label || null,
+        label:
+          isGeneric && filterFieldKey === "status"
+            ? "Lead Status"
+            : isGeneric && filterFieldKey === "lifecycleStageKey"
+              ? "Status"
+              : catalogColumn?.label || customField?.label || null,
         kind:
           catalogColumn?.filterKind ||
           (customField
@@ -6407,6 +6509,7 @@ const Leads = ({ initialListState = null } = {}) => {
     return [...fieldsByKey.values()];
   }, [
     customFieldByKey,
+    isGeneric,
     isTravel,
     isWellness,
     leadColumnCatalog,
@@ -6875,6 +6978,95 @@ const Leads = ({ initialListState = null } = {}) => {
     },
     [supportsColumnCustomization, resolveAllowedVisibleColumns],
   );
+  const reorderLeadColumnsFromHeader = useCallback(
+    async (fromKey, toKey) => {
+      if (
+        !supportsColumnCustomization ||
+        !fromKey ||
+        fromKey === "name" ||
+        fromKey === "actions" ||
+        fromKey === toKey
+      ) {
+        return;
+      }
+      const current = Array.isArray(visibleColumns)
+        ? [...visibleColumns]
+        : [
+            ...preferredVisibleColumns,
+            ...(preferredVisibleColumns.includes("actions") ? [] : ["actions"]),
+          ];
+      const fromIndex = current.indexOf(fromKey);
+      if (fromIndex < 0) return;
+
+      const next = [...current];
+      const [moved] = next.splice(fromIndex, 1);
+      if (toKey === "name") {
+        next.splice(Math.min(1, next.length), 0, moved);
+      } else if (toKey === "actions") {
+        const actionsIndex = next.indexOf("actions");
+        next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
+      } else {
+        const targetIndex = next.indexOf(toKey);
+        if (targetIndex < 0) return;
+        next.splice(targetIndex, 0, moved);
+      }
+
+      try {
+        await persistVisibleColumns(next);
+      } catch (err) {
+        notify.error(err?.message || "Failed to update column order");
+      }
+    },
+    [
+      notify,
+      persistVisibleColumns,
+      preferredVisibleColumns,
+      supportsColumnCustomization,
+      visibleColumns,
+    ],
+  );
+  const handleLeadHeaderDragStart = (key) => (event) => {
+    if (
+      !supportsColumnCustomization ||
+      key === "name" ||
+      key === "actions" ||
+      event.target.closest?.("button, input, select, a, [role=separator]")
+    ) {
+      event.preventDefault();
+      return;
+    }
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      try {
+        event.dataTransfer.setData("text/plain", key);
+      } catch (_err) {
+        // React state remains the source of truth for browsers/jsdom that
+        // reject setting a custom drag payload.
+      }
+    }
+    setDraggedLeadColumnKey(key);
+    setDropLeadColumnKey(key);
+  };
+  const handleLeadHeaderDragOver = (key) => (event) => {
+    if (!draggedLeadColumnKey || key === draggedLeadColumnKey) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    setDropLeadColumnKey(key);
+  };
+  const handleLeadHeaderDrop = (key) => async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const fromKey = draggedLeadColumnKey;
+    setDraggedLeadColumnKey(null);
+    setDropLeadColumnKey(null);
+    if (fromKey && fromKey !== key) {
+      await reorderLeadColumnsFromHeader(fromKey, key);
+    }
+  };
+  const handleLeadHeaderDragEnd = () => {
+    setDraggedLeadColumnKey(null);
+    setDropLeadColumnKey(null);
+  };
   const collapseColumn = (columnKey) => {
     setColumnLayout((prev) => ({
       ...prev,
@@ -7085,31 +7277,37 @@ const Leads = ({ initialListState = null } = {}) => {
       </button>
     );
   };
-  const genericWorkflowColumnDefs = leadFixedExtraColumnDefs.filter(
-    (column) => !CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  // The picker and table both consume this single ordered definition. Older
+  // code rendered user, workflow, and Callified columns in separate blocks;
+  // that made a valid saved order appear differently in the table.
+  const tableColumnCandidates = [
+    ...leadUserColumnDefs,
+    ...leadFixedExtraColumnDefs,
+  ];
+  const uniqueTableColumnCandidates = [
+    ...new Map(
+      tableColumnCandidates.map((column) => [column.key, column]),
+    ).values(),
+  ];
+  const preferredColumnOrder = new Map(
+    preferredVisibleColumns.map((key, index) => [key, index]),
   );
-  const genericCallifiedColumnDefs = leadFixedExtraColumnDefs.filter((column) =>
-    CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
-  );
-  // Keep this definition order identical to the Generic header/body render
-  // order below. The fixed-layout table applies <col> widths by position, so
-  // using the unsplit leadUserColumnDefs order here makes every column after
-  // Email resize a different column when Callified fields are interleaved.
-  const tableColumnDefs = isGeneric
-    ? [
-        { key: "name", label: "Name" },
-        ...leadUserColumnsBeforeCallified,
-        ...genericWorkflowColumnDefs,
-        ...genericCallifiedColumnDefs,
-        ...leadUserColumnsAfterCallified,
-        { key: "actions", label: "Actions", locked: true },
-      ]
-    : [
-        { key: "name", label: "Name" },
-        ...leadUserColumnDefs,
-        ...leadFixedExtraColumnDefs,
-        { key: "actions", label: "Actions", locked: true },
-      ];
+  const legacyLeadCellsEnabled = false;
+  const tableColumnDefs = [
+    { key: "name", label: "Name" },
+    ...uniqueTableColumnCandidates
+      .filter((column) => column.key !== "name" && column.key !== "actions")
+      .sort((left, right) => {
+        const leftIndex = preferredColumnOrder.has(left.key)
+          ? preferredColumnOrder.get(left.key)
+          : Number.MAX_SAFE_INTEGER;
+        const rightIndex = preferredColumnOrder.has(right.key)
+          ? preferredColumnOrder.get(right.key)
+          : Number.MAX_SAFE_INTEGER;
+        return leftIndex - rightIndex;
+      }),
+    { key: "actions", label: "Actions", locked: true },
+  ];
   // Generic CRM keeps the complete lead name visible while the remaining
   // columns move horizontally. Other verticals retain their existing table.
   const leadsFrozenColumnDefs = isGeneric
@@ -7711,6 +7909,21 @@ const Leads = ({ initialListState = null } = {}) => {
         currentLeadsPage * leadsPageSize,
         currentLeadsPage * leadsPageSize + leadsPageSize,
       );
+  const leadsTableState = {
+    searchTerm,
+    nameStartsWith,
+    sourceFilter,
+    campaignFilter,
+    leadStatusFilter,
+    assigneeFilter,
+    scoreMin,
+    scoreMax,
+    advancedFilters,
+    sortConfig,
+    leadTableDensity,
+    pageIndex: isGeneric ? leadsPage : currentLeadsPage,
+    pageSize: currentLeadsPageSize,
+  };
   const leadListNavigationState = {
     ...(location.state && typeof location.state === "object"
       ? location.state
@@ -7727,19 +7940,25 @@ const Leads = ({ initialListState = null } = {}) => {
       pageIndex: isGeneric ? leadsPage : currentLeadsPage,
       pageSize: currentLeadsPageSize,
     },
+    leadsTableState,
   };
   const rememberLeadListState = () => {
     if (!isGeneric || typeof window === "undefined") return;
     try {
       window.sessionStorage.setItem(
         leadsPaginationStorageKey,
-        JSON.stringify(leadListNavigationState.leadsListState),
+        JSON.stringify({
+          ...leadListNavigationState.leadsListState,
+          returnTo: leadListNavigationState.returnTo,
+          tableState: leadsTableState,
+        }),
       );
     } catch {
       // The URL and router state remain the primary handoff when storage is unavailable.
     }
   };
   const openLeadDetail = (lead) => {
+    rememberLeadListState();
     navigate(leadDetailPathWithListState(lead), {
       state: leadListNavigationState,
     });
@@ -8123,12 +8342,36 @@ const Leads = ({ initialListState = null } = {}) => {
     leadingControls = null,
   ) => {
     const locked = key === "select" || key === "actions";
+    const reorderable =
+      supportsColumnCustomization && key !== "name" && key !== "actions" && key !== "select";
+    const isDropTarget =
+      dropLeadColumnKey === key && draggedLeadColumnKey !== key;
     const { key: headerKey, ...restCellProps } = cellProps;
     return (
       <th
         key={headerKey}
         {...restCellProps}
-        style={getHeaderCellStyle(key, extra)}
+        data-column-header={key}
+        draggable={reorderable}
+        aria-grabbed={reorderable && draggedLeadColumnKey === key}
+        title={reorderable ? `Drag to reorder ${label}` : undefined}
+        onDragStart={handleLeadHeaderDragStart(key)}
+        onDragOver={handleLeadHeaderDragOver(key)}
+        onDrop={handleLeadHeaderDrop(key)}
+        onDragEnd={handleLeadHeaderDragEnd}
+        style={getHeaderCellStyle(key, {
+          ...extra,
+          cursor: reorderable
+            ? draggedLeadColumnKey === key
+              ? "grabbing"
+              : "grab"
+            : extra.cursor,
+          opacity: draggedLeadColumnKey === key ? 0.55 : 1,
+          outline: isDropTarget
+            ? "2px solid var(--accent-color)"
+            : extra.outline,
+          outlineOffset: isDropTarget ? -2 : extra.outlineOffset,
+        })}
         aria-label={`${label} column`}
       >
         <div
@@ -8233,6 +8476,62 @@ const Leads = ({ initialListState = null } = {}) => {
           }
         : {},
       renderHeaderMenuTrigger(column),
+    );
+  };
+  const renderLeadColumnHeaderCell = (column) => {
+    if (!column || (isGeneric && column.key === "name")) return null;
+    if (column.key === "name") {
+      return renderColumnHeaderCell(
+        "name",
+        "Name",
+        { paddingRight: "2rem" },
+        {},
+        renderHeaderMenuTrigger({ key: "name", label: "Name" }),
+        canLeadBulkActions ? (
+          <input
+            type="checkbox"
+            checked={allVisibleLeadsSelected}
+            ref={(input) => {
+              if (input) input.indeterminate = someVisibleLeadsSelected;
+            }}
+            onChange={toggleSelectAll}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Select all leads"
+            style={LEAD_CHECKBOX_STYLE}
+          />
+        ) : null,
+      );
+    }
+    if (column.key === "actions") {
+      return renderColumnHeaderCell("actions", "Actions", {
+        padding: "1rem 0.5rem",
+        whiteSpace: "nowrap",
+      });
+    }
+    if (leadUserColumnDefs.some((item) => item.key === column.key)) {
+      return renderLeadUserHeaderCell(column);
+    }
+    const genericSpacing = {
+      interestedPlotArea: { paddingRight: "1rem" },
+      pickupLocation: { paddingRight: "1.5rem" },
+      plotAssign: { paddingRight: "1rem" },
+      overallPickupStatus: { paddingRight: "1rem", paddingLeft: "1.5rem" },
+    };
+    const isWorkflowColumn = [
+      "interestedPlotArea",
+      "pickupLocation",
+      "plotAssign",
+      "overallPickupStatus",
+    ].includes(column.key);
+    return renderColumnHeaderCell(
+      column.key,
+      column.label,
+      {
+        paddingRight: "2rem",
+        ...(isGeneric ? genericSpacing[column.key] || {} : {}),
+      },
+      { key: column.key },
+      isWorkflowColumn ? null : renderHeaderMenuTrigger(column),
     );
   };
   const renderLeadUserBodyCell = (lead, column) => {
@@ -8870,14 +9169,22 @@ const Leads = ({ initialListState = null } = {}) => {
           column.key === "description"
             ? noteActivity?.description || lead.description
             : lead[column.key];
+        const plainDisplayValue =
+          column.key === "description"
+            ? plainTextLeadNote(displayValue)
+            : displayValue;
         return renderBuiltInLeadCell({
           lead,
           field: column.key,
           label: scalarLabels[column.key] || column.label,
-          value: displayValue,
+          value: plainDisplayValue,
           extraStyle: { color: "var(--text-secondary)" },
           renderValue: (displayValue) =>
-            displayValue ? String(displayValue) : "",
+            column.key === "description"
+              ? plainTextLeadNote(displayValue)
+              : displayValue
+                ? String(displayValue)
+                : "",
         });
       }
       case "birthDate":
@@ -8915,6 +9222,279 @@ const Leads = ({ initialListState = null } = {}) => {
         return null;
     }
   };
+  const renderLeadNameBodyCell = (lead) => (
+    <td
+      style={getBodyCellStyle("name", { fontWeight: "500" })}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          minWidth: 0,
+        }}
+      >
+        {canLeadBulkActions && (
+          <input
+            type="checkbox"
+            checked={selectedLeads.includes(lead.id)}
+            onChange={() => toggleSelect(lead.id)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select ${lead.name || "lead"}`}
+            style={LEAD_CHECKBOX_STYLE}
+          />
+        )}
+        <span className="generic-lead-avatar" aria-hidden="true">
+          {String(lead.name || "?").trim().charAt(0).toUpperCase() || "?"}
+        </span>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <BuiltInInlineCellEditor
+            lead={lead}
+            field="name"
+            label="Name"
+            value={lead.name}
+            onSave={updateLeadInlineValue}
+            required
+            editOnDisplayClick={false}
+            showEditButton={canLeadUpdate}
+            disableTruncation
+            renderValue={(name) =>
+              isTravel ? (
+                <a
+                  href="#lead-preview"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setPreviewLead(lead);
+                  }}
+                  title={`Preview ${lead.name || "lead"}`}
+                  style={{
+                    minWidth: 0,
+                    overflow: "visible",
+                    textOverflow: "clip",
+                    whiteSpace: "nowrap",
+                    color: "var(--accent-color)",
+                    fontWeight: 700,
+                    textDecoration: "none",
+                  }}
+                >
+                  {name || "Unnamed lead"}
+                </a>
+              ) : (
+                <Link
+                  to={leadDetailPathWithListState(lead)}
+                  state={leadListNavigationState}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    rememberLeadListState();
+                  }}
+                  title={`Open profile for ${name || "lead"}`}
+                  style={{
+                    minWidth: 0,
+                    overflow: "visible",
+                    textOverflow: "clip",
+                    whiteSpace: "nowrap",
+                    color: "var(--accent-color)",
+                    fontWeight: 700,
+                    textDecoration: "none",
+                  }}
+                >
+                  {name || "Unnamed lead"}
+                </Link>
+              )
+            }
+          />
+        </div>
+      </div>
+    </td>
+  );
+  const renderLeadWorkflowBodyCell = (lead, key) => {
+    if (!isGeneric) return null;
+    const pickupStatus = pickupPlotStatusByContact.get(Number(lead.id));
+    const overallStatus = pickupStatus
+      ? `${PICKUP_STAGE_LABELS[pickupStatus.currentStage] || "Transport"}: ${formatPickupStatus(pickupStatus.currentStatus || pickupStatus.status)}`
+      : "Not started";
+    const pickupAddress = pickupStatus?.pickupAddress?.trim();
+    const selectedPickupLocation = pickupLocationOptions.find(
+      (location) => String(location.address || "").trim() === pickupAddress,
+    );
+    const currentPickupOption =
+      pickupAddress && !selectedPickupLocation
+        ? { id: `current-${lead.id}`, name: "Current pickup", address: pickupAddress }
+        : null;
+    const plotAssignmentCustomer = getPlotAssignmentCustomer(lead.id);
+    const assignedPlots = getAssignedPlotsForLead(lead, pickupStatus);
+    const transportWorkflowLocked = isTransportWorkflowLocked(pickupStatus);
+    if (key === "interestedPlotArea") {
+      return (
+        <td
+          className="generic-interested-plot-cell"
+          style={getBodyCellStyle(key, { whiteSpace: "normal", overflowWrap: "anywhere" })}
+          title={lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || undefined}
+        >
+          {lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || "Not captured"}
+        </td>
+      );
+    }
+    if (key === "pickupLocation") {
+      return (
+        <td
+          className="generic-pickup-location-cell"
+          style={getBodyCellStyle(key, { whiteSpace: "normal", overflowWrap: "anywhere", paddingRight: "1.5rem" })}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div
+            data-testid="generic-lead-pickup-location-content"
+            style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, margin: ".25rem .5rem .25rem 0", padding: ".35rem .5rem", boxSizing: "border-box" }}
+          >
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+              <PickupLocationSelect
+                compact
+                ariaLabel={`Pickup location for ${lead.name || "lead"}`}
+                value={selectedPickupLocation?.id || currentPickupOption?.id || ""}
+                disabled={pickupLocationOptions.length === 0 || savingPickupLocationId === Number(lead.id) || transportWorkflowLocked}
+                onChange={(locationId) => saveLeadPickupLocation(lead, pickupStatus, locationId)}
+                options={currentPickupOption ? [currentPickupOption, ...pickupLocationOptions] : pickupLocationOptions}
+              />
+            </div>
+            {pickupAddress && (
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pickupAddress)}`}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open pickup location for ${lead.name || "lead"} in Google Maps`}
+                title="Open pickup location in Google Maps"
+                style={{ ...actionIconBtn, display: "grid", placeItems: "center", flex: "0 0 auto", color: "var(--primary-color, var(--accent-color))" }}
+              >
+                <MapPin size={15} aria-hidden="true" style={{ flex: "0 0 auto" }} />
+              </a>
+            )}
+          </div>
+        </td>
+      );
+    }
+    if (key === "plotAssign") {
+      return (
+        <td className="generic-plot-assign-cell" style={getBodyCellStyle(key, { whiteSpace: "normal", overflow: "visible" })} onClick={(event) => event.stopPropagation()}>
+          <div>
+            {isAdmin && assignedPlots.length > 0 && (
+              <button type="button" className="btn-secondary" aria-label={`View plots for ${lead.name || "lead"}`} onClick={() => setViewingLeadPlots({ lead, plots: assignedPlots, customer: plotAssignmentCustomer, pickupStatus, selectedPlot: null })} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, width: "fit-content", padding: ".35rem .55rem", fontSize: ".72rem" }}>
+                <Eye size={13} /> View plot
+              </button>
+            )}
+            {isAdmin && assignedPlots.length === 0 && (
+              <button type="button" className="btn-secondary" aria-label={`Assign plot to ${lead.name || "lead"}`} title={transportWorkflowLocked ? "Plot assignments are locked because transport has started" : "Assign plots"} onClick={() => openLeadPlotAssignment(lead)} disabled={transportWorkflowLocked} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, width: "fit-content", padding: ".35rem .55rem", fontSize: ".72rem" }}>
+                <Plus size={13} /> Assign plot
+              </button>
+            )}
+          </div>
+        </td>
+      );
+    }
+    if (key === "overallPickupStatus") {
+      return (
+        <td className="generic-overall-status-cell" style={getBodyCellStyle(key, { whiteSpace: "normal", overflow: "visible", paddingLeft: "1.5rem" })} onClick={(event) => event.stopPropagation()}>
+          <div className="generic-overall-status-content">
+            <strong>{overallStatus}</strong>
+            {pickupStatus && (
+              <button type="button" className="btn-secondary generic-overall-status-action" aria-label={`View all status for ${lead.name || "lead"}`} onClick={() => setViewingPickupStatus(pickupStatus)} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: ".32rem .5rem", fontSize: ".7rem" }}>
+                <Eye size={13} /> View status
+              </button>
+            )}
+          </div>
+        </td>
+      );
+    }
+    return null;
+  };
+  const renderLeadCallifiedBodyCell = (lead, key) => {
+    if (key === "campaign") {
+      return (
+        <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
+          <ScrollableSelect
+            value={lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : ""}
+            onChange={(campaignId) => handleCampaignChange(lead, campaignId)}
+            disabled={!callifiedConfigured || !canLeadUpdate}
+            width={160}
+            maxVisibleRows={5}
+            ariaLabel={`Assign Callified campaign for ${lead.name || "lead"}`}
+            placeholder="—"
+            options={[{ value: "", label: "—" }, ...callifiedCampaigns.map((c) => ({ value: String(c.id), label: `${c.name || `Campaign ${c.id}`}${c.product_name ? ` — ${c.product_name}` : ""}` }))]}
+          />
+        </td>
+      );
+    }
+    if (key === "callStatus") {
+      const queueItem = callQueue.find((q) => q.lead.id === lead.id);
+      const isConnected = queueItem && (queueItem.status === "calling" || queueItem.status === "waiting_for_completion");
+      const meta = getCallStatusMeta(lead.callifiedLeadStatus);
+      return (
+        <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
+          {isConnected ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Connected</span>
+          ) : classifyingLeads.has(lead.id) ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "var(--surface-hover)", color: "var(--text-secondary)" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Classifying…</span>
+          ) : (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+              <select className="input-field" value={normalizeCallStatus(lead.callifiedLeadStatus)} onChange={(e) => handleLeadStatusChange(lead, e.target.value)} disabled={!callifiedConfigured || !canLeadUpdate} style={{ padding: ".25rem .6rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, border: "none", cursor: "pointer", minWidth: "90px", color: meta.color, backgroundColor: meta.bg }} aria-label={`Call status for ${lead.name || "lead"}`}>
+                {CALL_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {lead.callifiedLeadStatus && normalizeCallStatus(lead.callifiedLeadStatus) !== CALL_STATUS.YET_TO_CALL && <span title={buildLeadStatusTooltip(lead, { maxRetries: dnpMaxRetries })} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", cursor: "help", marginLeft: ".25rem", flexShrink: 0 }}><Info size={14} /></span>}
+            </span>
+          )}
+        </td>
+      );
+    }
+    if (key === "callifiedAi") {
+      const count = callifiedSummaries[lead.id]?.callCount || 0;
+      return (
+        <td data-callified-ai-lead-id={String(lead.id)} data-callified-ai-highlighted={Number(lead.id) === focusedCallifiedLeadId ? "true" : undefined} aria-label={`Callified AI call for ${lead.name || "lead"}`} style={getBodyCellStyle(key, Number(lead.id) === focusedCallifiedLeadId ? { background: "color-mix(in srgb, var(--primary-color, var(--accent-color)) 18%, transparent)", boxShadow: "inset 0 0 0 2px var(--primary-color, var(--accent-color))" } : {})} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { if (!lead.phone) { notify.error("Phone number is required to make a call."); return; } if (!callifiedConfigured) { notify.info("Configure Callified in Settings → Integrations to make AI calls"); return; } setCallifiedCallLead(lead); }} title={callifiedConfigured ? `Call ${lead.name || "lead"} via AI` : "Configure Callified settings"} style={{ ...actionIconBtn, color: callifiedConfigured ? "var(--success-color)" : "var(--text-secondary)", opacity: callifiedConfigured ? 1 : 0.6, position: "relative" }}><Phone size={15} />{count > 0 && <span style={{ position: "absolute", top: -6, right: -6, minWidth: "18px", height: "18px", padding: "0 4px", borderRadius: "999px", background: "var(--accent-color)", color: "#fff", fontSize: ".65rem", fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "2px solid var(--bg-color)" }}>{count > 99 ? "99+" : count}</span>}</button>
+          <button onClick={() => { if (!callifiedConfigured) { notify.info("Configure Callified settings in Integrations to view call details"); return; } setCallifiedDetailsLead(lead); }} title={callifiedConfigured ? `View Callified call details for ${lead.name || "lead"}` : "Configure Callified settings"} style={{ ...actionIconBtn, marginLeft: 6, color: callifiedConfigured ? "var(--accent-color)" : "var(--text-secondary)", opacity: callifiedConfigured ? 1 : 0.6 }}><FileText size={15} /></button>
+        </td>
+      );
+    }
+    if (key === "callifiedScore") {
+      const score = callifiedSummaries[lead.id]?.lastScore;
+      if (score == null) return <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}><span style={{ color: "var(--text-secondary)", fontSize: ".875rem" }}>—</span></td>;
+      const color = score >= 4 ? "var(--success-color)" : score >= 3 ? "var(--warning-color)" : "#ef4444";
+      const bg = score >= 4 ? "rgba(16, 185, 129, 0.1)" : score >= 3 ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)";
+      return <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}><span style={{ padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: "bold", background: bg, color, display: "inline-flex", alignItems: "center", gap: ".15rem" }}>{Array.from({ length: 5 }).map((_, index) => <span key={index} style={{ opacity: index < score ? 1 : 0.3 }}>★</span>)}<span style={{ marginLeft: 4 }}>{score}/5</span></span></td>;
+    }
+    return null;
+  };
+  const renderLeadTravelBodyCell = (lead, key) => {
+    if (key === "subBrand") {
+      return <td style={getBodyCellStyle(key, { color: "var(--text-secondary)", fontSize: ".875rem" })}>{lead.subBrand ? subBrandShortLabel(lead.subBrand) : <span style={{ color: "var(--border-color)" }}>-</span>}</td>;
+    }
+    if (key !== "amount") return null;
+    const bv = bookingValueByContact[lead.id];
+    const tmcEntry = tmcPaidByEmail[lead.email];
+    const deals = dealsByContact[lead.id] || [];
+    const total = bv?.value > 0 ? Number(bv.value) : tmcEntry?.paidTotal > 0 ? Number(tmcEntry.paidTotal) : deals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0);
+    const currency = bv?.currency || tmcEntry?.currency || deals[0]?.currency || "INR";
+    return <td style={getBodyCellStyle(key, { fontWeight: 500, fontSize: ".875rem" })} title="Amount paid">{total > 0 ? `${currency} ${total.toLocaleString()}` : <span style={{ color: "var(--text-secondary)" }}>-</span>}</td>;
+  };
+  const renderLeadActionsBodyCell = (lead) => (
+    <td style={getBodyCellStyle("actions", { padding: ".75rem .5rem", minWidth: `${getColumnWidth("actions")}px`, overflow: "visible", textOverflow: "clip" })} onClick={(e) => e.stopPropagation()}>
+      {wellnessCall.enabled && <WellnessLeadCallButton lead={lead} onCall={() => wellnessCall.open(lead)} />}
+      <button onClick={() => setPreviewLead(lead)} title="Preview lead" aria-label={`Preview ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
+      {canLeadUpdate && <>
+        <button onClick={() => openEdit(lead)} title="Edit lead" style={{ ...actionIconBtn, marginLeft: 6 }}><Pencil size={15} /></button>
+        <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>
+      </>}
+      {canLeadDelete && <button onClick={() => handleDelete(lead)} title="Delete lead" style={{ ...actionIconBtn, color: "var(--danger-color, #f43f5e)", marginLeft: 6 }}><Trash2 size={15} /></button>}
+    </td>
+  );
+  const renderLeadColumnBodyCell = (lead, column) => {
+    if (column.key === "name") return renderLeadNameBodyCell(lead);
+    if (column.key === "actions") return renderLeadActionsBodyCell(lead);
+    if (CALLIFIED_LEAD_COLUMN_KEYS.has(column.key)) return renderLeadCallifiedBodyCell(lead, column.key);
+    if (["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(column.key)) return renderLeadWorkflowBodyCell(lead, column.key);
+    if (["subBrand", "amount"].includes(column.key)) return renderLeadTravelBodyCell(lead, column.key);
+    return renderLeadUserBodyCell(lead, column);
+  };
   const previewLeadCurrent = previewLead
     ? leads.find((lead) => lead.id === previewLead.id) || previewLead
     : null;
@@ -8927,6 +9507,14 @@ const Leads = ({ initialListState = null } = {}) => {
     ? getCallStatusMeta(previewLeadCurrent.callifiedLeadStatus)
     : null;
   const headerMenuRect = headerMenuState?.rect || null;
+  const headerMenuWidth = Math.min(
+    LEADS_HEADER_MENU_WIDTH,
+    Math.max(0, window.innerWidth - 24),
+  );
+  const headerSubmenuWidth = Math.min(
+    LEADS_HEADER_MENU_SUBMENU_WIDTH,
+    Math.max(0, window.innerWidth - 24),
+  );
   const headerMenuOpenUp = Boolean(
     headerMenuRect &&
     window.innerHeight - headerMenuRect.bottom - 12 < 260 &&
@@ -8945,7 +9533,7 @@ const Leads = ({ initialListState = null } = {}) => {
     ? Math.max(
         12,
         Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
+          window.innerWidth - headerMenuWidth - 12,
           headerMenuRect.left,
         ),
       )
@@ -8965,23 +9553,23 @@ const Leads = ({ initialListState = null } = {}) => {
     ? Math.max(
         12,
         Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
-          headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
+          window.innerWidth - headerSubmenuWidth - 12,
+          headerMenuLeft + headerMenuWidth + LEADS_HEADER_MENU_GAP,
         ),
       )
     : 0;
   const headerSubmenuOpenLeft =
     headerMenuRect &&
     headerMenuLeft +
-      LEADS_HEADER_MENU_WIDTH +
-      LEADS_HEADER_MENU_SUBMENU_WIDTH +
+      headerMenuWidth +
+      headerSubmenuWidth +
       LEADS_HEADER_MENU_GAP * 2 >
       window.innerWidth;
   const headerSubmenuFallbackLeft = headerMenuRect
     ? Math.max(
         12,
         headerMenuLeft -
-          LEADS_HEADER_MENU_SUBMENU_WIDTH -
+          headerSubmenuWidth -
           LEADS_HEADER_MENU_GAP,
       )
     : 0;
@@ -9269,7 +9857,10 @@ const Leads = ({ initialListState = null } = {}) => {
             <>
               {/* Auto-assign campaign rules: dropdown shows a grid where each
                   rule maps a lead column + value to a Callified campaign. */}
-              <div style={{ position: "relative" }}>
+              <div
+                className="leads-auto-campaign-control"
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   className="input-field"
@@ -9333,7 +9924,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       onClick={() => setAutoCampaignRulesOpen(false)}
                     />
                     <div
-                      className="card"
+                      className="card leads-auto-campaign-menu"
                       onClick={(e) => e.stopPropagation()}
                       style={{
                         position: "absolute",
@@ -9436,6 +10027,7 @@ const Leads = ({ initialListState = null } = {}) => {
                           }}
                         >
                           <div
+                            className="auto-campaign-rule-heading-row"
                             style={{
                               display: "grid",
                               gridTemplateColumns: "34px 1fr 1fr 1fr 80px 32px",
@@ -9448,7 +10040,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               padding: "0 0.25rem",
                             }}
                           >
-                            <span className="auto-campaign-rule-on-heading">
+                            <span className="auto-campaign-rule-on-heading auto-campaign-rule-heading">
                               On
                             </span>
                             <span>Lead column</span>
@@ -9499,6 +10091,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             return (
                               <div
                                 key={rule.id}
+                                className="auto-campaign-rule-grid"
                                 style={{
                                   display: "grid",
                                   gridTemplateColumns:
@@ -9774,7 +10367,10 @@ const Leads = ({ initialListState = null } = {}) => {
               </div>
 
               {/* Multi-select campaign dropdown for bulk dial. */}
-              <div style={{ position: "relative" }}>
+              <div
+                className="leads-campaign-dropdown-control"
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   className="input-field"
@@ -9806,7 +10402,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       onClick={() => setCampaignDropdownOpen(false)}
                     />
                     <div
-                      className="card"
+                      className="card leads-campaign-dropdown-menu"
                       style={{
                         position: "absolute",
                         top: "calc(100% + 4px)",
@@ -9984,14 +10580,17 @@ const Leads = ({ initialListState = null } = {}) => {
                   <div
                     role="menu"
                     aria-label="Bulk actions"
+                    className="leads-bulk-actions-menu"
                     onMouseDown={(e) => e.stopPropagation()}
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      left: 0,
-                      right: "auto",
+                      right: 0,
+                      left: "auto",
                       zIndex: 1089,
                       width: "min(420px, 92vw)",
+                      maxWidth: "calc(100vw - 1rem)",
+                      boxSizing: "border-box",
                       padding: "0.85rem",
                       background: "var(--bg-color)",
                       border: "1px solid var(--border-color)",
@@ -10537,7 +11136,10 @@ const Leads = ({ initialListState = null } = {}) => {
               }}
             />
             {isGeneric && (
-              <div style={{ position: "relative" }}>
+              <div
+                className="leads-density-control"
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   className="btn-secondary leads-density-trigger"
@@ -10570,6 +11172,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     />
                     <div
                       role="menu"
+                      className="leads-density-menu"
                       aria-label="Table density"
                       style={{
                         position: "absolute",
@@ -11876,132 +12479,11 @@ const Leads = ({ initialListState = null } = {}) => {
                       backgroundColor: "var(--table-header-bg)",
                     }}
                   >
-                    {!isGeneric &&
-                      renderColumnHeaderCell(
-                        "name",
-                        "Name",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({ key: "name", label: "Name" }),
-                        canLeadBulkActions ? (
-                          <input
-                            type="checkbox"
-                            checked={allVisibleLeadsSelected}
-                            ref={(input) => {
-                              if (input)
-                                input.indeterminate = someVisibleLeadsSelected;
-                            }}
-                            onChange={toggleSelectAll}
-                            onClick={(e) => e.stopPropagation()}
-                            aria-label="Select all leads"
-                            style={LEAD_CHECKBOX_STYLE}
-                          />
-                        ) : null,
-                      )}
-                    {leadUserColumnsBeforeCallified.map((column) => (
+                    {leadsScrollableColumnDefs.map((column) => (
                       <Fragment key={column.key}>
-                        {renderLeadUserHeaderCell(column)}
+                        {renderLeadColumnHeaderCell(column)}
                       </Fragment>
                     ))}
-                    {isGeneric &&
-                      [
-                        ["interestedPlotArea", "Interested plot area"],
-                        [
-                          "pickupLocation",
-                          "Pickup location",
-                          { paddingRight: "1.5rem" },
-                        ],
-                        ["plotAssign", "Plot Assign"],
-                        [
-                          "overallPickupStatus",
-                          "Overall status",
-                          { paddingLeft: "1.5rem" },
-                        ],
-                      ]
-                        .filter(([key]) => isLeadFixedColumnVisible(key))
-                        .map(([key, label, spacing = {}]) =>
-                          renderColumnHeaderCell(
-                            key,
-                            label,
-                            { paddingRight: "1rem", ...spacing },
-                            { key },
-                          ),
-                        )}
-                    {isLeadFixedColumnVisible("campaign") &&
-                      renderColumnHeaderCell(
-                        "campaign",
-                        "Callified Campaign",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "campaign",
-                          label: "Callified Campaign",
-                        }),
-                      )}
-                    {isLeadFixedColumnVisible("callStatus") &&
-                      renderColumnHeaderCell(
-                        "callStatus",
-                        "Call Status",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "callStatus",
-                          label: "Call Status",
-                        }),
-                      )}
-                    {isLeadFixedColumnVisible("callifiedAi") &&
-                      renderColumnHeaderCell(
-                        "callifiedAi",
-                        "Callified AI call",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "callifiedAi",
-                          label: "Callified AI call",
-                        }),
-                      )}
-                    {isLeadFixedColumnVisible("callifiedScore") &&
-                      renderColumnHeaderCell(
-                        "callifiedScore",
-                        "Callified Score",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "callifiedScore",
-                          label: "Callified Score",
-                        }),
-                      )}
-                    {leadUserColumnsAfterCallified.map((column) => (
-                      <Fragment key={column.key}>
-                        {renderLeadUserHeaderCell(column)}
-                      </Fragment>
-                    ))}
-                    {isTravel &&
-                      renderColumnHeaderCell(
-                        "subBrand",
-                        "Sub-brand",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "subBrand",
-                          label: "Sub-brand",
-                        }),
-                      )}
-                    {isTravel &&
-                      renderColumnHeaderCell(
-                        "amount",
-                        "Amount",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "amount",
-                          label: "Amount",
-                        }),
-                      )}
-                    {renderColumnHeaderCell("actions", "Actions", {
-                      padding: "1rem 0.5rem",
-                      whiteSpace: "nowrap",
-                    })}
                   </tr>
                 </thead>
                 <tbody>
@@ -12045,7 +12527,14 @@ const Leads = ({ initialListState = null } = {}) => {
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
-                        {!isGeneric && (
+                        {leadsScrollableColumnDefs.map((column) => (
+                          <Fragment key={column.key}>
+                            {renderLeadColumnBodyCell(lead, column)}
+                          </Fragment>
+                        ))}
+                        {legacyLeadCellsEnabled && (
+                          <>
+                            {!isGeneric && (
                           <td
                             style={getBodyCellStyle("name", {
                               fontWeight: "500",
@@ -12868,6 +13357,8 @@ const Leads = ({ initialListState = null } = {}) => {
                             </button>
                           )}
                         </td>
+                          </>
+                        )}
                       </tr>
                     ))
                   )}
@@ -13549,7 +14040,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   left: headerMenuLeft,
                   top: headerMenuOpenUp ? undefined : headerMenuTop,
                   bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
-                  width: LEADS_HEADER_MENU_WIDTH,
+                  width: headerMenuWidth,
                   maxHeight: headerMenuMaxHeight,
                   overflowY: "auto",
                   zIndex: 1095,
@@ -13891,7 +14382,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         left: headerSubmenuActualLeft,
                         top: headerMenuOpenUp ? undefined : headerMenuTop,
                         bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
-                        width: LEADS_HEADER_MENU_SUBMENU_WIDTH,
+                        width: headerSubmenuWidth,
                         maxHeight: headerSubmenuMaxHeight,
                         overflowY: "auto",
                         zIndex: 1096,
@@ -14433,7 +14924,10 @@ const Leads = ({ initialListState = null } = {}) => {
                     onChange={(e) => setPageInput(e.target.value)}
                     onBlur={goToLeadsPage}
                     style={{
-                      width: "3.5rem",
+                      width: "4.5rem",
+                      minWidth: "4.5rem",
+                      flexShrink: 0,
+                      boxSizing: "border-box",
                       padding: "0.35rem 0.4rem",
                       textAlign: "center",
                       border: "1px solid var(--border-color)",
@@ -15637,7 +16131,6 @@ const Leads = ({ initialListState = null } = {}) => {
         positionStorageKey={`generic-leads-assistant-position.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
         sessionStorageKey={`generic-leads-assistant-session.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
       />
-      <Outlet />
     </div>
   );
 };

@@ -1,9 +1,26 @@
 .cp-wrap { padding: 1.25rem; max-width: 1280px; margin: 0 auto; }
 .cp-slide-root { min-height: 100vh; }
 .cp-slide-bg { padding: 0; }
+.cp-full-page {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  background: var(--bg-color, #f3f5f9);
+  container-type: inline-size;
+  overflow-x: hidden;
+}
+.cp-full-page-toolbar { padding: 0.75rem 1.25rem 0; }
+.cp-full-page-toolbar .cp-back { margin-bottom: 0; }
+.cp-full-page-scroll { width: 100%; min-width: 0; }
+.cp-full-page .cp-wrap { width: 100%; max-width: none; box-sizing: border-box; }
 .cp-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); z-index: 800; }
 .cp-slide-panel { position: fixed; top: 0; right: 0; height: 100vh; width: min(1400px, 95%); background: var(--bg-color, #f3f5f9); z-index: 900; overflow: visible; container-type: inline-size; box-shadow: -16px 0 40px rgba(15, 23, 42, 0.22); animation: cp-slide-in 0.28s ease-out; }
-body[data-vertical="generic"] .cp-slide-panel { width: 70vw; }
+/* Generic lead profiles are intentionally wide: the profile overview has a
+   navigation rail, pipeline, summary fields, and activity column. Keep the
+   drawer close to the reference layout instead of leaving most of the
+   viewport occupied by the dimmed Leads table. */
+body[data-vertical="generic"] .cp-slide-panel { width: 90vw; }
 .cp-slide-scroll { height: 100vh; overflow-x: hidden; overflow-y: auto; }
 .cp-slide-panel .cp-wrap { max-width: none; margin: 0; padding-top: 0.4rem; }
 .cp-slide-close { position: absolute; left: -32px; top: 24px; background: var(--primary-color, var(--accent-color)); color: #fff; border: none; border-radius: 8px 0 0 8px; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 2px 8px rgba(0,0,0,0.2); z-index: 901; }
@@ -192,6 +209,24 @@ body[data-vertical="generic"] .cp-lifecycle-row--generic { position: relative; z
 .cp-stage-manager-footer .cp-btn-row { margin-top: 0; }
 .cp-stage-reset-warning { padding: 0.75rem 0.85rem; border: 1px solid #f59e0b; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 0.82rem; line-height: 1.45; }
 .cp-lifecycle-right { min-width: 0; }
+.cp-lifecycle-right--resizable { position: relative; box-sizing: border-box; max-width: 100%; padding-right: 0.9rem; }
+.cp-lifecycle-right--resizable .cp-pipeline { width: 100%; }
+.cp-lifecycle-right--resizable .cp-chev-wrap { flex: 1 1 0; }
+.cp-status-resize-handle {
+  position: absolute;
+  top: 1.35rem;
+  right: 0;
+  width: 0.9rem;
+  height: calc(100% - 1.35rem);
+  min-height: 2.2rem;
+  border-radius: 0.35rem;
+  background: repeating-linear-gradient(to bottom, var(--border-color) 0 0.22rem, transparent 0.22rem 0.42rem);
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
+}
+.cp-status-resize-handle:hover,
+.cp-status-resize-handle:focus-visible { background: repeating-linear-gradient(to bottom, var(--primary-color, var(--accent-color)) 0 0.22rem, transparent 0.22rem 0.42rem); }
 .cp-lifecycle-status-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 26px; }
 .cp-lifecycle-status-head .cp-label { margin-bottom: 0; }
 .cp-lifecycle-history-btn { width: 30px; height: 30px; justify-content: center; border: 1px solid var(--border-color); background: var(--surface-color, #fff); color: var(--primary-color, var(--accent-color)); }
@@ -285,6 +320,7 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-lifecycle-row--generic .cp-chev-wrap:first-child .cp-chev { margin-left: 0; padding-left: 0.65rem; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%); }
 .cp-lifecycle-row--generic .cp-chev { box-sizing: content-box; }
 .cp-lifecycle-row--generic .cp-chev-wrap { box-sizing: border-box; }
+.cp-lifecycle-row--generic .cp-lifecycle-right--resizable .cp-chev-wrap { flex: 1 1 0; }
 .cp-lifecycle-row--generic .cp-chev-label { min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
 .cp-lifecycle-row--generic .cp-chev.done { background: #c7dced; color: #243b57; }
 .cp-lifecycle-row--generic .cp-chev.current { background: #a9c8e5; color: #172f4d; font-weight: 700; }
@@ -442,6 +478,12 @@ a.cp-soc:hover { border-color: currentColor; }
    browser viewport. Keep the Generic CRM lifecycle and notes layout based on
    the drawer width, avoiding clipped stages and overlapping columns. */
 @container (max-width: 900px) {
+  .cp-header { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 0.75rem; padding: 0.9rem; align-items: start; }
+  .cp-header-main { grid-column: 2; width: 100%; }
+  .cp-header-mid,
+  .cp-header-right { grid-column: 1 / -1; min-width: 0; padding: 0; }
+  .cp-header-mid { border: none; flex-wrap: wrap; gap: 1rem; }
+  .cp-header-right { margin-left: 0; flex-wrap: wrap; }
   .cp-layout { grid-template-columns: 56px minmax(0, 1fr); gap: 0.75rem; }
   .cp-side { padding: 0.3rem; }
   .cp-nav-item { justify-content: center; padding: 0.6rem; }
@@ -460,7 +502,7 @@ a.cp-soc:hover { border-color: currentColor; }
 }
 
 @media (max-width: 1200px) and (min-width: 769px) {
-  body[data-vertical="generic"] .cp-slide-panel { width: min(860px, 84vw); }
+  body[data-vertical="generic"] .cp-slide-panel { width: 90vw; }
 }
 
 @media (max-width: 899px) {
@@ -505,6 +547,15 @@ a.cp-soc:hover { border-color: currentColor; }
   .cp-wrap { padding: 0.85rem; }
   .cp-slide-panel { width: 100%; }
   .cp-slide-close { left: auto; right: 12px; top: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+}
+
+@container (max-width: 560px) {
+  .cp-full-page-toolbar { padding: 0.6rem 0.6rem 0; }
+  .cp-actions-bar { gap: 0.35rem; }
+  .cp-action-btn { min-height: 34px; padding: 0.35rem 0.55rem; }
+  .cp-contact-line { flex-direction: column; align-items: flex-start; gap: 0.35rem; min-width: 0; }
+  .cp-contact-line a,
+  .cp-contact-line span { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 }
 
 @media (max-width: 768px) {

@@ -311,6 +311,17 @@ async function fetchParentDocumentFile(token, documentId, { download = false } =
   return response.blob();
 }
 
+async function fetchParentDocumentViewUrl(token, documentId) {
+  const response = await fetch(`/api/portal/tmc/parent/documents/${documentId}/view-url`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error(data.error || "Unable to open document"), { status: response.status, code: data.code });
+  }
+  return data.url || null;
+}
+
 async function fetchParentConsentDetails(token, documentId) {
   const response = await fetch(`/api/portal/tmc/parent/documents/${documentId}/consent`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -1728,6 +1739,19 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
         const consent = await fetchParentConsentDetails(token, documentRecord.id);
         setConsentPreview({ consent, document: documentRecord });
         return;
+      }
+      if (!download) {
+        try {
+          const viewUrl = await fetchParentDocumentViewUrl(token, documentRecord.id);
+          if (viewUrl) {
+            window.open(viewUrl, "_blank", "noopener,noreferrer");
+            return;
+          }
+        } catch (error) {
+          // Legacy database-backed documents have no object-storage URL. Keep
+          // the authenticated stream fallback for those rows only.
+          if (error.status !== 404) throw error;
+        }
       }
       const blob = await fetchParentDocumentFile(token, documentRecord.id, { download });
       const url = URL.createObjectURL(blob);

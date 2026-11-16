@@ -159,7 +159,7 @@ import { pathWithDateRange, readDateRange } from "../utils/dateRangeNavigation";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
-// when the drawer is open at <900px so Tab cycles within the drawer instead of
+// when the drawer is open below 1100px so Tab cycles within the drawer instead of
 // escaping to the (visually hidden) main content.
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -296,7 +296,7 @@ const Sidebar = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
-  // T2.1: focus trap + initial-focus. When the drawer opens at <900px, move
+  // T2.1: focus trap + initial-focus. When the drawer opens below 1100px, move
   // focus to the first focusable element inside it (skipping the brand
   // header which has no interactive elements) and intercept Tab/Shift-Tab so
   // focus cycles within the drawer. Closing the drawer returns focus to the
@@ -397,7 +397,11 @@ const Sidebar = ({
     // fetchApi docstring at utils/api.js:107-109 explicitly recommends
     // {silent} for background-poll callsites.
     const [leads, tasks, tickets, inbox] = await Promise.all([
-      safeLen(fetchApi("/api/contacts?status=Lead&count=1", { silent: true })),
+      // Keep the All Leads badge aligned with the Generic Leads page, which
+      // intentionally includes every CRM contact/status in its workspace.
+      // Non-generic verticals continue to apply their normal status filter;
+      // the backend only honors includeCrmStatuses for Generic CRM.
+      safeLen(fetchApi("/api/contacts?status=Lead&includeCrmStatuses=true&count=1", { silent: true })),
       safeLen(fetchApi("/api/tasks?status=PENDING&count=1", { silent: true })),
       safeLen(fetchApi("/api/tickets?status=OPEN&count=1", { silent: true })),
       safeLen(fetchApi("/api/email?unread=1", { silent: true })),
@@ -1127,7 +1131,7 @@ const Sidebar = ({
     [],
   );
 
-  // T2.1: when the drawer is open at <900px, the sidebar IS a modal dialog 
+  // T2.1: when the drawer is open below 1100px, the sidebar IS a modal dialog 
   // it's the focused, foregrounded layer over a backdrop and the rest of the
   // app is inert. Switch role from "navigation" to "dialog" + add aria-modal
   // so screen readers announce it correctly. On desktop (or when closed),
@@ -1138,7 +1142,7 @@ const Sidebar = ({
 
   return (
     <>
-      {/* T2.1 (extends #228): backdrop is only visible at <900px (responsive.css)
+      {/* T2.1 (extends #228): backdrop is only visible below 1100px (responsive.css)
           and only when the drawer is open. Tap dismisses. */}
       <div
         className={`sidebar-backdrop ${mobileOpen ? "is-open" : ""}`}

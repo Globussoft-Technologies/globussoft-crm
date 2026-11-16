@@ -114,7 +114,7 @@
   /* The omnibar and its body-mounted-looking result panel are inline-styled;
      class-scoped overrides keep them shrinking with the viewport too. */
   .app-shell .app-topbar .omnibar-root {
-    width: clamp(145px, 38vw, 320px) !important;
+    width: 100% !important;
     min-width: 0 !important;
   }
 

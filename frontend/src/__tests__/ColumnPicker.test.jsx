@@ -262,6 +262,40 @@ describe("ColumnPicker reorder", () => {
     expect(checkbox.disabled).toBe(true);
   });
 
+  it("moves Actions after newly added visible columns from an older saved order", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/table-column-prefs/leads" && !opts) {
+        return Promise.resolve({
+          availableColumns: [
+            { key: "name", label: "Name", lockedVisible: true },
+            { key: "email", label: "Email" },
+            { key: "actions", label: "Actions", lockedVisible: true },
+            { key: "utm_source", label: "UTM Source" },
+          ],
+          visible: ["name", "actions", "utm_source", "email"],
+        });
+      }
+      if (url === "/api/table-column-prefs/leads" && opts?.method === "PUT") {
+        return Promise.resolve({ visible: JSON.parse(opts.body).visible });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<ColumnPicker tableKey="leads" />);
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Customize table/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Customize table columns" });
+    expect([...dialog.querySelectorAll("[data-column-row]")].map((row) => row.getAttribute("data-column-row"))).toEqual([
+      "name",
+      "utm_source",
+      "email",
+      "actions",
+    ]);
+  });
+
   it("resets the generic leads table to the default column set only", async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === "/api/table-column-prefs/leads" && !opts) {

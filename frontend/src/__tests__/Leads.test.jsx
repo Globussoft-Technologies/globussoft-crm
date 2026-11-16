@@ -1768,6 +1768,160 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
+  it('uses one saved order for the table even when columns cross feature groups', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'source', 'campaign', 'email', 'actions'],
+          availableColumns: [
+            { key: 'name', label: 'Name', lockedVisible: true },
+            { key: 'source', label: 'Source' },
+            { key: 'campaign', label: 'Callified Campaign' },
+            { key: 'email', label: 'Email' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Smith');
+
+    await waitFor(() => {
+      expect(Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
+        th.textContent.replace(/\s+/g, ' ').trim(),
+      )).toEqual(['Name', 'Source', 'Callified Campaign', 'Email', 'Actions']);
+    });
+  });
+
+  it('reorders and persists columns when dragged from the table header', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'source', 'campaign', 'email', 'actions'],
+          availableColumns: [
+            { key: 'name', label: 'Name', lockedVisible: true },
+            { key: 'source', label: 'Source' },
+            { key: 'campaign', label: 'Callified Campaign' },
+            { key: 'email', label: 'Email' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      if (url === '/api/table-column-prefs/leads' && opts?.method === 'PUT') {
+        return Promise.resolve({ visible: JSON.parse(opts.body).visible });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Alice Smith');
+
+    const dataTransfer = {
+      effectAllowed: 'all',
+      dropEffect: 'none',
+      setData: vi.fn(),
+    };
+    const campaignHeader = container.querySelector('[data-column-header="campaign"]');
+    const sourceHeader = container.querySelector('[data-column-header="source"]');
+    fireEvent.dragStart(campaignHeader, { dataTransfer });
+    fireEvent.dragOver(sourceHeader, { dataTransfer });
+    fireEvent.drop(sourceHeader, { dataTransfer });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/table-column-prefs/leads',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({
+            visible: ['name', 'campaign', 'source', 'email', 'actions'],
+          }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
+        th.textContent.replace(/\s+/g, ' ').trim(),
+      )).toEqual(['Name', 'Callified Campaign', 'Source', 'Email', 'Actions']);
+    });
+  });
+
+  it('keeps the saved column order in sync while moving between every Leads page', async () => {
+    const pageRows = {
+      1: [{ ...SAMPLE_LEADS[0], name: 'Page 1 lead' }],
+      2: [{ ...SAMPLE_LEADS[1], name: 'Page 2 lead' }],
+      3: [{ ...SAMPLE_LEADS[2], name: 'Page 3 lead' }],
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'source', 'campaign', 'email', 'actions'],
+          availableColumns: [
+            { key: 'name', label: 'Name', lockedVisible: true },
+            { key: 'source', label: 'Source' },
+            { key: 'campaign', label: 'Callified Campaign' },
+            { key: 'email', label: 'Email' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      if (url === '/api/table-column-prefs/leads' && opts?.method === 'PUT') {
+        return Promise.resolve({ visible: JSON.parse(opts.body).visible });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
+        return Promise.resolve({
+          data: pageRows[page] || [],
+          total: 3,
+          page,
+          limit: 1,
+          totalPages: 3,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+    await screen.findByText('Page 1 lead');
+
+    const dataTransfer = {
+      effectAllowed: 'all',
+      dropEffect: 'none',
+      setData: vi.fn(),
+    };
+    const campaignHeader = container.querySelector('[data-column-header="campaign"]');
+    const sourceHeader = container.querySelector('[data-column-header="source"]');
+    fireEvent.dragStart(campaignHeader, { dataTransfer });
+    fireEvent.dragOver(sourceHeader, { dataTransfer });
+    fireEvent.drop(sourceHeader, { dataTransfer });
+
+    const getHeaders = () => Array.from(
+      container.querySelectorAll('.leads-split-table thead th'),
+    ).map((th) => th.textContent.replace(/\s+/g, ' ').trim());
+    await waitFor(() => expect(getHeaders()).toEqual([
+      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+    ]));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(screen.getByText('Page 2 lead')).toBeInTheDocument());
+    expect(getHeaders()).toEqual([
+      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await waitFor(() => expect(screen.getByText('Page 3 lead')).toBeInTheDocument());
+    expect(getHeaders()).toEqual([
+      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+    await waitFor(() => expect(screen.getByText('Page 2 lead')).toBeInTheDocument());
+    expect(getHeaders()).toEqual([
+      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+    ]);
+  });
+
   it('keeps vertical wheel and touchpad gestures from becoming horizontal at grid boundaries', async () => {
     const { container } = renderLeads(authValue);
     await screen.findByText('Alice Lead');
@@ -2380,6 +2534,52 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true);
   });
 
+  it('restores the Generic CRM page from the URL after a list remount', async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => ({
+      ...SAMPLE_LEADS[index % SAMPLE_LEADS.length],
+      id: 100 + index,
+      name: `URL Page lead ${index + 1}`,
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        const params = new URL(url, 'http://crm.test').searchParams;
+        const page = Number(params.get('page') || 1);
+        const limit = Number(params.get('limit') || 10);
+        return Promise.resolve({
+          data: rows.slice((page - 1) * limit, page * limit),
+          total: rows.length,
+          page,
+          limit,
+          totalPages: Math.ceil(rows.length / limit),
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH, ['/leads?page=2&limit=10']);
+
+    await screen.findByText('URL Page lead 11');
+    expect(screen.getByLabelText('Page number')).toHaveValue(2);
+    expect(fetchApiMock.mock.calls.some(([url]) =>
+      typeof url === 'string'
+      && url.startsWith('/api/contacts?status=Lead')
+      && url.includes('page=2&limit=10'),
+    )).toBe(true);
+  });
+
+  it('keeps the page number fully visible in the Leads pagination footer', async () => {
+    renderLeads(ADMIN_AUTH);
+
+    await screen.findByText('Alice Smith');
+
+    expect(screen.getByLabelText('Page number')).toHaveStyle({
+      width: '4.5rem',
+      minWidth: '4.5rem',
+      flexShrink: '0',
+      boxSizing: 'border-box',
+    });
+  });
+
   it('allows Generic CRM Leads to use a custom rows-per-page value', async () => {
     renderLeads(ADMIN_AUTH);
 
@@ -2646,7 +2846,10 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         return Promise.resolve({ values: [{ value: 'Lead', label: 'Lead' }] });
       }
       if (typeof url === 'string' && url.includes('/api/contacts/filter-values/assignedToId')) {
-        return Promise.resolve({ values: [{ value: '7', label: 'Sales Rep One' }] });
+        return Promise.resolve({ values: [
+          { value: 'unassigned', label: 'Unassigned' },
+          { value: '7', label: 'Sales Rep One' },
+        ] });
       }
       if (typeof url === 'string' && url.includes('/api/contacts/filter-values/email')) {
         return new Promise((resolve) => {
@@ -2683,20 +2886,22 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     ).toBeNull();
     expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Status' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Lead Status' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Assigned To' }));
+    const assignedSection = within(dialog).getByText('Assigned To').closest('.filter-panel-section');
+    expect(await within(assignedSection).findByRole('checkbox', { name: 'Unassigned' })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Email' }));
 
     expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
     expect(within(dialog).getByText('Email')).toBeInTheDocument();
     expect(within(dialog).getByText('Source')).toBeInTheDocument();
-    expect(within(dialog).getByText('Status')).toBeInTheDocument();
+    expect(within(dialog).getByText('Lead Status')).toBeInTheDocument();
     expect(within(dialog).getByText('Assigned To')).toBeInTheDocument();
     expect(
       Array.from(dialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
-    ).toEqual(['Email', 'Assigned To', 'Status', 'Source']);
+    ).toEqual(['Email', 'Assigned To', 'Lead Status', 'Source']);
     expect(within(dialog).getByRole('button', { name: /^Apply$/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /^Reset$/i })).toBeInTheDocument();
 
@@ -2762,7 +2967,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(within(draftDialog).getByRole('button', { name: 'Name' }));
     expect(
       Array.from(draftDialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
-    ).toEqual(['Name', 'Email', 'Assigned To', 'Status', 'Source']);
+    ).toEqual(['Name', 'Email', 'Assigned To', 'Lead Status', 'Source']);
     fireEvent.click(within(draftDialog).getByRole('button', { name: /^Apply$/i }));
 
     await waitFor(() => {
@@ -2798,7 +3003,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       expect(within(reopenedDialog).getByPlaceholderText('Add a field to filter')).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Email' })).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Source' })).toBeInTheDocument();
-      expect(within(reopenedDialog).getByRole('button', { name: 'Status' })).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'Lead Status' })).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Assigned To' })).toBeInTheDocument();
     });
 
@@ -2813,6 +3018,40 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(within(emptyDialog).getByRole('status')).toHaveTextContent(
       'Add filters to narrow down the contacts you want to see.',
     );
+  });
+
+  it('disambiguates Generic CRM lead status from configured stage status', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'status', label: 'Status' },
+            { key: 'lifecycleStage', label: 'Lifecycle Stage', filterField: 'lifecycleStageKey', filterKind: 'enum' },
+          ],
+        });
+      }
+      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [
+            { field: 'status', label: 'Status', kind: 'text' },
+            { field: 'lifecycleStageKey', label: 'Status', kind: 'enum' },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Filters/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+
+    expect(within(dialog).getByRole('button', { name: 'Lead Status' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Status' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Lifecycle Stage' })).toBeNull();
   });
 
   it('dynamically mirrors the full Generic CRM Customize Table catalog in Filter By', async () => {
@@ -2984,8 +3223,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(bulkActionsButton);
     const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
     expect(menu).toHaveStyle({
-      left: '0px',
-      right: 'auto',
+      right: '0px',
+      left: 'auto',
+      boxSizing: 'border-box',
     });
     await waitFor(() => {
       expect(within(menu).getByText(/3 selected/i)).toBeInTheDocument();
@@ -4840,6 +5080,43 @@ describe('Leads extended Freshsales-parity columns', () => {
     'linkedin', 'industry', 'companySize', 'description', 'stateCode',
     'firstTouchSource', 'lastTouchSource',
   ];
+
+  it('renders HTML-formatted lead notes as readable plain text', async () => {
+    const noteLead = {
+      ...EXTENDED_LEAD,
+      id: 202,
+      name: 'Note Lead',
+      description: '',
+      activities: [{
+        id: 1,
+        type: 'Note',
+        description: '<span>16th - Nov | IA * Dialled | Not answered, sent VM, sent an email</span>',
+        createdAt: '2026-11-16T09:00:00.000Z',
+      }],
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve([noteLead]);
+      }
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'description', 'actions'],
+          availableColumns: [
+            { key: 'name', label: 'Name', lockedVisible: true },
+            { key: 'description', label: 'Note' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(genericAuth);
+    await screen.findByText('Note Lead');
+
+    expect(screen.getByText('16th - Nov | IA * Dialled | Not answered, sent VM, sent an email')).toBeInTheDocument();
+    expect(screen.queryByText('<span>16th - Nov | IA * Dialled | Not answered, sent VM, sent an email</span>')).toBeNull();
+  });
 
   it('renders the extended headers + data-backed cells when the picker enables them', async () => {
     fetchApiMock.mockImplementation((url, opts) => {

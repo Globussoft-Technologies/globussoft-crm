@@ -876,6 +876,14 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
   overflow-y: auto !important;
 }
 
+/* A direct Generic lead detail is a page, not a drawer. Let the profile use
+   the full content pane so its responsive container queries measure the real
+   available width rather than a fixed drawer over the Leads table. */
+.app-main > main.generic-page-content:has(.cp-full-page) {
+  padding: 0;
+  overflow-y: auto !important;
+}
+
 /* Pickup & Plot module (Generic CRM): keep the workspace stable while its
    background refresh completes. Transport and Site Visits already use this
    non-remounting presentation; apply the same shell rule to every sibling
@@ -934,11 +942,15 @@ body[data-vertical="generic"]
 /* Generic Pickup Inventory owns the only table viewport on the page. Keep
    the page shell from becoming a second vertical scroller and let the card
    fill the available height while its table body handles the rows. */
-body[data-vertical="generic"] .app-main > main.generic-page-content:has(.pickup-inventory-page) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content:has(.pickup-inventory-page) {
   overflow-y: hidden !important;
 }
 
-body[data-vertical="generic"] .pickup-inventory-page > .pickup-plot-table-body-scroll {
+body[data-vertical="generic"]
+  .pickup-inventory-page
+  > .pickup-plot-table-body-scroll {
   flex: 1 1 auto !important;
   max-height: none !important;
 }
@@ -5857,6 +5869,52 @@ table.leads-table thead th {
     width: 100%;
     justify-content: space-between;
   }
+
+  /* Toolbar menus are opened from narrow grid cells on tablet and phone.
+     Cap every anchored popup to the viewport and keep each menu aligned to
+     the side of its trigger that has available space. */
+  .leads-page-root--generic
+    .leads-actions-toolbar
+    :is(.leads-auto-campaign-menu, .leads-campaign-dropdown-menu) {
+    width: min(560px, calc(100vw - 3.5rem)) !important;
+    max-width: calc(100vw - 3.5rem) !important;
+    min-width: 0 !important;
+    max-height: calc(100dvh - 1rem) !important;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar .leads-bulk-actions-menu {
+    left: auto !important;
+    right: 0 !important;
+    width: min(420px, calc(100vw - 1rem)) !important;
+    max-width: calc(100vw - 1rem) !important;
+    min-width: 0 !important;
+    max-height: calc(100dvh - 1rem) !important;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar .leads-auto-campaign-menu {
+    left: 0 !important;
+    right: auto !important;
+  }
+
+  .leads-page-root--generic
+    .leads-actions-toolbar
+    .leads-campaign-dropdown-menu {
+    left: auto !important;
+    right: 0 !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell .leads-density-menu {
+    left: auto !important;
+    right: 0 !important;
+    width: min(220px, calc(100vw - 3.5rem)) !important;
+    max-width: calc(100vw - 3.5rem) !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
 }
 
 @media (max-width: 600px) {
@@ -5969,6 +6027,36 @@ table.leads-table thead th {
     padding-inline: 0.4rem;
   }
 
+  /* The rule editor has six controls in a desktop grid. Stack those controls
+     on narrow screens so each select, value field, and action remains usable
+     instead of collapsing into unreadable slivers. */
+  .leads-page-root--generic
+    .leads-auto-campaign-menu
+    .auto-campaign-rule-heading-row {
+    display: none !important;
+  }
+
+  .leads-page-root--generic .leads-auto-campaign-menu .auto-campaign-rule-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0.4rem !important;
+  }
+
+  .leads-page-root--generic
+    .leads-auto-campaign-menu
+    .auto-campaign-rule-grid
+    > input[type="checkbox"] {
+    justify-self: start;
+  }
+
+  /* At phone widths Bulk actions returns to the left column. Keep its menu
+     aligned with that column instead of extending back toward the gutter. */
+  .leads-page-root--generic .leads-actions-toolbar .leads-bulk-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+    width: min(420px, calc(100vw - 3.5rem)) !important;
+    max-width: calc(100vw - 3.5rem) !important;
+  }
+
   .leads-page-root--generic .leads-mobile-actions-toggle {
     display: inline-flex;
     align-items: center;
@@ -6051,17 +6139,93 @@ table.leads-table thead th {
   }
 }
 
+/* Tablet landscape uses the full-width app shell, but the Leads controls still
+   need an explicit two-row shape so search/filter controls cannot compete
+   with the action toolbar at 900–1099px. */
+@media (min-width: 900px) and (max-width: 1099px) {
+  .leads-page-root--generic {
+    padding: clamp(0.75rem, 2vw, 1.25rem) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .leads-page-root--generic .leads-page-header__actions {
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-page-header__actions > button {
+    flex: 1 1 12rem;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell {
+    align-items: stretch !important;
+    padding: 0.75rem !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child,
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic
+    .leads-toolbar-shell
+    > div:first-child
+    > div:first-child {
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell .crm-search-input {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) {
+    justify-content: flex-start;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar {
+    align-items: stretch;
+    gap: 0.5rem !important;
+  }
+}
+
+/* At compact desktop widths the Leads action row wraps, which moves Bulk
+   actions away from the right edge of the toolbar. Keep the menu anchored to
+   its trigger instead of allowing the right-aligned popup to extend beneath
+   the frozen Name pane and get clipped by the page shell. */
+@media (min-width: 1200px) and (max-width: 1599px) {
+  .leads-page-root--generic .leads-actions-toolbar .leads-bulk-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+    width: min(420px, calc(100vw - 2rem)) !important;
+    max-width: calc(100vw - 2rem) !important;
+    max-height: calc(100dvh - 4rem) !important;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+}
+
 /* Import dialogs can be rendered above the page container when opened from
    Generic CRM Leads. Keep their tables responsive even when they are outside
    the generic-main container used by the density rules. */
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-history-title"] > .glass,
+  [role="dialog"][aria-labelledby="import-history-title"]
+  > .glass,
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-contacts-title"] > .glass,
+  [role="dialog"][aria-labelledby="import-contacts-title"]
+  > .glass,
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-action-title"] > .glass,
+  [role="dialog"][aria-labelledby="import-action-title"]
+  > .glass,
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-errors-title"] > .glass {
+  [role="dialog"][aria-labelledby="import-errors-title"]
+  > .glass {
   width: min(1200px, calc(100vw - 2rem)) !important;
   max-width: calc(100vw - 2rem) !important;
   max-height: calc(100dvh - 2rem) !important;
@@ -6069,13 +6233,17 @@ body[data-vertical="generic"]
 }
 
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-history-title"] .csv-import-data-table,
+  [role="dialog"][aria-labelledby="import-history-title"]
+  .csv-import-data-table,
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-contacts-title"] .csv-import-data-table,
+  [role="dialog"][aria-labelledby="import-contacts-title"]
+  .csv-import-data-table,
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-action-title"] .csv-import-data-table,
+  [role="dialog"][aria-labelledby="import-action-title"]
+  .csv-import-data-table,
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-errors-title"] .csv-import-data-table {
+  [role="dialog"][aria-labelledby="import-errors-title"]
+  .csv-import-data-table {
   display: table !important;
   width: max-content !important;
   min-width: 100% !important;
@@ -6084,13 +6252,21 @@ body[data-vertical="generic"]
 }
 
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-history-title"] .csv-import-data-table :is(th, td),
+  [role="dialog"][aria-labelledby="import-history-title"]
+  .csv-import-data-table
+  :is(th, td),
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-contacts-title"] .csv-import-data-table :is(th, td),
+  [role="dialog"][aria-labelledby="import-contacts-title"]
+  .csv-import-data-table
+  :is(th, td),
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-action-title"] .csv-import-data-table :is(th, td),
+  [role="dialog"][aria-labelledby="import-action-title"]
+  .csv-import-data-table
+  :is(th, td),
 body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-errors-title"] .csv-import-data-table :is(th, td) {
+  [role="dialog"][aria-labelledby="import-errors-title"]
+  .csv-import-data-table
+  :is(th, td) {
   min-width: 120px !important;
   max-width: 240px !important;
   white-space: normal !important;
@@ -6101,13 +6277,17 @@ body[data-vertical="generic"]
 
 @media (max-width: 600px) {
   body[data-vertical="generic"]
-    [role="dialog"][aria-labelledby="import-history-title"] > .glass,
+    [role="dialog"][aria-labelledby="import-history-title"]
+    > .glass,
   body[data-vertical="generic"]
-    [role="dialog"][aria-labelledby="import-contacts-title"] > .glass,
+    [role="dialog"][aria-labelledby="import-contacts-title"]
+    > .glass,
   body[data-vertical="generic"]
-    [role="dialog"][aria-labelledby="import-action-title"] > .glass,
+    [role="dialog"][aria-labelledby="import-action-title"]
+    > .glass,
   body[data-vertical="generic"]
-    [role="dialog"][aria-labelledby="import-errors-title"] > .glass {
+    [role="dialog"][aria-labelledby="import-errors-title"]
+    > .glass {
     width: calc(100vw - 1.5rem) !important;
     max-width: calc(100vw - 1.5rem) !important;
     max-height: calc(100dvh - 1.5rem) !important;
@@ -8941,12 +9121,14 @@ body[data-vertical="generic"]
 
 body[data-vertical="generic"] .tasks-filterbar__search.is-active {
   border-color: var(--accent-color, #4f46e5);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
 }
 
 body[data-vertical="generic"] .tasks-filterbar__field--active {
   border-color: var(--accent-color, #4f46e5);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--accent-color, #4f46e5) 14%, transparent);
   background: var(--input-bg, #fff);
 }
 
@@ -9036,12 +9218,20 @@ body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
 
 .tasks-summary-card--critical {
   border-color: rgba(239, 68, 68, 0.35);
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.07), var(--surface-color, #fff));
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.07),
+    var(--surface-color, #fff)
+  );
 }
 
 .tasks-summary-card--all {
   border-color: rgba(99, 102, 241, 0.35);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), var(--surface-color, #fff));
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.07),
+    var(--surface-color, #fff)
+  );
 }
 
 .tasks-summary-card--all strong {
@@ -9050,7 +9240,11 @@ body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
 
 .tasks-summary-card--progress {
   border-color: rgba(14, 165, 233, 0.35);
-  background: linear-gradient(135deg, rgba(14, 165, 233, 0.07), var(--surface-color, #fff));
+  background: linear-gradient(
+    135deg,
+    rgba(14, 165, 233, 0.07),
+    var(--surface-color, #fff)
+  );
 }
 
 .tasks-summary-card--progress strong {
@@ -9059,7 +9253,11 @@ body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
 
 .tasks-summary-card--completed {
   border-color: rgba(16, 185, 129, 0.35);
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.07), var(--surface-color, #fff));
+  background: linear-gradient(
+    135deg,
+    rgba(16, 185, 129, 0.07),
+    var(--surface-color, #fff)
+  );
 }
 
 .tasks-summary-card--completed strong {
@@ -9072,7 +9270,11 @@ body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
 
 .tasks-summary-card--high {
   border-color: rgba(249, 115, 22, 0.35);
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.07), var(--surface-color, #fff));
+  background: linear-gradient(
+    135deg,
+    rgba(249, 115, 22, 0.07),
+    var(--surface-color, #fff)
+  );
 }
 
 .tasks-summary-card--high strong {
@@ -9081,7 +9283,11 @@ body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
 
 .tasks-summary-card--overdue {
   border-color: rgba(239, 68, 68, 0.35);
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.06), var(--surface-color, #fff));
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.06),
+    var(--surface-color, #fff)
+  );
 }
 
 .tasks-summary-card--overdue strong {
@@ -9091,7 +9297,9 @@ body[data-vertical="generic"] .tasks-filterbar__refresh:hover {
 /* Generic CRM owns the only vertical scroll area on the task page. Keep the
    page frame fixed to the app viewport and let the active queue consume the
    remaining height instead of creating a page-level scrollbar. */
-body[data-vertical="generic"] .app-main > main.generic-page-content:has(.tasks-page) {
+body[data-vertical="generic"]
+  .app-main
+  > main.generic-page-content:has(.tasks-page) {
   overflow-y: hidden !important;
 }
 
@@ -10264,10 +10472,9 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
 
 .duplicates-contact-row {
   display: grid !important;
-  grid-template-columns: 72px minmax(190px, 1.15fr) minmax(
-      240px,
-      1.45fr
-    ) minmax(160px, 1fr) 82px;
+  grid-template-columns:
+    72px minmax(190px, 1.15fr) minmax(240px, 1.45fr)
+    minmax(160px, 1fr) 82px;
   align-items: start !important;
   gap: 12px !important;
   min-width: 790px;
@@ -10856,7 +11063,10 @@ body[data-vertical="generic"] table.pickup-plot-leads-table thead tr,
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
   /* Sticky headers overlap scrolling rows, so they need an opaque themed
      surface rather than the glass/translucent table-header token. */
-  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+  background-color: var(
+    --popover-bg,
+    var(--modal-bg, var(--surface-color))
+  ) !important;
 }
 
 body[data-vertical="generic"] table.pickup-plot-leads-table thead th {
@@ -10874,17 +11084,31 @@ body[data-vertical="generic"] .pickup-plot-table-body-scroll {
   isolation: isolate;
 }
 
-body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead,
-body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead tr {
+body[data-vertical="generic"]
+  .pickup-plot-table-body-scroll
+  table.pickup-plot-leads-table
+  thead,
+body[data-vertical="generic"]
+  .pickup-plot-table-body-scroll
+  table.pickup-plot-leads-table
+  thead
+  tr {
   /* Do not make the table section and its row sticky as well. Chromium can
      composite the row independently and let the first body row show above
      the header. The cells below are the sole sticky layer. */
   position: static !important;
   z-index: auto;
-  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+  background-color: var(
+    --popover-bg,
+    var(--modal-bg, var(--surface-color))
+  ) !important;
 }
 
-body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-leads-table thead th {
+body[data-vertical="generic"]
+  .pickup-plot-table-body-scroll
+  table.pickup-plot-leads-table
+  thead
+  th {
   position: sticky !important;
   top: 0 !important;
   inset-block-start: 0 !important;
@@ -10896,7 +11120,10 @@ body[data-vertical="generic"] .pickup-plot-table-body-scroll table.pickup-plot-l
   vertical-align: middle;
   line-height: 1.25;
   letter-spacing: 0.01em;
-  background-color: var(--popover-bg, var(--modal-bg, var(--surface-color))) !important;
+  background-color: var(
+    --popover-bg,
+    var(--modal-bg, var(--surface-color))
+  ) !important;
   background-clip: padding-box;
   box-shadow: inset 0 -1px 0 var(--border-color);
 }
@@ -10945,7 +11172,12 @@ body[data-vertical="generic"]
   ) !important;
 }
 
-body[data-vertical="generic"] .pickup-customers-page .pickup-directory-scroll table.pickup-customer-table thead th,
+body[data-vertical="generic"]
+  .pickup-customers-page
+  .pickup-directory-scroll
+  table.pickup-customer-table
+  thead
+  th,
 body[data-vertical="generic"]
   .pickup-installment-table-wrap
   table.pickup-installment-table
@@ -12006,9 +12238,131 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   box-sizing: border-box;
   padding: 14px 18px;
 }
-.travel-lead-note-composer{display:flex;align-items:center;gap:14px}.travel-lead-note-input-wrap{display:flex;align-items:center;gap:14px;min-width:0;flex:1;height:50px;padding:0 16px;border:1px solid var(--border-color);border-radius:12px;background:var(--surface-color);color:var(--text-secondary)}.travel-lead-note-input-wrap input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--text-primary);font:inherit;font-size:14px}.travel-lead-note-input-wrap input::placeholder{color:var(--text-secondary)}.travel-lead-add-note-button{min-width:150px;height:50px;border-radius:12px;font-size:14px}.travel-lead-note-list{display:grid;gap:14px}.travel-lead-note-card{display:flex;align-items:flex-start;gap:16px;padding:20px;border:1px solid var(--border-color);border-radius:14px;background:var(--surface-color)}.travel-lead-note-avatar{display:flex;align-items:center;justify-content:center;flex:0 0 42px;width:42px;height:42px;border-radius:50%;background:#eee9ff;color:#5b21e6;font-size:14px;font-weight:800}.travel-lead-note-content{min-width:0;flex:1;color:var(--text-primary);font-size:14px;line-height:1.5}.travel-lead-note-meta{display:flex;align-items:center;gap:8px;margin-bottom:5px;color:var(--text-secondary);font-size:12px}.travel-lead-note-meta strong{color:var(--text-primary);font-size:14px}
-.travel-lead-note-actions{display:flex;gap:8px;margin-left:auto}.travel-lead-note-actions button,.travel-lead-note-cancel{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid var(--border-color);border-radius:10px;background:var(--surface-color);color:var(--text-secondary);cursor:pointer}.travel-lead-note-actions button:hover,.travel-lead-note-cancel:hover{color:var(--primary-color,var(--accent-color));border-color:var(--primary-color,var(--accent-color))}.travel-lead-note-cancel{flex:0 0 38px}
-.travel-lead-note-input-wrap:has(input.is-editing){border-color:var(--primary-color,var(--accent-color));background:color-mix(in srgb,var(--primary-color,var(--accent-color)) 7%,var(--surface-color));box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-color,var(--accent-color)) 14%,transparent)}.travel-lead-note-input-wrap input.is-editing{font-weight:600}
+.travel-lead-note-composer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.travel-lead-note-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1;
+  height: 50px;
+  padding: 0 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+}
+.travel-lead-note-input-wrap input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+}
+.travel-lead-note-input-wrap input::placeholder {
+  color: var(--text-secondary);
+}
+.travel-lead-add-note-button {
+  min-width: 150px;
+  height: 50px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+.travel-lead-note-list {
+  display: grid;
+  gap: 14px;
+}
+.travel-lead-note-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--surface-color);
+}
+.travel-lead-note-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #eee9ff;
+  color: #5b21e6;
+  font-size: 14px;
+  font-weight: 800;
+}
+.travel-lead-note-content {
+  min-width: 0;
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.travel-lead-note-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.travel-lead-note-meta strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.travel-lead-note-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.travel-lead-note-actions button,
+.travel-lead-note-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.travel-lead-note-actions button:hover,
+.travel-lead-note-cancel:hover {
+  color: var(--primary-color, var(--accent-color));
+  border-color: var(--primary-color, var(--accent-color));
+}
+.travel-lead-note-cancel {
+  flex: 0 0 38px;
+}
+.travel-lead-note-input-wrap:has(input.is-editing) {
+  border-color: var(--primary-color, var(--accent-color));
+  background: color-mix(
+    in srgb,
+    var(--primary-color, var(--accent-color)) 7%,
+    var(--surface-color)
+  );
+  box-shadow: 0 0 0 3px
+    color-mix(
+      in srgb,
+      var(--primary-color, var(--accent-color)) 14%,
+      transparent
+    );
+}
+.travel-lead-note-input-wrap input.is-editing {
+  font-weight: 600;
+}
 .csv-import-modal-backdrop,
 [role="dialog"][aria-labelledby="import-history-title"],
 [role="dialog"][aria-labelledby="import-contacts-title"],
@@ -12031,10 +12385,18 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   flex-direction: column;
 }
 
-[role="dialog"][aria-labelledby="import-history-title"] > .glass > div:nth-child(2),
-[role="dialog"][aria-labelledby="import-contacts-title"] > .glass > div:nth-child(2),
-[role="dialog"][aria-labelledby="import-action-title"] > .glass > div:nth-child(2),
-[role="dialog"][aria-labelledby="import-errors-title"] > .glass > div:nth-child(2) {
+[role="dialog"][aria-labelledby="import-history-title"]
+  > .glass
+  > div:nth-child(2),
+[role="dialog"][aria-labelledby="import-contacts-title"]
+  > .glass
+  > div:nth-child(2),
+[role="dialog"][aria-labelledby="import-action-title"]
+  > .glass
+  > div:nth-child(2),
+[role="dialog"][aria-labelledby="import-errors-title"]
+  > .glass
+  > div:nth-child(2) {
   min-width: 0;
   flex: 1 1 auto;
   min-height: 0;

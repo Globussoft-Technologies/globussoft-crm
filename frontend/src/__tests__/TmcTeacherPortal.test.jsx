@@ -302,6 +302,28 @@ describe("TmcTeacherPortal", () => {
     expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
   });
 
+  it("opens participant, payment, and rooming tabs from the trips page", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Trips" }));
+    await screen.findByRole("heading", { name: "Your trips" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Singapore.*participants/ }));
+    expect(await screen.findByText("Manish")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Participants" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Payments" }));
+    expect(await screen.findByRole("tab", { name: "Payments" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("No per-participant instalments yet")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Rooming" }));
+    expect(await screen.findByRole("tab", { name: "Rooming" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("button", { name: "Add room" })).toBeInTheDocument();
+    expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/trips/7/payment-plan")).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/trips/7/rooming")).toBe(true);
+  });
+
   it("restores the selected section from the URL after a refresh", async () => {
     window.history.replaceState({}, "", "/tmc/teacher-portal?view=trips");
     render(<TmcTeacherPortal />);

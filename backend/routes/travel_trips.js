@@ -2524,6 +2524,14 @@ async function loadStaffParentDocument({ tenantId, tripId, parentEmail, document
   });
 }
 
+async function resolveStaffParentDocumentViewUrl(document) {
+  return visaDocStore.resolveViewUrl({
+    attachmentUrl: document?.fileUrl,
+    attachmentStorage: document?.storage,
+    attachmentKey: document?.storageKey,
+  });
+}
+
 const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
 
 // GET /api/travel/trips/:id/participants/import-template
@@ -2873,6 +2881,70 @@ router.get(
 // Staff-only generic view for any parent-portal document on a participant.
 // The document id is still constrained by tenant, trip and matching parent
 // email so an operator cannot use this route to cross participant boundaries.
+router.get(
+  "/trips/:id/participants/:pid/parent-documents/:documentId/view-url",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const participantId = parseInt(req.params.pid, 10);
+      const documentId = parseInt(req.params.documentId, 10);
+      if (!Number.isFinite(participantId) || !Number.isFinite(documentId)) {
+        return res.status(400).json({ error: "Invalid participant or document id", code: "INVALID_DOCUMENT_ID" });
+      }
+      const participant = await prisma.tripParticipant.findFirst({
+        where: { id: participantId, tripId: trip.id },
+        select: { parentEmail: true },
+      });
+      if (!participant) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
+      const document = await loadStaffParentDocument({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        parentEmail: participant.parentEmail,
+        documentId,
+      });
+      if (!document) return res.status(404).json({ error: "Parent document not found", code: "DOCUMENT_NOT_FOUND" });
+      const url = await resolveStaffParentDocumentViewUrl(document);
+      if (!url) return res.status(404).json({ error: "Parent document has no direct view URL", code: "DOCUMENT_VIEW_URL_UNAVAILABLE" });
+      return res.json({ url, expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant parent document view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to generate parent document URL" });
+    }
+  },
+);
+
+router.get(
+  "/trips/:id/registrations/:rid/parent-documents/:documentId/view-url",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const { trip, draft } = await loadPendingRegistration(req);
+      const documentId = parseInt(req.params.documentId, 10);
+      if (!Number.isFinite(documentId)) return res.status(400).json({ error: "documentId must be a number", code: "INVALID_DOCUMENT_ID" });
+      const document = await loadStaffParentDocument({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        parentEmail: draft.parentEmail,
+        documentId,
+      });
+      if (!document) return res.status(404).json({ error: "Parent document not found", code: "DOCUMENT_NOT_FOUND" });
+      const url = await resolveStaffParentDocumentViewUrl(document);
+      if (!url) return res.status(404).json({ error: "Parent document has no direct view URL", code: "DOCUMENT_VIEW_URL_UNAVAILABLE" });
+      return res.json({ url, expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] registration parent document view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to generate parent document URL" });
+    }
+  },
+);
+
 router.get(
   "/trips/:id/participants/:pid/parent-documents/:documentId/file",
   verifyToken,

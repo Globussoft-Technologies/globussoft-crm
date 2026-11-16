@@ -119,7 +119,10 @@ describe("LeadDetail", () => {
     renderPage();
 
     await screen.findByRole("heading", { name: "Sharada School Trust" });
-    expect(screen.getAllByText("₹160,000").length).toBeGreaterThanOrEqual(1);
+    const wholeTripAmount = screen.getAllByText(
+      (content) => content.includes("₹") && content.replace(/\D/g, "") === "160000",
+    );
+    expect(wholeTripAmount.length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows the empty trip state when no trips are linked", async () => {

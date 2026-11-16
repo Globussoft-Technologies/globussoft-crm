@@ -59,6 +59,24 @@ export default function ColumnPicker({
     "actions",
   ];
 
+  // Name identifies each row and Actions contains the row controls, so both
+  // are structural columns rather than reorderable fields. Keep them at the
+  // edges everywhere, including for preferences saved by older versions.
+  const normalizeColumnOrder = (keys, columns = available) => {
+    const availableKeys = new Set(columns.map((column) => column.key));
+    const unique = [];
+    for (const key of Array.isArray(keys) ? keys : []) {
+      if ((!columns.length || availableKeys.has(key)) && !unique.includes(key)) {
+        unique.push(key);
+      }
+    }
+    if (!columns.length) return unique;
+    const first = availableKeys.has("name") ? ["name"] : [];
+    const middle = unique.filter((key) => key !== "name" && key !== "actions");
+    const actions = availableKeys.has("actions") ? ["actions"] : [];
+    return [...first, ...middle, ...actions];
+  };
+
   const load = async () => {
     setLoading(true);
     try {
@@ -76,8 +94,9 @@ export default function ColumnPicker({
       const availableColumns = Array.isArray(data.availableColumns) ? data.availableColumns : [];
       setAvailable(availableColumns);
       onAvailableColumnsChange?.(availableColumns);
-      setDraftVisible(data.visible);
-      onColumnsChange?.(data.visible);
+      const normalizedVisible = normalizeColumnOrder(data.visible, availableColumns);
+      setDraftVisible(normalizedVisible);
+      onColumnsChange?.(normalizedVisible);
       loadedOnce.current = true;
     } catch (_err) {
       // Best-effort — a failed load just means the table falls back to
@@ -169,7 +188,12 @@ export default function ColumnPicker({
   }, [open]);
 
   const toggleColumn = (key) => {
-    setDraftVisible((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+    setDraftVisible((prev) => {
+      const next = prev.includes(key)
+        ? prev.filter((k) => k !== key)
+        : [...prev, key];
+      return normalizeColumnOrder(next);
+    });
   };
 
   const moveVisibleColumn = (fromKey, toKey = null) => {
@@ -178,17 +202,26 @@ export default function ColumnPicker({
       if (fromIndex < 0) return prev;
       const next = [...prev];
       const [moved] = next.splice(fromIndex, 1);
-      if (!toKey) {
-        next.push(moved);
-        return next;
+      // A locked edge column is a visual drop zone, not a valid destination.
+      // Dropping onto Name inserts immediately after it; dropping onto
+      // Actions inserts immediately before it.
+      if (!toKey || toKey === "actions") {
+        const actionsIndex = next.indexOf("actions");
+        next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
+        return normalizeColumnOrder(next);
+      }
+      if (toKey === "name") {
+        next.splice(next.indexOf("name") + 1, 0, moved);
+        return normalizeColumnOrder(next);
       }
       const toIndex = next.indexOf(toKey);
       if (toIndex < 0) {
-        next.push(moved);
-        return next;
+        const actionsIndex = next.indexOf("actions");
+        next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
+        return normalizeColumnOrder(next);
       }
       next.splice(toIndex, 0, moved);
-      return next;
+      return normalizeColumnOrder(next);
     });
   };
 
@@ -236,9 +269,11 @@ export default function ColumnPicker({
     try {
       const data = await fetchApi(`/api/table-column-prefs/${tableKey}`, {
         method: "PUT",
-        body: JSON.stringify({ visible: draftVisible }),
+        body: JSON.stringify({ visible: normalizeColumnOrder(draftVisible) }),
       });
-      const saved = Array.isArray(data.visible) ? data.visible : draftVisible;
+      const saved = normalizeColumnOrder(
+        Array.isArray(data.visible) ? data.visible : draftVisible,
+      );
       setDraftVisible(saved);
       onColumnsChange?.(saved);
       setOpen(false);
@@ -251,12 +286,18 @@ export default function ColumnPicker({
 
   const handleReset = () => {
     if (tableKey === "leads") {
-      setDraftVisible(leadsDefaultColumns.filter((key) => available.some((column) => column.key === key)));
+      setDraftVisible(
+        normalizeColumnOrder(
+          leadsDefaultColumns.filter((key) => available.some((column) => column.key === key)),
+        ),
+      );
       return;
     }
     // Other tables keep the previous behaviour: every builtin column
     // visible, custom-field columns opt-in.
-    setDraftVisible(available.filter((c) => !c.key.startsWith("cf_")).map((c) => c.key));
+    setDraftVisible(
+      normalizeColumnOrder(available.filter((c) => !c.key.startsWith("cf_")).map((c) => c.key)),
+    );
   };
 
   const handleDeleteField = async (column) => {
@@ -295,7 +336,8 @@ export default function ColumnPicker({
   const isLockedFn = (column) => column.key === "name" || Boolean(column.lockedVisible);
   const matchesSearch = (column) =>
     !searchTerm || column.label.toLowerCase().includes(searchTerm);
-  const shownKeys = new Set(draftVisible);
+  const normalizedDraftVisible = normalizeColumnOrder(draftVisible);
+  const shownKeys = new Set(normalizedDraftVisible);
   // Locked columns (identity `name`, always-on `actions`) are always shown —
   // merge them in so older saved preferences that predate the key still
   // display them as fixed instead of dropping them into "not shown".
@@ -303,7 +345,7 @@ export default function ColumnPicker({
     if (c.lockedVisible) shownKeys.add(c.key);
   }
   if (availableByKey.has("name")) shownKeys.add("name");
-  const shown = [...shownKeys]
+  const shown = normalizeColumnOrder([...shownKeys])
     .map((key) => availableByKey.get(key))
     .filter(Boolean)
     .filter(matchesSearch);

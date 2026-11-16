@@ -684,19 +684,19 @@ function extractMedia(m) {
   };
 }
 
-// S3 persistence for inbound Wati media — mirrors the wellness pipeline
-// (cron/whatsappMediaEngine.js: download provider bytes → s3Service.uploadFile
-// → permanent S3 URL on WhatsAppMessage.mediaUrl), executed inline at
+// Object-storage persistence for inbound Wati media — mirrors the wellness
+// pipeline (cron/whatsappMediaEngine.js: download provider bytes → upload
+// → permanent object-storage URL on WhatsAppMessage.mediaUrl), executed inline at
 // ingest time since Wati media is fetched with a simple Bearer GET (no
 // Meta two-step URL dance, so no job queue needed). Falls back to the
-// streaming proxy URL when S3 isn't configured (local dev) or the
+// streaming proxy URL when object storage isn't configured (local dev) or the
 // download/upload fails — the bubble still renders either way.
 let s3Service = null;
 try {
   s3Service = require("../services/s3Service");
 } catch {
   console.warn(
-    "[travel-whatsapp] s3Service unavailable — Wati media will serve via the streaming proxy",
+    "[travel-whatsapp] object storage unavailable — Wati media will serve via the streaming proxy",
   );
 }
 
@@ -721,7 +721,7 @@ async function resolveInboundMediaUrl({ tenantId, fileName, mediaType }) {
     );
   } catch (e) {
     console.error(
-      `[travel-whatsapp] media S3 persist failed (proxy fallback): ${e.message}`,
+      `[travel-whatsapp] object-storage media persist failed (proxy fallback): ${e.message}`,
     );
     return proxyUrl;
   }
@@ -890,19 +890,16 @@ router.post(
 // mount (dev fallback — server.js already serves backend/uploads/).
 async function persistOutboundMedia({ tenantId, buffer, filename, mimeType }) {
   const safeName = `${crypto.randomUUID()}-${String(filename || "file").replace(/[^\w.-]/g, "_")}`;
-  if (s3Service && s3Service.BUCKET_NAME) {
-    try {
-      return await s3Service.uploadFile(
-        buffer,
-        safeName,
-        mimeType,
-        `whatsapp/${tenantId}/wati-media`,
-      );
-    } catch (e) {
-      console.error(
-        `[travel-whatsapp] outbound media S3 persist failed (local fallback): ${e.message}`,
-      );
-    }
+  if (s3Service && s3Service.isConfigured()) {
+    // A configured object store is authoritative for production uploads. Do
+    // not silently downgrade a failed OCI write to local disk, because the
+    // resulting URL would disappear on the next deploy.
+    return s3Service.uploadFile(
+      buffer,
+      safeName,
+      mimeType,
+      `whatsapp/${tenantId}/wati-media`,
+    );
   }
   try {
     const dir = path.join(__dirname, "..", "uploads", "wati-media");

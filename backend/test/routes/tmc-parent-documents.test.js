@@ -86,6 +86,7 @@ beforeEach(() => {
     key: "parent-document.pdf",
   });
   visaDocStore.readDocBuffer = vi.fn().mockResolvedValue(Buffer.from("stored document"));
+  visaDocStore.resolveViewUrl = vi.fn().mockResolvedValue("https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf?sig=parent-view");
 });
 
 describe("TMC parent travel documents", () => {
@@ -443,6 +444,30 @@ describe("TMC parent travel documents", () => {
       url: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf",
       storage: "ocs",
       key: "visa-docs/parent.pdf",
+    });
+  });
+
+  test("returns a signed OCI view URL for the authenticated parent", async () => {
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 11,
+      fileUrl: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf",
+      storage: "ocs",
+      storageKey: "visa-docs/parent.pdf",
+    });
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/parent/documents/11/view-url")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      url: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf?sig=parent-view",
+      expiresIn: visaDocStore.DEFAULT_VIEW_TTL_SEC,
+    });
+    expect(visaDocStore.resolveViewUrl).toHaveBeenCalledWith({
+      attachmentUrl: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/parent.pdf",
+      attachmentStorage: "ocs",
+      attachmentKey: "visa-docs/parent.pdf",
     });
   });
 

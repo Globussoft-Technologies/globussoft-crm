@@ -126,6 +126,46 @@ describe("CsvImportExportToolbar", () => {
     });
   });
 
+  it("keeps export and import menus inside a narrow viewport", () => {
+    const viewportWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 320 });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 36,
+      right: 128,
+      top: 40,
+      bottom: 72,
+      width: 92,
+      height: 32,
+      x: 36,
+      y: 40,
+      toJSON: () => ({}),
+    });
+
+    try {
+      render(
+        <CsvImportExportToolbar
+          entity="contacts"
+          label="Contacts"
+          formats={["csv", "xlsx"]}
+          genericLeadWizard
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /^Export Contacts$/i }));
+      const exportMenu = screen.getByRole("menu", { name: /Export Contacts format/i });
+      expect(exportMenu).toHaveStyle({ position: "fixed" });
+      expect(Number.parseFloat(exportMenu.style.left)).toBeGreaterThanOrEqual(8);
+      expect(Number.parseFloat(exportMenu.style.left) + Number.parseFloat(exportMenu.style.width)).toBeLessThanOrEqual(312);
+
+      fireEvent.click(screen.getByRole("button", { name: "Import contacts options" }));
+      const importMenu = screen.getByRole("menu", { name: "Import contacts options" });
+      expect(importMenu).toHaveStyle({ position: "fixed" });
+      expect(Number.parseFloat(importMenu.style.left) + Number.parseFloat(importMenu.style.width)).toBeLessThanOrEqual(312);
+    } finally {
+      if (viewportWidth) Object.defineProperty(window, "innerWidth", viewportWidth);
+    }
+  });
+
   it("renders export-only when allowImport is false", () => {
     render(
       <CsvImportExportToolbar entity="attendance" label="Attendance" allowImport={false} />,

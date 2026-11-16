@@ -1076,12 +1076,26 @@ function CalendarRedirect() {
 }
 
 function LeadsRouteLayout() {
+  const location = useLocation();
+  const isLeadDetailRoute = location.pathname.startsWith("/leads/");
+  // Keep one Leads instance mounted across drawer/full-page profile
+  // transitions. Recreating the list on the way back makes its initial page
+  // (page one) win over the page that opened the profile. The list is hidden
+  // while a standalone profile is active, but its pagination, filters, and
+  // loaded rows remain alive and are revealed when the profile closes.
+  const hideListBehindProfile = isLeadDetailRoute && (
+    Boolean(location.state?.openFullPage)
+    || !location.state?.leadsListState
+  );
+
   return (
     <RoleGuard
       requiredPermission={{ module: "leads", action: "read" }}
       feature="Leads"
     >
-      <Leads />
+      <div hidden={hideListBehindProfile}>
+        <Leads />
+      </div>
       <Outlet />
     </RoleGuard>
   );

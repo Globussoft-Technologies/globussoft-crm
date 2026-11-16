@@ -216,7 +216,7 @@ export default function TripDetail() {
       {tab === "overview" && <OverviewTab trip={trip} onJump={selectTab} notify={notify} />}
       {tab === "participants" && <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "documents" && <DocumentsTab trip={trip} onChange={load} notify={notify} />}
-      {tab === "rooming" && <RoomingTab trip={trip} notify={notify} />}
+      {tab === "rooming" && <RoomingTab trip={trip} notify={notify} readOnly showExports={false} />}
       {tab === "payment" && <PaymentTab trip={trip} notify={notify} />}
     </div>
   );
@@ -251,20 +251,34 @@ function OverviewTab({ trip, onJump, notify }) {
   const pay = ops?.payments;
   const room = ops?.rooming;
 
+  const participantHint = (() => {
+    // Prefer the application-status breakdown when the ops-dashboard call
+    // has returned it (server-computed), then fall back to consent progress.
+    const pr = ops?.participants;
+    if (pr && typeof pr.approved === "number") {
+      const bits = [];
+      if (pr.approved) bits.push(`${pr.approved} approved`);
+      if (pr.pendingReview) bits.push(`${pr.pendingReview} pending`);
+      if (pr.rejected) bits.push(`${pr.rejected} rejected`);
+      if (bits.length) return bits.join(" · ");
+    }
+    if (ops?.participants?.capturedConsent != null) {
+      return `${ops.participants.capturedConsent} consent captured`;
+    }
+    return partCount === 0 ? "Add the first one" : null;
+  })();
+
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <TeacherAssignment trip={trip} notify={notify} isAdmin={isAdmin} />
-      {(trip.familyParent || (trip.familyVariants || []).length > 0) && (
-        <TripFamilyCard trip={trip} />
-      )}
+    <div data-testid="trip-overview" style={{ display: "grid", gap: 20 }}>
       {/* Hero band — destination + dates + readiness gauge */}
-      <div style={{
-        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
-        borderRadius: 12, padding: 20,
+      <section style={overviewSectionCard} aria-label="Trip at a glance">
+        <div style={{
+        background: "transparent", border: "none",
+        borderRadius: 0, padding: 0,
         display: "grid", gap: 16,
         gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
         alignItems: "center",
-      }}>
+        }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-secondary)", marginBottom: 6 }}>
             <MapPin size={14} aria-hidden /> Destination
@@ -288,31 +302,22 @@ function OverviewTab({ trip, onJump, notify }) {
         </div>
         <ReadinessGauge score={score} components={comp} />
       </div>
+      </section>
 
       {/* KPI strip — participants / docs / status */}
+      <section style={overviewSectionCard} aria-labelledby="trip-operations-title">
+        <OverviewSectionHeader
+          eyebrow="MONITOR"
+          title="Trip operations"
+          titleId="trip-operations-title"
+          description="Track the work that needs attention before departure."
+        />
       <div style={{ display: "grid", gap: 12, minWidth: 0, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))" }}>
         <KpiCard
           icon={Users}
           label="Participants"
           value={partCount}
-          hint={(() => {
-            // Prefer the application-status breakdown when the ops-dashboard
-            // call has returned it (server-computed). Fall back to consent
-            // count for pre-ops-dashboard states, then to a friendly empty
-            // hint when no participants have registered yet.
-            const pr = ops?.participants;
-            if (pr && typeof pr.approved === "number") {
-              const bits = [];
-              if (pr.approved) bits.push(`${pr.approved} approved`);
-              if (pr.pendingReview) bits.push(`${pr.pendingReview} pending`);
-              if (pr.rejected) bits.push(`${pr.rejected} rejected`);
-              if (bits.length) return bits.join(" · ");
-            }
-            if (ops?.participants?.capturedConsent != null) {
-              return `${ops.participants.capturedConsent} consent captured`;
-            }
-            return partCount === 0 ? "Add the first one" : null;
-          })()}
+          hint={participantHint}
           onClick={() => onJump?.("participants")}
         />
         <KpiCard
@@ -320,6 +325,7 @@ function OverviewTab({ trip, onJump, notify }) {
           label="Required docs"
           value={docCount}
           hint={docCount === 0 ? "None required yet" : `${ops?.documents?.submittedCount ?? 0} submitted`}
+          onClick={() => onJump?.("documents")}
         />
         <KpiCard
           icon={CheckCircle2}
@@ -330,7 +336,7 @@ function OverviewTab({ trip, onJump, notify }) {
         />
       </div>
 
-      <TripFinancialSummary trip={trip} />
+      <div style={overviewTwoColumnGrid}>
 
       {/* Payment band — wider visualisation */}
       <SummaryBand
@@ -369,7 +375,38 @@ function OverviewTab({ trip, onJump, notify }) {
       </SummaryBand>
 
       {/* Public Experience band — landing page and registration entry point. */}
+      </div>
+      </section>
+
+      <TripFinancialSummary trip={trip} />
+
+      <section style={overviewSectionCard} aria-labelledby="trip-access-title">
+        <OverviewSectionHeader
+          eyebrow="SETUP & SHARING"
+          title="Access and sharing"
+          titleId="trip-access-title"
+          description="Control who can manage this trip and how parents enter the registration flow."
+        />
+        <TeacherAssignment trip={trip} notify={notify} isAdmin={isAdmin} embedded />
+      </section>
+
+      <div style={overviewSupportGrid}>
+        {(trip.familyParent || (trip.familyVariants || []).length > 0) && <TripFamilyCard trip={trip} />}
       <LandingPageCard trip={trip} notify={notify} />
+      </div>
+    </div>
+  );
+}
+
+function OverviewSectionHeader({ eyebrow, title, description, trailing, titleId }) {
+  return (
+    <div style={overviewSectionHeader}>
+      <div style={{ minWidth: 0 }}>
+        <div style={overviewEyebrow}>{eyebrow}</div>
+        <h2 id={titleId} style={{ margin: "5px 0 0", fontSize: 17, lineHeight: 1.25 }}>{title}</h2>
+        {description && <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 }}>{description}</p>}
+      </div>
+      {trailing}
     </div>
   );
 }
@@ -422,7 +459,7 @@ function TripFamilyCard({ trip }) {
   );
 }
 
-function TeacherAssignment({ trip, notify, isAdmin }) {
+function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
   const [teachers, setTeachers] = useState([]);
   const [teacherId, setTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
   const [savedTeacherId, setSavedTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
@@ -496,7 +533,12 @@ function TeacherAssignment({ trip, notify, isAdmin }) {
   const assignmentSaved = teacherId === savedTeacherId;
 
   return (
-    <section style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
+    <section style={{
+      background: embedded ? "transparent" : "var(--bg-color, #111318)",
+      border: embedded ? 0 : "1px solid var(--border-color)",
+      borderRadius: 10,
+      padding: embedded ? 0 : 14,
+    }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Teacher portal access</div>
@@ -1051,6 +1093,7 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
+  const [viewingParticipant, setViewingParticipant] = useState(null);
   const importInputRef = useRef(null);
   const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
   const participants = Array.isArray(trip.participants) ? trip.participants : [];
@@ -1160,6 +1203,13 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      {viewingParticipant && (
+        <ParticipantDetailsModal
+          person={viewingParticipant}
+          trip={trip}
+          onClose={() => setViewingParticipant(null)}
+        />
+      )}
       <section className="glass" data-testid="participant-bulk-import" style={{ padding: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div style={{ minWidth: 0 }}>
@@ -1221,10 +1271,16 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
                 const paymentStatus = getPaymentStatus(participant);
                 return (
                   <div key={participant.id} style={{ ...documentMatrixGrid, gridTemplateColumns: "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)" }}>
-                    <div style={{ minWidth: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => setViewingParticipant(participant)}
+                      style={participantIdentityButton}
+                      aria-label={`View details for ${participant.fullName || "participant"}`}
+                      data-testid={`participant-details-trigger-${participant.id}`}
+                    >
                       <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{participant.fullName || "Participant"}</strong>
                       <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{participant.parentName || participant.parentEmail || "Parent details unavailable"}</span>
-                    </div>
+                    </button>
                     {[documentStatus, paymentStatus].map((status, index) => (
                       <div key={index} style={{ display: "grid", gap: 3, justifyItems: "start" }}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: status.completed ? "#2F7A4D" : "var(--text-secondary)", fontWeight: 650, fontSize: 12 }}>
@@ -1500,15 +1556,32 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
-  const viewParentConsentFile = async (path, document, person) => {
+  const viewParentConsentFile = async (filePath, document, person) => {
     if (isDigitalConsentRequirement(document)) {
       setViewingConsent({ person, document });
       return;
     }
     try {
       const token = getAuthToken();
-      const response = await fetch(`/api/travel${path}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      // Parent uploads are private. Ask the staff-only backend route for a
+      // short-lived OCI signed URL so the browser opens the actual object
+      // storage URL instead of a temporary blob: URL. Keep the streamed file
+      // route as a compatibility fallback for legacy DB/blob-backed rows.
+      const viewUrlPath = filePath.replace(/\/file$/, "/view-url");
+      const viewUrlResponse = await fetch(`/api/travel${viewUrlPath}`, {
+        headers,
+      });
+      if (viewUrlResponse.ok && typeof viewUrlResponse.json === "function") {
+        const payload = await viewUrlResponse.json().catch(() => ({}));
+        if (payload?.url) {
+          window.open(payload.url, "_blank", "noopener,noreferrer");
+          return;
+        }
+      }
+
+      const response = await fetch(`/api/travel${filePath}`, {
+        headers,
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -2001,7 +2074,6 @@ function DocumentsTab({ trip, onChange, notify }) {
   const [captureMode, setCaptureMode] = useState("file");
   const [saving, setSaving] = useState(false);
   const [viewingConsent, setViewingConsent] = useState(null);
-  const [viewingParticipant, setViewingParticipant] = useState(null);
 
   const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
   const parentDocumentsByEmail = useMemo(() => new Map(
@@ -2141,7 +2213,22 @@ function DocumentsTab({ trip, onChange, notify }) {
     return response.blob();
   };
 
+  const fetchDocumentViewUrl = async (person, documentRecord) => {
+    const token = getAuthToken();
+    const response = await fetch(`/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${documentRecord.id}/view-url`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok || typeof response.json !== "function") return null;
+    const result = await response.json().catch(() => ({}));
+    return result?.url || null;
+  };
+
   const viewDocument = async (person, documentRecord) => {
+    const signedUrl = await fetchDocumentViewUrl(person, documentRecord);
+    if (signedUrl) {
+      window.open(signedUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
     const url = URL.createObjectURL(await fetchDocumentBlob(person, documentRecord));
     window.open(url, "_blank", "noopener,noreferrer");
     window.setTimeout(() => URL.revokeObjectURL(url), 30000);
@@ -2178,13 +2265,6 @@ function DocumentsTab({ trip, onChange, notify }) {
           person={viewingConsent.person}
           document={viewingConsent.document}
           onClose={() => setViewingConsent(null)}
-        />
-      )}
-      {viewingParticipant && (
-        <ParticipantDetailsModal
-          person={viewingParticipant}
-          trip={trip}
-          onClose={() => setViewingParticipant(null)}
         />
       )}
       <section style={documentAdminCard}>
@@ -2290,16 +2370,10 @@ function DocumentsTab({ trip, onChange, notify }) {
               </div>
               {people.map((person) => (
                 <div key={person.id} style={{ ...documentMatrixGrid, gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))` }}>
-                  <button
-                    type="button"
-                    onClick={() => setViewingParticipant(person)}
-                    style={participantIdentityButton}
-                    aria-label={`View details for ${person.name || "participant"}`}
-                    data-testid={`participant-details-trigger-${person.sourceId}`}
-                  >
+                  <div style={{ minWidth: 0 }}>
                     <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{person.name || "Participant"}</strong>
                     <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{person.parentName || person.parentEmail || "Parent details unavailable"}</span>
-                  </button>
+                  </div>
                   {requirements.length ? requirements.map((requirement) => {
                     const document = person.documents.find((candidate) => documentMatchesRequirement(candidate, requirement));
                     return document ? (
@@ -2354,7 +2428,7 @@ function DocumentsTab({ trip, onChange, notify }) {
 const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
 const ROOM_TYPES = ["single", "twin", "triple", "quad"];
 
-function RoomingTab({ trip, notify }) {
+export function RoomingTab({ trip, notify, request = fetchApi, showExports = true, readOnly = false }) {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   // Edit buffer per existing room (keyed by room.id). Local edits live
@@ -2377,7 +2451,7 @@ function RoomingTab({ trip, notify }) {
     // count. Without this, removed-but-still-referenced IDs disagreed with the
     // visible checkbox state (only real participants render checkboxes).
     const validIds = new Set((trip.participants || []).map((p) => p.id));
-    fetchApi(`/api/travel/trips/${trip.id}/rooming`)
+    request(`/api/travel/trips/${trip.id}/rooming`)
       .then((r) => {
         const rs = r?.rooming || [];
         setRooms(rs);
@@ -2400,7 +2474,7 @@ function RoomingTab({ trip, notify }) {
         setBuffers({});
       })
       .finally(() => setLoading(false));
-  }, [trip.id, trip.participants]);
+  }, [request, trip.id, trip.participants]);
 
   useEffect(load, [load]);
 
@@ -2439,7 +2513,7 @@ function RoomingTab({ trip, notify }) {
     }
     setBusyId(id);
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/rooming/${id}`, {
+      await request(`/api/travel/trips/${trip.id}/rooming/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
           roomNumber: buf.roomNumber.trim(),
@@ -2466,7 +2540,7 @@ function RoomingTab({ trip, notify }) {
     if (!ok) return;
     setBusyId(id);
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/rooming/${id}`, { method: "DELETE" });
+      await request(`/api/travel/trips/${trip.id}/rooming/${id}`, { method: "DELETE" });
       notify.success("Room deleted");
       load();
     } catch (e) {
@@ -2497,7 +2571,7 @@ function RoomingTab({ trip, notify }) {
     }
     setBusyId("new");
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/rooming`, {
+      await request(`/api/travel/trips/${trip.id}/rooming`, {
         method: "POST",
         body: JSON.stringify({
           roomNumber: newRoom.roomNumber.trim(),
@@ -2533,7 +2607,7 @@ function RoomingTab({ trip, notify }) {
     setShowAutoAllocateDialog(false);
     setAutoAllocating(true);
     try {
-      const result = await fetchApi(`/api/travel/trips/${trip.id}/rooming/auto`, {
+      const result = await request(`/api/travel/trips/${trip.id}/rooming/auto`, {
         method: "POST",
         body: JSON.stringify({
           roomTypes: ["twin", "quad"],
@@ -2551,7 +2625,7 @@ function RoomingTab({ trip, notify }) {
 
   return (
     <div>
-      {showAutoAllocateDialog && (
+      {!readOnly && showAutoAllocateDialog && (
         <div style={{
           position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
           background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
@@ -2607,7 +2681,7 @@ function RoomingTab({ trip, notify }) {
           {unassignedCount} of {participants.length} participant{participants.length === 1 ? "" : "s"} unassigned
         </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
+          {!readOnly && <button
             type="button"
             onClick={() => unassignedCount > 0 && setShowAutoAllocateDialog(true)}
             disabled={autoAllocating || showAutoAllocateDialog || unassignedCount === 0}
@@ -2616,26 +2690,28 @@ function RoomingTab({ trip, notify }) {
             aria-label="Auto-allocate unassigned participants"
           >
             <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
-          </button>
-          <a
-            href={pdfHref}
-            target="_blank"
-            rel="noreferrer"
-            style={{ ...secondaryBtn, textDecoration: "none" }}
-            aria-label="Download rooming as PDF"
-          >
-            <FileText size={14} aria-hidden /> Download PDF
-          </a>
-          <a
-            href={xlsxHref}
-            target="_blank"
-            rel="noreferrer"
-            style={{ ...secondaryBtn, textDecoration: "none" }}
-            aria-label="Download rooming as XLSX"
-          >
-            <Download size={14} aria-hidden /> Download XLSX
-          </a>
-          {!newRoom && (
+          </button>}
+          {!readOnly && showExports && <>
+            <a
+              href={pdfHref}
+              target="_blank"
+              rel="noreferrer"
+              style={{ ...secondaryBtn, textDecoration: "none" }}
+              aria-label="Download rooming as PDF"
+            >
+              <FileText size={14} aria-hidden /> Download PDF
+            </a>
+            <a
+              href={xlsxHref}
+              target="_blank"
+              rel="noreferrer"
+              style={{ ...secondaryBtn, textDecoration: "none" }}
+              aria-label="Download rooming as XLSX"
+            >
+              <Download size={14} aria-hidden /> Download XLSX
+            </a>
+          </>}
+          {!readOnly && !newRoom && (
             <button type="button" onClick={startNew} style={addBtn}>
               <Plus size={14} aria-hidden /> Add room
             </button>
@@ -2643,7 +2719,7 @@ function RoomingTab({ trip, notify }) {
         </div>
       </div>
 
-      {newRoom && (
+      {!readOnly && newRoom && (
         <RoomCard
           buf={newRoom}
           isNew
@@ -2665,10 +2741,13 @@ function RoomingTab({ trip, notify }) {
           </div>
           <div style={{ display: "grid", gap: 10 }}>
             {rooms.map((room) => {
-              let pids = [];
-              try { pids = JSON.parse(room.participantIds || "[]"); } catch (_e) { pids = []; }
+              let storedPids = [];
+              try { storedPids = JSON.parse(room.participantIds || "[]"); } catch (_e) { storedPids = []; }
+              const pids = Array.isArray(buffers[room.id]?.participantIds)
+                ? buffers[room.id].participantIds
+                : storedPids;
               const roomParticipants = pids.map((pid) => participants.find((p) => p.id === pid));
-              const isEditing = !!buffers[room.id];
+              const isEditing = !readOnly && !!buffers[room.id];
 
               if (isEditing) {
                 // Show edit form
@@ -2720,7 +2799,7 @@ function RoomingTab({ trip, notify }) {
                       )}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {!readOnly && <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <button
                       type="button"
                       onClick={() => {
@@ -2747,7 +2826,7 @@ function RoomingTab({ trip, notify }) {
                     >
                       <Trash2 size={14} aria-hidden />
                     </button>
-                  </div>
+                  </div>}
                 </div>
               );
             })}
@@ -2761,9 +2840,9 @@ function RoomingTab({ trip, notify }) {
           <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
             <BedDouble size={28} aria-hidden style={{ opacity: 0.4 }} />
             <div>No rooming assignments yet</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
+            {!readOnly && <div style={{ fontSize: 12, opacity: 0.75 }}>
               Click <em>Add room</em> to start grouping participants into single, twin, triple or quad rooms.
-            </div>
+            </div>}
           </div>
         </div>
       )}
@@ -2927,7 +3006,7 @@ function RoomCard({
 
 // ─── Payment plan tab ────────────────────────────────────────────────
 
-function PaymentTab({ trip, notify }) {
+export function PaymentTab({ trip, notify, request = fetchApi, readOnly = false }) {
   const [plan, setPlan] = useState(null);
   const [instalments, setInstalments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2955,8 +3034,8 @@ function PaymentTab({ trip, notify }) {
     // payment-plan; the dedicated catch handles it. Without silent, fetchApi
     // would red-toast "Payment plan not found" before the catch runs.
     Promise.all([
-      fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, { silent: true }).catch(() => null),
-      fetchApi(`/api/travel/trips/${trip.id}/instalments`, { silent: true }).then((r) => r?.instalments || []).catch(() => []),
+      request(`/api/travel/trips/${trip.id}/payment-plan`, { silent: true }).catch(() => null),
+      request(`/api/travel/trips/${trip.id}/instalments`, { silent: true }).then((r) => r?.instalments || []).catch(() => []),
     ])
       .then(([p, ins]) => {
         // A slower request must not overwrite the result of a newer save or
@@ -2978,7 +3057,7 @@ function PaymentTab({ trip, notify }) {
       .finally(() => {
         if (requestId === loadRequestRef.current) setLoading(false);
       });
-  }, [trip.id]);
+  }, [request, trip.id]);
 
   useEffect(load, [load]);
 
@@ -3091,7 +3170,7 @@ function PaymentTab({ trip, notify }) {
     const savedRevision = editorRevisionRef.current;
     setSaving(true);
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, {
+      await request(`/api/travel/trips/${trip.id}/payment-plan`, {
         method: "PUT",
         body: JSON.stringify({
           instalmentsJson: JSON.stringify(editInstalments),
@@ -3118,7 +3197,7 @@ function PaymentTab({ trip, notify }) {
     if (!ok) return;
     setDeleting(true);
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
+      await request(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
       notify.success("Payment plan deleted.");
       editorDirtyRef.current = false;
       load();
@@ -3136,7 +3215,7 @@ function PaymentTab({ trip, notify }) {
     }
     setGenerating(true);
     try {
-      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/from-plan`, {
+      const result = await request(`/api/travel/trips/${trip.id}/instalments/from-plan`, {
         method: "POST",
       });
       notify.success(`Generated ${result.materialised} instalment(s) for ${result.participants} participant(s)`);
@@ -3162,7 +3241,7 @@ function PaymentTab({ trip, notify }) {
     const ins = instalments.find((i) => i.id === editingInstalment);
     if (!ins) return;
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/instalments/${editingInstalment}`, {
+      await request(`/api/travel/trips/${trip.id}/instalments/${editingInstalment}`, {
         method: "PATCH",
         body: JSON.stringify(instalmentEdit),
       });
@@ -3179,7 +3258,7 @@ function PaymentTab({ trip, notify }) {
   if (loading) return <div style={empty}>Loading&hellip;</div>;
   return (
     <div>
-      <section style={{ marginBottom: 20 }}>
+      {!readOnly && <section style={{ marginBottom: 20 }}>
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
           marginBottom: 10, flexWrap: "wrap", gap: 8,
@@ -3352,11 +3431,11 @@ function PaymentTab({ trip, notify }) {
             </button>
           </div>
         </div>
-      </section>
+      </section>}
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
         <h3 style={{ fontSize: 14, margin: 0 }}>Per-participant instalments</h3>
-        {plan && instalments.length === 0 && (
+        {!readOnly && plan && instalments.length === 0 && (
           <button
             type="button"
             onClick={onGenerateInstalments}
@@ -3541,7 +3620,7 @@ function PaymentTab({ trip, notify }) {
                                 >
                                   <Link2 size={12} aria-hidden />
                                 </button>
-                                <button
+                                {!readOnly && <button
                                   type="button"
                                   onClick={() => onEditInstalment(i)}
                                   style={{ ...iconBtn, padding: "4px" }}
@@ -3549,7 +3628,7 @@ function PaymentTab({ trip, notify }) {
                                   aria-label="Edit instalment"
                                 >
                                   <Edit3 size={12} aria-hidden />
-                                </button>
+                                </button>}
                               </div>
                             </div>
                           </div>
@@ -3702,6 +3781,43 @@ const dangerBtn = {
 
 // ─── Shared styles ───────────────────────────────────────────────────
 
+const overviewSectionCard = {
+  display: "grid",
+  gap: 16,
+  padding: 18,
+  background: "var(--surface-color, var(--bg-color, #111318))",
+  border: "1px solid var(--border-color)",
+  borderRadius: 14,
+};
+const overviewSectionHeader = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 14,
+  paddingBottom: 14,
+  borderBottom: "1px solid var(--border-color)",
+};
+const overviewEyebrow = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  color: "var(--text-secondary)",
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: 0.8,
+  textTransform: "uppercase",
+};
+const overviewTwoColumnGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
+  gap: 14,
+};
+const overviewSupportGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))",
+  gap: 14,
+  alignItems: "stretch",
+};
 const backLink = {
   display: "inline-flex", alignItems: "center", gap: 4,
   fontSize: 13, color: "var(--text-secondary)", textDecoration: "none",

@@ -146,9 +146,10 @@ function TenantChip({ tenant }) {
   );
 }
 
-// Keep this aligned with the drawer media queries in responsive.css. JS uses
-// it for the sidebar dialog semantics and keyboard focus trap.
-const DRAWER_BREAKPOINT_PX = 900;
+// Keep this aligned with the drawer media queries in responsive.css. Tablets
+// and small laptops need the full content width; a permanent 250px sidebar
+// leaves too little room for the Leads workspace around 1024px.
+const DRAWER_BREAKPOINT_PX = 1100;
 
 const Layout = () => {
   const { user, setUser, setToken, token, tenant } = useContext(AuthContext);
@@ -191,8 +192,8 @@ const Layout = () => {
   // /leads, /invoices, and /tasks). Use the active tenant rather than the
   // URL prefix so travel shortcuts remain available on every travel page.
   const isTravelShortcutPath = isTravel;
-  // T2.1 (extends #228): drawer state for the mobile sidebar (<900px). Desktop
-  // (>=900px) ignores this — CSS keeps the sidebar statically positioned.
+  // T2.1 (extends #228): drawer state for the mobile/tablet sidebar (<1100px).
+  // Larger desktop widths keep the sidebar statically positioned.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [popupScrollLocked, setPopupScrollLocked] = useState(false);
   // Track viewport so we can apply role="dialog" + aria-modal only when the
@@ -425,7 +426,7 @@ const Layout = () => {
         >
           {/* T2.1: hamburger toggle. Visibility is controlled entirely by the
               .sidebar-toggle class in responsive.css (hidden on desktop,
-              inline-flex at <900px with 44x44 touch target). The inline
+              inline-flex below 1100px with 44x44 touch target). The inline
               display:none was removed because React's inline style wins over
               stylesheets, which made the desktop @media flip impossible. */}
           <button

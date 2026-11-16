@@ -191,6 +191,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // to either return a synthetic folder or throw (best-effort failure path).
 const googleDriveClient = requireCJS('../../services/googleDriveClient');
 const digilockerClient = requireCJS('../../services/digilockerClient');
+const visaDocStore = requireCJS('../../lib/visaDocStore');
 
 const sendEmailMock = vi.fn();
 requireCJS('../../lib/emailSender').sendEmail = sendEmailMock;
@@ -779,6 +780,66 @@ describe('GET /api/travel/trips/:id', () => {
     expect(fileResponse.status).toBe(200);
     expect(fileResponse.headers['content-type']).toMatch(/application\/pdf/);
     expect(fileResponse.body.toString()).toBe('passport scan');
+  });
+
+  test('staff view-url returns the signed OCI URL for a participant document', async () => {
+    const signedUrl = 'https://objectstorage.ap-mumbai-1.oraclecloud.com/p/temporary-signed-url';
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, parentEmail: 'parent@example.com' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 55 });
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 902,
+      filename: 'passport.pdf',
+      mimeType: 'application/pdf',
+      fileUrl: 'https://objectstorage.ap-mumbai-1.oraclecloud.com/n/ns/b/bucket/o/visa-docs/902.pdf',
+      storage: 'ocs',
+      storageKey: 'visa-docs/902.pdf',
+    });
+    const viewUrlSpy = vi.spyOn(visaDocStore, 'resolveViewUrl').mockResolvedValue(signedUrl);
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/participants/50/parent-documents/902/view-url')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      url: signedUrl,
+      expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC,
+    });
+    expect(viewUrlSpy).toHaveBeenCalledWith({
+      attachmentUrl: 'https://objectstorage.ap-mumbai-1.oraclecloud.com/n/ns/b/bucket/o/visa-docs/902.pdf',
+      attachmentStorage: 'ocs',
+      attachmentKey: 'visa-docs/902.pdf',
+    });
+  });
+
+  test('staff view-url returns the signed OCI URL for a pending registration document', async () => {
+    const signedUrl = 'https://objectstorage.ap-mumbai-1.oraclecloud.com/p/temporary-signed-url';
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 300,
+      tripId: 100,
+      parentEmail: 'parent@example.com',
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 55 });
+    prisma.tmcParentDocument.findFirst.mockResolvedValue({
+      id: 902,
+      filename: 'passport.pdf',
+      mimeType: 'application/pdf',
+      fileUrl: 'https://objectstorage.ap-mumbai-1.oraclecloud.com/n/ns/b/bucket/o/visa-docs/902.pdf',
+      storage: 'ocs',
+      storageKey: 'visa-docs/902.pdf',
+    });
+    const viewUrlSpy = vi.spyOn(visaDocStore, 'resolveViewUrl').mockResolvedValue(signedUrl);
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/registrations/300/parent-documents/902/view-url')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe(signedUrl);
+    expect(viewUrlSpy).toHaveBeenCalledWith(expect.objectContaining({
+      attachmentStorage: 'ocs',
+      attachmentKey: 'visa-docs/902.pdf',
+    }));
   });
 
   test('cross-tenant trip lookup returns 404 NOT_FOUND', async () => {

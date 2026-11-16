@@ -39,7 +39,10 @@ vi.hoisted(() => {
 prisma.tenant = { ...(prisma.tenant || {}), findUnique: vi.fn() };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn(), findMany: vi.fn() };
 prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.fn() };
-prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn() };
+prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn(), count: vi.fn() };
+prisma.tripPaymentPlan = { ...(prisma.tripPaymentPlan || {}), findUnique: vi.fn() };
+prisma.tripInstalmentPayment = { ...(prisma.tripInstalmentPayment || {}), findMany: vi.fn() };
+prisma.roomingAssignment = { ...(prisma.roomingAssignment || {}), findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), createMany: vi.fn() };
 prisma.pendingTripRegistration = { ...(prisma.pendingTripRegistration || {}), findMany: vi.fn() };
 prisma.tmcParentTrip = { ...(prisma.tmcParentTrip || {}), findMany: vi.fn() };
 prisma.visaApplication = { ...(prisma.visaApplication || {}), findMany: vi.fn() };
@@ -99,6 +102,15 @@ beforeEach(() => {
   prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcTrip.findFirst.mockReset();
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripParticipant.count.mockReset().mockResolvedValue(0);
+  prisma.tripPaymentPlan.findUnique.mockReset();
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.roomingAssignment.findMany.mockReset().mockResolvedValue([]);
+  prisma.roomingAssignment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.roomingAssignment.create.mockReset();
+  prisma.roomingAssignment.update.mockReset();
+  prisma.roomingAssignment.delete.mockReset();
+  prisma.roomingAssignment.createMany.mockReset();
   prisma.pendingTripRegistration.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcParentTrip.findMany.mockReset().mockResolvedValue([]);
   prisma.visaApplication.findMany.mockReset().mockResolvedValue([]);
@@ -153,6 +165,76 @@ describe('TMC portal authentication and tenant isolation', () => {
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 7, teacherContactId: 41 },
     }));
+  });
+});
+
+describe('TMC teacher trip management', () => {
+  beforeEach(() => {
+    prisma.contact.findFirst.mockResolvedValue(contact('TEACHER'));
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'TMC-100',
+      destination: 'Singapore',
+      tripType: 'international',
+      departDate: new Date('2026-12-01T00:00:00Z'),
+      returnDate: new Date('2026-12-08T00:00:00Z'),
+      status: 'confirmed',
+      teacherContactId: 41,
+      _count: { participants: 2, pendingRegistrations: 0 },
+    });
+  });
+
+  test('teacher can read the assigned trip payment and rooming ledgers', async () => {
+    prisma.tripPaymentPlan.findUnique.mockResolvedValue({
+      id: 1,
+      tripId: 100,
+      instalmentsJson: '[{"dueDate":"2026-11-20","amount":100000}]',
+      graceDays: 0,
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { id: 9, tripId: 100, participantId: 501, instalmentIndex: 0, amount: 100000, paidAmount: 100000, status: 'paid' },
+    ]);
+    prisma.roomingAssignment.findMany.mockResolvedValue([
+      { id: 12, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[501,502]' },
+    ]);
+
+    const [paymentPlan, instalments, rooming] = await Promise.all([
+      request(makeApp()).get('/api/portal/tmc/teacher/trips/100/payment-plan').set(bearer()),
+      request(makeApp()).get('/api/portal/tmc/teacher/trips/100/instalments').set(bearer()),
+      request(makeApp()).get('/api/portal/tmc/teacher/trips/100/rooming').set(bearer()),
+    ]);
+
+    expect(paymentPlan.status).toBe(200);
+    expect(paymentPlan.body.tripId).toBe(100);
+    expect(instalments.status).toBe(200);
+    expect(instalments.body.instalments).toHaveLength(1);
+    expect(rooming.status).toBe(200);
+    expect(rooming.body.rooming[0].roomNumber).toBe('101');
+  });
+
+  test('teacher can create rooming only for participants on the assigned trip', async () => {
+    prisma.tripParticipant.count.mockResolvedValue(2);
+    prisma.roomingAssignment.findMany.mockResolvedValue([]);
+    prisma.roomingAssignment.create.mockResolvedValue({
+      id: 22,
+      tripId: 100,
+      roomNumber: '201',
+      roomType: 'twin',
+      participantIds: '[501,502]',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/portal/tmc/teacher/trips/100/rooming')
+      .set(bearer())
+      .send({ roomNumber: '201', roomType: 'twin', participantIds: [501, 502] });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tripParticipant.count).toHaveBeenCalledWith({
+      where: { id: { in: [501, 502] }, tripId: 100 },
+    });
+    expect(prisma.roomingAssignment.create).toHaveBeenCalledWith({
+      data: { tripId: 100, roomNumber: '201', roomType: 'twin', participantIds: '[501,502]' },
+    });
   });
 });
 

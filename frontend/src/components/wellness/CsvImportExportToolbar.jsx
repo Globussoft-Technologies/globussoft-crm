@@ -46,6 +46,41 @@ const FORMAT_META = {
   xlsx: { label: "Excel (XLSX)", ext: "xlsx" },
 };
 
+const DROPDOWN_VIEWPORT_GUTTER = 8;
+const DROPDOWN_GAP = 4;
+
+const getViewportDropdownPosition = (anchorRef, preferredWidth) => {
+  if (typeof window === "undefined" || !anchorRef?.current) return null;
+  const rect = anchorRef.current.getBoundingClientRect();
+  const viewportWidth = document.documentElement?.clientWidth || window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const width = Math.min(
+    preferredWidth,
+    Math.max(0, viewportWidth - DROPDOWN_VIEWPORT_GUTTER * 2),
+  );
+  const left = Math.max(
+    DROPDOWN_VIEWPORT_GUTTER,
+    Math.min(
+      rect.right - width,
+      viewportWidth - width - DROPDOWN_VIEWPORT_GUTTER,
+    ),
+  );
+  const estimatedHeight = 84;
+  const spaceBelow = viewportHeight - rect.bottom - DROPDOWN_GAP - DROPDOWN_VIEWPORT_GUTTER;
+  const spaceAbove = rect.top - DROPDOWN_GAP - DROPDOWN_VIEWPORT_GUTTER;
+  const openAbove = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+
+  return {
+    position: "fixed",
+    left,
+    top: openAbove ? undefined : rect.bottom + DROPDOWN_GAP,
+    bottom: openAbove ? viewportHeight - rect.top + DROPDOWN_GAP : undefined,
+    width,
+    maxWidth: `calc(100vw - ${DROPDOWN_VIEWPORT_GUTTER * 2}px)`,
+    boxSizing: "border-box",
+  };
+};
+
 const IMPORT_FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
   { value: "textarea", label: "Textarea" },
@@ -243,6 +278,8 @@ export default function CsvImportExportToolbar({
   const [showImport, setShowImport] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [exportMenuPos, setExportMenuPos] = useState(null);
+  const [importMenuPos, setImportMenuPos] = useState(null);
   const [recentImport, setRecentImport] = useState(() => {
     if (typeof window === "undefined") return null;
     try { return JSON.parse(window.sessionStorage.getItem("generic-crm-latest-import") || "null"); } catch { return null; }
@@ -257,6 +294,8 @@ export default function CsvImportExportToolbar({
   });
   const exportMenuRef = useRef(null);
   const importMenuRef = useRef(null);
+  const exportMenuContentRef = useRef(null);
+  const importMenuContentRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
   const safeEndpoints = endpoints || {};
   const toolbarButtonStyle = compact ? compactSecondaryBtnStyle : secondaryBtnStyle;
@@ -345,6 +384,7 @@ export default function CsvImportExportToolbar({
   const doExport = async (format = "csv") => {
     setExporting(true);
     setExportMenuOpen(false);
+    setExportMenuPos(null);
     try {
       const qs = formats.length > 1 ? buildQueryString({ format }) : buildQueryString();
       const url = `${exportUrl}${qs}`;
@@ -377,23 +417,79 @@ export default function CsvImportExportToolbar({
   // Close the export dropdown on outside click.
   useEffect(() => {
     if (!exportMenuOpen) return undefined;
+    const recompute = () => {
+      setExportMenuPos(getViewportDropdownPosition(exportMenuRef, 180));
+    };
+    recompute();
     const onDocClick = (e) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+      if (
+        exportMenuRef.current &&
+        !exportMenuRef.current.contains(e.target) &&
+        !exportMenuContentRef.current?.contains(e.target)
+      ) {
         setExportMenuOpen(false);
+        setExportMenuPos(null);
       }
     };
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    window.addEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
   }, [exportMenuOpen]);
 
   useEffect(() => {
     if (!importMenuOpen) return undefined;
+    const recompute = () => {
+      setImportMenuPos(getViewportDropdownPosition(importMenuRef, 220));
+    };
+    recompute();
     const onDocClick = (event) => {
-      if (importMenuRef.current && !importMenuRef.current.contains(event.target)) setImportMenuOpen(false);
+      if (
+        importMenuRef.current &&
+        !importMenuRef.current.contains(event.target) &&
+        !importMenuContentRef.current?.contains(event.target)
+      ) {
+        setImportMenuOpen(false);
+        setImportMenuPos(null);
+      }
     };
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    window.addEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
   }, [importMenuOpen]);
+
+  const toggleExportMenu = () => {
+    if (exportMenuOpen) {
+      setExportMenuOpen(false);
+      setExportMenuPos(null);
+      return;
+    }
+    setImportMenuOpen(false);
+    setImportMenuPos(null);
+    setExportMenuPos(getViewportDropdownPosition(exportMenuRef, 180));
+    setExportMenuOpen(true);
+  };
+
+  const toggleImportMenu = () => {
+    if (importMenuOpen) {
+      setImportMenuOpen(false);
+      setImportMenuPos(null);
+      return;
+    }
+    setExportMenuOpen(false);
+    setExportMenuPos(null);
+    setImportMenuPos(getViewportDropdownPosition(importMenuRef, 220));
+    setImportMenuOpen(true);
+  };
 
   const actionEye = (item, action, label) => (
     <button type="button" aria-label={`View ${label} import data`} title={`View ${label} import data`} disabled={!(action === "created" ? item.inserted : action === "updated" ? item.updated : item[action])} onClick={() => viewImportAction(item, action)} style={{ border: 0, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: 2, verticalAlign: "middle", opacity: (action === "created" ? item.inserted : action === "updated" ? item.updated : item[action]) ? 1 : 0.35 }}>
@@ -417,7 +513,7 @@ export default function CsvImportExportToolbar({
           <div ref={exportMenuRef} style={{ position: "relative" }}>
             <button
               type="button"
-              onClick={() => setExportMenuOpen((v) => !v)}
+              onClick={toggleExportMenu}
               disabled={exporting}
               aria-haspopup="menu"
               aria-expanded={exportMenuOpen}
@@ -427,25 +523,6 @@ export default function CsvImportExportToolbar({
               <Upload size={14} /> {exporting ? "Exporting..." : "Export"}
               <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
             </button>
-            {exportMenuOpen && (
-              <div
-                role="menu"
-                aria-label={`Export ${displayLabel} format`}
-                style={dropdownMenuStyle}
-              >
-                {formats.map((f) => (
-                  <button
-                    key={f}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => doExport(f)}
-                    style={dropdownItemStyle}
-                  >
-                    {FORMAT_META[f].label || f.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         ) : showExport ? (
           <button
@@ -460,18 +537,12 @@ export default function CsvImportExportToolbar({
         ) : null}
         {allowImport && genericLeadWizard ? (
           <div ref={importMenuRef} style={{ position: "relative", display: "inline-flex" }}>
-            <button type="button" onClick={() => setShowImport(true)} aria-label="Import contacts" style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
+            <button type="button" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImport(true); }} aria-label="Import contacts" style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
               <Download size={14} /> Import contacts
             </button>
-            <button type="button" onClick={() => setImportMenuOpen((open) => !open)} aria-label="Import contacts options" aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
+            <button type="button" onClick={toggleImportMenu} aria-label="Import contacts options" aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
               <ChevronDown size={13} />
             </button>
-            {importMenuOpen && (
-              <div role="menu" aria-label="Import contacts options" style={{ ...dropdownMenuStyle, right: 0, left: "auto", minWidth: 190 }}>
-                <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
-                <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowImportHistory(true); }} style={dropdownItemStyle}>View import history</button>
-              </div>
-            )}
           </div>
         ) : allowImport ? (
           <button
@@ -484,6 +555,41 @@ export default function CsvImportExportToolbar({
           </button>
         ) : null}
       </div>
+
+      {exportMenuOpen && exportMenuPos && createPortal(
+        <div
+          ref={exportMenuContentRef}
+          role="menu"
+          aria-label={`Export ${displayLabel} format`}
+          style={{ ...dropdownMenuStyle, ...exportMenuPos, zIndex: 1200 }}
+        >
+          {formats.map((f) => (
+            <button
+              key={f}
+              type="button"
+              role="menuitem"
+              onClick={() => doExport(f)}
+              style={dropdownItemStyle}
+            >
+              {FORMAT_META[f].label || f.toUpperCase()}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+
+      {importMenuOpen && importMenuPos && createPortal(
+        <div
+          ref={importMenuContentRef}
+          role="menu"
+          aria-label="Import contacts options"
+          style={{ ...dropdownMenuStyle, ...importMenuPos, zIndex: 1200 }}
+        >
+          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
+          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImportHistory(true); }} style={dropdownItemStyle}>View import history</button>
+        </div>,
+        document.body,
+      )}
 
       {showRecentImport && (
         <div role="dialog" aria-modal="true" aria-labelledby="recent-import-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowRecentImport(false)}>
@@ -1772,10 +1878,8 @@ const tableCellStyle = {
 };
 
 const dropdownMenuStyle = {
-  position: "absolute",
-  top: "calc(100% + 4px)",
-  right: 0,
-  minWidth: 160,
+  position: "fixed",
+  minWidth: 0,
   // --bg-color: opaque in both themes. (--surface-color is rgba(...,0.6)
   // in dark wellness, which makes menu items hard to read against the
   // page behind them.)

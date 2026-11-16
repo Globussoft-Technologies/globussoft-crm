@@ -55,7 +55,7 @@ import { fetchApi } from '../utils/api';
 
 // Counter-fetching endpoints we care about — Sidebar wires four with `silent: true`.
 const COUNTER_URLS = [
-  '/api/contacts?status=Lead&count=1',
+  '/api/contacts?status=Lead&includeCrmStatuses=true&count=1',
   '/api/tasks?status=PENDING&count=1',
   '/api/tickets?status=OPEN&count=1',
   '/api/email?unread=1',

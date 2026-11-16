@@ -15,6 +15,19 @@ async function login(request, email) {
   return (await res.json()).token;
 }
 
+async function loginTeacherPortal(request) {
+  const res = await request.post(`${BASE_URL}/api/portal/login`, {
+    data: {
+      email: 'teacher@getairmail.com',
+      password: 'password123',
+      portalRole: 'TEACHER',
+    },
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(res.status(), `teacher portal login: ${await res.text()}`).toBe(200);
+  return (await res.json()).token;
+}
+
 test.describe('TMC portal API security contract', () => {
   test('teacher portal rejects requests without a portal token', async ({ request }) => {
     const res = await request.get(`${BASE_URL}/api/portal/tmc/teacher/me`, {
@@ -57,5 +70,30 @@ test.describe('TMC portal API security contract', () => {
       expect(teacher).not.toHaveProperty('portalPasswordHash');
       expect(teacher).not.toHaveProperty('tenantId');
     }
+  });
+
+  test('assigned teacher can open the participant, payment, and rooming ledgers from Trips', async ({ request }) => {
+    const token = await loginTeacherPortal(request);
+    const headers = { Authorization: `Bearer ${token}` };
+    const tripsRes = await request.get(`${BASE_URL}/api/portal/tmc/teacher/trips`, { headers, timeout: REQUEST_TIMEOUT });
+    expect(tripsRes.status(), await tripsRes.text()).toBe(200);
+    const trips = (await tripsRes.json()).trips || [];
+    test.skip(trips.length === 0, 'The seeded tenant has no assigned teacher trips');
+
+    const tripId = trips[0].id;
+    const [participantsRes, paymentPlanRes, instalmentsRes, roomingRes] = await Promise.all([
+      request.get(`${BASE_URL}/api/portal/tmc/teacher/trips/${tripId}/participants`, { headers, timeout: REQUEST_TIMEOUT }),
+      request.get(`${BASE_URL}/api/portal/tmc/teacher/trips/${tripId}/payment-plan`, { headers, timeout: REQUEST_TIMEOUT }),
+      request.get(`${BASE_URL}/api/portal/tmc/teacher/trips/${tripId}/instalments`, { headers, timeout: REQUEST_TIMEOUT }),
+      request.get(`${BASE_URL}/api/portal/tmc/teacher/trips/${tripId}/rooming`, { headers, timeout: REQUEST_TIMEOUT }),
+    ]);
+
+    expect(participantsRes.status(), await participantsRes.text()).toBe(200);
+    expect((await participantsRes.json()).participants).toEqual(expect.any(Array));
+    expect([200, 404]).toContain(paymentPlanRes.status());
+    expect(instalmentsRes.status(), await instalmentsRes.text()).toBe(200);
+    expect((await instalmentsRes.json()).instalments).toEqual(expect.any(Array));
+    expect(roomingRes.status(), await roomingRes.text()).toBe(200);
+    expect((await roomingRes.json()).rooming).toEqual(expect.any(Array));
   });
 });

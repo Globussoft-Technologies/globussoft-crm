@@ -584,7 +584,7 @@ const FILTERABLE_FIELDS = {
   lifecycleStageKey: {
     column: "lifecycleStageKey",
     kind: "enum",
-    label: "Status",
+    label: "Lifecycle Stage",
     verticals: ["generic"],
   },
   medium: { column: "medium", kind: "text", label: "Medium", verticals: ["generic"] },

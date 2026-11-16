@@ -61,6 +61,14 @@ const CONTACT_ID_CHILDREN = [
   ["rfuLeadProfile", "contactId"],
 ];
 
+// Bulk deletion removes rows from many dependent tables for every Contact.
+// Prisma's default interactive-transaction timeout is 5 seconds, which is
+// too short for a normal Leads page selection of 500 contacts.
+const CONTACT_HARD_DELETE_TRANSACTION_OPTIONS = {
+  maxWait: 15_000,
+  timeout: 120_000,
+};
+
 function isMissingSchemaError(error) {
   return error?.code === "P2021" || error?.code === "P2022";
 }
@@ -200,7 +208,7 @@ async function hardDeleteContacts(db, contactIds) {
       const result = await tx.contact.deleteMany({ where: { id: contactId } });
       deletedCount += result.count;
     }
-  });
+  }, CONTACT_HARD_DELETE_TRANSACTION_OPTIONS);
 
   return deletedCount;
 }

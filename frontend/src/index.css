@@ -5761,6 +5761,59 @@ table.leads-table thead th {
   box-shadow: 0 -1px 0 var(--border-color);
 }
 
+/* Generic CRM tablet layout. The app shell still leaves less than the full
+ * browser width beside the sidebar, so the desktop flex toolbar can wrap its
+ * action groups into uneven rows before the phone breakpoint is reached. */
+@media (min-width: 900px) and (max-width: 1199px) {
+  .leads-page-root--generic {
+    padding: 0.75rem !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start !important;
+    gap: 0.5rem !important;
+    padding: 0.6rem !important;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:first-child {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell > div:nth-child(2) {
+    min-width: 0;
+    max-width: 100%;
+    justify-content: flex-end;
+  }
+
+  .leads-page-root--generic .leads-toolbar-shell .leads-generic-actions-host {
+    flex: 0 0 100% !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem !important;
+    width: 100%;
+    min-width: 0;
+    padding-top: 0.45rem !important;
+  }
+
+  .leads-page-root--generic .leads-actions-toolbar > span:not([aria-hidden="true"]) {
+    white-space: nowrap;
+  }
+
+  .leads-page-root--generic .leads-split-table--no-topbar {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 899px) {
   /* The generic page has an authored 2rem padding. Reduce it at the same
      breakpoint where the app shell becomes a drawer so the page width is
@@ -6294,20 +6347,16 @@ body[data-vertical="generic"]
   }
 }
 
-/* Generic CRM import dialogs use a clear backdrop so the page does not look
-   washed out while the dialog is open. */
-body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="recent-import-title"],
-body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-history-title"],
-body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-contacts-title"],
-body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-action-title"],
-body[data-vertical="generic"]
-  [role="dialog"][aria-labelledby="import-errors-title"] {
-  background: transparent !important;
-  backdrop-filter: none !important;
+/* All CSV import dialogs use the same dark, blurred backdrop so the page
+   remains clearly separated from the modal in every CRM theme. */
+[role="dialog"][aria-labelledby="recent-import-title"],
+[role="dialog"][aria-labelledby="import-history-title"],
+[role="dialog"][aria-labelledby="import-contacts-title"],
+[role="dialog"][aria-labelledby="import-action-title"],
+[role="dialog"][aria-labelledby="import-errors-title"] {
+  background: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
 }
 
 .leads-split-table--no-topbar::-webkit-scrollbar {

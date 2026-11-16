@@ -15,7 +15,7 @@ import { AuthContext } from '../appContexts';
 import { usePermissions } from '../hooks/usePermissions';
 import { PROFILE_TABS, SOCIAL_NETWORKS, buildOverviewSections, normalizeSocialUrl } from '../components/contact/contactProfileConfig';
 import CustomizeFieldsDrawer, { ALL_OVERVIEW_FIELDS, DEFAULT_VISIBLE_FIELD_KEYS, normalizeVisibleKeys } from '../components/contact/CustomizeFieldsDrawer';
-import { assignOwner, fetchActivities, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
+import { assignOwner, fetchActivities, fetchScore, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
 import { InlineField, Stars, Modal } from '../components/contact/ProfileWidgets';
 import {
   ActivityModal, CallModal, DealModal, EmailModal, MeetingModal, SmsModal, TaskModal, WhatsappModal,
@@ -484,6 +484,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     });
   }, [location.pathname, location.search, location.state, navigate]);
   const [contact, setContact] = useState(null);
+  const [liveScore, setLiveScore] = useState(null);
   const [overviewActivities, setOverviewActivities] = useState([]);
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
   const [overviewActivityTotal, setOverviewActivityTotal] = useState(0);
@@ -711,12 +712,19 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const loadContact = useCallback(() => {
     setLoading(true);
     fetchApi(`/api/contacts/${id}`)
-      .then((data) => { setContact(data); setLoading(false); })
+      .then((data) => {
+        setContact(data);
+        setLoading(false);
+        return fetchScore(id)
+          .then((score) => setLiveScore(score?.liveComputedScore ?? data.aiScore ?? null))
+          .catch(() => setLiveScore(data.aiScore ?? null));
+      })
       .catch(() => setLoading(false));
   }, [id]);
 
   useEffect(() => {
     setContact(null);
+    setLiveScore(null);
     setOverviewActivityPage(1);
     setActiveTab(new URLSearchParams(location.search).get('tab') === 'deals' ? 'deals' : 'overview');
     setSummaryOpen(true);
@@ -822,6 +830,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     try {
       const updated = await patchContact(id, data);
       setContact(updated);
+      fetchScore(id)
+        .then((score) => setLiveScore(score?.liveComputedScore ?? updated.aiScore ?? null))
+        .catch(() => setLiveScore(updated.aiScore ?? null));
       // The update response is a flat Contact row. Reload after a status
       // change so the newly-created lifecycle activity is available to the
       // separate Activities tab immediately.
@@ -886,9 +897,16 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     const opt = segOptionById(stageIdOrLabel, lifecycleSegments) || segOption(stageIdOrLabel, lifecycleSegments);
     if (!opt) return;
     const nextStageIndex = lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === opt.id));
-    const currentStageIndex = contact?.lifecycleStageKey
-      ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
-      : segIndexOf(defaultStageFor(contact?.status, isWellness, isTravel), lifecycleSegments);
+    const currentStatusOption = isGeneric
+      ? lifecycleSegments.flatMap((segment) => segment.options).find((option) => (
+        String(option.label || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+      ))
+      : null;
+    const currentStageIndex = currentStatusOption
+      ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === currentStatusOption.id))
+      : contact?.lifecycleStageKey
+        ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
+        : segIndexOf(defaultStageFor(contact?.status, isWellness, isTravel), lifecycleSegments);
     const isBackward = isGeneric && currentStageIndex >= 0 && nextStageIndex >= 0 && nextStageIndex < currentStageIndex;
     if (isGeneric && (opt.negative || isBackward)) {
       setPendingStageTransition({ option: opt, isBackward, reason: '' });
@@ -1505,7 +1523,8 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     );
   }
 
-  const fitStars = Math.max(0, Math.min(5, Math.round((Number(contact.aiScore) || 0) / 20)));
+  const displayedScore = liveScore ?? contact.aiScore ?? 0;
+  const fitStars = Math.max(0, Math.min(5, Math.round((Number(displayedScore) || 0) / 20)));
   const ownerName = contact.assignedTo?.name || contact.assignedTo?.email || null;
 
   const saveSocLink = async (e, network) => {
@@ -1521,13 +1540,26 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       await patchField({ [network.key]: clean });
     } catch { /* patchField surfaces the error toast */ }
   };
+  const statusStageOption = isGeneric
+    ? lifecycleSegments.flatMap((segment) => segment.options).find((option) => (
+      String(option.label || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+    ))
+    : null;
   const selectedStageOption = (stageSel && (segOptionById(stageSel, lifecycleSegments) || segOption(stageSel, lifecycleSegments)))
     || (isGeneric && contact.lifecycleStageKey ? segOptionById(contact.lifecycleStageKey, lifecycleSegments) : null);
   const fallbackStageOption = lifecycleSegments.flatMap((segment) => segment.options).find((option) => option.backend === contact.status);
-  const activeStage = selectedStageOption && (isGeneric || isTravel || selectedStageOption.backend === contact.status)
-    ? selectedStageOption.label
-    : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
-  const activeSeg = segIndexOf(activeStage, lifecycleSegments);
+  const activeStage = statusStageOption?.label
+    || (selectedStageOption && (isGeneric || isTravel || selectedStageOption.backend === contact.status)
+      ? selectedStageOption.label
+      : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel)))
+  const activeSeg = isGeneric
+    ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => (
+      String(option.label || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+        || String(option.status || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+        || String(option.backend || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+        || option.id === contact?.lifecycleStageKey
+    )))
+    : segIndexOf(activeStage, lifecycleSegments);
   const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
   const openOverviewEditor = () => {
     if (isGeneric) {
@@ -1893,7 +1925,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
         <div className="cp-header-mid">
           <div className="cp-score-block">
             <div className="cp-label">Score</div>
-            <div className="cp-score-val">{Number(contact.aiScore) || 0}</div>
+            <div className="cp-score-val">{Number(displayedScore) || 0}</div>
           </div>
           <div className="cp-score-block">
             <div className="cp-label">Customer fit</div>

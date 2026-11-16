@@ -1279,7 +1279,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(actions).toBeInTheDocument();
     expect(actions).toContainElement(screen.getByRole('button', { name: /^Refresh$/i }));
     expect(actions).toContainElement(screen.getByRole('button', { name: /Export Leads/i }));
-    expect(actions).toContainElement(screen.getByRole('button', { name: /^Import contacts$/i }));
+    expect(actions).toContainElement(screen.getByRole('button', { name: /^Import Leads$/i }));
     expect(actions).toContainElement(screen.getByRole('button', { name: /Bulk actions/i }));
 
     fireEvent.click(toggle);
@@ -1622,7 +1622,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('keeps prospect conversion available in the generic lead preview', async () => {
+  it('hides prospect conversion in the generic lead preview', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -1632,7 +1632,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(preview).toBeInTheDocument();
     expect(within(preview).getByText('Contact information')).toBeInTheDocument();
     expect(within(preview).getByText('Open full detail')).toBeInTheDocument();
-    expect(within(preview).getByRole('button', { name: 'Convert to Prospect' })).toBeInTheDocument();
+    expect(within(preview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
   });
 
   it('converts a lead from the Travel lead preview', async () => {
@@ -3020,7 +3020,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     );
   });
 
-  it('disambiguates Generic CRM lead status from configured stage status', async () => {
+  it('shows Generic CRM lifecycle stages under Status', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -3049,9 +3049,10 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     const dialog = await screen.findByRole('dialog', { name: /Filters/i });
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
 
-    expect(within(dialog).getByRole('button', { name: 'Lead Status' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Status' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'CRM Status' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Lifecycle Stage' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Lead Status' })).toBeNull();
   });
 
   it('dynamically mirrors the full Generic CRM Customize Table catalog in Filter By', async () => {
@@ -3632,12 +3633,12 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true));
   });
 
-  it('keeps the prospect conversion row action and functionality for every vertical', async () => {
+  it('hides prospect conversion for Generic CRM but keeps it for Travel CRM', async () => {
     const genericRender = renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    expect(screen.getAllByTitle('Convert to Prospect')).toHaveLength(3);
-    expect(screen.getByRole('button', { name: 'Convert Alice Smith to Prospect' })).toBeInTheDocument();
+    expect(screen.queryAllByTitle('Convert to Prospect')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Convert Alice Smith to Prospect' })).not.toBeInTheDocument();
 
     genericRender.unmount();
     renderLeads({

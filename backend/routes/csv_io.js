@@ -73,6 +73,19 @@ function contactImportUpload(req, res, next) {
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
+// Keep the history endpoints compatible with a backend process that was
+// started before the additive `columns` migration and is still using an older
+// generated Prisma client. A normal deploy regenerates Prisma, but an old
+// client must not take down the otherwise-successful import flow.
+const hasGenericImportHistoryField = (fieldName) => {
+  const fields = prisma._runtimeDataModel?.models?.GenericImportHistory?.fields;
+  return !Array.isArray(fields) || fields.some((field) => field.name === fieldName);
+};
+const isMissingGenericImportColumnsError = (error) => (
+  String(error?.message || "").includes("GenericImportHistory.columns")
+  || String(error?.message || "").includes("Unknown field `columns`")
+);
+
 // CSV is shared by several pages, so authorization is capability-based rather
 // than role-name-based. Leads and contacts intentionally share the contacts
 // CSV surface: a custom Leads role must be able to use the same import/history
@@ -207,7 +220,7 @@ router.get("/contacts/import-history", CONTACT_READ, async (req, res) => {
     return res.status(404).json({ error: "Import history is not available", code: "IMPORT_HISTORY_NOT_AVAILABLE" });
   }
   try {
-    const rows = await prisma.genericImportHistory.findMany({
+    const query = {
       where: { tenantId: req.user.tenantId },
       orderBy: [{ completedAt: "desc" }, { id: "desc" }],
       take: 20,
@@ -219,12 +232,23 @@ router.get("/contacts/import-history", CONTACT_READ, async (req, res) => {
         updated: true,
         skipped: true,
         errors: true,
-        columns: true,
+        ...(hasGenericImportHistoryField("columns") ? { columns: true } : {}),
         contacts: true,
         errorRows: true,
         completedAt: true,
       },
-    });
+    };
+    let rows;
+    try {
+      rows = await prisma.genericImportHistory.findMany(query);
+    } catch (error) {
+      if (!isMissingGenericImportColumnsError(error)) throw error;
+      const { columns: _columns, ...selectWithoutColumns } = query.select;
+      rows = await prisma.genericImportHistory.findMany({
+        ...query,
+        select: selectWithoutColumns,
+      });
+    }
     res.json(rows.map((row) => ({ ...row, status: row.errors ? "Completed, with errors" : "Completed" })));
   } catch (error) {
     console.error("[csv] import history error:", error.message);
@@ -241,10 +265,27 @@ router.get("/contacts/import-history/:id/report", async (req, res) => {
     return res.status(400).json({ error: "Invalid import history ID", code: "INVALID_IMPORT_HISTORY_ID" });
   }
   try {
-    const history = await prisma.genericImportHistory.findFirst({
+    const query = {
       where: { id, tenantId: req.user.tenantId },
-        select: { fileName: true, errors: true, errorRows: true, columns: true, contacts: true },
-    });
+        select: {
+          fileName: true,
+          errors: true,
+          ...(hasGenericImportHistoryField("columns") ? { columns: true } : {}),
+          contacts: true,
+          errorRows: true,
+        },
+    };
+    let history;
+    try {
+      history = await prisma.genericImportHistory.findFirst(query);
+    } catch (error) {
+      if (!isMissingGenericImportColumnsError(error)) throw error;
+      const { columns: _columns, ...selectWithoutColumns } = query.select;
+      history = await prisma.genericImportHistory.findFirst({
+        ...query,
+        select: selectWithoutColumns,
+      });
+    }
     if (!history) return res.status(404).json({ error: "Import history not found", code: "IMPORT_HISTORY_NOT_FOUND" });
     const storedErrorRows = normalizeImportErrorRows(history.errorRows);
     const errorReportRows = storedErrorRows.length || !history.errors
@@ -1083,19 +1124,24 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           action: "error",
           data: error.data || rows[Math.max(0, Number(error.rowNumber || 1) - 2)] || {},
         }));
-        await prisma.genericImportHistory.create({
-          data: {
+        const historyData = {
             tenantId: req.user.tenantId,
             fileName: req.file?.originalname || "Uploaded contacts file",
             inserted: imported,
             updated,
             skipped,
             errors: errors.length,
-            columns: Object.keys(rows[0] || {}),
+            ...(hasGenericImportHistoryField("columns") ? { columns: Object.keys(rows[0] || {}) } : {}),
             contacts: importedContacts,
             errorRows,
-          },
-        });
+        };
+        try {
+          await prisma.genericImportHistory.create({ data: historyData });
+        } catch (historyError) {
+          if (!isMissingGenericImportColumnsError(historyError)) throw historyError;
+          const { columns: _columns, ...dataWithoutColumns } = historyData;
+          await prisma.genericImportHistory.create({ data: dataWithoutColumns });
+        }
       } catch (historyError) {
         console.error("[csv] failed to persist import history:", historyError.message);
       }

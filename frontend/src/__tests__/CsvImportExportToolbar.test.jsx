@@ -157,8 +157,8 @@ describe("CsvImportExportToolbar", () => {
       expect(Number.parseFloat(exportMenu.style.left)).toBeGreaterThanOrEqual(8);
       expect(Number.parseFloat(exportMenu.style.left) + Number.parseFloat(exportMenu.style.width)).toBeLessThanOrEqual(312);
 
-      fireEvent.click(screen.getByRole("button", { name: "Import contacts options" }));
-      const importMenu = screen.getByRole("menu", { name: "Import contacts options" });
+      fireEvent.click(screen.getByRole("button", { name: "Import Contacts options" }));
+      const importMenu = screen.getByRole("menu", { name: "Import Contacts options" });
       expect(importMenu).toHaveStyle({ position: "fixed" });
       expect(Number.parseFloat(importMenu.style.left) + Number.parseFloat(importMenu.style.width)).toBeLessThanOrEqual(312);
     } finally {
@@ -286,6 +286,7 @@ describe("CsvImportExportToolbar", () => {
     fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
 
     expect(await screen.findByText("Review the mapping of your fields")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Import Department" })).not.toBeChecked();
     const crmFieldDropdown = screen.getByRole("combobox", { name: "CRM field for Department" });
     const options = Array.from(crmFieldDropdown.options).map((option) => option.textContent);
     expect(options.slice(0, 3)).toEqual(["Choose CRM field", "＋ Add new field", "Email"]);
@@ -470,6 +471,38 @@ describe("CsvImportExportToolbar", () => {
     expect(screen.getByRole("combobox", { name: "CRM field for Mobile" })).toHaveValue("");
   });
 
+  it("imports selected Generic CRM columns while skipping unchecked columns", async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ imported: 1, errors: [] }) });
+    render(
+      <CsvImportExportToolbar
+        entity="contacts"
+        label="Contacts"
+        genericLeadWizard
+        skipMeta
+        mappingFields={[{ key: "name", fieldKey: "name", label: "Name", fieldType: "text" }]}
+        endpoints={{ import: "/api/csv/contacts/import.csv" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const csv = "name,Mobile\nAsha Patel,+919876543210\n";
+    const file = new File([csv], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue(csv) });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    expect(await screen.findByRole("checkbox", { name: "Import Mobile" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page to see preview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/csv/contacts/import.csv",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    const form = fetchMock.mock.calls[0][1].body;
+    expect(form.get("mapping")).toBe(JSON.stringify({ name: "name" }));
+  });
+
   it("creates proposed Generic columns in the database before importing their values", async () => {
     fetchApiMock.mockImplementation((url, options) => {
       if (url === "/api/lead-custom-fields" && options?.method === "POST") {
@@ -503,6 +536,8 @@ describe("CsvImportExportToolbar", () => {
     fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
 
     expect(await screen.findByRole("button", { name: "Edit proposed CRM field Department" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Import Department" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Import Unnamed: 2" }));
     fireEvent.click(screen.getByRole("button", { name: "Go to next page to see preview" }));
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
 
@@ -564,6 +599,8 @@ describe("CsvImportExportToolbar", () => {
     const type = await screen.findByRole('combobox', { name: 'Field type for Tier' });
     expect(screen.getAllByText('ignored').length).toBeGreaterThan(0);
     expect(screen.queryByText('Silver')).not.toBeInTheDocument(); // Outside the preview.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Import Unnamed: 2' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Import Tier' }));
     fireEvent.change(type, { target: { value: 'dropdown' } });
     fireEvent.click(screen.getByRole('button', { name: 'Go to next page to see preview' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
@@ -592,6 +629,7 @@ describe("CsvImportExportToolbar", () => {
     Object.defineProperty(file, 'arrayBuffer', { value: async () => buffer });
     fireEvent.change(screen.getByLabelText('Select CSV or Excel file'), { target: { files: [file] } });
 
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Import 12006225923' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Go to next page to see preview' }));
     expect(await screen.findByText(/Invalid or missing column headers/)).toBeInTheDocument();
     expect(screen.getByText(/first row must contain column names/)).toBeInTheDocument();
@@ -609,6 +647,7 @@ describe("CsvImportExportToolbar", () => {
     const file = new File([csv], 'leads.csv', { type: 'text/csv' });
     Object.defineProperty(file, 'text', { value: async () => csv });
     fireEvent.change(screen.getByLabelText('Select CSV file'), { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Import Tier' }));
     fireEvent.change(await screen.findByRole('combobox', { name: 'Field type for Tier' }), { target: { value: 'dropdown' } });
     fireEvent.click(screen.getByRole('button', { name: 'Go to next page to see preview' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));

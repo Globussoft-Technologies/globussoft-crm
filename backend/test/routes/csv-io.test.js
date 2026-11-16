@@ -248,6 +248,19 @@ describe('GET /api/csv/contacts/import-history', () => {
     expect(res.body.code).toBe('IMPORT_HISTORY_NOT_AVAILABLE');
     expect(prisma.genericImportHistory.findMany).not.toHaveBeenCalled();
   });
+
+  test('falls back when the deployed database has not added the optional columns column yet', async () => {
+    prisma.genericImportHistory.findMany
+      .mockRejectedValueOnce(new Error('The column `globussoft_crm.GenericImportHistory.columns` does not exist in the current database.'))
+      .mockResolvedValueOnce([{ id: 13, tenantId: 1, fileName: 'legacy.csv', errors: 0, contacts: [], errorRows: [] }]);
+
+    const res = await request(makeApp()).get('/api/csv/contacts/import-history');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: 13, status: 'Completed' });
+    expect(prisma.genericImportHistory.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.genericImportHistory.findMany.mock.calls[1][0].select).not.toHaveProperty('columns');
+  });
 });
 
 describe('GET /api/csv/contacts/export.csv', () => {
@@ -853,6 +866,24 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
     expect(prisma.genericImportHistory.create).toHaveBeenCalledOnce();
+  });
+
+  test('completes the import when the history table is missing the optional columns column', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 103 });
+    prisma.genericImportHistory.create
+      .mockRejectedValueOnce(new Error('The column `globussoft_crm.GenericImportHistory.columns` does not exist in the current database.'))
+      .mockResolvedValueOnce({ id: 2 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,email\nLegacy Schema,legacy-schema@example.com\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(prisma.genericImportHistory.create).toHaveBeenCalledTimes(2);
+    expect(prisma.genericImportHistory.create.mock.calls[1][0].data).not.toHaveProperty('columns');
   });
 
   test('does not write Generic import history for a Wellness import', async () => {

@@ -94,7 +94,10 @@ export default function ColumnPicker({
         loadedOnce.current = true;
         return;
       }
-      const availableColumns = Array.isArray(data.availableColumns) ? data.availableColumns : [];
+      const availableColumns = (Array.isArray(data.availableColumns) ? data.availableColumns : [])
+        .map((column) => tableKey === "leads" && column.key === "lifecycleStage"
+          ? { ...column, label: "Status" }
+          : column);
       const pickerColumns = availableColumns.filter(
         (column) => !hiddenColumnKeys.includes(column.key),
       );

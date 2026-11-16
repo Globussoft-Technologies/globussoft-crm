@@ -149,6 +149,14 @@ const normalizeFieldType = (fieldType) => (
 // header such as "12006225923" must be rejected before that API call rather
 // than surfacing the backend's less actionable INVALID_FIELD_KEY response.
 const canDeriveLeadFieldKey = (label) => {
+  const normalizedLabel = String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  // These headers are native CRM aliases. If an exact native field is not
+  // available in the mapping catalog, leave them unchecked rather than
+  // proposing a custom field that would shadow the native import mapping.
+  if (["mobile", "mobilenumber", "mobilephone", "workphone", "workmobile", "phonenumber", "jobtitle"].includes(normalizedLabel)) return false;
   const key = String(label || "")
     .trim()
     .toLowerCase()
@@ -306,6 +314,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
     const key = String(field.fieldKey || field.key || field.id || "").toLowerCase();
     return getMappingFieldLabel(field).toLowerCase().includes(normalizedQuery) || key.includes(normalizedQuery);
   });
+  const emptyLabel = triggerLabel ? "Choose CRM field" : "Select CRM field";
 
   useEffect(() => {
     if (!open) return undefined;
@@ -323,7 +332,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
   };
 
   return (
-    <div ref={rootRef} style={{ position: "relative", minWidth: 0 }}>
+    <div ref={rootRef} data-proposed-field={triggerLabel ? "true" : undefined} style={{ position: "relative", minWidth: 0 }}>
       <select
         value={value}
         aria-label={ariaLabel}
@@ -331,7 +340,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
         style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
         tabIndex={-1}
       >
-        <option value="">Select CRM field</option>
+        <option value="">{emptyLabel}</option>
         <option value="__add_new_field__">＋ Add new field</option>
         {options.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{getMappingFieldLabel(field)}</option>)}
       </select>
@@ -343,7 +352,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
         onClick={() => setOpen((current) => !current)}
         style={{ width: "100%", height: 36, minHeight: 0, padding: "0.4rem 0.65rem", border: `1px solid ${highlightEmpty && !value ? "var(--accent-color)" : "var(--border-color)"}`, borderRadius: 8, background: highlightEmpty && !value ? "var(--accent-bg, #eef2ff)" : "#fff", color: "inherit", font: "inherit", fontWeight: highlightEmpty && !value ? 600 : "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
       >
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{triggerLabel || getMappingFieldLabel(selected) || "Select CRM field"}</span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{triggerLabel || getMappingFieldLabel(selected) || emptyLabel}</span>
         <ChevronDown size={16} aria-hidden="true" />
       </button>
       {open && (
@@ -358,7 +367,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
             onChange={(event) => setQuery(event.target.value)}
             style={{ width: "100%", boxSizing: "border-box", marginBottom: 6, minHeight: 32, height: 32 }}
           />
-          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, background: !value ? "var(--accent-bg, #eef2ff)" : "transparent", color: "inherit", textAlign: "left", cursor: "pointer" }}>Select CRM field</button>
+          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, background: !value ? "var(--accent-bg, #eef2ff)" : "transparent", color: "inherit", textAlign: "left", cursor: "pointer" }}>{emptyLabel}</button>
           <button type="button" role="option" aria-selected={value === "__add_new_field__"} onClick={() => choose("__add_new_field__")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, background: value === "__add_new_field__" ? "var(--accent-bg, #eef2ff)" : "transparent", color: "inherit", textAlign: "left", cursor: "pointer" }}>＋ Add new field</button>
           {filteredOptions.map((field) => {
             const fieldValue = field.fieldKey || field.key || field.id;
@@ -667,10 +676,10 @@ export default function CsvImportExportToolbar({
         ) : null}
         {allowImport && genericLeadWizard ? (
           <div ref={importMenuRef} style={{ position: "relative", display: "inline-flex" }}>
-            <button type="button" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImport(true); }} aria-label="Import contacts" style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
-              <Download size={14} /> Import contacts
+            <button type="button" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImport(true); }} aria-label={`Import ${displayLabel}`} style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
+              <Download size={14} /> Import {displayLabel}
             </button>
-            <button type="button" onClick={toggleImportMenu} aria-label="Import contacts options" aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
+            <button type="button" onClick={toggleImportMenu} aria-label={`Import ${displayLabel} options`} aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
               <ChevronDown size={13} />
             </button>
           </div>
@@ -712,7 +721,7 @@ export default function CsvImportExportToolbar({
         <div
           ref={importMenuContentRef}
           role="menu"
-          aria-label="Import contacts options"
+          aria-label={`Import ${displayLabel} options`}
           style={{ ...dropdownMenuStyle, ...importMenuPos, zIndex: 1200 }}
         >
           <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
@@ -804,6 +813,9 @@ export default function CsvImportExportToolbar({
           onClose={() => setShowImport(false)}
           genericLeadWizard={genericLeadWizard}
           mappingFields={mappingFields}
+          refreshImportHistory={() => fetchApi("/api/csv/contacts/import-history", { silent: true })
+            .then((rows) => setImportHistory(Array.isArray(rows) ? rows : []))
+            .catch(() => {})}
           onImported={(result) => {
             if (genericLeadWizard) {
               const latest = { fileName: result.fileName || "Uploaded contacts file", completedAt: new Date().toISOString(), inserted: result.inserted || 0, updated: result.updated || 0, skipped: result.skipped || 0, errors: result.errors?.length || 0, contacts: result.importedContacts || [] };
@@ -840,6 +852,7 @@ function ImportModal({
   initialExpectedHeaders = [],
   genericLeadWizard = false,
   mappingFields = [],
+  refreshImportHistory = null,
 }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
@@ -904,6 +917,8 @@ function ImportModal({
     });
     setMappingSelections(selections);
     setMappingFieldTypes(types);
+    // Unmapped columns are opt-in: keep them visible for review, but do not
+    // import them until the user maps them to a CRM field.
     if (genericLeadWizard) setExcludedHeaders(unmatched);
   };
 
@@ -1035,7 +1050,7 @@ function ImportModal({
       const next = current.filter((header) => !findExactMappingField(fields, header) && !mappingSelections[header]);
       const excluded = new Set(next);
       for (const header of previewHeaders) {
-        if (!mappingSelections[header] && !findExactMappingField(fields, header)) excluded.add(header);
+        if (!mappingSelections[header] && !findExactMappingField(fields, header) && !canDeriveLeadFieldKey(header)) excluded.add(header);
       }
       return next.length === current.length && excluded.size === current.length
         ? current
@@ -1145,8 +1160,8 @@ function ImportModal({
 
     if (genericLeadWizard) {
       const invalidHeaders = previewHeaders
-        .filter((header) => !excludedHeaders.includes(header))
         .filter((header) => {
+        if (excludedHeaders.includes(header)) return false;
         if (mappingSelections[header] || findExactMappingField(availableMappingFields, header)) return false;
         return !canDeriveLeadFieldKey(header);
       });
@@ -1166,8 +1181,8 @@ function ImportModal({
 
     if (genericLeadWizard) {
       const invalidHeaders = previewHeaders
-        .filter((header) => !excludedHeaders.includes(header))
         .filter((header) => {
+        if (excludedHeaders.includes(header)) return false;
         if (mappingSelections[header] || findExactMappingField(availableMappingFields, header)) return false;
         return !canDeriveLeadFieldKey(header);
       });
@@ -1378,8 +1393,6 @@ function ImportModal({
         } else if (normalizedResult.errors.length) {
           notify.error(`Import had ${normalizedResult.errors.length} row error(s).`);
         }
-        setSubmitting(false);
-        return;
       }
 
       const fd = new FormData();
@@ -1442,11 +1455,7 @@ function ImportModal({
           // The history dialog is kept mounted outside the import modal. Pull
           // the just-written history row immediately so it cannot display a
           // stale older import that only has an error count.
-          if (genericLeadWizard) {
-            fetchApi("/api/csv/contacts/import-history", { silent: true })
-              .then((rows) => setImportHistory(Array.isArray(rows) ? rows : []))
-              .catch(() => { /* the import result still contains row errors */ });
-          }
+          if (genericLeadWizard && refreshImportHistory) refreshImportHistory();
 
         if (normalizedResult.inserted || normalizedResult.updated) {
           notify.success(
@@ -1618,15 +1627,20 @@ function ImportModal({
                     <AlertTriangle size={18} aria-label={`Unmapped ${header}`} style={{ color: "#d97706" }} />
                   )}
                   {!mappingSelections[header] ? (
-                    <SearchableMappingFieldSelect
-                      value=""
-                      options={sortedMappingFields}
-                      ariaLabel={`CRM field for ${header}`}
-                      title="Choose an existing CRM field or add a new one"
-                      triggerLabel={`＋ ${header} (new field)`}
-                      highlightEmpty
-                      onChange={(value) => updateMappingFor(header, value || "")}
-                    />
+                    <div data-proposed-field={canDeriveLeadFieldKey(header) ? "true" : undefined} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                      <SearchableMappingFieldSelect
+                        value=""
+                        options={sortedMappingFields}
+                        ariaLabel={`CRM field for ${header}`}
+                        title="Choose an existing CRM field or add a new one"
+                        triggerLabel={`＋ ${header} (new field)`}
+                        highlightEmpty
+                        onChange={(value) => updateMappingFor(header, value || "")}
+                      />
+                      {canDeriveLeadFieldKey(header) && (
+                        <button type="button" aria-label={`Edit proposed CRM field ${header}`} title={`Edit proposed CRM field ${header}`} onClick={() => openAddFieldFor(header, "edit")} style={{ ...secondaryBtnStyle, flex: "0 0 auto", minHeight: 36, padding: "0.35rem 0.55rem", whiteSpace: "nowrap" }}>Edit</button>
+                      )}
+                    </div>
                   ) : (
                     <SearchableMappingFieldSelect
                       value={mappingSelections[header]}

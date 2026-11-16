@@ -511,6 +511,16 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   description: "textarea",
 };
+const GENERIC_STATUS_FILTER_OPTIONS = Object.freeze([
+  { value: "new", label: "New" },
+  { value: "contacted", label: "Contacted" },
+  { value: "interested", label: "Interested" },
+  { value: "unqualified", label: "Unqualified" },
+  { value: "qualified", label: "Qualified" },
+  { value: "lost", label: "Lost" },
+  { value: "won", label: "Won" },
+  { value: "churned", label: "Churned" },
+]);
 // The import mapper must offer CRM fields even when a user has hidden those
 // columns from their personal Leads table layout. Keep this catalog separate
 // from `leadColumnCatalog`, which is driven by table-column preferences.
@@ -531,7 +541,7 @@ const GENERIC_LEAD_IMPORT_DEFAULT_FIELDS = [
   { key: "stateCode", label: "State", fieldType: "text" },
   { key: "status", label: "Status", fieldType: "dropdown" },
   { key: "source", label: "Source", fieldType: "text" },
-  { key: "lifecycleStageKey", label: "Lifecycle Stage", fieldType: "dropdown" },
+  { key: "lifecycleStageKey", label: "Status", fieldType: "dropdown" },
   { key: "medium", label: "Medium", fieldType: "text" },
   { key: "firstTouchSource", label: "First Touch Source", fieldType: "text" },
   { key: "lastTouchSource", label: "Last Touch Source", fieldType: "text" },
@@ -9574,7 +9584,7 @@ const Leads = ({ initialListState = null } = {}) => {
       <button onClick={() => setPreviewLead(lead)} title="Preview lead" aria-label={`Preview ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
       {canLeadUpdate && <>
         <button onClick={() => openEdit(lead)} title="Edit lead" style={{ ...actionIconBtn, marginLeft: 6 }}><Pencil size={15} /></button>
-        <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>
+        {!isGeneric && <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>}
       </>}
       {canLeadDelete && <button onClick={() => handleDelete(lead)} title="Delete lead" style={{ ...actionIconBtn, color: "var(--danger-color, #f43f5e)", marginLeft: 6 }}><Trash2 size={15} /></button>}
     </td>
@@ -11226,6 +11236,7 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
+              allowedValueOptions={isGeneric ? { lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -12151,6 +12162,10 @@ const Leads = ({ initialListState = null } = {}) => {
                             !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
                         ).map((column) =>
                           column.key === "lifecycleStage"
+                            ? { ...column, label: "Status" }
+                            : column,
+                        ).map((column) =>
+                          column.key === "status"
                             ? { ...column, label: "Status" }
                             : column,
                         )
@@ -14694,6 +14709,7 @@ const Leads = ({ initialListState = null } = {}) => {
             showSelectedFilters={false}
             showCountBadge={false}
             onClose={() => setHeaderFilterRequest(null)}
+            allowedValueOptions={isGeneric ? { lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
           />
         )}
         {renameFieldState && (

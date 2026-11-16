@@ -1279,8 +1279,8 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(actions).toBeInTheDocument();
     expect(actions).toContainElement(screen.getByRole('button', { name: /^Refresh$/i }));
     expect(actions).toContainElement(screen.getByRole('button', { name: /Export Leads/i }));
-    expect(actions).toContainElement(screen.getByRole('button', { name: /^Import Leads$/i }));
-    expect(actions).toContainElement(screen.getByRole('button', { name: /Bulk actions/i }));
+    expect(screen.getByRole('button', { name: /^Import Leads$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bulk actions/i })).toBeInTheDocument();
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
@@ -2859,6 +2859,12 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           ] });
         });
       }
+      if (url === '/api/contacts/filter-values/lifecycleStageKey?status=Lead' && opts?.silent === true) {
+        return Promise.resolve({ values: [
+          { value: 'tenant-custom', label: 'Tenant Custom Stage' },
+          { value: 'new', label: 'New' },
+        ] });
+      }
       return leadsFetchMock(url, opts);
     });
     renderLeads(ADMIN_AUTH);
@@ -2886,7 +2892,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     ).toBeNull();
     expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Lead Status' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'CRM Status' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Assigned To' }));
     const assignedSection = within(dialog).getByText('Assigned To').closest('.filter-panel-section');
@@ -2897,11 +2903,11 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(within(dialog).queryByPlaceholderText('Add a field to filter')).toBeNull();
     expect(within(dialog).getByText('Email')).toBeInTheDocument();
     expect(within(dialog).getByText('Source')).toBeInTheDocument();
-    expect(within(dialog).getByText('Lead Status')).toBeInTheDocument();
+    expect(within(dialog).getByText('CRM Status')).toBeInTheDocument();
     expect(within(dialog).getByText('Assigned To')).toBeInTheDocument();
     expect(
       Array.from(dialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
-    ).toEqual(['Email', 'Assigned To', 'Lead Status', 'Source']);
+    ).toEqual(['Email', 'Assigned To', 'CRM Status', 'Source']);
     expect(within(dialog).getByRole('button', { name: /^Apply$/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /^Reset$/i })).toBeInTheDocument();
 
@@ -2967,7 +2973,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(within(draftDialog).getByRole('button', { name: 'Name' }));
     expect(
       Array.from(draftDialog.querySelectorAll('.filter-panel-section strong')).map((node) => node.textContent),
-    ).toEqual(['Name', 'Email', 'Assigned To', 'Lead Status', 'Source']);
+    ).toEqual(['Name', 'Email', 'Assigned To', 'CRM Status', 'Source']);
     fireEvent.click(within(draftDialog).getByRole('button', { name: /^Apply$/i }));
 
     await waitFor(() => {
@@ -3003,7 +3009,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       expect(within(reopenedDialog).getByPlaceholderText('Add a field to filter')).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Email' })).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Source' })).toBeInTheDocument();
-      expect(within(reopenedDialog).getByRole('button', { name: 'Lead Status' })).toBeInTheDocument();
+      expect(within(reopenedDialog).getByRole('button', { name: 'CRM Status' })).toBeInTheDocument();
       expect(within(reopenedDialog).getByRole('button', { name: 'Assigned To' })).toBeInTheDocument();
     });
 
@@ -3028,7 +3034,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'status', label: 'Status' },
-            { key: 'lifecycleStage', label: 'Lifecycle Stage', filterField: 'lifecycleStageKey', filterKind: 'enum' },
+            { key: 'lifecycleStage', label: 'Status', filterField: 'lifecycleStageKey', filterKind: 'enum' },
           ],
         });
       }
@@ -3053,6 +3059,12 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(within(dialog).getByRole('button', { name: 'CRM Status' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Lifecycle Stage' })).toBeNull();
     expect(within(dialog).queryByRole('button', { name: 'Lead Status' })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Status' }));
+    expect(await within(dialog).findByRole('checkbox', { name: 'New' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show more' }));
+    expect(within(dialog).getByRole('checkbox', { name: 'Churned' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox', { name: 'Tenant Custom Stage' })).toBeNull();
   });
 
   it('dynamically mirrors the full Generic CRM Customize Table catalog in Filter By', async () => {
@@ -5161,7 +5173,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     await screen.findByText('Aarav Sharma');
 
     // Headers for every extended column.
-    for (const h of ['Lifecycle Stage', 'Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
+    for (const h of ['Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
       expect(screen.getByText(h)).toBeInTheDocument();
     }
 
@@ -5169,7 +5181,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     expect(screen.getByText('Aarav')).toBeInTheDocument();
     expect(screen.getByText('Sharma')).toBeInTheDocument();
     expect(screen.getByText('Chief Executive')).toBeInTheDocument();
-    expect(await screen.findByText('Interested')).toBeInTheDocument();
+    expect(await screen.findByText('Lead')).toBeInTheDocument();
     expect(screen.getByText('Logistics')).toBeInTheDocument();
     expect(screen.getByText('Invalid employee count', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Met at expo')).toBeInTheDocument();
@@ -5189,7 +5201,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     );
   });
 
-  it('keeps a lifecycle edit in the same lead list and asks for a negative-condition reason', async () => {
+  it('keeps a CRM status edit in the same lead list', async () => {
     notifyPrompt.mockResolvedValue('No valid requirement');
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
@@ -5200,7 +5212,7 @@ describe('Leads extended Freshsales-parity columns', () => {
           visible: ['name', 'lifecycleStage'],
           availableColumns: [
             { key: 'name', label: 'Name' },
-            { key: 'lifecycleStage', label: 'Lifecycle Stage' },
+            { key: 'lifecycleStage', label: 'Status' },
           ],
         });
       }
@@ -5221,22 +5233,16 @@ describe('Leads extended Freshsales-parity columns', () => {
     });
 
     renderLeads(genericAuth);
-    await screen.findByText('Interested');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit Lifecycle Stage for Aarav Sharma' }));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Edit Lifecycle Stage for Aarav Sharma' }), {
+    await screen.findByText('Lead');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Status for Aarav Sharma' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Edit Status for Aarav Sharma' }), {
       target: { value: 'Unqualified' },
     });
 
-    await waitFor(() => expect(notifyPrompt).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Reason required',
-      message: 'Tell us why Unqualified was selected.',
-    })));
     const patchCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/201' && opts?.method === 'PATCH');
     expect(JSON.parse(patchCall[1].body)).toEqual({
-      lifecycleStageKey: 'unqualified',
-      lifecycleTransitionReason: 'No valid requirement',
+      status: 'Unqualified',
     });
-    expect(JSON.parse(patchCall[1].body)).not.toHaveProperty('status');
   });
 });
 

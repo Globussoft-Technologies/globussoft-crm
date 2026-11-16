@@ -866,7 +866,6 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     try {
       const updated = await patchContact(id, payload);
       setContact(updated);
-      await loadContact();
       notify.success(isGeneric
         ? `Lifecycle stage changed to ${selectedSegment?.options.find((option) => option.id === lifecycleStageKey)?.label || lifecycleStageKey}.`
         : `Status changed to ${status}.`);
@@ -1540,26 +1539,33 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       await patchField({ [network.key]: clean });
     } catch { /* patchField surfaces the error toast */ }
   };
-  const statusStageOption = isGeneric
-    ? lifecycleSegments.flatMap((segment) => segment.options).find((option) => (
-      String(option.label || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
-    ))
-    : null;
   const selectedStageOption = (stageSel && (segOptionById(stageSel, lifecycleSegments) || segOption(stageSel, lifecycleSegments)))
     || (isGeneric && contact.lifecycleStageKey ? segOptionById(contact.lifecycleStageKey, lifecycleSegments) : null);
+  const statusStageOption = isGeneric
+    ? lifecycleSegments.flatMap((segment) => segment.options).find((option) => (
+      [option.backend, option.status, option.label].some((value) => (
+        String(value || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+      ))
+    ))
+    : null;
   const fallbackStageOption = lifecycleSegments.flatMap((segment) => segment.options).find((option) => option.backend === contact.status);
-  const activeStage = statusStageOption?.label
-    || (selectedStageOption && (isGeneric || isTravel || selectedStageOption.backend === contact.status)
+  const selectedStageMatchesStatus = selectedStageOption && [
+    selectedStageOption.backend,
+    selectedStageOption.status,
+    selectedStageOption.label,
+  ].some((value) => String(value || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase());
+  const historyStageOption = isGeneric
+    ? lifecycleHistory
+      .map((entry) => entry?.to)
+      .find((entry) => String(entry?.status || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase())
+    : null;
+  const historyStage = historyStageOption ? segOptionById(historyStageOption.stageKey, lifecycleSegments) : null;
+  const activeStage = isGeneric
+    ? (historyStage?.label || statusStageOption?.label || (selectedStageMatchesStatus ? selectedStageOption.label : null) || defaultStageFor(contact.status, isWellness, isTravel))
+    : selectedStageOption && (isTravel || selectedStageOption.backend === contact.status)
       ? selectedStageOption.label
-      : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel)))
-  const activeSeg = isGeneric
-    ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => (
-      String(option.label || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
-        || String(option.status || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
-        || String(option.backend || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
-        || option.id === contact?.lifecycleStageKey
-    )))
-    : segIndexOf(activeStage, lifecycleSegments);
+      : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
+  const activeSeg = segIndexOf(activeStage, lifecycleSegments);
   const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
   const openOverviewEditor = () => {
     if (isGeneric) {
@@ -2200,7 +2206,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                     {lifecycleSegments.map((seg) => {
                       const i = lifecycleSegments.indexOf(seg);
                       const selectedSegmentOption = isGeneric
-                        ? seg.options.find((option) => option.id === lifecycleStageSelections[seg.id])
+                        ? seg.options.find((option) => option.id === (lifecycleStageSelections[seg.id] || contact.lifecycleStageKey))
                         : null;
                       const displayTitle = selectedSegmentOption?.label || segmentDisplayTitle(seg);
                       const selectedSegmentIsNegative = Boolean(selectedSegmentOption?.negative);

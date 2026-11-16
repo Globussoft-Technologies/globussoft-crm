@@ -68,7 +68,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 10210,
+    "all-js-maxKB": 10240,
+    "//pr1668-settings-workspace-js": "10210 -> 10240 KB: PR #1668 adds the shared settings workspace, field-help tooltips, vertical-scoped integration tiles and connection badges without a runtime dependency. PR validation run 43862235940 measured 10218.1 KB total JS; retain 21.9 KB headroom for cross-platform build variance while preserving every per-chunk cap.",
     "//node24-cross-platform-js-bump": "10200 -> 10210 KB: the same frontend source measured 10199.3 KB in Linux CI and 10205.0 KB locally on Windows under Node 24. Retain 5 KB of local headroom for platform build-output variance; individual chunk limits remain unchanged.",
     "//generic-crm-responsive-js-bump": "10175 -> 10200 KB: Generic CRM ticket/import responsiveness and completion-detail behavior add intentional route-split UI code; retain a small reviewable headroom without adding dependencies.",
     "//pr1658-total-js-bump": "10150 -> 10175 KB: Generic landing chatbot, task/ticket workflows, and Workflows navigation add route-split UI chunks. The current production build measures 10166.5 KB JS; retain 8.5 KB headroom while preserving all per-chunk caps.",
@@ -105,7 +106,8 @@
     "//previous-total-bump-3": "7950→8150 on 2026-09-15: PR #1441 adds lazy-loaded contact/deal profile workflows and the standalone email composer, bringing total JS to 8027.5 KB. No new runtime dependency was added; this preserves 122.5 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-2": "7850→7950 on 2026-09-10: PR #1432 added the lazy-loaded TMC teacher and parent portal screens, bringing total JS to 7885.4 KB. The feature adds no new dependency; this restores 64.6 KB of total-budget headroom while retaining the existing per-chunk limits.",
     "//previous-total-bump": "7800→7850 on 2026-09-04: PR #1404 added the wellness patient-signature workflow and pushed total JS to 7803.4 KB. This small increase restored 46.6 KB headroom; no new dependency was introduced.",
-    "all-css-maxKB": 725,
+    "all-css-maxKB": 750,
+    "//pr1668-settings-workspace-css": "725 -> 750 KB: PR #1668 adds scoped settings layout, responsive navigation, form controls, tooltips and integration-card styling across Generic, Travel and Wellness. PR validation run 43862235940 measured 735.2 KB total CSS; retain 14.8 KB headroom while keeping the total CSS gate enforced.",
     "//lead-workspace-css-bump": "715 -> 725 KB: Generic Leads and Contact profile responsive layouts, Pickup & Plot table viewport contracts, and import-dialog sizing bring the production CSS bundle to 718.8 KB in CI. Retain 6.2 KB of headroom while keeping the total CSS gate enforced.",
     "//generic-crm-responsive-css-bump": "690 -> 715 KB: Generic CRM table/modal responsive contracts and import-detail presentation add intentional scoped CSS; Travel and Wellness styles are unchanged.",
     "//pr1658-total-css-bump": "670 -> 690 KB: task/ticket and generic landing-chat surfaces add shared responsive styling. The current production build measures 681.4 KB CSS; retain 8.6 KB headroom while preserving all per-chunk caps.",

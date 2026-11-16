@@ -76,6 +76,7 @@ export default function FilterPanel({
   allowedFieldKeys = null,
   allowedFieldLabels = null,
   allowedFieldDefinitions = null,
+  allowedValueOptions = null,
 }) {
   const isSingleFieldMode = Boolean(fieldKey);
   const isFreshsalesLayout = layoutVariant === "freshsales";
@@ -147,9 +148,12 @@ export default function FilterPanel({
           : baseUrl;
         const data = await fetchApi(requestUrl, { silent: true });
         if (valueRequestSequenceRef.current[field] !== requestId) return;
-        setValuesByField((prev) => ({
+          const overrideOptions = allowedValueOptions?.[field];
+          setValuesByField((prev) => ({
           ...prev,
-          [field]: Array.isArray(data?.values) ? data.values : [],
+            [field]: Array.isArray(overrideOptions)
+              ? overrideOptions
+              : Array.isArray(data?.values) ? data.values : [],
         }));
       } catch {
         if (valueRequestSequenceRef.current[field] !== requestId) return;
@@ -164,7 +168,7 @@ export default function FilterPanel({
         }
       }
     },
-    [valuesUrl],
+    [allowedValueOptions, valuesUrl],
   );
 
   const clearSearchedValuesFor = useCallback((field) => {

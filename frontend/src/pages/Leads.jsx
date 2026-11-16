@@ -488,6 +488,7 @@ const TRAVEL_LEAD_COLUMN_KEYS = new Set([
   "createdAt",
 ]);
 const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set();
+const GENERIC_HIDDEN_COLUMN_PICKER_KEYS = Object.freeze(["status"]);
 const CSV_IMPORT_FIELD_TYPES = {
   aiScore: "number",
   callifiedScore: "number",
@@ -510,6 +511,57 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   description: "textarea",
 };
+const GENERIC_STATUS_FILTER_OPTIONS = Object.freeze([
+  { value: "new", label: "New" },
+  { value: "contacted", label: "Contacted" },
+  { value: "interested", label: "Interested" },
+  { value: "unqualified", label: "Unqualified" },
+  { value: "qualified", label: "Qualified" },
+  { value: "lost", label: "Lost" },
+  { value: "won", label: "Won" },
+  { value: "churned", label: "Churned" },
+]);
+// The import mapper must offer CRM fields even when a user has hidden those
+// columns from their personal Leads table layout. Keep this catalog separate
+// from `leadColumnCatalog`, which is driven by table-column preferences.
+const GENERIC_LEAD_IMPORT_DEFAULT_FIELDS = [
+  { key: "name", label: "Name", fieldType: "text" },
+  { key: "firstName", label: "First Name", fieldType: "text" },
+  { key: "lastName", label: "Last Name", fieldType: "text" },
+  { key: "email", label: "Email", fieldType: "text" },
+  { key: "phone", label: "Phone", fieldType: "text" },
+  { key: "whatsappPhone", label: "WhatsApp Number", fieldType: "text" },
+  { key: "company", label: "Company", fieldType: "text" },
+  { key: "title", label: "Job Title", fieldType: "text" },
+  { key: "website", label: "Website URL", fieldType: "url" },
+  { key: "linkedin", label: "LinkedIn", fieldType: "url" },
+  { key: "industry", label: "Service Type", fieldType: "text" },
+  { key: "companySize", label: "No Of Employee", fieldType: "number" },
+  { key: "description", label: "Note", fieldType: "textarea" },
+  { key: "stateCode", label: "State", fieldType: "text" },
+  { key: "status", label: "Status", fieldType: "dropdown" },
+  { key: "source", label: "Source", fieldType: "text" },
+  { key: "lifecycleStageKey", label: "Status", fieldType: "dropdown" },
+  { key: "medium", label: "Medium", fieldType: "text" },
+  { key: "firstTouchSource", label: "First Touch Source", fieldType: "text" },
+  { key: "lastTouchSource", label: "Last Touch Source", fieldType: "text" },
+  { key: "tags", label: "Tags", fieldType: "text" },
+  { key: "aiScore", label: "Lead Score", fieldType: "number" },
+  { key: "webForm", label: "Web Form", fieldType: "text" },
+  { key: "location", label: "Location", fieldType: "text" },
+  { key: "assignedTo", label: "Assigned To", fieldType: "text" },
+  { key: "createdAt", label: "Created", fieldType: "date" },
+  { key: "lastUpdated", label: "Last Updated", fieldType: "date" },
+  { key: "interestedPlotArea", label: "Interested plot area", fieldType: "text" },
+  { key: "pickupLocation", label: "Pickup Location", fieldType: "text" },
+  { key: "plotAssign", label: "Plot Assign", fieldType: "text" },
+  { key: "overallPickupStatus", label: "Overall Status", fieldType: "text" },
+  { key: "subBrand", label: "Sub-brand", fieldType: "text" },
+  { key: "campaign", label: "Callified Campaign", fieldType: "text" },
+  { key: "callStatus", label: "Call Status", fieldType: "dropdown" },
+  { key: "callifiedAi", label: "Callified AI call", fieldType: "text" },
+  { key: "callifiedScore", label: "Callified Score", fieldType: "number" },
+];
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
   name: 240,
@@ -1847,7 +1899,13 @@ function BuiltInInlineCellEditor({
         onClick={editOnDisplayClick ? () => setEditing(true) : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        title={editOnDisplayClick ? `Click to edit ${label}` : undefined}
+        title={
+          isEmpty
+            ? editOnDisplayClick
+              ? `Click to edit ${label}`
+              : undefined
+            : String(value)
+        }
         style={{
           ...inlineBuiltinCellStyle,
           cursor: editOnDisplayClick
@@ -2774,6 +2832,7 @@ const Leads = ({ initialListState = null } = {}) => {
   }, [loadPlotAssignmentInventory]);
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
+  const [genericBulkActionsHost, setGenericBulkActionsHost] = useState(null);
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -2835,6 +2894,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const genericQueryEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState(String(initialLeadsPage + 1));
   const [selectedLeads, setSelectedLeads] = useState([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // Keep router pagination authoritative when the list is remounted after a
   // detail view. This also repairs a transient page-one state if another
@@ -3103,6 +3163,24 @@ const Leads = ({ initialListState = null } = {}) => {
         : [];
     }
   });
+
+  useEffect(() => {
+    if (!isGeneric) return;
+    setAdvancedFilters((current) => {
+      let changed = false;
+      const next = current.map((filter) => {
+        const label = filter?.field === "lifecycleStageKey"
+          ? "Status"
+          : filter?.field === "status"
+            ? "CRM Status"
+            : filter?.label;
+        if (label === filter?.label) return filter;
+        changed = true;
+        return { ...filter, label };
+      });
+      return changed ? next : current;
+    });
+  }, [isGeneric]);
 
   useEffect(() => {
     if (!isGeneric) return;
@@ -3491,13 +3569,15 @@ const Leads = ({ initialListState = null } = {}) => {
         Math.max(0, text.length - 1) * letterSpacing
       );
     };
-    const longest = { name: "Name", phone: "Phone" };
+    const longest = { name: "Name", phone: "Phone", email: "Email" };
     for (const lead of leads) {
       const name = String(lead?.name || "Unnamed lead");
       const phone = String(lead?.phone || "+ Add Phone");
+      const email = String(lead?.email || "+ Add Email");
       if (textWidth(name, 700) > textWidth(longest.name, 700))
         longest.name = name;
       if (textWidth(phone) > textWidth(longest.phone)) longest.phone = phone;
+      if (textWidth(email) > textWidth(longest.email)) longest.email = email;
     }
     const nameValueWidth =
       textWidth(longest.name, 700) +
@@ -3511,12 +3591,17 @@ const Leads = ({ initialListState = null } = {}) => {
     const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
     const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
+    const emailValueWidth = textWidth(longest.email) + 16 + 8 + 4 + 20;
+    const emailHeaderWidth = textWidth("Email", 500) + 16 + 28 + 8;
     return {
       name: Math.ceil(
         Math.max(LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
       ),
       phone: Math.ceil(
         Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth),
+      ),
+      email: Math.ceil(
+        Math.max(LEADS_COLUMN_MIN_WIDTH, emailValueWidth, emailHeaderWidth),
       ),
     };
   }, [isGeneric, leads]);
@@ -3560,6 +3645,14 @@ const Leads = ({ initialListState = null } = {}) => {
         autoFitLeadColumnWidths[key],
         manuallySizedWidth,
         isGeneric ? getColumnDefaultWidth(key) : 0,
+      );
+    }
+    if (key === "email" && isGeneric) {
+      const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
+      return Math.max(
+        autoFitLeadColumnWidths.email,
+        manuallySizedWidth,
+        getColumnDefaultWidth(key),
       );
     }
     if (key === "actions") {
@@ -5910,6 +6003,7 @@ const Leads = ({ initialListState = null } = {}) => {
     if (!ok) return;
 
     setLeadBulkActionsOpen(false);
+    setBulkDeleting(true);
     try {
       const res = await fetchApi("/api/contacts/bulk-delete", {
         method: "DELETE",
@@ -5929,6 +6023,8 @@ const Leads = ({ initialListState = null } = {}) => {
       notify.error(
         err?.body?.error || err?.message || "Failed to delete leads",
       );
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -6488,10 +6584,10 @@ const Leads = ({ initialListState = null } = {}) => {
       fieldsByKey.set(filterFieldKey, {
         field: filterFieldKey,
         label:
-          isGeneric && filterFieldKey === "status"
-            ? "Lead Status"
-            : isGeneric && filterFieldKey === "lifecycleStageKey"
-              ? "Status"
+          isGeneric && filterFieldKey === "lifecycleStageKey"
+            ? "Status"
+            : isGeneric && filterFieldKey === "status"
+              ? "CRM Status"
               : catalogColumn?.label || customField?.label || null,
         kind:
           catalogColumn?.filterKind ||
@@ -6643,7 +6739,7 @@ const Leads = ({ initialListState = null } = {}) => {
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
-      if (key === "lifecycleStage") return { key, label: "Lifecycle Stage" };
+      if (key === "lifecycleStage") return { key, label: isGeneric ? "Status" : "Lifecycle Stage" };
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
@@ -6813,7 +6909,7 @@ const Leads = ({ initialListState = null } = {}) => {
       case "lifecycleStage":
         return {
           fieldKey: "lifecycleStageKey",
-          label: "Lifecycle Stage",
+          label: isGeneric ? "Status" : "Lifecycle Stage",
           kind: "enum",
         };
       case "medium":
@@ -8641,7 +8737,14 @@ const Leads = ({ initialListState = null } = {}) => {
           label: "Email",
           value: lead.email,
           type: "email",
-          extraStyle: { color: "var(--text-secondary)" },
+          disableTruncation: isGeneric,
+          extraStyle: isGeneric
+            ? {
+                color: "var(--text-secondary)",
+                overflow: "visible",
+                whiteSpace: "nowrap",
+              }
+            : { color: "var(--text-secondary)" },
         });
       case "company":
         return renderBuiltInLeadCell({
@@ -8869,50 +8972,49 @@ const Leads = ({ initialListState = null } = {}) => {
             : ["Lead", "Prospect", "Customer", "Churned", "Junk"].map(
                 (status) => ({ id: status, label: status, status }),
               );
+        const genericStatusOptions = isGeneric
+          ? [...new Set([
+              ...genericLifecycleOptions.map((option) => option.label),
+              "Lead",
+              "Prospect",
+              "Customer",
+              "Churned",
+              "Junk",
+              lead.status,
+            ].filter(Boolean))].map((status) => ({ id: status, label: status, status }))
+          : lifecycleOptions;
         // Lifecycle stage — inline-editable dropdown, pill display.
         return renderBuiltInLeadCell({
           lead,
           field: "status",
-          label: "Lifecycle Stage",
+          label: isGeneric ? "Status" : "Lifecycle Stage",
           // Generic CRM keeps lifecycle stage independent from CRM Status.
           // Existing rows without an explicit lifecycle stage stay at the
           // pipeline's initial Lead stage instead of mirroring lead.status.
-          value:
-            configuredStage?.label ||
-            (isGeneric ? "Lead" : lead.status || "Lead"),
+          value: isGeneric ? (lead.status || "Lead") : (configuredStage?.label || lead.status || "Lead"),
           type: "select",
-          options: lifecycleOptions.map((option) => option.label),
+          options: (isGeneric ? genericStatusOptions : lifecycleOptions).map((option) => option.label),
           renderValue: (displayValue) => (
             <span style={sourceBadgeStyle}>{displayValue || ""}</span>
           ),
           onSave: async (row, _field, selectedLabel) => {
-            const option = lifecycleOptions.find(
+            const option = (isGeneric ? genericStatusOptions : lifecycleOptions).find(
               (item) => item.label === selectedLabel,
             );
             if (!option) return;
-            let lifecycleTransitionReason = "";
-            if (isGeneric && option.negative) {
-              const reason = await notify.prompt({
-                title: "Reason required",
-                message: `Tell us why ${option.label} was selected.`,
-                placeholder: "Enter the reason for this negative stage",
-                confirmText: "Confirm stage",
+            if (isGeneric) {
+              const updated = await fetchApi(`/api/contacts/${row.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ status: selectedLabel }),
               });
-              lifecycleTransitionReason = String(reason || "").trim();
-              if (!lifecycleTransitionReason) return false;
+              setLeads((current) =>
+                current.map((item) => item.id === row.id ? { ...item, ...updated } : item),
+              );
+              return;
             }
             const updated = await fetchApi(`/api/contacts/${row.id}`, {
               method: "PATCH",
-              body: JSON.stringify(
-                isGeneric && genericLifecycleOptions.length
-                  ? {
-                      lifecycleStageKey: option.id,
-                      ...(lifecycleTransitionReason
-                        ? { lifecycleTransitionReason }
-                        : {}),
-                    }
-                  : { status: option.status },
-              ),
+              body: JSON.stringify({ status: option.status }),
             });
             setLeads((current) =>
               current.map((item) =>
@@ -9482,7 +9584,7 @@ const Leads = ({ initialListState = null } = {}) => {
       <button onClick={() => setPreviewLead(lead)} title="Preview lead" aria-label={`Preview ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
       {canLeadUpdate && <>
         <button onClick={() => openEdit(lead)} title="Edit lead" style={{ ...actionIconBtn, marginLeft: 6 }}><Pencil size={15} /></button>
-        <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>
+        {!isGeneric && <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>}
       </>}
       {canLeadDelete && <button onClick={() => handleDelete(lead)} title="Delete lead" style={{ ...actionIconBtn, color: "var(--danger-color, #f43f5e)", marginLeft: 6 }}><Trash2 size={15} /></button>}
     </td>
@@ -9808,6 +9910,7 @@ const Leads = ({ initialListState = null } = {}) => {
               label="Leads"
               formats={["csv", "xlsx"]}
               genericLeadWizard={isGeneric && canLeadRead}
+              genericCrm={isGeneric}
               showExport={!isGeneric || canLeadExport}
               allowImport={!isGeneric || canLeadWrite}
               onImported={isGeneric ? refreshAll : undefined}
@@ -9818,6 +9921,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       // not a tenant custom field. Keep it in the mapping
                       // catalog so imports never propose a duplicate field.
                       { key: "id", label: "Id", fieldType: "text" },
+                      ...GENERIC_LEAD_IMPORT_DEFAULT_FIELDS,
                       ...leadColumnCatalog,
                     ]
                       .map((catalogField) => {
@@ -10521,9 +10625,12 @@ const Leads = ({ initialListState = null } = {}) => {
             </>
           )}
 
-          <span aria-hidden="true" style={compactToolbarDividerStyle} />
+          {!isGeneric && (
+            <span aria-hidden="true" style={compactToolbarDividerStyle} />
+          )}
 
-          {canLeadBulkActions && (
+          <PortalWhenReady enabled={isGeneric} target={genericBulkActionsHost}>
+            {canLeadBulkActions && (
             <div
               className="lead-bulk-actions-control"
               style={{ position: "relative" }}
@@ -10580,7 +10687,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   <div
                     role="menu"
                     aria-label="Bulk actions"
-                    className="leads-bulk-actions-menu"
+                    className="lead-bulk-actions-menu"
                     onMouseDown={(e) => e.stopPropagation()}
                     style={{
                       position: "absolute",
@@ -10804,6 +10911,7 @@ const Leads = ({ initialListState = null } = {}) => {
               )}
             </div>
           )}
+          </PortalWhenReady>
 
           {isGeneric && canLeadUpdate && selectedLeads.length > 0 && (
             <button
@@ -11128,6 +11236,7 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
+              allowedValueOptions={isGeneric ? { lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -11234,6 +11343,13 @@ const Leads = ({ initialListState = null } = {}) => {
                   </>
                 )}
               </div>
+            )}
+            {isGeneric && (
+              <div
+                ref={setGenericBulkActionsHost}
+                className="leads-generic-bulk-actions-host"
+                style={{ display: "inline-flex", alignItems: "center" }}
+              />
             )}
           </div>
 
@@ -12025,6 +12141,7 @@ const Leads = ({ initialListState = null } = {}) => {
             {supportsColumnCustomization && (
               <ColumnPicker
                 tableKey="leads"
+                hiddenColumnKeys={isGeneric ? GENERIC_HIDDEN_COLUMN_PICKER_KEYS : undefined}
                 onColumnsChange={(columns) =>
                   setVisibleColumns(
                     isGeneric
@@ -12043,6 +12160,14 @@ const Leads = ({ initialListState = null } = {}) => {
                         ).filter(
                           (column) =>
                             !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
+                        ).map((column) =>
+                          column.key === "lifecycleStage"
+                            ? { ...column, label: "Status" }
+                            : column,
+                        ).map((column) =>
+                          column.key === "status"
+                            ? { ...column, label: "Status" }
+                            : column,
                         )
                       : columns,
                   )
@@ -13329,7 +13454,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               >
                                 <Pencil size={15} />
                               </button>
-                              <button
+                              {!isGeneric && <button
                                 onClick={() => handleConvert(lead.id)}
                                 title="Convert to Prospect"
                                 aria-label={`Convert ${lead.name || "lead"} to Prospect`}
@@ -13340,7 +13465,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                 }}
                               >
                                 <ArrowRightCircle size={15} />
-                              </button>
+                              </button>}
                             </>
                           )}
                           {canLeadDelete && (
@@ -14584,6 +14709,7 @@ const Leads = ({ initialListState = null } = {}) => {
             showSelectedFilters={false}
             showCountBadge={false}
             onClose={() => setHeaderFilterRequest(null)}
+            allowedValueOptions={isGeneric ? { lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
           />
         )}
         {renameFieldState && (
@@ -15173,13 +15299,13 @@ const Leads = ({ initialListState = null } = {}) => {
                   >
                     {isTravel ? "Edit contact" : "Edit lead"}
                   </button>
-                  <button
+                  {!isGeneric && <button
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleConvert(previewLeadCurrent.id)}
                   >
                     Convert to Prospect
-                  </button>
+                  </button>}
                 </>
               )}
             </div>
@@ -16110,6 +16236,46 @@ const Leads = ({ initialListState = null } = {}) => {
         <CallifiedCallStatusDrawer
           onClose={() => setCallStatusDrawerOpen(false)}
         />
+      )}
+
+      {bulkDeleting && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="Deleting selected leads"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(15, 23, 42, 0.42)",
+            backdropFilter: "blur(2px)",
+          }}
+        >
+          <div
+            style={{
+              minWidth: "min(320px, calc(100vw - 2rem))",
+              padding: "1.5rem 1.75rem",
+              borderRadius: 14,
+              background: "var(--surface-color, #fff)",
+              boxShadow: "0 18px 48px rgba(0, 0, 0, 0.28)",
+              textAlign: "center",
+            }}
+          >
+            <RefreshCw
+              size={32}
+              aria-hidden="true"
+              style={{ color: "var(--accent-color)", animation: "spin 0.9s linear infinite", marginBottom: 12 }}
+            />
+            <strong style={{ display: "block", fontSize: "1rem", color: "var(--text-primary)" }}>
+              Deleting selected leads…
+            </strong>
+            <span style={{ display: "block", marginTop: 6, fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              Removing {selectedLeads.length} lead{selectedLeads.length === 1 ? "" : "s"} and related data. Please wait.
+            </span>
+          </div>
+        </div>
       )}
 
       <GenericLeadsAssistant

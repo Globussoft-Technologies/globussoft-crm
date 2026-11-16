@@ -82,6 +82,13 @@ describe('ContactDetail profile', () => {
     expect(panel.getByText('Starter plan')).toBeTruthy();
   });
 
+  it('highlights the current status stage in the profile status bar', async () => {
+    renderProfile();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    expect(panel.getByRole('button', { name: 'New' }).className).toMatch(/current/);
+    expect(panel.getByRole('button', { name: 'Contacted' }).className).not.toMatch(/current/);
+  });
+
   it('hides the retired Generic CRM profile actions while keeping Delete and Export', async () => {
     renderProfile();
     const panel = within(await screen.findByLabelText('Contact profile'));
@@ -304,7 +311,7 @@ describe('ContactDetail profile', () => {
     });
     expect(JSON.parse(fetchApiMock.mock.calls.find(([_u, o]) => o?.method === 'PATCH')[1].body)).toEqual({ lifecycleStageKey: 'interested' });
     expect(currentContact.status).toBe('Lead');
-    await waitFor(() => expect(panel.getByRole('button', { name: 'Interested' }).className).toMatch(/current/));
+    await waitFor(() => expect(panel.getByRole('button', { name: 'New' }).className).toMatch(/current/));
   });
 
   it('qualified dropdown shows Qualified and red Lost options', async () => {
@@ -347,7 +354,7 @@ describe('ContactDetail profile', () => {
     fireEvent.click(panel.getByRole('button', { name: 'Won / Churned' }));
     fireEvent.click(panel.getByRole('button', { name: 'Won' }));
 
-    await waitFor(() => expect(panel.getByRole('button', { name: 'Won' }).className).toMatch(/current/));
+    await waitFor(() => expect(panel.getByRole('button', { name: 'New' }).className).toMatch(/current/));
     expect(panel.getByRole('button', { name: 'Unqualified' }).className).toMatch(/lost/);
     fireEvent.click(panel.getByRole('button', { name: 'Unqualified' }));
     expect(panel.getByRole('button', { name: 'Interested' })).toBeInTheDocument();

@@ -214,7 +214,7 @@ describe("GET /api/contacts/filter-fields", () => {
     expect(byKey.status.kind).toBe("text");
     expect(byKey.lifecycleStageKey).toMatchObject({
       kind: "enum",
-      label: "Status",
+      label: "Lifecycle Stage",
     });
     expect(byKey.callifiedCampaignId.kind).toBe("id");
     expect(byKey.callifiedCampaignId.label).toBe("Callified Campaign");

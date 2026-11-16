@@ -168,6 +168,9 @@ body[data-vertical="generic"] .cp-ov-card:has(.cp-chev-menu) { overflow: visible
 .cp-lifecycle-row--generic { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; padding: 0.8rem 1.25rem 0.9rem; background: var(--surface-color, #fff); }
 body[data-vertical="generic"] .cp-lifecycle-row--generic { position: relative; z-index: 20; }
 .cp-lifecycle-row--generic .cp-lifecycle-left { min-width: 0; display: grid; align-content: start; }
+/* Generic CRM shows lifecycle stages in the Status pipeline below. Keep the
+   duplicate current-stage summary out of the Overview header. */
+.cp-lifecycle-row--generic .cp-lifecycle-left { display: none; }
 .cp-lifecycle-row--generic .cp-lifecycle-label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .cp-lifecycle-row--generic .cp-lifecycle-label-main { min-width: 0; }
 .cp-lifecycle-row--generic .cp-lifecycle-label-main .cp-label { white-space: nowrap; }

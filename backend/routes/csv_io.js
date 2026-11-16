@@ -60,15 +60,6 @@ const contactUpload = multer({
 
 const MAX_IMPORT_ROWS = 5000;
 const MAX_CONTACT_IMPORT_ROWS = 1_000_000;
-const GENERIC_IMPORT_STATUS_MAP = new Map([
-  ["new", "Lead"],
-  ["unqualified", "Lead"],
-  ["contacted", "Prospect"],
-  ["interested", "Prospect"],
-  ["qualified", "Prospect"],
-  ["won", "Customer"],
-  ["lost", "Junk"],
-]);
 const GENERIC_IMPORT_LIFECYCLE_MAP = new Map([
   ["lead", "new"],
   ["salesqualifiedlead", "qualified"],
@@ -81,6 +72,19 @@ function contactImportUpload(req, res, next) {
 }
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
+
+// Keep the history endpoints compatible with a backend process that was
+// started before the additive `columns` migration and is still using an older
+// generated Prisma client. A normal deploy regenerates Prisma, but an old
+// client must not take down the otherwise-successful import flow.
+const hasGenericImportHistoryField = (fieldName) => {
+  const fields = prisma._runtimeDataModel?.models?.GenericImportHistory?.fields;
+  return !Array.isArray(fields) || fields.some((field) => field.name === fieldName);
+};
+const isMissingGenericImportColumnsError = (error) => (
+  String(error?.message || "").includes("GenericImportHistory.columns")
+  || String(error?.message || "").includes("Unknown field `columns`")
+);
 
 // CSV is shared by several pages, so authorization is capability-based rather
 // than role-name-based. Leads and contacts intentionally share the contacts
@@ -131,7 +135,7 @@ async function writeImportedCustomFields(contactId, tenantId, customFields, defi
   const writeOne = async ([fieldKey, raw]) => {
     const def = definitionsByKey.get(fieldKey);
     if (!def) return;
-    const value = String(raw ?? "").trim();
+    const value = expandScientificNotation(raw);
     const data = { valueText: value || null, valueNumber: null, valueDate: null, valueBool: null };
     if (def.fieldType === "number" && value !== "") {
       const number = Number(value);
@@ -216,7 +220,7 @@ router.get("/contacts/import-history", CONTACT_READ, async (req, res) => {
     return res.status(404).json({ error: "Import history is not available", code: "IMPORT_HISTORY_NOT_AVAILABLE" });
   }
   try {
-    const rows = await prisma.genericImportHistory.findMany({
+    const query = {
       where: { tenantId: req.user.tenantId },
       orderBy: [{ completedAt: "desc" }, { id: "desc" }],
       take: 20,
@@ -228,11 +232,23 @@ router.get("/contacts/import-history", CONTACT_READ, async (req, res) => {
         updated: true,
         skipped: true,
         errors: true,
+        ...(hasGenericImportHistoryField("columns") ? { columns: true } : {}),
         contacts: true,
         errorRows: true,
         completedAt: true,
       },
-    });
+    };
+    let rows;
+    try {
+      rows = await prisma.genericImportHistory.findMany(query);
+    } catch (error) {
+      if (!isMissingGenericImportColumnsError(error)) throw error;
+      const { columns: _columns, ...selectWithoutColumns } = query.select;
+      rows = await prisma.genericImportHistory.findMany({
+        ...query,
+        select: selectWithoutColumns,
+      });
+    }
     res.json(rows.map((row) => ({ ...row, status: row.errors ? "Completed, with errors" : "Completed" })));
   } catch (error) {
     console.error("[csv] import history error:", error.message);
@@ -249,13 +265,30 @@ router.get("/contacts/import-history/:id/report", async (req, res) => {
     return res.status(400).json({ error: "Invalid import history ID", code: "INVALID_IMPORT_HISTORY_ID" });
   }
   try {
-    const history = await prisma.genericImportHistory.findFirst({
+    const query = {
       where: { id, tenantId: req.user.tenantId },
-        select: { fileName: true, errors: true, errorRows: true },
-    });
+        select: {
+          fileName: true,
+          errors: true,
+          ...(hasGenericImportHistoryField("columns") ? { columns: true } : {}),
+          contacts: true,
+          errorRows: true,
+        },
+    };
+    let history;
+    try {
+      history = await prisma.genericImportHistory.findFirst(query);
+    } catch (error) {
+      if (!isMissingGenericImportColumnsError(error)) throw error;
+      const { columns: _columns, ...selectWithoutColumns } = query.select;
+      history = await prisma.genericImportHistory.findFirst({
+        ...query,
+        select: selectWithoutColumns,
+      });
+    }
     if (!history) return res.status(404).json({ error: "Import history not found", code: "IMPORT_HISTORY_NOT_FOUND" });
-    const storedErrorRows = Array.isArray(history.errorRows) ? history.errorRows : [];
-    const reportRows = storedErrorRows.length || !history.errors
+    const storedErrorRows = normalizeImportErrorRows(history.errorRows);
+    const errorReportRows = storedErrorRows.length || !history.errors
       ? storedErrorRows
       : [{
         rowNumber: "—",
@@ -265,34 +298,55 @@ router.get("/contacts/import-history/:id/report", async (req, res) => {
         data: {},
       }];
     const format = String(req.query.format || "csv").toLowerCase();
-    const columns = [];
+    const scope = String(req.query.scope || "errors").toLowerCase();
+    const successfulRows = normalizeImportErrorRows(history.contacts)
+      .filter((row) => row?.action === "created" || row?.action === "updated")
+      .map((row) => ({
+        action: row.action,
+        data: Object.fromEntries(Object.entries(row).filter(([key]) => key !== "action" && key !== "reason")),
+      }));
+    const reportRows = scope === "successful" ? successfulRows : errorReportRows;
+    const storedColumns = Array.isArray(history.columns)
+      ? history.columns.filter((key) => typeof key === "string" && key && key !== "action" && key !== "reason")
+      : [];
+    const columns = [...storedColumns];
     for (const row of reportRows) {
       for (const key of Object.keys(row?.data || {})) {
         if (!columns.includes(key)) columns.push(key);
       }
     }
-    const reportColumns = [
-      { key: "rowNumber", header: "rowNumber" },
-      { key: "field", header: "field" },
-      { key: "action", header: "action" },
-      { key: "reason", header: "reason" },
-      ...columns.map((key) => ({ key: `data.${key}`, header: key })),
-    ];
-    const rows = reportRows.map((row) => ({
-      rowNumber: row.rowNumber,
-      field: row.field || "row",
-      action: "error",
-      reason: row.reason || "Import failed",
-      ...Object.fromEntries(columns.map((key) => [`data.${key}`, row?.data?.[key] ?? ""])),
-    }));
+    const reportColumns = scope === "successful"
+      ? [
+          { key: "action", header: "action" },
+          ...columns.map((key) => ({ key: `data.${key}`, header: key })),
+        ]
+      : [
+          { key: "rowNumber", header: "rowNumber" },
+          { key: "field", header: "field" },
+          { key: "action", header: "action" },
+          { key: "reason", header: "reason" },
+          ...columns.map((key) => ({ key: `data.${key}`, header: key })),
+        ];
+    const rows = scope === "successful"
+      ? reportRows.map((row) => ({
+          action: row.action,
+          ...Object.fromEntries(columns.map((key) => [`data.${key}`, row?.data?.[key] ?? ""])),
+        }))
+      : reportRows.map((row) => ({
+          rowNumber: row.rowNumber,
+          field: row.field || "row",
+          action: "error",
+          reason: row.reason || "Import failed",
+          ...Object.fromEntries(columns.map((key) => [`data.${key}`, row?.data?.[key] ?? ""])),
+        }));
     const safeName = String(history.fileName || "import").replace(/\.[^.]+$/, "");
     if (format === "xlsx") {
-      const buffer = toXlsxBuffer(reportColumns, rows, "Import errors");
+      const buffer = toXlsxBuffer(reportColumns, rows, scope === "successful" ? "Created and updated" : "Import errors");
       res.setHeader("Content-Type", XLSX_CONTENT_TYPE);
-      res.setHeader("Content-Disposition", `attachment; filename="${safeName}-import-report.xlsx"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${scope === "successful" ? "created-updated" : "import-report"}.xlsx"`);
       return res.send(buffer);
     }
-    setCsvDownloadHeaders(res, `${safeName}-import-report.csv`);
+    setCsvDownloadHeaders(res, `${safeName}-${scope === "successful" ? "created-updated" : "import-report"}.csv`);
     return res.send(serializeRows(reportColumns, rows));
   } catch (error) {
     console.error("[csv] import report error:", error.message);
@@ -403,17 +457,225 @@ function normalizeLifecycleValue(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-function resolveGenericImportStatus(value) {
-  const normalized = normalizeLifecycleValue(value);
-  return GENERIC_IMPORT_STATUS_MAP.get(normalized) || value;
-}
-
 function normalizeGenericImportTarget(target) {
   const normalized = normalizeLifecycleValue(target);
   if (normalized === "lifecyclestage" || normalized === "lifecyclestagekey") {
     return "lifecycleStageKey";
   }
   return target;
+}
+
+function normalizeImportErrorRows(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function expandScientificNotation(value) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return raw;
+  const [, sign, integerPart, fractionPart = "", exponentText] = match;
+  const digits = integerPart + fractionPart;
+  const decimalIndex = integerPart.length + Number(exponentText);
+  if (decimalIndex <= 0) return `${sign}0.${"0".repeat(-decimalIndex)}${digits}`;
+  if (decimalIndex >= digits.length) return `${sign}${digits}${"0".repeat(decimalIndex - digits.length)}`;
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+}
+
+const GENERIC_IMPORT_NATIVE_FIELDS = new Set([
+  "whatsappPhone",
+  "medium",
+  "tagsJson",
+  "subBrand",
+  "aiScore",
+  "industry",
+  "companySize",
+  "linkedin",
+  "website",
+  "facebookUrl",
+  "githubUrl",
+  "twitterUrl",
+  "firstTouchSource",
+  "lastTouchSource",
+  "treatmentOfInterest",
+  "birthDate",
+  "anniversary",
+  "gst",
+  "stateCode",
+  "billingStateCode",
+  "interestedPlotArea",
+  "externalId",
+  "description",
+  "createdAt",
+  "updatedAt",
+]);
+const GENERIC_IMPORT_STORED_TARGETS = new Set([
+  "name", "firstName", "lastName", "email", "phone", "company", "title",
+  "status", "source", "lifecycleStageKey", "tags", ...GENERIC_IMPORT_NATIVE_FIELDS,
+]);
+const IMPORT_FIELD_TYPES = new Set(["text", "textarea", "number", "dropdown", "radio", "date", "url", "checkbox", "multiselect"]);
+
+async function ensureGenericImportDefinitions(mapping, mappingFieldTypes, definitions, tenantId) {
+  const definitionsByKey = new Map(definitions.map((definition) => [definition.fieldKey, definition]));
+  const targets = [...new Set(Object.values(mapping || {}))].filter((target) => (
+    target && !String(target).startsWith("cf_") && !GENERIC_IMPORT_STORED_TARGETS.has(target)
+  ));
+  for (const target of targets) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,49}$/.test(String(target)) || definitionsByKey.has(target)) continue;
+    const source = Object.entries(mapping || {}).find(([, mappedTarget]) => mappedTarget === target)?.[0];
+    const requestedType = source ? mappingFieldTypes?.[source] : mappingFieldTypes?.[target];
+    const fieldType = IMPORT_FIELD_TYPES.has(requestedType) ? requestedType : "text";
+    try {
+      const created = await prisma.leadCustomFieldDefinition.create({
+        data: {
+          tenantId,
+          fieldKey: target,
+          label: String(target).replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
+          fieldType,
+          isRequired: false,
+        },
+      });
+      definitionsByKey.set(target, created);
+      definitions.push(created);
+    } catch (error) {
+      // Another import/tab may have created the same fallback definition.
+      if (error?.code !== "P2002") throw error;
+      const existing = await prisma.leadCustomFieldDefinition.findFirst({
+        where: { tenantId, fieldKey: target },
+      });
+      if (existing) {
+        definitionsByKey.set(target, existing);
+        definitions.push(existing);
+      }
+    }
+  }
+}
+
+function parseImportedDate(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseImportedTags(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const tags = parsed.map((tag) => String(tag ?? "").trim()).filter(Boolean);
+      return tags.length ? JSON.stringify([...new Set(tags)]) : null;
+    }
+  } catch { /* CSV values are commonly comma-separated rather than JSON. */ }
+  const tags = raw.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean);
+  return tags.length ? JSON.stringify([...new Set(tags)]) : null;
+}
+
+function buildGenericNativeImportData(row) {
+  const data = {};
+  const aliases = {
+    lastUpdated: "updatedAt",
+    tags: "tagsJson",
+  };
+  for (const [sourceKey, targetKey] of Object.entries(aliases)) {
+    if (Object.prototype.hasOwnProperty.call(row, sourceKey)) {
+      const raw = row[sourceKey];
+      if (targetKey === "externalId") {
+        const value = expandScientificNotation(raw);
+        if (value) data[targetKey] = value;
+      }
+      if (targetKey === "updatedAt") {
+        const date = parseImportedDate(raw);
+        if (date) data[targetKey] = date;
+      }
+      if (targetKey === "tagsJson") data[targetKey] = parseImportedTags(raw);
+    }
+  }
+  for (const field of GENERIC_IMPORT_NATIVE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(row, field)) continue;
+    const raw = row[field];
+    if (field === "tagsJson") data[field] = parseImportedTags(raw);
+    else if (["birthDate", "anniversary", "createdAt", "updatedAt"].includes(field)) {
+      const date = parseImportedDate(raw);
+      if (date) data[field] = date;
+    } else if (field === "aiScore") {
+      const score = Number(raw);
+      if (Number.isFinite(score)) data[field] = Math.max(0, Math.min(100, Math.round(score)));
+    } else {
+      const value = expandScientificNotation(raw);
+      if (value) data[field] = field === "externalId" ? value : sanitizeCellForExport(value);
+    }
+  }
+  // Freshsales exports call the lead's primary note "Recent note". Keep it
+  // in the native Note field as well as the timeline activity so both lead
+  // detail surfaces show the same imported value.
+  if (!data.description) {
+    const recentNote = String(getSpreadsheetValue(row, ["recent note", "recentNote"])).trim();
+    if (recentNote) data.description = sanitizeCellForExport(recentNote);
+  }
+  return data;
+}
+
+function buildImportedActivityRecords(row) {
+  const recentNote = String(getSpreadsheetValue(row, ["recent note", "recentNote", "note"])).trim();
+  const lastActivityType = String(getSpreadsheetValue(row, ["last activity type", "lastActivityType"])).trim();
+  const lastActivityDate = parseImportedDate(getSpreadsheetValue(row, ["last activity date", "lastActivityDate"]));
+  const contactedAt = getSpreadsheetValue(row, ["last contacted time", "lastContactedTime"]);
+  const contactedMode = String(getSpreadsheetValue(row, ["last contacted mode", "lastContactedMode"])).trim();
+  const contactedViaChat = String(getSpreadsheetValue(row, ["last contacted via chat", "lastContactedViaChat"])).trim();
+  const records = [];
+
+  if (recentNote) {
+    records.push({
+      type: "Note",
+      description: recentNote,
+      createdAt: lastActivityDate || parseImportedDate(getSpreadsheetValue(row, ["updated at", "updatedAt"])) || undefined,
+    });
+  }
+
+  const activityDetails = [
+    lastActivityType && `Activity type: ${lastActivityType}`,
+    lastActivityDate && `Activity date: ${lastActivityDate.toISOString()}`,
+    contactedMode && `Last contacted mode: ${contactedMode}`,
+    contactedAt && `Last contacted time: ${expandScientificNotation(contactedAt)}`,
+    contactedViaChat && `Last contacted via chat: ${contactedViaChat}`,
+  ].filter(Boolean);
+  if (activityDetails.length && (lastActivityType || lastActivityDate || contactedMode || contactedAt || contactedViaChat)) {
+    records.push({
+      type: lastActivityType || (contactedMode || contactedAt ? "Contacted" : "Activity"),
+      description: activityDetails.join("\n"),
+      createdAt: lastActivityDate || parseImportedDate(contactedAt) || undefined,
+    });
+  }
+  return records;
+}
+
+async function writeImportedActivities(contactId, tenantId, userId, row) {
+  const records = buildImportedActivityRecords(row);
+  for (const record of records) {
+    const existing = await prisma.activity.findFirst({
+      where: { contactId, tenantId, type: record.type, description: record.description },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.activity.create({
+      data: {
+        contactId,
+        tenantId,
+        userId: userId || null,
+        type: record.type,
+        description: record.description,
+        ...(record.createdAt ? { createdAt: record.createdAt } : {}),
+      },
+    });
+  }
 }
 
 async function loadGenericLifecycleOptions(tenantId, mapping) {
@@ -583,10 +845,15 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
     try { mapping = req.body?.mapping ? JSON.parse(req.body.mapping) : {}; } catch { mapping = {}; }
     if (isGeneric && mapping && typeof mapping === "object" && !Array.isArray(mapping)) {
       mapping = Object.fromEntries(
-        Object.entries(mapping).map(([source, target]) => [
-          source,
-          normalizeGenericImportTarget(target),
-        ]),
+        Object.entries(mapping).map(([source, target]) => {
+          // Generic CRM Status is independent from lifecycle stage. Even a
+          // stale mapping must write a Status column to Contact.status.
+          const normalizedSource = normalizeLifecycleValue(source);
+          return [
+            source,
+            normalizedSource === "status" ? "status" : normalizeGenericImportTarget(target),
+          ];
+        }),
       );
       // Lifecycle stage is an automatic Generic CRM column and may be absent
       // from an older/saved mapping payload. Detect the source header directly
@@ -602,16 +869,16 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         mapping[lifecycleSource] = "lifecycleStageKey";
       }
     }
-    const misroutedStatusSource = isGeneric
-      ? Object.entries(mapping).find(([source, target]) => (
-        target === "lifecycleStageKey" && normalizeLifecycleValue(source) === "status"
-      ))?.[0]
-      : null;
     let lifecycleOptions = [];
     if (isGeneric) lifecycleOptions = await loadGenericLifecycleOptions(req.user.tenantId, mapping);
+    let mappingFieldTypes = {};
+    try { mappingFieldTypes = req.body?.mappingFieldTypes ? JSON.parse(req.body.mappingFieldTypes) : {}; } catch { mappingFieldTypes = {}; }
     const customDefinitions = Object.keys(mapping).length
       ? await prisma.leadCustomFieldDefinition.findMany({ where: { tenantId: req.user.tenantId } })
       : [];
+    if (isGeneric && Object.keys(mapping).length) {
+      await ensureGenericImportDefinitions(mapping, mappingFieldTypes, customDefinitions, req.user.tenantId);
+    }
 
     for (let i = 0; i < rows.length; i++) {
       const sourceRow = rows[i];
@@ -632,19 +899,12 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
       try {
         const name = String(getSpreadsheetValue(row, ["name", "Name"])).trim();
         const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
-        const sourceStatus = String(
-          (misroutedStatusSource
-            ? sourceRow?.[misroutedStatusSource]
-            : getSpreadsheetValue(row, ["status", "Status"])) || "Lead",
-        ).trim();
-        const rawStatus = isGeneric
-          ? resolveGenericImportStatus(sourceStatus)
-          : sourceStatus;
-
-        const status = [...ALLOWED_CONTACT_STATUSES].find(
-          (allowedStatus) =>
-            allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
-        );
+        const rawStatus = String(getSpreadsheetValue(row, ["status", "Status"]) || "Lead").trim();
+        const status = isGeneric
+          ? rawStatus
+          : [...ALLOWED_CONTACT_STATUSES].find(
+            (allowedStatus) => allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
+          );
         if (!isGeneric && !email) {
           recordImportError("email", "missing email", email);
           continue;
@@ -653,7 +913,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           recordImportError("email", `invalid email (${email})`, email);
           continue;
         }
-        if (!status) {
+        if (!isGeneric && !status) {
           recordImportError("status", `invalid status "${rawStatus}"`, rawStatus);
           continue;
         }
@@ -696,6 +956,8 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           source: source || null,
         };
         if (lifecycleStageKey) createData.lifecycleStageKey = lifecycleStageKey;
+        const nativeImportData = isGeneric ? buildGenericNativeImportData(row) : {};
+        Object.assign(createData, nativeImportData);
         const customFields = {};
         for (const definition of customDefinitions) {
           const mappedKey = `cf_${definition.fieldKey}`;
@@ -714,6 +976,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         if (rawStatus) updateData.status = status;
         if (source) updateData.source = source;
         if (lifecycleStageKey) updateData.lifecycleStageKey = lifecycleStageKey;
+        Object.assign(updateData, nativeImportData);
 
         let existing = null;
         if (email) {
@@ -721,6 +984,21 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
             where: { email, tenantId: req.user.tenantId },
             select: { id: true, deletedAt: true },
           });
+        }
+        if (isGeneric && nativeImportData.externalId) {
+          const externalMatch = await prisma.contact.findFirst({
+            where: { externalId: nativeImportData.externalId, tenantId: req.user.tenantId },
+            select: { id: true, email: true, deletedAt: true },
+          });
+          if (externalMatch && existing && externalMatch.id !== existing.id) {
+            recordImportError(
+              "id",
+              `duplicate external ID "${nativeImportData.externalId}" is already assigned to another contact${externalMatch.email ? ` (${externalMatch.email})` : ""}`,
+              nativeImportData.externalId,
+            );
+            continue;
+          }
+          if (externalMatch) existing = externalMatch;
         }
         // A supplied email is the authoritative identity for Generic CRM.
         // Do not let a stale/custom external ID or phone value redirect a
@@ -753,11 +1031,38 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           await hardDeleteContact(prisma, existing.id);
           existing = null;
         }
-        const wasExisting = Boolean(existing);
+        let wasExisting = Boolean(existing);
         if (existing) {
           await prisma.contact.update({ where: { id: existing.id }, data: updateData });
         } else {
-          existing = await prisma.contact.create({ data: { ...createData, tenantId: req.user.tenantId }, select: { id: true } });
+          try {
+            existing = await prisma.contact.create({ data: { ...createData, tenantId: req.user.tenantId }, select: { id: true } });
+          } catch (createError) {
+            // A concurrent import or a stale lookup can still race the
+            // tenant/externalId unique constraint. Resolve that race as an
+            // update so valid spreadsheet rows are not lost.
+            if (isGeneric && nativeImportData.externalId && createError?.code === "P2002") {
+              existing = await prisma.contact.findFirst({
+                where: { externalId: nativeImportData.externalId, tenantId: req.user.tenantId },
+                select: { id: true, deletedAt: true },
+              });
+              if (existing?.deletedAt) {
+                await hardDeleteContact(prisma, existing.id);
+                existing = null;
+              }
+              if (existing) {
+                await prisma.contact.update({ where: { id: existing.id }, data: updateData });
+                wasExisting = true;
+              } else {
+                throw createError;
+              }
+            } else {
+              throw createError;
+            }
+          }
+        }
+        if (isGeneric) {
+          await writeImportedActivities(existing.id, req.user.tenantId, req.user.userId, row);
         }
         await writeImportedCustomFields(
           existing.id,
@@ -784,6 +1089,11 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           }
         }
         importedContacts.push({
+          // Keep every original imported column in history so the successful
+          // report can reproduce the complete spreadsheet, including custom
+          // and unmapped columns. Canonical contact values below override any
+          // raw aliases with the values actually persisted.
+          ...sourceRow,
           action: wasExisting ? "updated" : "created",
           reason: wasExisting ? "Existing contact matched and updated" : "New contact created",
           id: existing.id,
@@ -814,18 +1124,24 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           action: "error",
           data: error.data || rows[Math.max(0, Number(error.rowNumber || 1) - 2)] || {},
         }));
-        await prisma.genericImportHistory.create({
-          data: {
+        const historyData = {
             tenantId: req.user.tenantId,
             fileName: req.file?.originalname || "Uploaded contacts file",
             inserted: imported,
             updated,
             skipped,
             errors: errors.length,
+            ...(hasGenericImportHistoryField("columns") ? { columns: Object.keys(rows[0] || {}) } : {}),
             contacts: importedContacts,
             errorRows,
-          },
-        });
+        };
+        try {
+          await prisma.genericImportHistory.create({ data: historyData });
+        } catch (historyError) {
+          if (!isMissingGenericImportColumnsError(historyError)) throw historyError;
+          const { columns: _columns, ...dataWithoutColumns } = historyData;
+          await prisma.genericImportHistory.create({ data: dataWithoutColumns });
+        }
       } catch (historyError) {
         console.error("[csv] failed to persist import history:", historyError.message);
       }

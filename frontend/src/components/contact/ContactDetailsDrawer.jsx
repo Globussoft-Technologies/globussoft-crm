@@ -25,6 +25,18 @@ import './ContactDetailsDrawer.css';
 
 const GROUPS = [{ key: 'basic', label: 'Basic information', openByDefault: true }];
 
+const expandScientificNotation = (value) => {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return raw;
+  const [, sign, integerPart, fractionPart = '', exponentText] = match;
+  const digits = integerPart + fractionPart;
+  const decimalIndex = integerPart.length + Number(exponentText);
+  if (decimalIndex <= 0) return `${sign}0.${'0'.repeat(-decimalIndex)}${digits}`;
+  if (decimalIndex >= digits.length) return `${sign}${digits}${'0'.repeat(decimalIndex - digits.length)}`;
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+};
+
 const GENERIC_DETAIL_TABS = [
   { key: 'all', label: 'All details' },
   { key: 'basic', label: 'Basic information' },
@@ -252,6 +264,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     : contact?.overallPickupStatus || contact?.currentStatus || contact?.workflowStatus;
   const genericBasicFields = [
     { label: 'Name', key: 'name', value: contact?.name },
+    { label: 'External ID', key: 'externalId', value: contact?.externalId, readOnly: true },
     { label: 'Email', key: 'email', value: contact?.email },
     { label: 'First Name', key: 'firstName', value: contact?.firstName || nameParts[0] },
     { label: 'Last Name', key: 'lastName', value: contact?.lastName || nameParts.slice(1).join(' ') },
@@ -259,16 +272,16 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Company', key: 'company', value: contact?.company },
     { label: 'Lead Score', key: 'aiScore', value: contact?.aiScore, readOnly: true },
     { label: 'Source', key: 'source', value: contact?.source },
-    { label: 'Web Form', key: 'webForm', value: latestWebFormSubmission?.webForm?.name || contact?.webFormName, readOnly: true },
+    { label: 'Web Form', key: 'webForm', value: latestWebFormSubmission?.webForm?.name || contact?.webFormName || customFields.webForm, readOnly: true },
     { label: 'Medium', key: 'medium', value: contact?.medium },
-    { label: 'Pickup Location', key: 'pickupLocation', value: genericWorkflowDetails?.pickupAddress || contact?.pickupAddress || contact?.pickupLocation, readOnly: true },
-    { label: 'Plot Assign', key: 'plotAssign', value: assignedPlots.map((plot) => plot?.plotNumber || plot?.name).filter(Boolean).join(', ') || contact?.plotAssign, readOnly: true },
-    { label: 'Overall Status', key: 'overallPickupStatus', value: overallPickupStatus, readOnly: true },
-    { label: 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email, owner: true },
+    { label: 'Pickup Location', key: 'pickupLocation', value: genericWorkflowDetails?.pickupAddress || contact?.pickupAddress || contact?.pickupLocation || customFields.pickupLocation, readOnly: true },
+    { label: 'Plot Assign', key: 'plotAssign', value: assignedPlots.map((plot) => plot?.plotNumber || plot?.name).filter(Boolean).join(', ') || contact?.plotAssign || customFields.plotAssign, readOnly: true },
+    { label: 'Overall Status', key: 'overallPickupStatus', value: overallPickupStatus || customFields.overallPickupStatus, readOnly: true },
+    { label: 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email || customFields.assignedTo, owner: true },
     { label: 'Created', key: 'createdAt', value: contact?.createdAt, readOnly: true },
-    { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId, readOnly: true },
-    { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus, readOnly: true },
-    { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore, readOnly: true },
+    { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId || customFields.campaign, readOnly: true },
+    { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus || customFields.callStatus, readOnly: true },
+    { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore ?? customFields.callifiedScore, readOnly: true },
     ...(lifecycleStageLabel
       ? [{ label: 'Lifecycle Stage', key: 'lifecycleStageKey', value: lifecycleStageLabel, readOnly: true }]
       : []),
@@ -355,7 +368,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const visibleAdFields = adFields.filter(fieldIsVisible);
   const displayValue = (value) => value === null || value === undefined || value === ''
     ? <span className="cd-empty-value">Click to add</span>
-    : <span className="cd-filled-value">{String(value)}</span>;
+    : <span className="cd-filled-value">{expandScientificNotation(value)}</span>;
 
   const toggleGroup = (key) => setOpenGroups((current) => ({ ...current, [key]: !current[key] }));
   const runAction = (key) => onAction?.(key);

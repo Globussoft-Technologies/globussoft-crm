@@ -32,6 +32,10 @@ describe("contactHardDelete", () => {
 
     expect(deleted).toBe(2);
     expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      maxWait: 15_000,
+      timeout: 120_000,
+    });
     expect(tx.tmcParentTrip.deleteMany).toHaveBeenCalledWith({
       where: { OR: [{ parentContactId: 42 }, { teacherContactId: 42 }] },
     });

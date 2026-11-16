@@ -4,6 +4,8 @@ import { SlidersHorizontal, Search, GripVertical, Trash2 } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
+const EMPTY_HIDDEN_COLUMN_KEYS = Object.freeze([]);
+
 // ── ColumnPicker — "Customize table" column-visibility popover ─────
 //
 // Generic-vertical-only feature (Settings > Lead Fields' sibling — this is
@@ -24,6 +26,7 @@ export default function ColumnPicker({
   tableKey,
   onColumnsChange,
   onAvailableColumnsChange,
+  hiddenColumnKeys = EMPTY_HIDDEN_COLUMN_KEYS,
   deletableColumns = [],
   onFieldDeleted,
 }) {
@@ -91,10 +94,16 @@ export default function ColumnPicker({
         loadedOnce.current = true;
         return;
       }
-      const availableColumns = Array.isArray(data.availableColumns) ? data.availableColumns : [];
-      setAvailable(availableColumns);
+      const availableColumns = (Array.isArray(data.availableColumns) ? data.availableColumns : [])
+        .map((column) => tableKey === "leads" && column.key === "lifecycleStage"
+          ? { ...column, label: "Status" }
+          : column);
+      const pickerColumns = availableColumns.filter(
+        (column) => !hiddenColumnKeys.includes(column.key),
+      );
+      setAvailable(pickerColumns);
       onAvailableColumnsChange?.(availableColumns);
-      const normalizedVisible = normalizeColumnOrder(data.visible, availableColumns);
+      const normalizedVisible = normalizeColumnOrder(data.visible, pickerColumns);
       setDraftVisible(normalizedVisible);
       onColumnsChange?.(normalizedVisible);
       loadedOnce.current = true;
@@ -112,7 +121,7 @@ export default function ColumnPicker({
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tableKey]);
+  }, [hiddenColumnKeys, tableKey]);
 
   useEffect(() => {
     if (!open) return;

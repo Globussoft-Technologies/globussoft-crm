@@ -167,6 +167,19 @@ describe('ContactDetail — current profile contract', () => {
     }
   });
 
+  it('renders the live computed score in the profile header when it differs from the stored score', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/ai_scoring/contact/42') return Promise.resolve({ liveComputedScore: 47 });
+      return baseFetch(url, opts);
+    });
+
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.getByText('47', { exact: true })).toBeInTheDocument();
+    expect(profile.queryByText('85', { exact: true })).not.toBeInTheDocument();
+  });
+
   it('uses the originating diagnostics URL when closing the profile', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ state: { backTo: '/travel/diagnostics?page=2' } });

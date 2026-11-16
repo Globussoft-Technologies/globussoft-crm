@@ -12098,6 +12098,7 @@ model GenericImportHistory {
   updated     Int      @default(0)
   skipped     Int      @default(0)
   errors      Int      @default(0)
+  columns     Json?
   contacts    Json?
   errorRows   Json?
   completedAt DateTime @default(now())

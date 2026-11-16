@@ -3888,9 +3888,45 @@ router.get(
           tenantId: Number(req.portal.tenantId),
           parentContactId: Number(req.tmcContact.id),
         },
-        select: { id: true, fileUrl: true, storage: true, storageKey: true },
+        select: {
+          id: true,
+          captureMode: true,
+          fileUrl: true,
+          storage: true,
+          storageKey: true,
+          mimeType: true,
+          filename: true,
+          fileBlob: true,
+          answersJson: true,
+          termsSnapshot: true,
+          signatureName: true,
+          agreedAt: true,
+          uploadedAt: true,
+          tripId: true,
+        },
       });
       if (!document) return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+
+      // Consent forms are rendered from their signed answers and historically
+      // had no object-storage key. Materialise the PDF once so the client can
+      // use the same short-lived cloud URL flow as uploaded documents.
+      if (normalizeCaptureMode(document.captureMode) === "digital_consent" && !document.fileUrl && !document.storageKey) {
+        const pdfBuffer = await renderTmcDigitalConsentPdf(document);
+        const stored = await visaDocStore.storeDoc(pdfBuffer, PDF_MIME_TYPE);
+        await prisma.tmcParentDocument.update({
+          where: { id: document.id },
+          data: {
+            fileUrl: stored.url,
+            storage: stored.storage,
+            storageKey: stored.key,
+            mimeType: PDF_MIME_TYPE,
+            filename: `consent-form-${document.id}.pdf`,
+          },
+        });
+        document.fileUrl = stored.url;
+        document.storage = stored.storage;
+        document.storageKey = stored.key;
+      }
       const url = await visaDocStore.resolveViewUrl({
         attachmentUrl: document.fileUrl,
         attachmentStorage: document.storage,

@@ -119,6 +119,12 @@ describe('GET /api/lead-custom-fields', () => {
     const res = await request(makeApp()).get('/api/lead-custom-fields');
 
     expect(res.status).toBe(200);
+    expect(res.body.map((field) => field.label)).toEqual([
+      'Trip Name',
+      'Traveler Type',
+      'Destination',
+      'Package Code',
+    ]);
     expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
       where: { tenantId: TENANT_ID },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],

@@ -59,6 +59,7 @@ timeline.xctimeline
 node_modules
 tally-connector/config.json
 tally-connector/logs/
+backend/runtime-assets/
 .env
 .env.*
 !.env.example

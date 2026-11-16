@@ -3316,6 +3316,9 @@ router.get("/:id/activities", async (req, res) => {
     const [activityRows, activityTotal, callLogs, callLogTotal, taskRows, taskTotal] = await Promise.all([
       prisma.activity.findMany({
         where,
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+        },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: isGeneric ? mergeWindow : limit,
         skip: isGeneric ? 0 : offset,
@@ -3691,19 +3694,32 @@ const updateContactById = async (req, res) => {
     const statusWillChange =
       Object.prototype.hasOwnProperty.call(updateData, "status") &&
       existing.status !== updateData.status;
+    const terminalStatus = ["churned", "junk"].includes(
+      String(updateData.status || "").toLowerCase(),
+    );
+    if (statusWillChange && terminalStatus && !lifecycleTransitionReason) {
+      return res.status(400).json({
+        error: `A reason is required when changing a lead to ${updateData.status}`,
+        code: "TERMINAL_STATUS_REASON_REQUIRED",
+      });
+    }
+    let lifecycleActivity = null;
     const contact = statusWillChange
       ? await prisma.$transaction(async (tx) => {
           const updated = await tx.contact.update({
             where: { id: existing.id },
             data: updateData,
           });
-          await tx.activity.create({
+          lifecycleActivity = await tx.activity.create({
             data: {
               type: "Lead Status updated",
-              description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}`,
+              description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}${lifecycleTransitionReason ? `. Reason: ${lifecycleTransitionReason}` : ""}`,
               contactId: updated.id,
               userId: req.user.userId,
               tenantId: req.user.tenantId,
+            },
+            include: {
+              user: { select: { id: true, name: true, email: true } },
             },
           });
           return updated;
@@ -3910,7 +3926,10 @@ const updateContactById = async (req, res) => {
       );
     }
 
-    res.json(serializeContactTags(contact, isGenericCrmRequest(req)));
+    res.json({
+      ...serializeContactTags(contact, isGenericCrmRequest(req)),
+      ...(lifecycleActivity ? { lifecycleActivity } : {}),
+    });
   } catch (err) {
     // #168 #165: PUT used to leak 500s on bad email / out-of-range values
     // because the Prisma validation error fell through unhandled. Map the

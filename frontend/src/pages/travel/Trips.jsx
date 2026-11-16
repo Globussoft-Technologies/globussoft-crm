@@ -978,7 +978,11 @@ export default function Trips() {
       </div>
       {creating && (
         <div
-          onClick={(e) => {
+          // Dismiss only when the pointer press starts on the backdrop. If a
+          // user drags to select text and releases outside the dialog, the
+          // browser may dispatch the final click on this backdrop; closing
+          // from click would discard the form unexpectedly.
+          onMouseDown={(e) => {
             if (e.target === e.currentTarget) {
               setCreating(false);
               setVariantSource(null);
@@ -999,6 +1003,13 @@ export default function Trips() {
         >
           <form
             onSubmit={submitCreate}
+            // Keep page-level travel shortcuts from treating clipboard and
+            // other editing keystrokes as actions on the list behind the
+            // modal. The modal owns all keyboard interaction while open.
+            onKeyDown={(event) => event.stopPropagation()}
+            onCopy={(event) => event.stopPropagation()}
+            onPaste={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
             className="card travel-trip-create-modal"
             role="dialog"
             aria-modal="true"

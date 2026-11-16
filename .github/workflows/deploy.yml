@@ -926,7 +926,9 @@ jobs:
             npm ci --include=dev --no-audit --no-fund --loglevel=error 2>&1 | tail -5
             npm run build:windows 2>&1 | tail -5
             test -s dist/TallyConnector.exe
-            export TALLY_CONNECTOR_EXE_PATH="$HOME/globussoft-crm/tally-connector/dist/TallyConnector.exe"
+            mkdir -p "$HOME/globussoft-crm/backend/runtime-assets"
+            install -m 0644 dist/TallyConnector.exe "$HOME/globussoft-crm/backend/runtime-assets/TallyConnector.exe"
+            export TALLY_CONNECTOR_EXE_PATH="$HOME/globussoft-crm/backend/runtime-assets/TallyConnector.exe"
 
             # The brochure engine is vendored under agentic-orchcrm/ and the
             # backend spawns tsx from its node_modules at runtime. Install its
@@ -1003,8 +1005,8 @@ jobs:
 
             echo "=== health poll ==="
             for i in 1 2 3 4 5 6 7 8 9 10; do
-              body=$(curl -s --max-time 5 http://127.0.0.1:5099/api/health 2>&1 || true)
-              if echo "$body" | grep -q '"healthy"'; then
+              body=$(curl -s --max-time 5 -H 'Authorization: Deployment-Readiness' http://127.0.0.1:5099/api/health 2>&1 || true)
+              if echo "$body" | grep -q '"healthy"' && echo "$body" | grep -q '"tallyConnectorBinaryAvailable":true'; then
                 echo "  [try $i] healthy"
                 exit 0
               fi

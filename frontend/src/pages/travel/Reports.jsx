@@ -11,6 +11,7 @@
 // grid. Sub-brand scoping happens server-side via the caller's
 // subBrandAccess — a TMC-ops user gets 403 on the RFU tab and vice versa.
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useNavigateSafe } from "../../utils/routerSafe";
 import {
   AlertCircle, BarChart3, ChevronDown, ChevronRight, FileCheck2, Globe, MapPin, PlaneTakeoff, RefreshCw, School, Star, TrendingUp, Download, Users, Wallet,
@@ -220,6 +221,7 @@ function useReport(path, params = null) {
     const q = new URLSearchParams();
     if (params.from) q.set("from", params.from);
     if (params.to) q.set("to", params.to);
+    if (params.groupBy) q.set("groupBy", params.groupBy);
     return `${path}?${q.toString()}`;
   }, [path, params]);
 
@@ -549,7 +551,14 @@ function TmcTab({ dateParams }) {
                 <tbody>
                   {data.revenue.topDestinations.map((row) => (
                     <tr key={row.destination} style={trStyle}>
-                      <td style={td}>{row.destination}</td>
+                      <td style={td}>
+                        {row.tripId ? (
+                          <Link to={`/travel/trips/${row.tripId}`} style={linkLike} title={`Open ${row.tripCode || "trip"}`}>
+                            {row.destination}
+                          </Link>
+                        ) : row.destination}
+                        {row.tripCount > 1 && <div style={mutedSmall}>{row.tripCount} trips · opens highest-revenue trip</div>}
+                      </td>
                       <td style={tdRight}>₹{Number(row.revenue).toLocaleString("en-IN")}</td>
                     </tr>
                   ))}
@@ -725,6 +734,7 @@ function RfuTab({ dateParams }) {
 
 function CrossBrandTab({ dateParams }) {
   const { data, loading, error, reload } = useReport("/api/travel/reports/cross-brand", dateParams);
+  const trends = useReport("/api/travel/reports/trends", { ...dateParams, groupBy: "monthly" });
   const [expandedBrand, setExpandedBrand] = useState(null);
 
   const brands = useMemo(() => Object.entries(data?.subBrands || {})
@@ -870,11 +880,55 @@ function CrossBrandTab({ dateParams }) {
                 </table>
                 </TopScrollSync>
               </Card>
+              <SubBrandTrendTable data={trends.data} loading={trends.loading} />
             </>
           )}
         </div>
       )}
     </StateShell>
+  );
+}
+
+function SubBrandTrendTable({ data, loading }) {
+  if (loading) return <Card title="Sub-brand analytics by period" wide><div style={loadingBox}>Loading period analytics&hellip;</div></Card>;
+  const rows = data?.rows || [];
+  return (
+    <Card title="Sub-brand analytics by period" wide actionLabel={`${data?.groupBy || "monthly"} grouping`}>
+      {rows.length === 0 ? (
+        <div style={empty}>No sub-brand activity in the selected date range.</div>
+      ) : (
+        <TopScrollSync>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={th}>Period</th>
+                <th style={th}>Sub-brand</th>
+                <th style={thRight}>Quotes</th>
+                <th style={thRight}>Accepted</th>
+                <th style={thRight}>Quote revenue</th>
+                <th style={thRight}>Itineraries</th>
+                <th style={thRight}>Itinerary revenue</th>
+                <th style={thRight}>Diagnostics</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.period}-${row.subBrand}`} style={trStyle}>
+                  <td style={td}>{row.period}</td>
+                  <td style={td}><span style={brandBadge}>{row.subBrand}</span></td>
+                  <td style={tdRight}>{row.quotes}</td>
+                  <td style={tdRight}>{row.acceptedQuotes}</td>
+                  <td style={tdRight}>{money(row.quoteRevenue)}</td>
+                  <td style={tdRight}>{row.itineraries}</td>
+                  <td style={tdRight}>{money(row.itineraryRevenue)}</td>
+                  <td style={tdRight}>{row.diagnostics}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TopScrollSync>
+      )}
+    </Card>
   );
 }
 
@@ -1133,6 +1187,24 @@ function Card({ title, children, wide, interactive, onClick, actionLabel }) {
 
 function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source detail" }) {
   const total = rows.reduce((sum, row) => sum + Number(row.revenue || 0), 0);
+  const downloadTripReport = async (row) => {
+    try {
+      const response = await fetch(`/api/travel/trips/${row.id}/report.csv`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!response.ok) throw new Error("Trip report download failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `trip-${row.id}-report.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (_error) {
+      // Keep the table usable if a single export fails; the trip remains
+      // available through its navigation link.
+    }
+  };
   return (
     <Card title={title} wide>
       <div style={detailHelpText}>
@@ -1141,10 +1213,10 @@ function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source d
       <TopScrollSync>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
           <thead>
-            <tr><th style={th}>Trip</th><th style={th}>School</th><th style={th}>Status</th><th style={thRight}>Participants</th><th style={thRight}>Price/student</th><th style={thRight}>Revenue</th><th style={th}>Dates</th></tr>
+            <tr><th style={th}>Trip</th><th style={th}>School</th><th style={th}>Status</th><th style={thRight}>Participants</th><th style={thRight}>Price/student</th><th style={thRight}>Revenue</th><th style={th}>Dates</th><th style={th}>Report</th></tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan="7" style={emptyCell}>No active TMC trip revenue rows yet.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan="8" style={emptyCell}>No active TMC trip revenue rows yet.</td></tr>}
             {rows.slice(0, 50).map((row) => (
               <tr key={row.id} style={{ ...trStyle, cursor: "pointer" }} onClick={() => onOpenTrip(row.id)} title="Open trip detail">
                 <td style={td}><span style={linkLike}>{row.tripCode || `Trip #${row.id}`}</span><div style={mutedSmall}>{row.destination || "-"}</div></td>
@@ -1154,6 +1226,20 @@ function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source d
                 <td style={tdRight}>{money(row.pricePerStudent || 0)}</td>
                 <td style={tdRight}>{money(row.revenue || 0)}</td>
                 <td style={td}>{formatReportDate(row.departDate)} - {formatReportDate(row.returnDate)}</td>
+                <td style={td}>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      downloadTripReport(row);
+                    }}
+                    style={{ ...linkLike, display: "inline-flex", alignItems: "center", gap: 5, border: 0, background: "none", padding: 0, cursor: "pointer" }}
+                    aria-label={`Download report for ${row.tripCode || `trip ${row.id}`}`}
+                    title="Download trip report"
+                  >
+                    <Download size={14} aria-hidden /> CSV
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

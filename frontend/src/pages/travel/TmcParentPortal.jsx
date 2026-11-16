@@ -361,6 +361,7 @@ export default function TmcParentPortal() {
   const [form, setForm] = useState({ email: "", password: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   useEffect(() => {
     try {
@@ -373,6 +374,15 @@ export default function TmcParentPortal() {
   useEffect(() => {
     persistTmcPortalView(activeView, PARENT_PORTAL_VIEWS);
   }, [activeView]);
+
+  useEffect(() => {
+    if (!showLogoutConfirm) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setShowLogoutConfirm(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showLogoutConfirm]);
 
   const logout = useCallback((message = "") => {
     localStorage.removeItem(TOKEN_KEY);
@@ -575,7 +585,7 @@ export default function TmcParentPortal() {
               <span style={styles.headerAvatar}>{(contact?.name || "P").slice(0, 1).toUpperCase()}</span>
               <span style={styles.profilePillText}><strong>{contact?.name || "Parent"}</strong><ChevronDown size={14} aria-hidden /></span>
             </button>
-            <button type="button" onClick={() => logout()} style={styles.iconButton} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
+            <button type="button" onClick={() => setShowLogoutConfirm(true)} style={styles.iconButton} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
           </div>
         </header>
 
@@ -589,6 +599,21 @@ export default function TmcParentPortal() {
           {activeView === "profile" && <ParentProfileView contact={contact} />}
         </main>
       </div>
+      {showLogoutConfirm && (
+        <div
+          style={styles.logoutDialogBackdrop}
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setShowLogoutConfirm(false); }}
+        >
+          <section role="alertdialog" aria-modal="true" aria-labelledby="parent-logout-title" aria-describedby="parent-logout-description" style={styles.logoutDialog}>
+            <h2 id="parent-logout-title" style={styles.logoutDialogTitle}>Sign out?</h2>
+            <p id="parent-logout-description" style={styles.logoutDialogDescription}>Are you sure you want to sign out of your account?</p>
+            <div style={styles.logoutDialogActions}>
+              <button type="button" onClick={() => setShowLogoutConfirm(false)} style={styles.logoutCancelButton} autoFocus>Cancel</button>
+              <button type="button" onClick={() => { setShowLogoutConfirm(false); logout(); }} style={styles.logoutConfirmButton}>Sign out</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -1519,6 +1544,13 @@ const styles = {
   primary: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 14px", border: 0, borderRadius: 8, background: "var(--tmc-parent-primary)", color: "var(--tmc-parent-primary-contrast)", cursor: "pointer", fontSize: 13, fontWeight: 700 },
   secondary: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-primary)", cursor: "pointer", fontSize: 12, fontWeight: 700 },
   iconButton: { position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 35, height: 35, border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-heading)", cursor: "pointer" },
+  logoutDialogBackdrop: { position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 20, background: "rgba(0, 0, 0, 0.48)", backdropFilter: "blur(3px)" },
+  logoutDialog: { width: "min(100%, 440px)", boxSizing: "border-box", padding: "26px 24px 22px", borderRadius: 12, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", boxShadow: "0 20px 60px rgba(0, 0, 0, 0.24)" },
+  logoutDialogTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 18, lineHeight: 1.35 },
+  logoutDialogDescription: { margin: "10px 0 22px", color: "var(--tmc-parent-subtle)", fontSize: 14, lineHeight: 1.5 },
+  logoutDialogActions: { display: "flex", justifyContent: "flex-end", gap: 9 },
+  logoutCancelButton: { minHeight: 38, padding: "0 16px", border: "1px solid var(--tmc-parent-border-strong)", borderRadius: 8, background: "var(--tmc-parent-surface)", color: "var(--tmc-parent-text)", cursor: "pointer", font: "inherit", fontSize: 13 },
+  logoutConfirmButton: { minHeight: 38, padding: "0 16px", border: "1px solid #ef5149", borderRadius: 8, background: "#ef5149", color: "#fff", cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 700 },
   label: { display: "grid", gap: 4, color: "var(--tmc-parent-subtle)", fontSize: 13, fontWeight: 700 },
   labelText: { display: "inline-flex", alignItems: "center", gap: 3, lineHeight: 1.2 },
   selectOption: { backgroundColor: "var(--tmc-parent-input-bg)", color: "var(--tmc-parent-text)" },
@@ -1740,18 +1772,27 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
         setConsentPreview({ consent, document: documentRecord });
         return;
       }
-      if (!download) {
-        try {
-          const viewUrl = await fetchParentDocumentViewUrl(token, documentRecord.id);
-          if (viewUrl) {
+      try {
+        const viewUrl = await fetchParentDocumentViewUrl(token, documentRecord.id);
+        if (viewUrl) {
+          if (download) {
+            const anchor = document.createElement("a");
+            anchor.href = viewUrl;
+            anchor.download = isDigitalConsentRequirement(documentRecord)
+              ? `consent-form-${documentRecord.id}.pdf`
+              : (documentRecord.filename || "travel-document");
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          } else {
             window.open(viewUrl, "_blank", "noopener,noreferrer");
-            return;
           }
-        } catch (error) {
-          // Legacy database-backed documents have no object-storage URL. Keep
-          // the authenticated stream fallback for those rows only.
-          if (error.status !== 404) throw error;
+          return;
         }
+      } catch (error) {
+        // Legacy database-backed documents have no object-storage URL. Keep
+        // the authenticated stream fallback for those rows only.
+        if (error.status !== 404) throw error;
       }
       const blob = await fetchParentDocumentFile(token, documentRecord.id, { download });
       const url = URL.createObjectURL(blob);

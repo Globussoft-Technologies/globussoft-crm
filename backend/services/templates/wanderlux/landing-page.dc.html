@@ -835,7 +835,21 @@ function validateField(f, val){
   const v = (val == null ? '' : String(val)).trim();
   if(f.required && !v) return f.label + ' is required';
   if(v && f.type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return 'Please enter a valid email address';
-  if(v && f.type === 'tel'   && !/^[+\d][\d\s\-()]{6,}$/.test(v))     return 'Please enter a valid phone number';
+  if(v && f.type === 'tel'){
+    if(!/^[+\d][\d\s\-()]*$/.test(v)) return 'Please enter a valid phone number';
+    if(f.exactPhoneDigits){
+      const digits = v.replace(/\D/g, '');
+      const countryCode = String(f.phoneCountryCode || '').replace(/\D/g, '');
+      const nationalDigits = countryCode && digits.length > f.exactPhoneDigits && digits.indexOf(countryCode) === 0
+        ? digits.slice(countryCode.length)
+        : digits;
+      if(nationalDigits.length !== f.exactPhoneDigits){
+        return f.label + ' must contain exactly ' + f.exactPhoneDigits + ' digits after the country code';
+      }
+    } else if(!/^[+\d][\d\s\-()]{6,}$/.test(v)) {
+      return 'Please enter a valid phone number';
+    }
+  }
   return '';
 }
 
@@ -969,7 +983,7 @@ var DEFAULT_CONFIG = {
       { title:'Step 2: Parent / Guardian', fields:[
         {name:'parent_name', label:'Parent / Guardian Name', type:'text', required:true, placeholder:'Enter full name'},
         {name:'parent_email', label:'Email', type:'email', required:true, placeholder:'email@example.com'},
-        {name:'parent_phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number'}
+        {name:'parent_phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number', exactPhoneDigits:10, phoneCountryCode:'91'}
       ]},
       { title:'Step 3: Confirm', fields:[
         {name:'participants', label:'Number of Participants', type:'number', required:false, placeholder:'1'}
@@ -1645,6 +1659,7 @@ class Component extends DCLogic {
     out.regProgress = rsteps.map((s,i) => ({ color: i <= stepIdx ? 'var(--c-brand)' : 'var(--c-border)' }));
     out.regFields = (curStep.fields || []).map(f => ({
       name:f.name, label:f.label, type:f.type || 'text', required: !!f.required, placeholder: f.placeholder || '',
+      exactPhoneDigits: f.exactPhoneDigits || 0, phoneCountryCode: f.phoneCountryCode || '',
       reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
       options: f.options || [], value: this.state.regValues[f.name] || '', onInput: this.setField('regValues', f.name)
     }));

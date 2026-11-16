@@ -33,6 +33,17 @@ const wanderlux = require('../../../services/templates/wanderlux');
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', '..', 'services', 'templates', 'wanderlux', 'landing-page.dc.html');
 const TEMPLATE_HTML = fs.readFileSync(TEMPLATE_PATH, 'utf8');
 
+test('parent registration phone validation requires exactly 10 national digits after +91', () => {
+  const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
+  const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };
+  vm.runInNewContext(`${script}\nglobalThis.validateRegistrationField = validateField;`, context);
+  const field = { label: 'Phone', type: 'tel', required: true, exactPhoneDigits: 10, phoneCountryCode: '91' };
+
+  expect(context.validateRegistrationField(field, '+91 98765 43210')).toBe('');
+  expect(context.validateRegistrationField(field, '+91 98765 4321')).toMatch(/exactly 10 digits/i);
+  expect(context.validateRegistrationField(field, '+91 98765 43210 9')).toMatch(/exactly 10 digits/i);
+});
+
 test('a successful payment changes the final action to Register', () => {
   const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
   const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };

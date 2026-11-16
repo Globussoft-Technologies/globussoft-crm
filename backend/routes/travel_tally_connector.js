@@ -8,18 +8,11 @@ const { requireTravelTenant } = require("../middleware/travelGuards");
 const { requirePermission } = require("../middleware/requirePermission");
 const { writeAudit } = require("../lib/audit");
 const tallyConnectorBridge = require("../lib/tallyConnectorBridge");
+const { resolveConnectorBinaryPath } = require("../lib/tallyConnectorBinary");
 const { CONNECTOR_PATH, CONNECTOR_PROVIDER } = tallyConnectorBridge;
 
 const guards = [verifyToken, requireTravelTenant];
 const activePushes = new Set();
-const packagedConnectorBinaryPath = path.resolve(
-  __dirname,
-  "..",
-  "..",
-  "tally-connector",
-  "dist",
-  "TallyConnector.exe",
-);
 const connectorDeploymentDirectory = path.join(__dirname, "..", "..", "tally-connector");
 const connectorDeploymentFiles = [
   "run-hidden.vbs",
@@ -27,16 +20,6 @@ const connectorDeploymentFiles = [
   "uninstall-startup.ps1",
   "README.md",
 ];
-
-function resolveConnectorBinaryPath() {
-  const configuredPath = String(process.env.TALLY_CONNECTOR_EXE_PATH || "").trim();
-  const candidates = configuredPath
-    ? [path.resolve(configuredPath), packagedConnectorBinaryPath]
-    : [packagedConnectorBinaryPath];
-  return candidates.find((candidate, index) => (
-    candidates.indexOf(candidate) === index && fs.existsSync(candidate)
-  )) || null;
-}
 
 function safeCredentials(raw) {
   if (!raw) return null;

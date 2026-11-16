@@ -2118,7 +2118,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
           container.querySelectorAll('.leads-table-scroll-pane tbody tr'),
         );
 
-        expect(container.querySelector('.leads-table-frozen-pane')).toBeNull();
+        expect(container.querySelector('.leads-table-frozen-pane')).toBeTruthy();
         expect(scrollHeader).toBeTruthy();
         expect(scrollHeader).toHaveClass('leads-table-header-row');
         expect(scrollRows.length).toBeGreaterThan(0);
@@ -3174,7 +3174,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'email', label: 'Email' },
-            { key: 'company', label: 'Category' },
+            { key: 'company', label: 'Trip Name' },
             { key: 'source', label: 'Source' },
             { key: 'cf_school', label: 'School', filterField: 'custom_91', filterKind: 'text' },
             { key: 'actions', label: 'Actions', lockedVisible: true },
@@ -3208,7 +3208,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
 
-    expect(await within(dialog).findByRole('button', { name: 'Category' })).toBeInTheDocument();
+    expect(await within(dialog).findByRole('button', { name: 'Trip Name' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'School' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Status' })).toBeNull();
     expect(within(dialog).queryByRole('button', { name: 'Territory' })).toBeNull();
@@ -4001,15 +4001,13 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     notifyError.mockReset();
   });
 
-  it('opens the travel lead preview when clicking a name in the Name column', async () => {
+  it('navigates to the travel lead profile when clicking a name in the Name column', async () => {
     renderLeads(TRAVEL_AUTH);
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
-    expect(lilyLink).toHaveAttribute('href', '#lead-preview');
+    expect(lilyLink).toHaveAttribute('href', '/travel/leads/50');
 
-    navigateMock.mockClear();
     fireEvent.click(lilyLink);
-    expect(await screen.findByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
-    expect(navigateMock).not.toHaveBeenCalledWith('/travel/leads/50');
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
   });
 
   it('keeps travel lead name editing behind the Name column edit icon', async () => {

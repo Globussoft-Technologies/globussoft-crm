@@ -177,7 +177,10 @@ function settingsTree() {
 }
 
 function renderSettings() {
-  return render(settingsTree());
+  const view = render(settingsTree());
+  const recovery = screen.queryByRole('button', { name: 'Role recovery' });
+  if (recovery) fireEvent.click(recovery);
+  return view;
 }
 
 beforeEach(() => {

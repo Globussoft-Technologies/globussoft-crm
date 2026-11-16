@@ -15,15 +15,18 @@ describe('<GoogleMapsSettingsCard />', () => {
   });
 
   it('loads masked status and saves a new server-side API key', async () => {
+    const onConnectionStatusChange = vi.fn();
     fetchApiMock
       .mockResolvedValueOnce({ enabled: false, configured: false, source: 'none', last4: null })
       .mockResolvedValueOnce({ enabled: true, configured: true, source: 'tenant', last4: '****1234' });
-    render(<GoogleMapsSettingsCard />);
+    render(<GoogleMapsSettingsCard onConnectionStatusChange={onConnectionStatusChange} />);
 
     const keyInput = await screen.findByLabelText('Google Maps API key');
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: false, loading: false }));
     expect(keyInput).toHaveAttribute('type', 'password');
     fireEvent.change(keyInput, { target: { value: 'AIzaNewGoogleMapsKey1234' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Enable Google Maps address suggestions' }));
+    expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: false, loading: false });
     fireEvent.click(screen.getByRole('button', { name: 'Save Google Maps Settings' }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/settings/google-maps', {
@@ -33,6 +36,7 @@ describe('<GoogleMapsSettingsCard />', () => {
     expect(keyInput).toHaveValue('');
     expect(screen.getByText(/Enabled using this organization’s key/i)).toBeInTheDocument();
     expect(notify.success).toHaveBeenCalledWith('Google Maps address suggestions enabled.');
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: true, loading: false }));
   });
 
   it('never puts the saved credential into the input', async () => {
@@ -50,5 +54,12 @@ describe('<GoogleMapsSettingsCard />', () => {
     await screen.findByLabelText('Google Maps API key');
     expect(screen.getByRole('button', { name: 'Save Google Maps Settings' })).toBeDisabled();
     expect(fetchApiMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports unknown connection status on a failed load', async () => {
+    const onConnectionStatusChange = vi.fn();
+    fetchApiMock.mockRejectedValueOnce(new Error('Unavailable'));
+    render(<GoogleMapsSettingsCard onConnectionStatusChange={onConnectionStatusChange} />);
+    await waitFor(() => expect(onConnectionStatusChange).toHaveBeenLastCalledWith({ ready: null, loading: false }));
   });
 });

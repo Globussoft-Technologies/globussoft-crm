@@ -3,7 +3,7 @@ import { Eye, EyeOff, MapPinned } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
-export default function GoogleMapsSettingsCard() {
+export default function GoogleMapsSettingsCard({ onConnectionStatusChange } = {}) {
   const notify = useNotify();
   const [status, setStatus] = useState(null);
   const [apiKey, setApiKey] = useState('');
@@ -11,6 +11,13 @@ export default function GoogleMapsSettingsCard() {
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    onConnectionStatusChange?.({
+      ready: typeof status?.configured === 'boolean' && typeof status?.enabled === 'boolean' ? status.configured && status.enabled : null,
+      loading,
+    });
+  }, [onConnectionStatusChange, status, loading]);
 
   useEffect(() => {
     let cancelled = false;

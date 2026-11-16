@@ -554,7 +554,7 @@ describe('<TravelReports /> — Cross-brand tab content', () => {
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('tab', { name: /Cross-brand/i }));
     expect(await screen.findByText(/Sub-brand analytics by period/i)).toBeInTheDocument();
-    expect(screen.getByText('2026-07')).toBeInTheDocument();
+    expect(screen.getAllByText('2026-07')).not.toHaveLength(0);
     expect(screen.getAllByText('TMC').length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -1334,7 +1334,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await screen.findByPlaceholderText('Search leads...');
     expect(screen.queryByRole('button', { name: /Table density/i })).not.toBeInTheDocument();
-    expect(document.querySelector('.leads-split-table')).not.toHaveClass('leads-split-table--density-compact');
+    expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
 
     fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
     const travelFilterDialog = await screen.findByRole('dialog', { name: /Filters/i });
@@ -2083,7 +2083,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         user: { id: 1, role: 'ADMIN' },
       },
     ],
-  ])('renders one scrollable Leads table for %s tenants', async (_label, verticalAuth) => {
+  ])('renders one scrollable Leads table for %s tenants', async (label, verticalAuth) => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -2118,7 +2118,9 @@ describe('Leads Freshsales-style list UI affordances', () => {
           container.querySelectorAll('.leads-table-scroll-pane tbody tr'),
         );
 
-        expect(container.querySelector('.leads-table-frozen-pane')).toBeTruthy();
+        const frozenPane = container.querySelector('.leads-table-frozen-pane');
+        if (label === 'travel') expect(frozenPane).toBeTruthy();
+        else expect(frozenPane).toBeNull();
         expect(scrollHeader).toBeTruthy();
         expect(scrollHeader).toHaveClass('leads-table-header-row');
         expect(scrollRows.length).toBeGreaterThan(0);

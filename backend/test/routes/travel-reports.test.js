@@ -377,8 +377,8 @@ describe('GET /api/travel/reports/tmc — happy path', () => {
     // topDestinations sorted by revenue DESC. Bali aggregates to $4000;
     // Singapore is $5000 → Singapore first.
     expect(res.body.revenue.topDestinations).toEqual([
-      { destination: 'Singapore', revenue: 5000 },
-      { destination: 'Bali', revenue: 4000 },
+      { destination: 'Singapore', revenue: 5000, tripId: 2, tripCode: null, tripCount: 1 },
+      { destination: 'Bali', revenue: 4000, tripId: 1, tripCode: null, tripCount: 2 },
     ]);
     expect(res.body.revenue.currency).toBe('INR');
   });
@@ -399,7 +399,7 @@ describe('GET /api/travel/reports/tmc — happy path', () => {
     expect(res.status).toBe(200);
     expect(res.body.revenue.total).toBe(500000);
     expect(res.body.revenue.topDestinations).toEqual([
-      { destination: 'Australia', revenue: 500000 },
+      { destination: 'Australia', revenue: 500000, tripId: 101, tripCode: null, tripCount: 1 },
     ]);
   });
 

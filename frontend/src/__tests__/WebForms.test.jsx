@@ -138,7 +138,8 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
     expect(code).toContain('allow="geolocation *"');
     expect(code).not.toContain('min-height:760px');
-    expect(code).toContain('source!=="gbs-web-form"');
+    expect(code).toContain('event.source===frame.contentWindow');
+    expect(code).toContain('event.data.source==="gbs-web-form"');
     expect(code).toContain('type:"responsive-device"');
     expect(code).toContain('window.innerWidth');
     expect(code).toContain('Max-Age="+maxAge');

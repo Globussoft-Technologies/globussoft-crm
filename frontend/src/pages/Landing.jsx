@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   injectLandingHeroForm,
   resizeHeroFormFrame,
+  safeHeroFormRedirectUrl,
   responsiveFormDevice,
   sendHeroFormContext,
 } from "../utils/landingHeroForm";
@@ -32,6 +33,7 @@ function setupLandingInteractions(container, getHeroFrame) {
   const header = container.querySelector("#site-header");
   const observers = [];
   const animationFrames = new Set();
+  let heroFormId = "";
 
   const sendResponsiveDevice = () => {
     const heroFormFrame = typeof getHeroFrame === "function" ? getHeroFrame() : null;
@@ -64,7 +66,13 @@ function setupLandingInteractions(container, getHeroFrame) {
       sendResponsiveDevice();
     }
     if (event.data.type === "size") {
+      const receivedFormId = String(event.data.formId || "");
+      if (/^\d+$/.test(receivedFormId)) heroFormId = receivedFormId;
       resizeHeroFormFrame(heroFormFrame, event.data.height);
+    }
+    if (event.data.type === "success-redirect") {
+      const redirectUrl = safeHeroFormRedirectUrl(event.data, heroFormId);
+      if (redirectUrl) window.location.assign(redirectUrl);
     }
   };
 

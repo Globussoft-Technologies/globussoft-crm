@@ -2435,6 +2435,7 @@
                 source: "gbs-web-form",
                 type: "size",
                 height: document.body.scrollHeight,
+                formId: String((formData && formData.id) || ""),
               },
               "*",
             );
@@ -4589,10 +4590,15 @@
                   "</div>") +
               "</div>"
             : "";
+          var customFooterText = String(
+            (formData.settings && formData.settings.footerText) || "",
+          ).trim();
           var footerLink =
             formData.settings && formData.settings.showPoweredBy === false
               ? ""
-              : '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
+              : customFooterText
+                ? esc(customFooterText)
+                : '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
 
           var stepConfig = multiStepConfig();
           var progress = stepConfig.enabled
@@ -5269,16 +5275,43 @@
               throw submitError;
             }
 
-            if (
+            var configuredRedirectUrl =
               json.redirectUrl ||
               (formData.settings &&
                 formData.settings.afterSubmitAction === "redirect" &&
-                formData.settings.redirectUrl)
-            ) {
-              window.location.href =
-                json.redirectUrl || formData.settings.redirectUrl;
-
-              return;
+                formData.settings.redirectUrl) ||
+              "";
+            if (configuredRedirectUrl) {
+              var safeRedirectUrl = "";
+              try {
+                var redirectTarget = new URL(String(configuredRedirectUrl).trim());
+                if (
+                  ["http:", "https:"].indexOf(redirectTarget.protocol) !== -1 &&
+                  !redirectTarget.username &&
+                  !redirectTarget.password &&
+                  redirectTarget.href.length <= 2048
+                )
+                  safeRedirectUrl = redirectTarget.href;
+              } catch (e) {}
+              if (safeRedirectUrl) {
+                if (window.parent && window.parent !== window) {
+                  try {
+                    window.parent.postMessage(
+                      {
+                        source: "gbs-web-form",
+                        type: "success-redirect",
+                        formId: String(formData.id || ""),
+                        formSlug: String(formData.slug || ""),
+                        redirectUrl: safeRedirectUrl,
+                      },
+                      "*",
+                    );
+                  } catch (e) {}
+                } else {
+                  window.location.assign(safeRedirectUrl);
+                  return;
+                }
+              }
             }
 
             setMessage(

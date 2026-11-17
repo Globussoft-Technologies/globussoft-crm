@@ -393,6 +393,7 @@ function defaultSettings() {
   formTitle: "",
   submitButtonLabel: "Submit",
   showPoweredBy: true,
+  footerText: "",
   successMessage: "Thank you! Your information has been received. We will be in touch with you shortly to assist with your account.",
     afterSubmitAction: "message",
  redirectUrl: "",
@@ -3519,6 +3520,7 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
   const isLabelSelection = selection === "label";
   const isPlaceholderSelection = selection === "placeholder";
   const isInputSelection = selection === "input";
+  const isFooterSelection = selection === "footer";
 
   return (
     <div className="wf-generic-live-editor">
@@ -3556,6 +3558,7 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
             <button type="button" className={selection === "button" ? "is-selected" : ""} onClick={() => onSelectionChange("button")}>Submit button</button>
             <button type="button" className={selection === "error" ? "is-selected" : ""} onClick={() => onSelectionChange("error")}>Error message</button>
             <button type="button" className={selection === "success" ? "is-selected" : ""} onClick={() => onSelectionChange("success")}>Success message</button>
+            <button type="button" className={isFooterSelection ? "is-selected" : ""} onClick={() => onSelectionChange("footer")}>Footer</button>
             <button type="button" className={selection === "layout" ? "is-selected" : ""} onClick={() => onSelectionChange("layout")}>Layout</button>
             <button type="button" className={selection === "container" ? "is-selected" : ""} onClick={() => onSelectionChange("container")}>Form container</button>
             <button
@@ -3597,6 +3600,29 @@ function GenericLiveCustomizationEditor({ form, fields, selection, onSelectionCh
             </> : null}
             {selection === "error" ? <GenericFormStyleControls group="error" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
             {selection === "success" ? <GenericFormStyleControls group="success" form={form} style={style} updateStyle={updateStyle} applyDraft={applyDraft} logoUploadRef={logoUploadRef} uploadingLogo={uploadingLogo} onLogoUpload={onLogoUpload} /> : null}
+            {isFooterSelection ? <div className="wf-settings-stack">
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Footer text</span>
+                <input
+                  aria-label="Footer text"
+                  className="input-field"
+                  value={String(form.settings.footerText || "")}
+                  onChange={(event) => applyDraft({ settings: { ...form.settings, footerText: event.target.value.slice(0, 300) } })}
+                  placeholder="Powered By GlobusCRM"
+                  maxLength={300}
+                />
+                <small style={{ color: "var(--text-secondary)" }}>Leave blank to use “Powered By GlobusCRM”. This text applies only to this form.</small>
+              </label>
+              <label className="wf-settings-toggle" style={{ alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  style={{ marginTop: 0, flexShrink: 0 }}
+                  checked={form.settings.showPoweredBy !== false}
+                  onChange={(event) => applyDraft({ settings: { ...form.settings, showPoweredBy: event.target.checked } })}
+                />
+                <span>Show footer on this web form</span>
+              </label>
+            </div> : null}
             {selection === "customCss" ? <div id="wf-custom-css-editor" className="wf-custom-css-editor">
               <div className="wf-custom-css-copy">
                 <strong>Custom CSS</strong>
@@ -7419,6 +7445,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
   const [creatingFolderForFormId, setCreatingFolderForFormId] = useState(null);
   const [newFolderName, setNewFolderName] = useState("");
   const [savingFolderForFormId, setSavingFolderForFormId] = useState(null);
+  const [cloningFormId, setCloningFormId] = useState(null);
   const [draggingFormId, setDraggingFormId] = useState(null);
   const [dropFolderId, setDropFolderId] = useState(null);
   const folderPickerListRef = useRef(null);
@@ -10917,6 +10944,49 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
   };
 
+  const cloneForm = async (sourceForm) => {
+    if (!sourceForm?.id || cloningFormId != null) return;
+
+    const baseName = `Copy of ${sourceForm.name || "Web form"}`;
+    let name = baseName;
+    let suffix = 2;
+    while (hasDuplicateWebFormName(forms, name)) {
+      name = `${baseName} (${suffix})`;
+      suffix += 1;
+    }
+
+    setCloningFormId(sourceForm.id);
+    try {
+      const cloned = await fetchApi(`/api/forms${scopeQuery}`, {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          description: sourceForm.description || "",
+          scope: sourceForm.scope || formScope,
+          isActive: sourceForm.isActive !== false,
+          fields: sourceForm.fields,
+          style: sourceForm.style,
+          settings: sourceForm.settings,
+          ...(sourceForm.scope === "generic" && sourceForm.folderId != null
+            ? { folderId: sourceForm.folderId }
+            : {}),
+        }),
+      });
+      const normalized = normalizeForm(cloned, leadFields);
+      setForms((current) => [normalized, ...current.filter((item) => String(item.id) !== String(normalized.id))]);
+      clearWebFormDraft(draftStorageKey);
+      setSelectedForm(normalized);
+      setBuilderOpen(true);
+      setDirty(false);
+      openFormRoute(normalized.id);
+      notify.success("Form cloned. You can edit the copy now.");
+    } catch (err) {
+      notify.error(err?.message || "Failed to clone form");
+    } finally {
+      setCloningFormId(null);
+    }
+  };
+
 
 
 
@@ -11255,8 +11325,8 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
   useEffect(() => {
     if (selectedForm?.scope !== "generic") return;
-    if (["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container", "customCss"].includes(genericStyleSelection)) return;
-    if (!["form", "title", "label", "placeholder", "input", "button", "error", "success", "layout", "container", "customCss"].includes(genericStyleSelection)) {
+    if (["form", "title", "label", "placeholder", "input", "button", "error", "success", "footer", "layout", "container", "customCss"].includes(genericStyleSelection)) return;
+    if (!["form", "title", "label", "placeholder", "input", "button", "error", "success", "footer", "layout", "container", "customCss"].includes(genericStyleSelection)) {
       setGenericStyleSelection("form");
     }
   }, [selectedForm?.scope, builderFields, genericStyleSelection]);
@@ -18220,7 +18290,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
 
-          align-items: flex-start;
+          align-items: center;
 
 
 
@@ -18301,53 +18371,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
         .wf-settings-toggle input {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          margin-top: 3px;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+          width: 16px;
+          height: 16px;
+          flex: 0 0 16px;
+          margin: 0;
           accent-color: var(--accent-color);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         }
 
 
@@ -20625,6 +20653,14 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                           )}
                         </div>
                       )}
+                      <button
+                        type="button"
+                        className="wf-form-menu-trigger"
+                        aria-label={cloningFormId === form.id ? `Cloning ${form.name}` : `Clone ${form.name}`}
+                        title={cloningFormId === form.id ? "Creating copy..." : "Clone form"}
+                        disabled={cloningFormId != null}
+                        onClick={() => cloneForm(form)}
+                      ><Copy size={16} aria-hidden="true" /></button>
                     </div>
                   </div>
                   <div className="wf-library-meta">
@@ -20943,16 +20979,6 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
                           <span>Enable reCAPTCHA</span>
                         </label>
                       </div>) : null}
-                      <div className="wf-settings-block">
-                        <label className="wf-settings-toggle">
-                          <input
-                            type="checkbox"
-                            checked={selectedForm.settings.showPoweredBy !== false}
-                            onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, showPoweredBy: e.target.checked } })}
-                          />
-                          <span>Show “Powered By GlobusCRM” on this web form</span>
-                        </label>
-                      </div>
                       {scope === "generic" ? <div className="wf-settings-block">
                         <label className="wf-settings-toggle">
                           <input

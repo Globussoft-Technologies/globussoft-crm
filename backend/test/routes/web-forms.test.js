@@ -231,7 +231,7 @@ describe('web-form embed sizing', () => {
       });
       const location = new URL(`https://external.example/contact?${query}`);
       const window = { innerWidth: 1000, addEventListener: (type, callback) => { listeners[type] = callback; } };
-      runInNewContext(runtime, { window, document, location, URLSearchParams });
+      runInNewContext(runtime, { window, document, location, URL, URLSearchParams });
       listeners.message({ source: frame.contentWindow, data: { source: 'gbs-web-form', type: 'ready' } });
       return messages.find((message) => message.type === 'context').attribution;
     };
@@ -279,7 +279,8 @@ describe('web-form embed sizing', () => {
 
     expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
     expect(code).not.toContain('min-height:760px');
-    expect(code).toContain('source!=="gbs-web-form"');
+    expect(code).toContain('event.source===frame.contentWindow');
+    expect(code).toContain('event.data.source==="gbs-web-form"');
     expect(code).toContain('type:"responsive-device"');
     expect(code).toContain('window.innerWidth');
     expect(code).toContain('Max-Age="+maxAge');

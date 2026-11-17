@@ -160,6 +160,26 @@ beforeEach(() => {
   prisma.emailMessage.findMany.mockResolvedValue([]);
 });
 
+describe('POST /send-email linked-contact activity', () => {
+  test('keeps the email send successful when the best-effort activity write throws synchronously', async () => {
+    prisma.activity.create.mockImplementationOnce(() => {
+      throw new Error('Activity model unavailable');
+    });
+
+    const response = await request(makeApp())
+      .post('/api/communications/send-email')
+      .send({
+        to: 'contact-linked@example.com',
+        subject: 'contact-linked',
+        body: 'hello',
+        contactId: 42,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.email.contactId).toBe(42);
+  });
+});
+
 // ─── parseRecipients (pure helper) ──────────────────────────────────
 
 describe('parseRecipients — comma-split + dedupe', () => {

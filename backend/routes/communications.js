@@ -678,15 +678,20 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
       // Per-recipient Activity on the linked contact (if any). Same pattern as
       // single-recipient: best-effort, non-critical.
       if (contactId) {
-        await prisma.activity.create({
-          data: {
-            type: "Email",
-            description: `Sent email: "${subject}"`,
-            contactId: parseInt(contactId),
-            userId: req.user.userId,
-            tenantId: req.user.tenantId,
-          }
-        }).catch(() => { });
+        try {
+          await prisma.activity.create({
+            data: {
+              type: "Email",
+              description: `Sent email: "${subject}"`,
+              contactId: parseInt(contactId),
+              userId: req.user.userId,
+              tenantId: req.user.tenantId,
+            }
+          });
+        } catch (_error) {
+          // Email delivery and persistence must not depend on the optional
+          // contact timeline write succeeding.
+        }
       }
 
       if (req.io) req.io.emit('email_sent', emailRecord);

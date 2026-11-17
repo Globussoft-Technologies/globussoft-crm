@@ -4,7 +4,7 @@ import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
 import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, UserPlus } from 'lucide-react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import ColumnPicker from '../components/ColumnPicker';
@@ -161,85 +161,8 @@ function validateCsvRow(row) {
   return issues;
 }
 
-function ContactPreviewDrawer({ contact, loading, onClose, onEdit, onConvert, onOpenFullDetail }) {
-  if (!contact) return null;
-
-  const valueOrNotSet = (value) => value || 'Not set';
-  const assignedTo = contact?.assignedTo?.name || contact?.assignedTo?.email || (contact?.assignedToId ? `Staff #${contact.assignedToId}` : 'Unassigned');
-  const details = [
-    ['Email', contact?.email],
-    ['Phone', contact?.phone],
-    ['Category', contact?.company],
-    ['Title', contact?.title],
-    ['Status', contact?.status || 'Lead'],
-    ['Assigned', assignedTo],
-    ['Created', contact?.createdAt ? formatDate(contact.createdAt) : null],
-  ];
-
-  return (
-    <div
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.45)', display: 'flex', justifyContent: 'flex-end', zIndex: 1000 }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Contact preview"
-    >
-      <aside
-        style={{ width: 'min(520px, 100vw)', height: '100vh', overflowY: 'auto', background: 'var(--bg-color)', color: 'var(--text-primary)', padding: '1.25rem', boxShadow: '-18px 0 40px rgba(15, 23, 42, 0.28)' }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>Contact preview</div>
-            <h2 style={{ margin: '0.2rem 0 0', fontSize: '1.25rem' }}>{contact?.name || 'Unnamed contact'}</h2>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{contact?.title || contact?.company || 'No title or company yet'}</div>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close contact preview" style={{ border: 0, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4 }}>
-            <X size={18} />
-          </button>
-        </div>
-
-        {loading ? (
-          <div style={{ padding: '2rem 0', color: 'var(--text-secondary)' }}>Loading contact…</div>
-        ) : (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem', marginTop: '1rem' }}>
-              {[
-                ['Status', contact.status || 'Lead'],
-                ['Assigned', assignedTo],
-                ['Score', `${contact.aiScore ?? 0}/100`],
-              ].map(([label, value]) => (
-                <div key={label} className="card" style={{ padding: '0.85rem' }}>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{label}</div>
-                  <strong>{valueOrNotSet(value)}</strong>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-              <button type="button" className="btn-secondary" onClick={onOpenFullDetail}>Open full detail</button>
-              <button type="button" className="btn-secondary" onClick={onEdit}>Edit contact</button>
-              {String(contact.status || 'Lead') === 'Lead' && (
-                <button type="button" className="btn-secondary" onClick={onConvert}>Convert to Prospect</button>
-              )}
-            </div>
-            <section style={{ marginTop: '1.25rem' }}>
-              <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Contact information</h3>
-              {details.map(([label, value]) => (
-                <div key={label} style={{ display: 'grid', gridTemplateColumns: '120px minmax(0, 1fr)', gap: '0.75rem', padding: '0.6rem 0', borderBottom: '1px solid var(--border-color)' }}>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{label}</span>
-                  <span style={{ overflowWrap: 'anywhere' }}>{valueOrNotSet(value)}</span>
-                </div>
-              ))}
-            </section>
-          </>
-        )}
-      </aside>
-    </div>
-  );
-}
-
 const Contacts = () => {
   const notify = useNotify();
-  const navigate = useNavigate();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   // Server-driven pagination (?limit=&offset=&page=) — `contacts` holds ONLY
@@ -337,46 +260,6 @@ const Contacts = () => {
   // per-cell custom-field editing above, for editing everything (name,
   // email, phone, company, status, custom fields) in one place at once.
   const [editingContact, setEditingContact] = useState(null);
-  const [previewContact, setPreviewContact] = useState(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const previewRequestId = useRef(0);
-
-  const closeContactPreview = () => {
-    previewRequestId.current += 1;
-    setPreviewContact(null);
-    setPreviewLoading(false);
-  };
-
-  const openContactPreview = async (contact) => {
-    const requestId = ++previewRequestId.current;
-    setPreviewContact(contact);
-    setPreviewLoading(true);
-    try {
-      const fullContact = await fetchApi(`/api/contacts/${contact.id}`, { silent: true });
-      if (previewRequestId.current === requestId) {
-        setPreviewContact((current) => current?.id === contact.id ? { ...current, ...fullContact } : current);
-      }
-    } catch {
-      // Keep the list row data visible if the detail request fails.
-    } finally {
-      if (previewRequestId.current === requestId) setPreviewLoading(false);
-    }
-  };
-
-  const convertPreviewToProspect = async () => {
-    if (!previewContact || previewContact.status === 'Prospect') return;
-    try {
-      const updated = await fetchApi(`/api/contacts/${previewContact.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ status: 'Prospect' }),
-      });
-      setPreviewContact((current) => ({ ...current, ...updated, status: 'Prospect' }));
-      setContacts((rows) => rows.map((row) => row.id === previewContact.id ? { ...row, ...updated, status: 'Prospect' } : row));
-      notify.success('Contact moved to Prospect');
-    } catch (error) {
-      notify.error(error?.body?.error || 'Could not update contact status');
-    }
-  };
 
   // #461: search + status filter inputs were rendered without value/onChange
   // and the table read straight from `contacts`, so neither one filtered.
@@ -1217,37 +1100,8 @@ const Contacts = () => {
           }}
         >
           <div style={{ minWidth: 0, flex: 1 }}>
-            {isTravel ? (
-              <button
-                type="button"
-                onClick={() => openContactPreview(contact)}
-                aria-label={`Preview contact ${contact.name || contact.email || ''}`}
-                style={{
-                  color: 'var(--text-primary)',
-                  textDecoration: 'none',
-                  display: 'block',
-                  width: '100%',
-                  padding: 0,
-                  border: 0,
-                  background: 'transparent',
-                  textAlign: 'left',
-                  font: 'inherit',
-                  pointerEvents: 'all',
-                  position: 'relative',
-                  zIndex: 10,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontWeight: 600,
-                }}
-                className="hover-underline"
-              >
-                {contact.name || 'Unnamed contact'}
-              </button>
-            ) : (
-              <Link
-                to={`/contacts/${contact.id}`}
+            <Link
+                to={isTravel ? `/travel/leads/${contact.id}` : `/contacts/${contact.id}`}
                 style={{
                   color: 'var(--text-primary)',
                   textDecoration: 'none',
@@ -1261,8 +1115,7 @@ const Contacts = () => {
                 className="hover-underline"
               >
                 {contact.name || 'Unnamed contact'}
-              </Link>
-            )}
+            </Link>
             <div
               style={{
                 fontSize: '0.75rem',
@@ -2362,25 +2215,6 @@ const Contacts = () => {
         />
       )}
 
-      <ContactPreviewDrawer
-        contact={previewContact}
-        loading={previewLoading}
-        onClose={closeContactPreview}
-        onEdit={() => {
-          setEditingContact(previewContact);
-          closeContactPreview();
-        }}
-        onConvert={convertPreviewToProspect}
-        onOpenFullDetail={() => {
-          const path = isTravel ? `/travel/leads/${previewContact?.id}` : `/contacts/${previewContact?.id}`;
-          navigate(path, {
-            state: {
-              backTo: isTravel ? "/contacts" : "/contacts",
-              backLabel: "Back to Contacts",
-            },
-          });
-        }}
-      />
     </div>
   );
 };

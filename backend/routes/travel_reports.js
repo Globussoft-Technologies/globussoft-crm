@@ -8,6 +8,7 @@
 //   GET /api/travel/reports/tmc          TMC analytics
 //   GET /api/travel/reports/rfu          RFU analytics
 //   GET /api/travel/reports/cross-brand  Multi-sub-brand revenue + conversion
+//   GET /api/travel/reports/trends      Date-bucketed sub-brand analytics
 //
 // All aggregates fire via Promise.all so each endpoint resolves in
 // ~one round-trip. None of the payloads include PII (no participant names,
@@ -761,16 +762,39 @@ async function buildTmcReport(tenantId, dateRange = null) {
       const tripRevenue = paidRevenueByTrip.has(trip.id)
         ? paidRevenueByTrip.get(trip.id)
         : price * headcount;
-      revByDest[trip.destination] = (revByDest[trip.destination] || 0) + tripRevenue;
+      const destination = trip.destination || "Unknown destination";
+      const currentDestination = revByDest[destination] || {
+        revenue: 0,
+        tripId: trip.id,
+        tripCode: trip.tripCode || null,
+        tripCount: 0,
+        representativeRevenue: -1,
+      };
+      currentDestination.revenue += tripRevenue;
+      currentDestination.tripCount += 1;
+      // A destination can have multiple trips. Link to the highest-revenue
+      // trip so the aggregate still has a deterministic drill-down target.
+      if (tripRevenue > currentDestination.representativeRevenue) {
+        currentDestination.tripId = trip.id;
+        currentDestination.tripCode = trip.tripCode || null;
+        currentDestination.representativeRevenue = tripRevenue;
+      }
+      revByDest[destination] = currentDestination;
       totalRevenue += tripRevenue;
       schoolTripCount[trip.schoolContactId] = (schoolTripCount[trip.schoolContactId] || 0) + 1;
     }
 
     // Top destinations sorted by revenue DESC, take 10.
     const topDestinations = Object.entries(revByDest)
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1].revenue - a[1].revenue)
       .slice(0, 10)
-      .map(([destination, revenue]) => ({ destination, revenue }));
+      .map(([destination, aggregate]) => ({
+        destination,
+        revenue: aggregate.revenue,
+        tripId: aggregate.tripId,
+        tripCode: aggregate.tripCode,
+        tripCount: aggregate.tripCount,
+      }));
 
     const schools = Object.keys(schoolTripCount).length;
     const repeatSchools = Object.values(schoolTripCount).filter((c) => c >= 2).length;
@@ -1446,6 +1470,104 @@ function parseDateRange(req) {
   }
   return Object.keys(range).length ? range : null;
 }
+
+const REPORT_GROUPINGS = new Set(["daily", "monthly", "yearly"]);
+
+function normalizeReportGrouping(value) {
+  const grouping = String(value || "monthly").toLowerCase();
+  return REPORT_GROUPINGS.has(grouping) ? grouping : "monthly";
+}
+
+function reportPeriod(value, grouping) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  if (grouping === "yearly") return String(year);
+  if (grouping === "monthly") return `${year}-${month}`;
+  return `${year}-${month}-${day}`;
+}
+
+function trendWhere(tenantId, allowed, dateRange) {
+  const where = { tenantId };
+  if (allowed !== null) where.subBrand = { in: [...allowed] };
+  if (dateRange) where.createdAt = dateRange;
+  return where;
+}
+
+async function buildSubBrandTrends(tenantId, allowed, dateRange, grouping) {
+  const where = trendWhere(tenantId, allowed, dateRange);
+  const [quotes, itineraries, diagnostics] = await Promise.all([
+    prisma.travelQuote.findMany({
+      where,
+      select: { subBrand: true, status: true, totalAmount: true, createdAt: true },
+    }),
+    prisma.itinerary.findMany({
+      where,
+      select: { subBrand: true, status: true, totalAmount: true, createdAt: true },
+    }),
+    prisma.travelDiagnostic.findMany({
+      where,
+      select: { subBrand: true, createdAt: true },
+    }),
+  ]);
+
+  const rows = new Map();
+  const ensure = (period, subBrand) => {
+    if (!period || !subBrand) return null;
+    const key = `${period}:${subBrand}`;
+    if (!rows.has(key)) rows.set(key, {
+      period,
+      subBrand,
+      quotes: 0,
+      acceptedQuotes: 0,
+      quoteRevenue: 0,
+      itineraries: 0,
+      itineraryRevenue: 0,
+      diagnostics: 0,
+    });
+    return rows.get(key);
+  };
+
+  for (const row of Array.isArray(quotes) ? quotes : []) {
+    const target = ensure(reportPeriod(row.createdAt, grouping), row.subBrand);
+    if (!target) continue;
+    target.quotes += 1;
+    if (isAcceptedQuoteStatus(row.status)) {
+      target.acceptedQuotes += 1;
+      target.quoteRevenue += Number(row.totalAmount || 0);
+    }
+  }
+  for (const row of Array.isArray(itineraries) ? itineraries : []) {
+    const target = ensure(reportPeriod(row.createdAt, grouping), row.subBrand);
+    if (!target) continue;
+    target.itineraries += 1;
+    target.itineraryRevenue += Number(row.totalAmount || 0);
+  }
+  for (const row of Array.isArray(diagnostics) ? diagnostics : []) {
+    const target = ensure(reportPeriod(row.createdAt, grouping), row.subBrand);
+    if (target) target.diagnostics += 1;
+  }
+
+  const trendRows = [...rows.values()].sort((a, b) => (
+    a.period.localeCompare(b.period) || a.subBrand.localeCompare(b.subBrand)
+  ));
+  return { groupBy: grouping, rows: trendRows, currency: "INR" };
+}
+
+router.get("/reports/trends", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const grouping = normalizeReportGrouping(req.query.groupBy || req.query.grouping);
+    const dateRange = parseDateRange(req);
+    res.json(await buildSubBrandTrends(req.travelTenant.id, allowed, dateRange, grouping));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-reports] trends error:", e.message);
+    res.status(500).json({ error: "Failed to compute travel report trends" });
+  }
+});
 
 async function tmcSummary(req, allowed, dateRange) {
   if (!canAccessSubBrand(allowed, "tmc")) return null;

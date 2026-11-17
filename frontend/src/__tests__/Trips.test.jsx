@@ -592,6 +592,38 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     expect(contactsCall).toBeFalsy();
   });
 
+  it('keeps the New Trip drawer open while copying or pasting field data', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('button', { name: /Create a new trip/i }));
+    const heading = await screen.findByRole('heading', { name: /^New Trip$/i });
+    const form = heading.closest('form');
+    const tripCode = within(form).getByPlaceholderText(/TMC-AND-2026-MUMBAI-G7/i);
+
+    fireEvent.focus(tripCode);
+    fireEvent.copy(tripCode);
+    fireEvent.keyDown(tripCode, { key: 'c', ctrlKey: true });
+    fireEvent.paste(tripCode, { clipboardData: { getData: () => 'TMC-COPIED' } });
+
+    expect(screen.getByRole('heading', { name: /^New Trip$/i })).toBeInTheDocument();
+  });
+
+  it('does not close when text selection ends outside the drawer', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('button', { name: /Create a new trip/i }));
+    const heading = await screen.findByRole('heading', { name: /^New Trip$/i });
+    const form = heading.closest('form');
+    const tripCode = within(form).getByPlaceholderText(/TMC-AND-2026-MUMBAI-G7/i);
+    const backdrop = form.parentElement;
+
+    fireEvent.mouseDown(tripCode);
+    fireEvent.mouseUp(backdrop);
+    fireEvent.click(backdrop);
+
+    expect(screen.getByRole('heading', { name: /^New Trip$/i })).toBeInTheDocument();
+  });
+
   it('validation: missing required fields surfaces notify.error + does NOT fire POST', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');

@@ -1294,6 +1294,52 @@ router.get(
   },
 );
 
+// GET /api/travel/trips/:id/report.csv
+// This literal route must stay before /trips/:id so Express does not treat
+// "report.csv" as a trip id.
+router.get(
+  "/trips/:id/report.csv",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      const trip = await prisma.tmcTrip.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: {
+          id: true, tripCode: true, destination: true, status: true,
+          departDate: true, returnDate: true, pricePerStudent: true,
+          participants: { orderBy: { id: "asc" }, select: { fullName: true, applicationStatus: true } },
+        },
+      });
+      if (!trip) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
+      const csvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const date = (value) => value ? new Date(value).toISOString().slice(0, 10) : "";
+      const rows = [
+        ["Trip code", trip.tripCode || `Trip #${trip.id}`],
+        ["Destination", trip.destination || ""],
+        ["Status", trip.status || ""],
+        ["Departure", date(trip.departDate)],
+        ["Return", date(trip.returnDate)],
+        ["Price per student", trip.pricePerStudent ?? ""],
+        ["Participant count", trip.participants.length],
+        [],
+        ["Participant", "Application status"],
+        ...trip.participants.map((participant) => [participant.fullName || "", participant.applicationStatus || ""]),
+      ];
+      const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n") + "\n";
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=trip-${trip.id}-report.csv`);
+      res.send(csv);
+    } catch (e) {
+      console.error("[travel-trips] report export error:", e.message);
+      res.status(500).json({ error: "Failed to export trip report" });
+    }
+  },
+);
+
 // GET /api/travel/trips/:id
 router.get(
   "/trips/:id",

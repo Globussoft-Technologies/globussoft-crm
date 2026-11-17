@@ -144,13 +144,13 @@ const AUTO_CAMPAIGN_RULE_COLUMN_KEYS = new Set([
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
 const TRAVEL_SOURCE_OPTIONS = [
-  { value: "tmc_registration", label: "TMC Registration" },
-  { value: "brochure_request", label: "Brochure Request" },
+  { value: "tmc_registration", label: "School Trip Registration" },
+  { value: "brochure_request", label: "Trip Brochure Request" },
   { value: "whatsapp", label: "WhatsApp" },
-  { value: "referral", label: "Referral" },
-  { value: "website", label: "Website" },
+  { value: "referral", label: "Traveler Referral" },
+  { value: "website", label: "Travel Website" },
   { value: "phone", label: "Phone Call" },
-  { value: "event", label: "Event / Expo" },
+  { value: "event", label: "Travel Event / Expo" },
   { value: "other", label: "Other" },
 ];
 const WELLNESS_SOURCE_OPTIONS = [
@@ -487,6 +487,17 @@ const TRAVEL_LEAD_COLUMN_KEYS = new Set([
   "assignedTo",
   "createdAt",
 ]);
+const TRAVEL_TAXONOMY_FIELD_KEYS = new Set([
+  "trip_name",
+  "traveler_type",
+  "destination",
+  "package_code",
+]);
+const TRAVEL_TAG_LABELS = {
+  tmc_registration: "School Trip Registration",
+  brochure_request: "Trip Brochure Request",
+};
+const travelTagLabel = (tag) => TRAVEL_TAG_LABELS[String(tag || "").toLowerCase()] || tag;
 const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set();
 const GENERIC_HIDDEN_COLUMN_PICKER_KEYS = Object.freeze(["status"]);
 const CSV_IMPORT_FIELD_TYPES = {
@@ -765,7 +776,7 @@ function removeLeadTagFromList(rawTags, tagKey) {
   return nextTags.length === currentTags.length ? null : nextTags;
 }
 
-function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
+function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labelForTag = (tag) => tag }) {
   const tags = normalizeLeadTags(lead.tags);
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
@@ -938,7 +949,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
     >
       <div
         className="lead-tags-display"
-        title={tags.join(", ") || (canEdit ? "Add tags" : "No tags")}
+        title={tags.map(labelForTag).join(", ") || (canEdit ? "Add travel tags" : "No travel tags")}
       >
         {tags.length === 0 ? (
           <span
@@ -953,7 +964,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
           <>
             {tags.map((tag) => (
               <span key={tag} className="lead-tag-chip">
-                {tag}
+                {labelForTag(tag)}
               </span>
             ))}
           </>
@@ -1041,12 +1052,12 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
                   className="lead-tags-draft-list"
                   aria-label="Selected tags"
                 >
-                  {draftTags.map((tag) => (
+                {draftTags.map((tag) => (
                     <span
                       key={tag}
                       className="lead-tag-chip lead-tag-chip--selected"
                     >
-                      <span className="lead-tag-chip__label">{tag}</span>
+                      <span className="lead-tag-chip__label">{labelForTag(tag)}</span>
                       {canEdit && (
                         <button
                           type="button"
@@ -2665,6 +2676,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  const usesGenericLeadTableLayout = isGeneric || isTravel;
   const [drillParams, setDrillParams] = useSearchParams();
   const focusedCallifiedLeadId = isGeneric
     ? Number(drillParams.get("callifiedLeadId"))
@@ -2700,9 +2712,8 @@ const Leads = ({ initialListState = null } = {}) => {
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
-  // The Generic CRM grid keeps horizontal movement at the bottom of the
-  // records. Other verticals retain their existing top scrollbar.
-  const showLeadsTopScrollbar = !isGeneric;
+  // Generic and Travel keep horizontal movement at the bottom of the records.
+  const showLeadsTopScrollbar = !usesGenericLeadTableLayout;
   // Assignment/deletion UI is driven by the effective Leads grants. Travel
   // non-admins can still use the separate owner-scoped assignment flow below.
   const isAdmin = auth?.user?.role === "ADMIN";
@@ -6531,10 +6542,16 @@ const Leads = ({ initialListState = null } = {}) => {
           ...LEADS_DEFAULT_VISIBLE_COLUMNS,
           ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
         ];
+    const travelTaxonomyColumns = isTravel
+      ? customFieldDefs
+          .filter((field) => TRAVEL_TAXONOMY_FIELD_KEYS.has(field.fieldKey))
+          .map((field) => `cf_${field.fieldKey}`)
+      : [];
+    const next = isTravel ? [...new Set([...preferred, ...travelTaxonomyColumns])] : preferred;
     return isGeneric
-      ? preferred.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
-      : preferred;
-  }, [customFieldDefs, isGeneric, visibleColumns]);
+      ? next.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+      : next;
+  }, [customFieldDefs, isGeneric, isTravel, visibleColumns]);
   const leadFilterFieldCatalog = useMemo(() => {
     const wellnessTableColumns = [
       { key: "name", label: "Name" },
@@ -6734,7 +6751,7 @@ const Leads = ({ initialListState = null } = {}) => {
     .map((key) => {
       if (key === "email") return { key, label: "Email" };
       if (key === "company")
-        return { key, label: isTravel ? "Category" : "Company" };
+        return { key, label: isTravel ? "Trip Name" : "Company" };
       if (key === "phone") return { key, label: "Phone" };
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
@@ -6743,7 +6760,7 @@ const Leads = ({ initialListState = null } = {}) => {
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
-      if (key === "tags") return { key, label: "Tags" };
+      if (key === "tags") return { key, label: isTravel ? "Travel Tags" : "Tags" };
       if (key === "assignedTo") return { key, label: "Assigned To" };
       if (key === "createdAt") return { key, label: "Created" };
       if (key === "status") return { key, label: "Status" };
@@ -6893,7 +6910,7 @@ const Leads = ({ initialListState = null } = {}) => {
       case "company":
         return {
           fieldKey: "company",
-          label: isTravel ? "Category" : "Company",
+          label: isTravel ? "Trip Name" : "Company",
           kind: "text",
         };
       case "phone":
@@ -6931,7 +6948,7 @@ const Leads = ({ initialListState = null } = {}) => {
           kind: "text",
         };
       case "tags":
-        return { fieldKey: "tags", label: "Tags", kind: "text" };
+        return { fieldKey: "tags", label: isTravel ? "Travel Tags" : "Tags", kind: "text" };
       case "aiScore":
         return { fieldKey: "aiScore", label: "Lead Score", kind: "number" };
       case "assignedTo":
@@ -7389,8 +7406,24 @@ const Leads = ({ initialListState = null } = {}) => {
     preferredVisibleColumns.map((key, index) => [key, index]),
   );
   const legacyLeadCellsEnabled = false;
-  const tableColumnDefs = [
-    { key: "name", label: "Name" },
+  const genericWorkflowColumnDefs = leadFixedExtraColumnDefs.filter(
+    (column) => !CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  const genericCallifiedColumnDefs = leadFixedExtraColumnDefs.filter((column) =>
+    CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
+  );
+  // Generic's definition order must match its header/body render order.
+  const tableColumnDefs = isGeneric
+    ? [
+        { key: "name", label: "Name" },
+        ...leadUserColumnsBeforeCallified,
+        ...genericWorkflowColumnDefs,
+        ...genericCallifiedColumnDefs,
+        ...leadUserColumnsAfterCallified,
+        { key: "actions", label: "Actions", locked: true },
+      ]
+    : [
+        { key: "name", label: "Name" },
     ...uniqueTableColumnCandidates
       .filter((column) => column.key !== "name" && column.key !== "actions")
       .sort((left, right) => {
@@ -7402,14 +7435,14 @@ const Leads = ({ initialListState = null } = {}) => {
           : Number.MAX_SAFE_INTEGER;
         return leftIndex - rightIndex;
       }),
-    { key: "actions", label: "Actions", locked: true },
-  ];
-  // Generic CRM keeps the complete lead name visible while the remaining
-  // columns move horizontally. Other verticals retain their existing table.
-  const leadsFrozenColumnDefs = isGeneric
+        { key: "actions", label: "Actions", locked: true },
+      ];
+  // Generic and Travel keep the complete lead name visible while the
+  // remaining columns move horizontally.
+  const leadsFrozenColumnDefs = usesGenericLeadTableLayout
     ? tableColumnDefs.filter((column) => column.key === "name")
     : [];
-  const leadsScrollableColumnDefs = isGeneric
+  const leadsScrollableColumnDefs = usesGenericLeadTableLayout
     ? tableColumnDefs.filter((column) => column.key !== "name")
     : tableColumnDefs;
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
@@ -7433,7 +7466,7 @@ const Leads = ({ initialListState = null } = {}) => {
     leadsScrollableTableBaseWidth,
   )}px`;
   const savedGenericNameWidth = Number(columnLayout.widths?.name);
-  const leadsFrozenTableWidthCss = isGeneric
+  const leadsFrozenTableWidthCss = usesGenericLeadTableLayout
     ? columnLayout.genericNameWidthUserSet &&
       Number.isFinite(savedGenericNameWidth) &&
       savedGenericNameWidth > 0
@@ -7441,7 +7474,7 @@ const Leads = ({ initialListState = null } = {}) => {
       : "clamp(320px, 22%, 380px)"
     : `${leadsFrozenTableWidth}px`;
   const leadsTableClassName = isTravel
-    ? "leads-table leads-table--fit"
+    ? "leads-table leads-table--compact leads-table--travel-generic"
     : isGeneric
       ? "leads-table leads-table--compact"
       : "leads-table";
@@ -7449,7 +7482,9 @@ const Leads = ({ initialListState = null } = {}) => {
     (column) => column.key === "phone",
   );
   const phoneColumnIndex =
-    phoneColumnOffset < 0 ? -1 : phoneColumnOffset + (isGeneric ? 0 : 1);
+    phoneColumnOffset < 0
+      ? -1
+      : phoneColumnOffset + (usesGenericLeadTableLayout ? 0 : 1);
   useLayoutEffect(() => {
     const table = leadsScrollableTableRef.current;
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
@@ -8750,7 +8785,7 @@ const Leads = ({ initialListState = null } = {}) => {
         return renderBuiltInLeadCell({
           lead,
           field: "company",
-          label: isTravel ? "Category" : "Company",
+          label: isTravel ? "Trip Name" : "Company",
           value: lead.company,
           extraStyle: { color: "var(--text-secondary)" },
         });
@@ -8889,6 +8924,7 @@ const Leads = ({ initialListState = null } = {}) => {
               onSave={updateLeadInlineValue}
               onDeleteTag={handleDeleteLeadTag}
               canEdit={canLeadUpdate}
+              labelForTag={isTravel ? travelTagLabel : undefined}
             />
           </td>
         );
@@ -12269,7 +12305,7 @@ const Leads = ({ initialListState = null } = {}) => {
           )}
         </div>
         <div
-          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : isTravel ? " leads-split-table--no-topbar leads-split-table--density-compact leads-split-table--travel-generic" : ""}`}
           onWheel={
             isGeneric
               ? (event) => {
@@ -12363,7 +12399,7 @@ const Leads = ({ initialListState = null } = {}) => {
             <div
               className="leads-table-frozen-pane"
               style={
-                isGeneric
+                usesGenericLeadTableLayout
                   ? { "--leads-name-pane-width": leadsFrozenTableWidthCss }
                   : { width: leadsFrozenTableWidthCss }
               }
@@ -12492,65 +12528,34 @@ const Leads = ({ initialListState = null } = {}) => {
                                 showEditButton={canLeadUpdate}
                                 disableTruncation
                                 renderValue={(name) => (
-                                  isTravel ? (
-                                    <a
-                                      href="#lead-preview"
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        setPreviewLead(lead);
-                                      }}
-                                      title={`Preview ${lead.name || "lead"}`}
-                                      style={{
-                                        minWidth: 0,
-                                        overflow: "visible",
-                                        textOverflow: "clip",
-                                        whiteSpace: "nowrap",
-                                        color: "var(--accent-color)",
-                                        fontWeight: 700,
-                                        textDecoration: "none",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "underline";
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "none";
-                                      }}
-                                    >
-                                      {name || "Unnamed lead"}
-                                    </a>
-                                  ) : (
-                                    <Link
-                                      to={leadDetailPathWithListState(lead)}
-                                      state={leadListNavigationState}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        rememberLeadListState();
-                                      }}
-                                      title={`Open profile for ${name || "lead"}`}
-                                      style={{
-                                        minWidth: 0,
-                                        overflow: "visible",
-                                        textOverflow: "clip",
-                                        whiteSpace: "nowrap",
-                                        color: "var(--accent-color)",
-                                        fontWeight: 700,
-                                        textDecoration: "none",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "underline";
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "none";
-                                      }}
-                                    >
-                                      {name || "Unnamed lead"}
-                                    </Link>
-                                  )
+                                  <Link
+                                    to={leadDetailPathWithListState(lead)}
+                                    state={leadListNavigationState}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      rememberLeadListState();
+                                    }}
+                                    title={`Open profile for ${name || "lead"}`}
+                                    style={{
+                                      minWidth: 0,
+                                      overflow: "visible",
+                                      textOverflow: "clip",
+                                      whiteSpace: "nowrap",
+                                      color: "var(--accent-color)",
+                                      fontWeight: 700,
+                                      textDecoration: "none",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.textDecoration =
+                                        "underline";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.textDecoration =
+                                        "none";
+                                    }}
+                                  >
+                                    {name || "Unnamed lead"}
+                                  </Link>
                                 )}
                               />
                             </div>
@@ -12570,11 +12575,11 @@ const Leads = ({ initialListState = null } = {}) => {
               topBarLeadingWidth={leadsFrozenTableWidth}
               stickyTop
               stickyTopOffset={0}
-              hideTopBar={isGeneric}
-              stickyBottom={isGeneric}
-              // Generic CRM retains its bottom scrollbar; other verticals
-              // retain their existing native table scroll.
-              hideBottomScrollbar={isGeneric}
+              hideTopBar={usesGenericLeadTableLayout}
+              stickyBottom={usesGenericLeadTableLayout}
+              // Generic and Travel use one synchronized bottom scrollbar so
+              // the frozen and scrollable panes share the outer vertical flow.
+              hideBottomScrollbar={usesGenericLeadTableLayout}
               verticalOverflow="visible"
             >
               <table
@@ -12696,49 +12701,26 @@ const Leads = ({ initialListState = null } = {}) => {
                                   showEditButton={canLeadUpdate}
                                   disableTruncation
                                   renderValue={(name) => (
-                                    isTravel ? (
-                                      <a
-                                        href="#lead-preview"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setPreviewLead(lead);
-                                        }}
-                                        title={`Preview ${lead.name || "lead"}`}
-                                        style={{
-                                          minWidth: 0,
-                                          overflow: "visible",
-                                          textOverflow: "clip",
-                                          whiteSpace: "nowrap",
-                                          color: "var(--accent-color)",
-                                          fontWeight: 700,
-                                          textDecoration: "none",
-                                        }}
-                                      >
-                                        {name || "Unnamed lead"}
-                                      </a>
-                                    ) : (
-                                      <Link
-                                        to={leadDetailPathWithListState(lead)}
-                                        state={leadListNavigationState}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          rememberLeadListState();
-                                        }}
-                                        title={`Open profile for ${name || "lead"}`}
-                                        style={{
-                                          minWidth: 0,
-                                          overflow: "visible",
-                                          textOverflow: "clip",
-                                          whiteSpace: "nowrap",
-                                          color: "var(--accent-color)",
-                                          fontWeight: 700,
-                                          textDecoration: "none",
-                                        }}
-                                      >
-                                        {name || "Unnamed lead"}
-                                      </Link>
-                                    )
+                                    <Link
+                                      to={leadDetailPathWithListState(lead)}
+                                      state={leadListNavigationState}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        rememberLeadListState();
+                                      }}
+                                      title={`Open profile for ${name || "lead"}`}
+                                      style={{
+                                        minWidth: 0,
+                                        overflow: "visible",
+                                        textOverflow: "clip",
+                                        whiteSpace: "nowrap",
+                                        color: "var(--accent-color)",
+                                        fontWeight: 700,
+                                        textDecoration: "none",
+                                      }}
+                                    >
+                                      {name || "Unnamed lead"}
+                                    </Link>
                                   )}
                                 />
                               </div>
@@ -15317,7 +15299,7 @@ const Leads = ({ initialListState = null } = {}) => {
               {[
                 ["Email", previewLeadCurrent.email],
                 ["Phone", previewLeadCurrent.phone],
-                [isTravel ? "Category" : "Company", previewLeadCurrent.company],
+                [isTravel ? "Trip Name" : "Company", previewLeadCurrent.company],
                 ["Title", previewLeadCurrent.title],
                 ["Created", formatDate(previewLeadCurrent.createdAt)],
               ].map(([label, value]) => (
@@ -15595,7 +15577,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     htmlFor="create-lead-company"
                     style={createLeadFieldLabelStyle}
                   >
-                    {isTravel ? "Category" : "Company"}
+                    {isTravel ? "Trip Name" : "Company"}
                     {isGeneric && createLeadRequiredFieldSet.has("company") && (
                       <span
                         aria-hidden="true"
@@ -15611,7 +15593,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     type="text"
                     placeholder={
                       isTravel
-                        ? "Category (e.g. School Trip, Umrah, Family Holiday)"
+                        ? "Trip Name (e.g. Deoghar 2026, Umrah, Family Holiday)"
                         : "Company"
                     }
                     maxLength={191}

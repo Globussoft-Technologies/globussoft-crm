@@ -304,6 +304,9 @@ describe('PATCH /api/contacts/:id — revert a converted lead', () => {
         userId: USER_ID,
         tenantId: TENANT_ID,
       },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
     });
     expect(prisma.$transaction).toHaveBeenCalledOnce();
   });
@@ -321,6 +324,46 @@ describe('PATCH /api/contacts/:id — revert a converted lead', () => {
     expect(prisma.contact.update).toHaveBeenCalledOnce();
     expect(prisma.activity.create).toHaveBeenCalledOnce();
   });
+
+  test.each(['Churned', 'Junk'])('requires a reason before changing status to %s', async (status) => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+
+    const res = await request(makeApp())
+      .put(`/api/contacts/${CONTACT_ID}`)
+      .send({ status });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TERMINAL_STATUS_REASON_REQUIRED');
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
+
+  test('records a terminal-status reason and returns the authored Activity', async () => {
+    const activity = {
+      id: 91,
+      type: 'Lead Status updated',
+      description: 'Updated from Prospect to Churned. Reason: Budget was withdrawn',
+      createdAt: '2026-11-16T08:30:00.000Z',
+      user: { id: USER_ID, name: 'Yasin', email: 'yasin@example.com' },
+    };
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.contact.update.mockResolvedValueOnce({ ...prospect, status: 'Churned' });
+    prisma.activity.create.mockResolvedValueOnce(activity);
+
+    const res = await request(makeApp())
+      .put(`/api/contacts/${CONTACT_ID}`)
+      .send({ status: 'Churned', lifecycleTransitionReason: '  Budget was withdrawn  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.lifecycleActivity).toEqual(activity);
+    expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        description: 'Updated from Prospect to Churned. Reason: Budget was withdrawn',
+        userId: USER_ID,
+      }),
+    }));
+    expect(prisma.contact.update.mock.calls[0][0].data).not.toHaveProperty('lifecycleTransitionReason');
+  });
 });
 
 describe('GET /api/contacts/:id/activities — deterministic pagination', () => {
@@ -337,6 +380,9 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     expect(res.body).toMatchObject({ total: 12, page: 2, limit: 5, totalPages: 3 });
     expect(prisma.activity.findMany).toHaveBeenCalledWith({
       where: { contactId: CONTACT_ID, tenantId: TENANT_ID },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 5,
       skip: 5,
@@ -443,6 +489,9 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     expect(res.body).toMatchObject({ total: 400, page: 3, limit: 10, totalPages: 40 });
     expect(prisma.activity.findMany).toHaveBeenCalledWith({
       where: { contactId: CONTACT_ID, tenantId: TENANT_ID },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 30,
       skip: 0,

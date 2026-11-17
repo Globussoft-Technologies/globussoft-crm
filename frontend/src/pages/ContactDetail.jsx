@@ -75,6 +75,38 @@ const PIPELINE_SEGS = [
   },
 ];
 
+const GENERIC_STATUS_GROUPS = [
+  { id: 'new', title: 'New', options: [{ id: 'New', label: 'New', negative: false }] },
+  { id: 'contacted', title: 'Contacted', options: [{ id: 'Contacted', label: 'Contacted', negative: false }] },
+  { id: 'interested', title: 'Interested', options: [{ id: 'Interested', label: 'Interested', negative: false }] },
+  {
+    id: 'qualified-lost',
+    title: 'Qualified / Lost',
+    options: [
+      { id: 'Qualified', label: 'Qualified', negative: false },
+      { id: 'Lost', label: 'Lost', negative: true },
+    ],
+  },
+  {
+    id: 'junk-unqualified',
+    title: 'Junk / Unqualified',
+    options: [
+      { id: 'Junk', label: 'Junk', negative: false },
+      { id: 'Unqualified', label: 'Unqualified', negative: true },
+    ],
+  },
+  {
+    id: 'won-churned',
+    title: 'Won / Churned',
+    options: [
+      { id: 'Won', label: 'Won', negative: false },
+      { id: 'Churned', label: 'Churned', negative: true },
+    ],
+  },
+];
+const GENERIC_STATUS_OPTIONS = GENERIC_STATUS_GROUPS.flatMap((group) => group.options);
+const GENERIC_STATUS_LABELS = { Lead: 'New', Prospect: 'Contacted', Customer: 'Won' };
+
 const GENERIC_LIFECYCLE_SETTING_KEY = 'generic.contactLifecycleStages';
 const GENERIC_LIFECYCLE_DRAFT_PREFIX = 'crm:generic-lifecycle-draft:v1';
 const GENERIC_LEADS_PAGINATION_STORAGE_PREFIX = 'globuscrm.leads.pagination.v1';
@@ -848,30 +880,21 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   }, [contact, id, loadContact, notify]);
 
   const changeStatus = async (status, lifecycleStageKey, lifecycleTransitionReason = '') => {
-    if (!contact || (isGeneric ? contact.lifecycleStageKey === lifecycleStageKey : contact.status === status)) return;
+    if (!contact || (isGeneric ? contact.status === status : contact.status === status)) return;
     const prev = contact;
     const prevLifecycleStageSelections = lifecycleStageSelections;
-    const selectedSegment = isGeneric
-      ? lifecycleSegments.find((segment) => segment.options.some((option) => option.id === lifecycleStageKey))
-      : null;
     const payload = {
-      ...(!isGeneric ? { status } : {}),
-      ...(isGeneric && lifecycleStageKey ? { lifecycleStageKey } : {}),
+      status,
       ...(isGeneric && lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
     };
     setContact({ ...contact, ...payload });
-    if (selectedSegment) {
-      setLifecycleStageSelections((current) => ({ ...current, [selectedSegment.id]: lifecycleStageKey }));
-    }
     try {
       const updated = await patchContact(id, payload);
       setContact(updated);
-      notify.success(isGeneric
-        ? `Lifecycle stage changed to ${selectedSegment?.options.find((option) => option.id === lifecycleStageKey)?.label || lifecycleStageKey}.`
-        : `Status changed to ${status}.`);
+      notify.success(`Status changed to ${status}.`);
     } catch {
       setContact(prev);
-      setLifecycleStageSelections(prevLifecycleStageSelections);
+      if (!isGeneric) setLifecycleStageSelections(prevLifecycleStageSelections);
       notify.error('Could not update status.');
     }
   };
@@ -893,6 +916,16 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
 
   const pickStage = (stageIdOrLabel) => {
     setOpenSeg(null);
+    if (isGeneric) {
+      const statusOption = GENERIC_STATUS_OPTIONS.find((option) => option.id === stageIdOrLabel || option.label === stageIdOrLabel);
+      if (!statusOption) return;
+      if (statusOption.negative) {
+        setPendingStageTransition({ option: statusOption, isBackward: false, reason: '' });
+        return;
+      }
+      changeStatus(statusOption.id);
+      return;
+    }
     const opt = segOptionById(stageIdOrLabel, lifecycleSegments) || segOption(stageIdOrLabel, lifecycleSegments);
     if (!opt) return;
     const nextStageIndex = lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === opt.id));
@@ -924,8 +957,12 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       return;
     }
     setPendingStageTransition(null);
-    setStageSel(pending.option.id || pending.option.label);
-    await changeStatus(pending.option.backend, pending.option.id, reason);
+    if (isGeneric) {
+      await changeStatus(pending.option.id, undefined, reason);
+    } else {
+      setStageSel(pending.option.id || pending.option.label);
+      await changeStatus(pending.option.backend, pending.option.id, reason);
+    }
   };
 
   const persistPrefs = (next) => {
@@ -1561,12 +1598,16 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     : null;
   const historyStage = historyStageOption ? segOptionById(historyStageOption.stageKey, lifecycleSegments) : null;
   const activeStage = isGeneric
-    ? (historyStage?.label || statusStageOption?.label || (selectedStageMatchesStatus ? selectedStageOption.label : null) || defaultStageFor(contact.status, isWellness, isTravel))
+    ? (GENERIC_STATUS_LABELS[contact?.status] || contact?.status || 'New')
     : selectedStageOption && (isTravel || selectedStageOption.backend === contact.status)
       ? selectedStageOption.label
       : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
-  const activeSeg = segIndexOf(activeStage, lifecycleSegments);
-  const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
+  const activeSeg = isGeneric
+    ? GENERIC_STATUS_GROUPS.findIndex((group) => group.options.some((option) => option.id.toLowerCase() === String(activeStage).toLowerCase()))
+    : segIndexOf(activeStage, lifecycleSegments);
+  const activeNegative = isGeneric
+    ? Boolean(GENERIC_STATUS_GROUPS[activeSeg]?.options.find((option) => option.id.toLowerCase() === String(activeStage).toLowerCase())?.negative)
+    : Boolean(segOption(activeStage, lifecycleSegments)?.negative);
   const openOverviewEditor = () => {
     if (isGeneric) {
       setOverviewEditOpen(true);
@@ -2185,12 +2226,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                 <div className="cp-lifecycle-left">
                   <div className="cp-lifecycle-label">
                     <div className="cp-lifecycle-label-main">
-                      <div className="cp-label">Lifecycle stage</div>
+                      <div className="cp-label">{isGeneric ? 'Status' : 'Lifecycle stage'}</div>
                       <button type="button" className="cp-action-btn cp-lifecycle-edit" onClick={openOverviewEditor} aria-label="Edit lifecycle stage and status" title="Edit lifecycle stage and status"><Pencil size={13} /></button>
                     </div>
-                    {isGeneric && (
-                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
-                    )}
                   </div>
                   <div className="cp-lifecycle-current">{activeStage}</div>
                 </div>
@@ -2201,9 +2239,57 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                 >
                   <div className="cp-lifecycle-status-head">
                     <div className="cp-label">Status</div>
+                    {isGeneric && (
+                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
+                    )}
                   </div>
                   <div className="cp-pipeline" role="group" aria-label={isGeneric ? 'Lead status stages' : 'Lifecycle stage'}>
-                    {lifecycleSegments.map((seg) => {
+                    {isGeneric ? GENERIC_STATUS_GROUPS.map((group, i) => {
+                      const selectedOption = group.options.find((option) => option.id.toLowerCase() === String(activeStage).toLowerCase());
+                      const displayTitle = selectedOption?.label || group.title;
+                      const stageClass = `cp-generic-status-${group.id}`;
+                      return (
+                        <div className="cp-chev-wrap" key={group.id}>
+                          {group.options.length === 1 ? (
+                            <button
+                              type="button"
+                              title={`Change status to ${displayTitle}`}
+                              onClick={() => pickStage(group.options[0].id)}
+                              className={`cp-chev ${stageClass}${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedOption?.negative ? ' lost' : ''}`}
+                            >
+                              <span className="cp-chev-label">{displayTitle}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                title={`Change status to ${displayTitle}`}
+                                onClick={() => setOpenSeg(openSeg === group.id ? null : group.id)}
+                                className={`cp-chev ${stageClass}${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedOption?.negative ? ' lost' : ''}`}
+                              >
+                                <span className="cp-chev-label">{displayTitle}</span> <ChevronDown size={12} />
+                              </button>
+                              {openSeg === group.id && (
+                                <div className="cp-chev-menu">
+                                  {group.options.map((option) => (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      className={option.negative ? 'neg' : ''}
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        pickStage(option.id);
+                                      }}
+                                    >{option.label}</button>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    }) : lifecycleSegments.map((seg) => {
                       const i = lifecycleSegments.indexOf(seg);
                       const selectedSegmentOption = isGeneric
                         ? seg.options.find((option) => option.id === (lifecycleStageSelections[seg.id] || contact.lifecycleStageKey))

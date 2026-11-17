@@ -313,7 +313,8 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-chev-wrap { position: relative; flex: 1; display: flex; min-width: 0; }
 .cp-chev { flex: 1; border: none; cursor: pointer; background: #e8eaed; color: #6b7280; font-size: 0.78rem; padding: 0.45rem 0.6rem 0.45rem 1.6rem; margin-left: -14px; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%, 14px 50%); white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 0.3rem; font-family: inherit; min-width: 0; }
 .cp-chev-wrap:first-child .cp-chev { margin-left: 0; padding-left: 0.9rem; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%); }
-.cp-lifecycle-row--generic .cp-lifecycle-status-head { min-height: 20px; }
+.cp-lifecycle-row--generic .cp-lifecycle-status-head { min-height: 20px; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.cp-lifecycle-row--generic .cp-lifecycle-status-head .cp-lifecycle-history-btn { width: 26px; height: 26px; }
 .cp-lifecycle-row--generic .cp-pipeline { display: flex; align-items: stretch; flex-wrap: nowrap; width: 100%; overflow-x: auto; overflow-y: visible; padding: 0.1rem 0 0.4rem; isolation: isolate; scrollbar-width: thin; scroll-snap-type: x proximity; }
 .cp-lifecycle-row--generic .cp-pipeline:has(.cp-chev-menu) { padding-bottom: 5rem; }
 .cp-lifecycle-row--generic .cp-chev-wrap { flex: 0 0 auto; min-width: 112px; scroll-snap-align: start; }
@@ -328,6 +329,27 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-lifecycle-row--generic .cp-chev.done { background: #c7dced; color: #243b57; }
 .cp-lifecycle-row--generic .cp-chev.current { background: #a9c8e5; color: #172f4d; font-weight: 700; }
 .cp-lifecycle-row--generic .cp-chev.lost { background: #efc3c3; color: #7f1d1d; }
+.cp-lifecycle-row--generic .cp-generic-status-new { --cp-stage-bg: #e8eaed; --cp-stage-current: #cbd5e1; }
+.cp-lifecycle-row--generic .cp-generic-status-contacted { --cp-stage-bg: #dbeafe; --cp-stage-current: #93c5fd; }
+.cp-lifecycle-row--generic .cp-generic-status-interested { --cp-stage-bg: #dbeafe; --cp-stage-current: #60a5fa; }
+.cp-lifecycle-row--generic .cp-generic-status-qualified-lost { --cp-stage-bg: #ede9fe; --cp-stage-current: #c4b5fd; }
+.cp-lifecycle-row--generic .cp-generic-status-junk-unqualified { --cp-stage-bg: #fef3c7; --cp-stage-current: #fcd34d; }
+.cp-lifecycle-row--generic .cp-generic-status-won-churned { --cp-stage-bg: #dcfce7; --cp-stage-current: #86efac; }
+.cp-lifecycle-row--generic .cp-generic-status-new,
+.cp-lifecycle-row--generic .cp-generic-status-contacted,
+.cp-lifecycle-row--generic .cp-generic-status-interested,
+.cp-lifecycle-row--generic .cp-generic-status-qualified-lost,
+.cp-lifecycle-row--generic .cp-generic-status-junk-unqualified,
+.cp-lifecycle-row--generic .cp-generic-status-won-churned { background: var(--cp-stage-bg); color: #243b57; }
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-new,
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-contacted,
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-interested,
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-qualified-lost,
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-junk-unqualified,
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-won-churned { background: var(--cp-stage-current); color: #172f4d; font-weight: 700; }
+.cp-lifecycle-row--generic .cp-chev.lost.cp-generic-status-qualified-lost,
+.cp-lifecycle-row--generic .cp-chev.lost.cp-generic-status-junk-unqualified,
+.cp-lifecycle-row--generic .cp-chev.lost.cp-generic-status-won-churned { background: #efc3c3; color: #7f1d1d; }
 .cp-lifecycle-row--generic .cp-chev:hover { filter: brightness(0.98); }
 .cp-chev.done, .cp-chev.current { background: #c3d9ec; color: #1e3a5f; }
 .cp-chev.current { font-weight: 700; background: #aecfe8; }

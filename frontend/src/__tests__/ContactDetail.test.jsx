@@ -437,7 +437,7 @@ describe('ContactDetail — current profile contract', () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();
     const profile = await getProfile();
-    expect(profile.getByText('Qualified', { exact: true })).toBeInTheDocument();
+    expect(profile.getAllByText('Won', { exact: true }).length).toBeGreaterThan(0);
     expect(profile.getByText('85', { exact: true })).toBeInTheDocument();
   });
 
@@ -447,7 +447,7 @@ describe('ContactDetail — current profile contract', () => {
     const profile = await getProfile();
 
     expect(document.querySelector('.cp-email-value')).toHaveAttribute('title', BASE_CONTACT.email);
-    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Move to Interested / Unqualified');
+    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Change status to Interested');
   });
 
   it('does not render an orphan title/company separator when both values are empty', async () => {

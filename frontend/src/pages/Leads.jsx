@@ -522,16 +522,19 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   description: "textarea",
 };
-const GENERIC_STATUS_FILTER_OPTIONS = Object.freeze([
-  { value: "new", label: "New" },
-  { value: "contacted", label: "Contacted" },
-  { value: "interested", label: "Interested" },
-  { value: "unqualified", label: "Unqualified" },
-  { value: "qualified", label: "Qualified" },
-  { value: "lost", label: "Lost" },
-  { value: "won", label: "Won" },
-  { value: "churned", label: "Churned" },
-]);
+const GENERIC_BACKEND_STATUS_OPTIONS = ["New", "Contacted", "Won", "Churned", "Junk", "Interested", "Unqualified", "Qualified", "Lost"];
+const GENERIC_STATUS_DISPLAY_MAP = { Lead: "New", Prospect: "Contacted", Customer: "Won" };
+const GENERIC_STATUS_FILTER_OPTIONS = [
+  { value: "New", label: "New" },
+  { value: "Contacted", label: "Contacted" },
+  { value: "Interested", label: "Interested" },
+  { value: "Unqualified", label: "Unqualified" },
+  { value: "Qualified", label: "Qualified" },
+  { value: "Lost", label: "Lost" },
+  { value: "Won", label: "Won" },
+  { value: "Churned", label: "Churned" },
+  { value: "Junk", label: "Junk" },
+];
 // The import mapper must offer CRM fields even when a user has hidden those
 // columns from their personal Leads table layout. Keep this catalog separate
 // from `leadColumnCatalog`, which is driven by table-column preferences.
@@ -6593,21 +6596,26 @@ const Leads = ({ initialListState = null } = {}) => {
       const columnKey = catalogColumn.key;
       const filterFieldAlias = columnToFilterFieldAlias[columnKey];
       const customField = customFieldByKey.get(columnKey);
-      const filterFieldKey =
+      const rawFilterFieldKey =
         catalogColumn?.filterField ||
         (customField?.id
           ? `custom_${customField.id}`
           : filterFieldAlias || columnKey);
+      const filterFieldKey = isGeneric && rawFilterFieldKey === "lifecycleStageKey"
+        ? "status"
+        : rawFilterFieldKey;
       fieldsByKey.set(filterFieldKey, {
         field: filterFieldKey,
         label:
-          isGeneric && filterFieldKey === "lifecycleStageKey"
+          isGeneric && rawFilterFieldKey === "lifecycleStageKey"
             ? "Status"
             : isGeneric && filterFieldKey === "status"
-              ? "CRM Status"
+              ? "Status"
               : catalogColumn?.label || customField?.label || null,
         kind:
-          catalogColumn?.filterKind ||
+          isGeneric && filterFieldKey === "status"
+            ? "enum"
+            : catalogColumn?.filterKind ||
           (customField
             ? customField.fieldType === "date"
               ? "date"
@@ -6925,7 +6933,7 @@ const Leads = ({ initialListState = null } = {}) => {
         return { fieldKey: "source", label: "Source", kind: "text" };
       case "lifecycleStage":
         return {
-          fieldKey: "lifecycleStageKey",
+          fieldKey: isGeneric ? "status" : "lifecycleStageKey",
           label: isGeneric ? "Status" : "Lifecycle Stage",
           kind: "enum",
         };
@@ -9008,36 +9016,26 @@ const Leads = ({ initialListState = null } = {}) => {
             : ["Lead", "Prospect", "Customer", "Churned", "Junk"].map(
                 (status) => ({ id: status, label: status, status }),
               );
-        const genericStatusOptions = isGeneric
-          ? [...new Set([
-              ...genericLifecycleOptions.map((option) => option.label),
-              "Lead",
-              "Prospect",
-              "Customer",
-              "Churned",
-              "Junk",
-              lead.status,
-            ].filter(Boolean))].map((status) => ({ id: status, label: status, status }))
-          : lifecycleOptions;
         // Lifecycle stage — inline-editable dropdown, pill display.
         return renderBuiltInLeadCell({
           lead,
           field: "status",
           label: isGeneric ? "Status" : "Lifecycle Stage",
-          // Generic CRM keeps lifecycle stage independent from CRM Status.
-          // Existing rows without an explicit lifecycle stage stay at the
-          // pipeline's initial Lead stage instead of mirroring lead.status.
-          value: isGeneric ? (lead.status || "Lead") : (configuredStage?.label || lead.status || "Lead"),
+          // Generic CRM Status is the backend Contact.status field. It is
+          // intentionally independent from lifecycleStageKey.
+          value: isGeneric
+            ? (GENERIC_STATUS_DISPLAY_MAP[lead.status] || lead.status || "New")
+            : (configuredStage?.label || lead.status || "Lead"),
           type: "select",
-          options: (isGeneric ? genericStatusOptions : lifecycleOptions).map((option) => option.label),
+          options: isGeneric ? GENERIC_BACKEND_STATUS_OPTIONS : lifecycleOptions.map((option) => option.label),
           renderValue: (displayValue) => (
             <span style={sourceBadgeStyle}>{displayValue || ""}</span>
           ),
           onSave: async (row, _field, selectedLabel) => {
-            const option = (isGeneric ? genericStatusOptions : lifecycleOptions).find(
+            const option = lifecycleOptions.find(
               (item) => item.label === selectedLabel,
             );
-            if (!option) return;
+            if (!isGeneric && !option) return;
             if (isGeneric) {
               const updated = await fetchApi(`/api/contacts/${row.id}`, {
                 method: "PATCH",
@@ -11272,7 +11270,7 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
-              allowedValueOptions={isGeneric ? { lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
+              allowedValueOptions={isGeneric ? { status: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -14691,7 +14689,7 @@ const Leads = ({ initialListState = null } = {}) => {
             showSelectedFilters={false}
             showCountBadge={false}
             onClose={() => setHeaderFilterRequest(null)}
-            allowedValueOptions={isGeneric ? { lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
+            allowedValueOptions={isGeneric ? { status: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
           />
         )}
         {renameFieldState && (

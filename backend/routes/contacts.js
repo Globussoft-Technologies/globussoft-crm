@@ -333,9 +333,19 @@ function normalizeContactTagsInput(raw) {
 }
 
 // #160 #166 #168: shared validator for create + update payloads on Contact.
+const LEGACY_CONTACT_STATUSES = ["Lead", "Prospect", "Customer", "Churned", "Junk"];
+const GENERIC_CONTACT_STATUSES = [
+  "New", "Contacted", "Won", "Churned", "Junk",
+  "Interested", "Unqualified", "Qualified", "Lost",
+];
+const GENERIC_ACCEPTED_CONTACT_STATUSES = [
+  ...GENERIC_CONTACT_STATUSES,
+  ...LEGACY_CONTACT_STATUSES,
+];
+
 function validateContactInput(
   body,
-  { isUpdate = false, requireEmail = !isUpdate } = {},
+  { isUpdate = false, requireEmail = !isUpdate, allowedStatuses = LEGACY_CONTACT_STATUSES } = {},
 ) {
   // Email — required on create, optional on update; if present, must parse.
   const emailErr = ensureEmail(body.email, { required: requireEmail });
@@ -365,7 +375,7 @@ function validateContactInput(
   if (body.status !== undefined && body.status !== null && body.status !== "") {
     const stErr = ensureEnum(
       body.status,
-      ["Lead", "Prospect", "Customer", "Churned", "Junk"],
+      allowedStatuses,
       { field: "status" },
     );
     if (stErr) return stErr;
@@ -2820,6 +2830,7 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
     const inputErr = validateContactInput(req.body, {
       isUpdate: false,
       requireEmail,
+      allowedStatuses: isGenericCrmRequest(req) ? GENERIC_ACCEPTED_CONTACT_STATUSES : LEGACY_CONTACT_STATUSES,
     });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // #337: persist the trimmed name so we don't leak the user's accidental
@@ -2859,12 +2870,12 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
     // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
     const isGenericLeadAwaitingCall =
       (req.user.vertical || "generic") === "generic" &&
-      normalised.status === "Lead" &&
+      normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead") &&
       (!normalised.callifiedLeadStatus ||
         normalised.callifiedLeadStatus === "yet_to_call");
     const shouldSkipInitialAssignee =
       isGenericLeadAwaitingCall ||
-      (skipInitialAssignee && normalised.status === "Lead");
+      (skipInitialAssignee && normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead"));
     if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
       normalised.assignedToId = req.user.userId;
     }
@@ -3612,7 +3623,10 @@ const updateContactById = async (req, res) => {
       if (req.body[key] === "") req.body[key] = null;
     }
     // #168: same input checks as create so PUT can't bypass POST validation.
-    const inputErr = validateContactInput(req.body, { isUpdate: true });
+    const inputErr = validateContactInput(req.body, {
+      isUpdate: true,
+      allowedStatuses: isGenericCrmRequest(req) ? GENERIC_ACCEPTED_CONTACT_STATUSES : LEGACY_CONTACT_STATUSES,
+    });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
@@ -3952,13 +3966,7 @@ router.patch("/:id", requireContactOrLeadUpdate, updateContactById);
 //   - sanitize CSV-injection prefixes (=, +, -, @) on name/company so the row
 //     can't execute as a formula if the data is later re-exported and opened in Excel
 //   - cap max rows at 5000 to prevent DoS via huge uploads
-const ALLOWED_STATUSES = new Set([
-  "Lead",
-  "Prospect",
-  "Customer",
-  "Churned",
-  "Junk",
-]);
+const ALLOWED_STATUSES = new Set(LEGACY_CONTACT_STATUSES);
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
 const MAX_IMPORT_ROWS = 5000;
@@ -4019,9 +4027,12 @@ router.post("/import-csv", requireContactOrLeadWrite, async (req, res) => {
           continue;
         }
         const status = String(row.status || "Lead").trim();
-        if (!ALLOWED_STATUSES.has(status)) {
+        const allowedStatuses = isGenericCrmRequest(req)
+          ? new Set(GENERIC_ACCEPTED_CONTACT_STATUSES)
+          : ALLOWED_STATUSES;
+        if (!allowedStatuses.has(status)) {
           errors.push(
-            `Row ${rowNum}: invalid status "${status}" (allowed: ${[...ALLOWED_STATUSES].join(", ")})`,
+            `Row ${rowNum}: invalid status "${status}" (allowed: ${[...allowedStatuses].join(", ")})`,
           );
           continue;
         }

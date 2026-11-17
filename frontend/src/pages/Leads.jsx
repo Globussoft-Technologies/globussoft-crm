@@ -140,6 +140,138 @@ const AUTO_CAMPAIGN_RULE_COLUMN_KEYS = new Set([
   "gst",
   "billingStateCode",
 ]);
+
+function AutoCampaignSelect({ value, options, disabled, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const selected = options.find((option) => String(option.id) === String(value));
+  const filteredOptions = options.filter((option) => {
+    const search = query.trim().toLowerCase();
+    return !search || String(option.name || `Campaign ${option.id}`).toLowerCase().includes(search);
+  });
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const updateMenuPosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setMenuPosition({ left: rect.left, top: rect.bottom, width: Math.max(138, rect.width) });
+    };
+    const closeOnOutsideClick = (event) => {
+      if (!rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+    };
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [open]);
+
+  const choose = (nextValue) => {
+    onChange(nextValue);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", minWidth: 0 }}>
+      <select className="input-field" value={value} disabled={disabled} tabIndex={-1} onChange={(event) => choose(event.target.value)} style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}>
+        <option value="">Select campaign</option>
+        {options.map((option) => <option key={option.id} value={String(option.id)}>{option.name || `Campaign ${option.id}`}</option>)}
+      </select>
+      <button ref={triggerRef} type="button" className="input-field" disabled={disabled} aria-label="Select campaign" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} style={{ width: "100%", minWidth: 0, minHeight: 36, padding: "0.35rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, textAlign: "left", cursor: disabled ? "not-allowed" : "pointer", borderColor: open ? "#4b61d1" : undefined }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected?.name || "Select campaign"}</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && menuPosition && createPortal(
+        <div ref={menuRef} role="listbox" aria-label="Select campaign options" style={{ position: "fixed", left: menuPosition.left, top: menuPosition.top, zIndex: 9999, width: Math.max(238, menuPosition.width), maxHeight: 300, overflowY: "auto", padding: 6, boxSizing: "border-box", border: "1px solid #d8dce5", borderRadius: 9, background: "#fff", boxShadow: "0 12px 28px rgba(15, 23, 42, 0.18)" }}>
+          <input type="search" autoFocus aria-label="Search campaigns" placeholder="Search campaigns" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: "100%", height: 34, boxSizing: "border-box", marginBottom: 5, padding: "0.4rem 0.55rem", border: "1px solid #5865f2", borderRadius: 5, outline: "none", font: "inherit" }} />
+          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: !value ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>Select campaign</button>
+          {filteredOptions.map((option) => {
+            const optionValue = String(option.id);
+            const isSelected = optionValue === String(value);
+            return <button key={option.id} type="button" role="option" aria-selected={isSelected} onClick={() => choose(optionValue)} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: isSelected ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>{option.name || `Campaign ${option.id}`}</button>;
+          })}
+          {!filteredOptions.length && <div style={{ padding: "0.5rem", color: "var(--text-secondary)", fontSize: "0.8rem" }}>No campaigns found</div>}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function AutoLeadColumnSelect({ value, options, disabled, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const selected = options.find((option) => option.key === value);
+  const filteredOptions = options.filter((option) => {
+    const search = query.trim().toLowerCase();
+    return !search || `${option.label} ${option.key}`.toLowerCase().includes(search);
+  });
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const updateMenuPosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setMenuPosition({ left: rect.left, top: rect.bottom, width: Math.max(238, rect.width) });
+    };
+    const closeOnOutsideClick = (event) => {
+      if (!rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+    };
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [open]);
+
+  const choose = (nextValue) => {
+    onChange(nextValue);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", minWidth: 0 }}>
+      <select className="input-field" value={value} disabled={disabled} tabIndex={-1} onChange={(event) => choose(event.target.value)} style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}>
+        <option value="">Select column</option>
+        {options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+      </select>
+      <button ref={triggerRef} type="button" className="input-field" disabled={disabled} aria-label="Select column" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} style={{ width: "100%", minWidth: 0, minHeight: 36, padding: "0.35rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, textAlign: "left", cursor: disabled ? "not-allowed" : "pointer", borderColor: open ? "#4b61d1" : undefined }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected?.label || "Select column"}</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && menuPosition && createPortal(
+        <div ref={menuRef} role="listbox" aria-label="Select column options" style={{ position: "fixed", left: menuPosition.left, top: menuPosition.top, zIndex: 9999, width: menuPosition.width, maxHeight: 300, overflowY: "auto", padding: 6, boxSizing: "border-box", border: "1px solid #d8dce5", borderRadius: 9, background: "#fff", boxShadow: "0 12px 28px rgba(15, 23, 42, 0.18)" }}>
+          <input type="search" autoFocus aria-label="Search CRM fields" placeholder="Search fields" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: "100%", height: 34, boxSizing: "border-box", marginBottom: 5, padding: "0.4rem 0.55rem", border: "1px solid #5865f2", borderRadius: 5, outline: "none", font: "inherit" }} />
+          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: !value ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>Select CRM field</button>
+          {filteredOptions.map((option) => {
+            const isSelected = option.key === value;
+            return <button key={option.key} type="button" role="option" aria-selected={isSelected} onClick={() => choose(option.key)} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: isSelected ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>{option.label}</button>;
+          })}
+          {!filteredOptions.length && <div style={{ padding: "0.5rem", color: "var(--text-secondary)", fontSize: "0.8rem" }}>No CRM fields found</div>}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
@@ -2909,6 +3041,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const [pageInput, setPageInput] = useState(String(initialLeadsPage + 1));
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [selectingAllPresent, setSelectingAllPresent] = useState(false);
 
   // Keep router pagination authoritative when the list is remounted after a
   // detail view. This also repairs a transient page-one state if another
@@ -3021,6 +3154,18 @@ const Leads = ({ initialListState = null } = {}) => {
   const [bulkCampaignId, setBulkCampaignId] = useState("");
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!leadBulkActionsOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      const target = event.target;
+      if (target.closest?.('.lead-bulk-actions-control')) return;
+      if (target.closest?.('input[type="checkbox"]')) return;
+      setLeadBulkActionsOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [leadBulkActionsOpen]);
   // Wellness Callified calling — the AI / Manual chooser used by Appointments
   // and Patients. Distinct from the generic-vertical flow below, which has its
   // own dialog, auto-campaign rules and lead-status sync; the hook returns
@@ -6453,13 +6598,66 @@ const Leads = ({ initialListState = null } = {}) => {
     });
   };
 
+  const selectLeadIds = (ids) => {
+    setSelectedLeads((previous) => Array.from(new Set([...previous, ...ids])));
+  };
+
+  const selectCurrentPageLeads = () => {
+    selectLeadIds(paginatedLeads.map((lead) => lead.id));
+  };
+
+  const selectAllPresentLeads = async () => {
+    if (!isGeneric) {
+      selectLeadIds(filteredLeads.map((lead) => lead.id));
+      return;
+    }
+    setSelectingAllPresent(true);
+    try {
+      const query = new URLSearchParams({ status: "Lead", page: "1", limit: "500", includeCrmStatuses: "true" });
+      if (searchTerm.trim()) {
+        query.set("q", searchTerm.trim());
+        const matchingCampaignIds = callifiedCampaigns
+          .filter((campaign) => String(campaign?.name || "").toLowerCase().includes(searchTerm.trim().toLowerCase()))
+          .map((campaign) => Number(campaign.id))
+          .filter((campaignId) => Number.isInteger(campaignId) && campaignId > 0)
+          .slice(0, 100);
+        if (matchingCampaignIds.length) query.set("callifiedCampaignIds", matchingCampaignIds.join(","));
+      }
+      if (nameStartsWith) query.set("nameStartsWith", nameStartsWith);
+      if (sourceFilter) query.set("leadSource", sourceFilter);
+      if (campaignFilter) query.set("callifiedCampaignId", campaignFilter);
+      if (leadStatusFilter) query.set("callifiedLeadStatus", leadStatusFilter);
+      if (assigneeFilter === "unassigned") query.set("unassigned", "true");
+      else if (assigneeFilter) query.set("assignedToId", assigneeFilter);
+      if (scoreMin !== "") query.set("scoreMin", scoreMin);
+      if (scoreMax !== "") query.set("scoreMax", scoreMax);
+      if (sortConfig.key && GENERIC_LEAD_SERVER_SORT_KEYS.has(sortConfig.key) && sortConfig.direction) {
+        query.set("sortBy", sortConfig.key);
+        query.set("sortDirection", sortConfig.direction);
+      }
+      if (advancedFilters.length > 0) {
+        query.set("filters", JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
+      }
+
+      const ids = [];
+      const totalPages = Math.max(1, Number(leadPagination.totalPages) || Math.ceil((Number(leadPagination.total) || 0) / 500));
+      for (let page = 1; page <= totalPages; page += 1) {
+        query.set("page", String(page));
+        const data = await fetchApi(`/api/contacts?${query.toString()}`, { silent: true });
+        const rows = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+        ids.push(...rows.map((lead) => lead.id).filter((id) => id !== undefined && id !== null));
+        if (rows.length < 500) break;
+      }
+      selectLeadIds(ids);
+    } finally {
+      setSelectingAllPresent(false);
+    }
+  };
+
   const handleLeadBulkActionsToggle = () => {
     if (leadBulkActionsOpen) {
       setLeadBulkActionsOpen(false);
       return;
-    }
-    if (selectedLeads.length === 0) {
-      setSelectedLeads(filteredLeads.map((lead) => lead.id));
     }
     setLeadBulkActionsOpen(true);
   };
@@ -10260,34 +10458,20 @@ const Leads = ({ initialListState = null } = {}) => {
                                       : "not-allowed",
                                   }}
                                 />
-                                <select
-                                  className="input-field"
+                                <AutoLeadColumnSelect
                                   value={rule.column || ""}
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  onChange={(e) => {
+                                  options={columnOptions}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
+                                  onChange={(nextColumn) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
-                                        ? { ...r, column: e.target.value }
+                                        ? { ...r, column: nextColumn }
                                         : r,
                                     );
                                     setAutoCampaignRules(next);
                                     removeSavedStatus();
                                   }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <option value="">Select column</option>
-                                  {columnOptions.map((col) => (
-                                    <option key={col.key} value={col.key}>
-                                      {col.label}
-                                    </option>
-                                  ))}
-                                </select>
+                                />
                                 <input
                                   type="text"
                                   value={rule.value || ""}
@@ -10314,34 +10498,20 @@ const Leads = ({ initialListState = null } = {}) => {
                                     minWidth: 0,
                                   }}
                                 />
-                                <select
-                                  className="input-field"
+                                <AutoCampaignSelect
                                   value={rule.campaignId || ""}
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  onChange={(e) => {
+                                  options={callifiedCampaigns}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
+                                  onChange={(nextCampaignId) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
-                                        ? { ...r, campaignId: e.target.value }
+                                        ? { ...r, campaignId: nextCampaignId }
                                         : r,
                                     );
                                     setAutoCampaignRules(next);
                                     removeSavedStatus();
                                   }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <option value="">Select campaign</option>
-                                  {callifiedCampaigns.map((c) => (
-                                    <option key={c.id} value={String(c.id)}>
-                                      {c.name || `Campaign ${c.id}`}
-                                    </option>
-                                  ))}
-                                </select>
+                                />
                                 <div
                                   style={{
                                     display: "flex",
@@ -10710,15 +10880,6 @@ const Leads = ({ initialListState = null } = {}) => {
               {leadBulkActionsOpen && (
                 <>
                   <div
-                    style={{
-                      position: "fixed",
-                      inset: 0,
-                      zIndex: 1088,
-                      background: "transparent",
-                    }}
-                    onClick={() => setLeadBulkActionsOpen(false)}
-                  />
-                  <div
                     role="menu"
                     aria-label="Bulk actions"
                     className="lead-bulk-actions-menu"
@@ -10766,7 +10927,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         {selectedLeads.length} selected
                       </span>
                     </div>
-                    {selectedLeads.length === 0 ? (
+                    {selectedLeads.length === 0 && (
                       <div
                         style={{
                           fontSize: "0.85rem",
@@ -10776,13 +10937,17 @@ const Leads = ({ initialListState = null } = {}) => {
                       >
                         Select one or more leads to use bulk actions.
                       </div>
-                    ) : (
-                      <div
+                    )}
+                    <div
                         style={{
                           display: "grid",
                           gap: "0.65rem",
                         }}
                       >
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                          <button type="button" className="btn-secondary" onClick={selectCurrentPageLeads} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>Select current page</button>
+                          <button type="button" className="btn-secondary" onClick={selectAllPresentLeads} disabled={selectingAllPresent} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>{selectingAllPresent ? "Selecting…" : "Select all present"}</button>
+                        </div>
                         {isGeneric && canLeadUpdate && (
                           <button
                             type="button"
@@ -10791,7 +10956,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               setLeadBulkActionsOpen(false);
                               handleDialSelectedLeads();
                             }}
-                            disabled={callQueueActive}
+                            disabled={callQueueActive || selectedLeads.length === 0}
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
@@ -10837,6 +11002,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                 setLeadBulkActionsOpen(false);
                                 handleBulkAssign();
                               }}
+                              disabled={selectedLeads.length === 0}
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
@@ -10864,7 +11030,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               onChange={(e) =>
                                 setBulkCampaignId(e.target.value)
                               }
-                              disabled={bulkCampaignSaving}
+                              disabled={bulkCampaignSaving || selectedLeads.length === 0}
                               style={{
                                 flex: 1,
                                 minWidth: 180,
@@ -10908,6 +11074,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             onClick={() => {
                               handleBulkDelete();
                             }}
+                            disabled={selectedLeads.length === 0}
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
@@ -10928,6 +11095,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             setBulkCampaignId("");
                             setLeadBulkActionsOpen(false);
                           }}
+                          disabled={selectedLeads.length === 0}
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
@@ -10939,7 +11107,6 @@ const Leads = ({ initialListState = null } = {}) => {
                           Clear selection
                         </button>
                       </div>
-                    )}
                   </div>
                 </>
               )}
@@ -11263,6 +11430,7 @@ const Leads = ({ initialListState = null } = {}) => {
               buttonTitle="Filter leads"
               buttonAriaLabel="Filter by"
               layoutVariant="freshsales"
+              panelClassName={isGeneric ? "filter-panel-generic" : ""}
               clearSectionsOnReset={isGeneric}
               promoteAddedSections={isGeneric}
               pinSelectedValues={isGeneric}

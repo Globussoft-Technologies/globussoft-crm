@@ -110,20 +110,6 @@ const GENERIC_STATUS_LABELS = { Lead: 'New', Prospect: 'Contacted', Customer: 'W
 const GENERIC_LIFECYCLE_SETTING_KEY = 'generic.contactLifecycleStages';
 const GENERIC_LIFECYCLE_DRAFT_PREFIX = 'crm:generic-lifecycle-draft:v1';
 const GENERIC_LEADS_PAGINATION_STORAGE_PREFIX = 'globuscrm.leads.pagination.v1';
-const GENERIC_STATUS_BAR_WIDTH_STORAGE_KEY = 'crm:generic-status-bar-width:v1';
-const GENERIC_STATUS_BAR_MIN_WIDTH = 40;
-const GENERIC_STATUS_BAR_MAX_WIDTH = 100;
-const clampStatusBarWidth = (value) => Math.max(
-  GENERIC_STATUS_BAR_MIN_WIDTH,
-  Math.min(GENERIC_STATUS_BAR_MAX_WIDTH, Number(value) || GENERIC_STATUS_BAR_MAX_WIDTH),
-);
-const readStatusBarWidth = () => {
-  try {
-    return clampStatusBarWidth(localStorage.getItem(GENERIC_STATUS_BAR_WIDTH_STORAGE_KEY));
-  } catch (_error) {
-    return GENERIC_STATUS_BAR_MAX_WIDTH;
-  }
-};
 const cloneLifecycleSegments = (segments) => segments.map((segment) => ({
   ...segment,
   options: segment.options.map((option) => ({ ...option })),
@@ -568,7 +554,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const [lifecycleHistoryLoading, setLifecycleHistoryLoading] = useState(false);
   const [lifecycleHistory, setLifecycleHistory] = useState([]);
   const [lifecycleStageSelections, setLifecycleStageSelections] = useState({});
-  const [genericStatusBarWidth, setGenericStatusBarWidth] = useState(readStatusBarWidth);
+  const [statusPipelineOverflow, setStatusPipelineOverflow] = useState(false);
+  const [statusPipelineCanScrollLeft, setStatusPipelineCanScrollLeft] = useState(false);
+  const [statusPipelineCanScrollRight, setStatusPipelineCanScrollRight] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [seqPicker, setSeqPicker] = useState(false);
   const [sequences, setSequences] = useState([]);
@@ -579,62 +567,31 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const notesRef = useRef(null);
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
-  const statusBarResizeRef = useRef(null);
-  const statusBarResizeActiveRef = useRef(false);
+  const statusPipelineRef = useRef(null);
   const contactTagManagerEnabled = isGeneric;
 
   useEffect(() => {
     if (!isGeneric) return undefined;
-    try {
-      localStorage.setItem(GENERIC_STATUS_BAR_WIDTH_STORAGE_KEY, String(genericStatusBarWidth));
-    } catch (_error) {
-      // A blocked storage context should not prevent the profile from working.
-    }
-    return undefined;
-  }, [genericStatusBarWidth, isGeneric]);
-
-  const updateStatusBarWidthFromPointer = useCallback((clientX) => {
-    const resizeHandle = statusBarResizeRef.current;
-    const row = resizeHandle?.closest('.cp-lifecycle-row--generic');
-    if (!row) return;
-    const bounds = row.getBoundingClientRect();
-    const computed = window.getComputedStyle(row);
-    const leftInset = Number.parseFloat(computed.paddingLeft) || 0;
-    const rightInset = Number.parseFloat(computed.paddingRight) || 0;
-    const usableWidth = Math.max(1, bounds.width - leftInset - rightInset);
-    const nextWidth = ((clientX - bounds.left - leftInset) / usableWidth) * 100;
-    setGenericStatusBarWidth(clampStatusBarWidth(nextWidth));
-  }, []);
-
-  const handleStatusBarResizeStart = useCallback((event) => {
-    event.preventDefault();
-    statusBarResizeActiveRef.current = true;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    updateStatusBarWidthFromPointer(event.clientX);
-  }, [updateStatusBarWidthFromPointer]);
-
-  const handleStatusBarResizeEnd = useCallback((event) => {
-    statusBarResizeActiveRef.current = false;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-  }, []);
-
-  const handleStatusBarResizeKeyDown = useCallback((event) => {
-    const keySteps = {
-      ArrowLeft: -5,
-      ArrowDown: -5,
-      ArrowRight: 5,
-      ArrowUp: 5,
+    const pipeline = statusPipelineRef.current;
+    if (!pipeline) return undefined;
+    const updateScrollState = () => {
+      const hasOverflow = pipeline.scrollWidth > pipeline.clientWidth + 1;
+      setStatusPipelineOverflow(hasOverflow);
+      setStatusPipelineCanScrollLeft(pipeline.scrollLeft > 1);
+      setStatusPipelineCanScrollRight(pipeline.scrollLeft + pipeline.clientWidth < pipeline.scrollWidth - 1);
     };
-    if (event.key === 'Home') {
-      event.preventDefault();
-      setGenericStatusBarWidth(GENERIC_STATUS_BAR_MIN_WIDTH);
-    } else if (event.key === 'End') {
-      event.preventDefault();
-      setGenericStatusBarWidth(GENERIC_STATUS_BAR_MAX_WIDTH);
-    } else if (keySteps[event.key]) {
-      event.preventDefault();
-      setGenericStatusBarWidth((current) => clampStatusBarWidth(current + keySteps[event.key]));
-    }
+    updateScrollState();
+    pipeline.addEventListener('scroll', updateScrollState, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateScrollState);
+    observer?.observe(pipeline);
+    return () => {
+      pipeline.removeEventListener('scroll', updateScrollState);
+      observer?.disconnect();
+    };
+  }, [isGeneric, genericLifecycleSegments]);
+
+  const moveStatusPipeline = useCallback((direction) => {
+    statusPipelineRef.current?.scrollBy({ left: direction * 180, behavior: 'smooth' });
   }, []);
 
   useEffect(() => {
@@ -2017,12 +1974,13 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
             <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
           </>
         )}
-        <div className="cp-more-wrap" ref={moreRef}>
+        <div className={`cp-more-wrap${isGeneric ? ' cp-more-wrap--generic' : ''}`} ref={moreRef}>
           <button type="button" className="cp-action-btn" onClick={() => setMoreOpen((o) => !o)} title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen}><MoreHorizontal size={13} /></button>
           {moreOpen && (
             <div className="cp-more-menu" role="menu">
               {!isGeneric && <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>}
               {!isGeneric && <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>}
+              {isGeneric && <button type="button" role="menuitem" onClick={() => { closeMore(); openLifecycleHistory(); }}><History size={13} /> View status history</button>}
               <button type="button" role="menuitem" className="neg" onClick={askDelete}><Trash2 size={13} /> Delete</button>
               {!isGeneric && !isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
               <button type="button" role="menuitem" onClick={handleExport}><Download size={13} /> Export</button>
@@ -2233,17 +2191,16 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                   <div className="cp-lifecycle-current">{activeStage}</div>
                 </div>
                 <div
-                  className={`cp-lifecycle-right${isGeneric ? ' cp-lifecycle-right--resizable' : ''}`}
-                  ref={isGeneric ? statusBarResizeRef : undefined}
-                  style={isGeneric ? { width: `${genericStatusBarWidth}%` } : undefined}
+                  className="cp-lifecycle-right"
                 >
                   <div className="cp-lifecycle-status-head">
                     <div className="cp-label">Status</div>
-                    {isGeneric && (
-                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
-                    )}
                   </div>
-                  <div className="cp-pipeline" role="group" aria-label={isGeneric ? 'Lead status stages' : 'Lifecycle stage'}>
+                  <div className={`cp-lifecycle-stage-scroller${statusPipelineOverflow ? ' cp-lifecycle-stage-scroller--overflow' : ' cp-lifecycle-stage-scroller--fit'}`}>
+                    {isGeneric && statusPipelineOverflow && (
+                      <button type="button" className="cp-lifecycle-stage-nav" onClick={() => moveStatusPipeline(-1)} disabled={!statusPipelineCanScrollLeft} aria-label="Show previous stages" title="Show previous stages"><ChevronLeft size={16} /></button>
+                    )}
+                    <div ref={isGeneric ? statusPipelineRef : undefined} className={`cp-pipeline${openSeg ? ' cp-pipeline--menu-open' : ''}`} role="group" aria-label={isGeneric ? 'Lead status stages' : 'Lifecycle stage'}>
                     {isGeneric ? GENERIC_STATUS_GROUPS.map((group, i) => {
                       const selectedOption = group.options.find((option) => option.id.toLowerCase() === String(activeStage).toLowerCase());
                       const displayTitle = selectedOption?.label || group.title;
@@ -2334,30 +2291,11 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                       </div>
                       );
                     })}
+                    </div>
+                    {isGeneric && statusPipelineOverflow && (
+                      <button type="button" className="cp-lifecycle-stage-nav" onClick={() => moveStatusPipeline(1)} disabled={!statusPipelineCanScrollRight} aria-label="Show next stages" title="Show next stages"><ChevronRight size={16} /></button>
+                    )}
                   </div>
-                  {isGeneric && (
-                    <div
-                      className="cp-status-resize-handle"
-                      role="separator"
-                      aria-label="Resize status bar"
-                      aria-orientation="vertical"
-                      aria-valuemin={GENERIC_STATUS_BAR_MIN_WIDTH}
-                      aria-valuemax={GENERIC_STATUS_BAR_MAX_WIDTH}
-                      aria-valuenow={genericStatusBarWidth}
-                      aria-valuetext={`${genericStatusBarWidth}% of available width`}
-                      tabIndex={0}
-                      title="Drag to resize the status bar"
-                      onPointerDown={handleStatusBarResizeStart}
-                      onPointerMove={(event) => {
-                        if (statusBarResizeActiveRef.current) {
-                          updateStatusBarWidthFromPointer(event.clientX);
-                        }
-                      }}
-                      onPointerUp={handleStatusBarResizeEnd}
-                      onPointerCancel={handleStatusBarResizeEnd}
-                      onKeyDown={handleStatusBarResizeKeyDown}
-                    />
-                  )}
                 </div>
               </div>
               ) : null}

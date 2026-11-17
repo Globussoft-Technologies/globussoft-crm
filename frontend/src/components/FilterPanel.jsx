@@ -77,6 +77,7 @@ export default function FilterPanel({
   allowedFieldLabels = null,
   allowedFieldDefinitions = null,
   allowedValueOptions = null,
+  panelClassName = "",
 }) {
   const isSingleFieldMode = Boolean(fieldKey);
   const isFreshsalesLayout = layoutVariant === "freshsales";
@@ -1049,9 +1050,9 @@ export default function FilterPanel({
               <div
                 ref={panelRef}
                 className={
-                  isFreshsalesLayout
+                  `${isFreshsalesLayout
                     ? "filter-panel-drawer filter-panel-drawer--freshsales"
-                    : "filter-panel-drawer"
+                    : "filter-panel-drawer"}${panelClassName ? ` ${panelClassName}` : ""}`
                 }
                 role="dialog"
                 aria-modal="true"

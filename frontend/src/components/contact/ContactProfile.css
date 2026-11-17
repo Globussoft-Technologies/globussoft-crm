@@ -11,7 +11,21 @@
   overflow-x: hidden;
 }
 .cp-full-page-toolbar { padding: 0.75rem 1.25rem 0; }
-.cp-full-page-toolbar .cp-back { margin-bottom: 0; }
+.cp-full-page-toolbar .cp-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--surface-color, #fff);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.cp-full-page-toolbar .cp-back:hover { border-color: var(--primary-color, var(--accent-color)); background: var(--surface-hover); color: var(--text-primary); }
 .cp-full-page-scroll { width: 100%; min-width: 0; }
 .cp-full-page .cp-wrap { width: 100%; max-width: none; box-sizing: border-box; }
 .cp-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); z-index: 800; }
@@ -166,7 +180,7 @@ body[data-vertical="generic"] .cp-ov-card:has(.cp-chev-menu) { overflow: visible
 .cp-overview-editor .cp-btn-row { grid-column: 1 / -1; }
 .cp-lifecycle-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 1rem; padding: 0.9rem 1.25rem; border-top: 1px solid var(--border-color); align-items: start; }
 .cp-lifecycle-row--generic { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; padding: 0.8rem 1.25rem 0.9rem; background: var(--surface-color, #fff); }
-body[data-vertical="generic"] .cp-lifecycle-row--generic { position: relative; z-index: 20; }
+body[data-vertical="generic"] .cp-lifecycle-row--generic { position: relative; z-index: 100; }
 .cp-lifecycle-row--generic .cp-lifecycle-left { min-width: 0; display: grid; align-content: start; }
 /* Generic CRM shows lifecycle stages in the Status pipeline below. Keep the
    duplicate current-stage summary out of the Overview header. */
@@ -212,24 +226,10 @@ body[data-vertical="generic"] .cp-lifecycle-row--generic { position: relative; z
 .cp-stage-manager-footer .cp-btn-row { margin-top: 0; }
 .cp-stage-reset-warning { padding: 0.75rem 0.85rem; border: 1px solid #f59e0b; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 0.82rem; line-height: 1.45; }
 .cp-lifecycle-right { min-width: 0; }
-.cp-lifecycle-right--resizable { position: relative; box-sizing: border-box; max-width: 100%; padding-right: 0.9rem; }
-.cp-lifecycle-right--resizable .cp-pipeline { width: 100%; }
-.cp-lifecycle-right--resizable .cp-chev-wrap { flex: 1 1 0; }
-.cp-status-resize-handle {
-  position: absolute;
-  top: 1.35rem;
-  right: 0;
-  width: 0.9rem;
-  height: calc(100% - 1.35rem);
-  min-height: 2.2rem;
-  border-radius: 0.35rem;
-  background: repeating-linear-gradient(to bottom, var(--border-color) 0 0.22rem, transparent 0.22rem 0.42rem);
-  cursor: ew-resize;
-  touch-action: none;
-  outline: none;
-}
-.cp-status-resize-handle:hover,
-.cp-status-resize-handle:focus-visible { background: repeating-linear-gradient(to bottom, var(--primary-color, var(--accent-color)) 0 0.22rem, transparent 0.22rem 0.42rem); }
+.cp-lifecycle-stage-scroller { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.cp-lifecycle-stage-nav { display: inline-flex; flex: 0 0 28px; align-items: center; justify-content: center; width: 28px; height: 30px; padding: 0; border: 1px solid var(--border-color); border-radius: 6px; background: var(--surface-color, #fff); color: var(--text-secondary); cursor: pointer; }
+.cp-lifecycle-stage-nav:hover:not(:disabled), .cp-lifecycle-stage-nav:focus-visible { border-color: var(--primary-color, var(--accent-color)); color: var(--primary-color, var(--accent-color)); }
+.cp-lifecycle-stage-nav:disabled { opacity: 0.35; cursor: not-allowed; }
 .cp-lifecycle-status-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 26px; }
 .cp-lifecycle-status-head .cp-label { margin-bottom: 0; }
 .cp-lifecycle-history-btn { width: 30px; height: 30px; justify-content: center; border: 1px solid var(--border-color); background: var(--surface-color, #fff); color: var(--primary-color, var(--accent-color)); }
@@ -313,10 +313,14 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-chev-wrap { position: relative; flex: 1; display: flex; min-width: 0; }
 .cp-chev { flex: 1; border: none; cursor: pointer; background: #e8eaed; color: #6b7280; font-size: 0.78rem; padding: 0.45rem 0.6rem 0.45rem 1.6rem; margin-left: -14px; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%, 14px 50%); white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 0.3rem; font-family: inherit; min-width: 0; }
 .cp-chev-wrap:first-child .cp-chev { margin-left: 0; padding-left: 0.9rem; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%); }
-.cp-lifecycle-row--generic .cp-lifecycle-status-head { min-height: 20px; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.cp-lifecycle-row--generic .cp-lifecycle-status-head { min-height: 32px; display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; padding-right: 0.15rem; }
 .cp-lifecycle-row--generic .cp-lifecycle-status-head .cp-lifecycle-history-btn { width: 26px; height: 26px; }
 .cp-lifecycle-row--generic .cp-pipeline { display: flex; align-items: stretch; flex-wrap: nowrap; width: 100%; overflow-x: auto; overflow-y: visible; padding: 0.1rem 0 0.4rem; isolation: isolate; scrollbar-width: thin; scroll-snap-type: x proximity; }
-.cp-lifecycle-row--generic .cp-pipeline:has(.cp-chev-menu) { padding-bottom: 5rem; }
+.cp-lifecycle-row--generic .cp-lifecycle-stage-scroller .cp-pipeline { flex: 1 1 auto; min-width: 0; }
+.cp-lifecycle-row--generic .cp-lifecycle-stage-scroller--fit .cp-chev-wrap { flex: 1 1 0; min-width: 112px; }
+.cp-lifecycle-row--generic .cp-lifecycle-stage-scroller--fit .cp-chev { width: 100%; min-width: 112px; }
+.cp-lifecycle-row--generic .cp-lifecycle-stage-scroller--fit .cp-pipeline { overflow: visible; }
+.cp-lifecycle-row--generic .cp-pipeline--menu-open { overflow: visible !important; }
 .cp-lifecycle-row--generic .cp-chev-wrap { flex: 0 0 auto; min-width: 112px; scroll-snap-align: start; }
 .cp-lifecycle-row--generic .cp-chev,
 .cp-lifecycle-row--generic .cp-chev-wrap:first-child .cp-chev { width: max-content; min-width: 112px; min-height: 30px; padding: 0.35rem 0.65rem 0.35rem 1.25rem; border: 0; border-radius: 0; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%, 14px 50%); background: #e8eaed; color: #596273; line-height: 1.15; white-space: nowrap; text-align: center; overflow: hidden; box-shadow: none; transition: background-color 160ms ease, color 160ms ease, filter 160ms ease; }
@@ -324,7 +328,6 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-lifecycle-row--generic .cp-chev-wrap:first-child .cp-chev { margin-left: 0; padding-left: 0.65rem; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%); }
 .cp-lifecycle-row--generic .cp-chev { box-sizing: content-box; }
 .cp-lifecycle-row--generic .cp-chev-wrap { box-sizing: border-box; }
-.cp-lifecycle-row--generic .cp-lifecycle-right--resizable .cp-chev-wrap { flex: 1 1 0; }
 .cp-lifecycle-row--generic .cp-chev-label { min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
 .cp-lifecycle-row--generic .cp-chev.done { background: #c7dced; color: #243b57; }
 .cp-lifecycle-row--generic .cp-chev.current { background: #a9c8e5; color: #172f4d; font-weight: 700; }
@@ -357,12 +360,14 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-chev.lost { background: #f3c1c1; color: #7f1d1d; }
 .cp-chev-wrap { position: relative; display: flex; }
 .cp-chev-menu { position: absolute; top: calc(100% + 4px); right: 0; background: #fff; border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 50; min-width: 130px; overflow: hidden; }
-body[data-vertical="generic"] .cp-chev-menu { z-index: 100; }
+body[data-vertical="generic"] .cp-chev-menu { z-index: 1000; }
 .cp-chev-menu button { display: block; width: 100%; border: none; background: none; text-align: left; padding: 0.5rem 0.85rem; font-size: 0.82rem; cursor: pointer; color: var(--text-primary); }
 .cp-chev-menu button:hover { background: var(--subtle-bg); }
 .cp-chev-menu button.neg { color: #dc2626; }
 .cp-more-wrap { position: relative; }
 .cp-more-menu { position: absolute; top: calc(100% + 4px); right: 0; background: #fff; border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18); z-index: 60; min-width: 200px; padding: 0.3rem; }
+.cp-more-wrap--generic { z-index: 150; }
+.cp-more-wrap--generic .cp-more-menu { top: calc(100% + 4px); bottom: auto; z-index: 151; }
 .cp-more-menu button { display: flex; align-items: center; gap: 0.6rem; width: 100%; border: none; background: none; text-align: left; padding: 0.55rem 0.7rem; border-radius: 7px; font-size: 0.83rem; font-family: inherit; cursor: pointer; color: var(--text-primary); white-space: nowrap; }
 .cp-more-menu button:hover { background: var(--subtle-bg); }
 .cp-more-menu button.neg { color: #dc2626; }

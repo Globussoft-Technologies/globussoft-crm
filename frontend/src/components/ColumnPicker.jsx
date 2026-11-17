@@ -41,6 +41,7 @@ export default function ColumnPicker({
   const [draggedKey, setDraggedKey] = useState(null);
   const [dropKey, setDropKey] = useState(null);
   const [deletingKey, setDeletingKey] = useState(null);
+  const [selectedDeleteKeys, setSelectedDeleteKeys] = useState([]);
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
@@ -327,10 +328,42 @@ export default function ColumnPicker({
       });
       setAvailable((current) => current.filter((item) => item.key !== column.key));
       setDraftVisible((current) => current.filter((key) => key !== column.key));
+      setSelectedDeleteKeys((current) => current.filter((key) => key !== column.key));
       onFieldDeleted?.(definition);
       notify.success("Field deleted");
     } catch (err) {
       notify.error(err?.message || "Failed to delete field");
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    const selected = available.filter((column) => selectedDeleteKeys.includes(column.key));
+    const definitions = selected
+      .map((column) => ({ column, definition: deletableColumns.find((item) => item.key === column.key) }))
+      .filter(({ definition }) => definition?.id);
+    if (!definitions.length) return;
+
+    const confirmed = await notify.confirm({
+      title: `Delete ${definitions.length} fields?`,
+      message: `These fields and their stored values will be removed from existing leads. This cannot be undone.`,
+      confirmText: "Delete fields",
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setDeletingKey("__multiple__");
+    try {
+      await Promise.all(definitions.map(({ definition }) => fetchApi(`/api/lead-custom-fields/${definition.id}`, { method: "DELETE" })));
+      const deletedKeys = new Set(definitions.map(({ column }) => column.key));
+      setAvailable((current) => current.filter((item) => !deletedKeys.has(item.key)));
+      setDraftVisible((current) => current.filter((key) => !deletedKeys.has(key)));
+      setSelectedDeleteKeys([]);
+      definitions.forEach(({ definition }) => onFieldDeleted?.(definition));
+      notify.success(`${definitions.length} fields deleted`);
+    } catch (err) {
+      notify.error(err?.message || "Failed to delete selected fields");
     } finally {
       setDeletingKey(null);
     }
@@ -359,6 +392,7 @@ export default function ColumnPicker({
     .filter(Boolean)
     .filter(matchesSearch);
   const hidden = filtered.filter((c) => !shownKeys.has(c.key));
+  const deletableHidden = hidden.filter((column) => deletableColumns.some((item) => item.key === column.key));
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
@@ -485,6 +519,38 @@ export default function ColumnPicker({
                           {c.label}
                         </span>
                       </label>
+                      {deletableColumns.some((item) => item.key === c.key) && (
+                        <>
+                          <input
+                            type="checkbox"
+                            checked={selectedDeleteKeys.includes(c.key)}
+                            onChange={() => setSelectedDeleteKeys((current) => current.includes(c.key) ? current.filter((key) => key !== c.key) : [...current, c.key])}
+                            aria-label={`Select ${c.label} field for deletion`}
+                            title={`Select ${c.label} field for deletion`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteField(c)}
+                            disabled={deletingKey === c.key || deletingKey === "__multiple__"}
+                            aria-label={`Delete ${c.label} field`}
+                            title={`Delete ${c.label} field`}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--danger-color, #dc2626)",
+                              padding: "0.2rem",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              cursor: deletingKey === c.key ? "wait" : "pointer",
+                              opacity: deletingKey === c.key ? 0.55 : 1,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -493,8 +559,20 @@ export default function ColumnPicker({
             )}
             {hidden.length > 0 && (
               <>
-                <div style={{ padding: "0.6rem 0.75rem 0.3rem", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Fields not shown in table
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.6rem 0.75rem 0.3rem" }}>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    Fields not shown in table
+                  </div>
+                  {deletableHidden.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDeleteKeys((current) => current.length === deletableHidden.length ? [] : deletableHidden.map((column) => column.key))}
+                      className="btn-secondary"
+                      style={{ fontSize: "0.7rem", padding: "0.2rem 0.45rem" }}
+                    >
+                      {selectedDeleteKeys.length === deletableHidden.length ? "Clear selection" : "Select all"}
+                    </button>
+                  )}
                 </div>
                 {hidden.map((c) => (
                   <div
@@ -508,27 +586,36 @@ export default function ColumnPicker({
                       </span>
                     </label>
                     {deletableColumns.some((item) => item.key === c.key) && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteField(c)}
-                        disabled={deletingKey === c.key}
-                        aria-label={`Delete ${c.label} field`}
-                        title={`Delete ${c.label} field`}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "var(--danger-color, #dc2626)",
-                          padding: "0.2rem",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          cursor: deletingKey === c.key ? "wait" : "pointer",
-                          opacity: deletingKey === c.key ? 0.55 : 1,
-                          flexShrink: 0,
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <>
+                        <input
+                          type="checkbox"
+                          checked={selectedDeleteKeys.includes(c.key)}
+                          onChange={() => setSelectedDeleteKeys((current) => current.includes(c.key) ? current.filter((key) => key !== c.key) : [...current, c.key])}
+                          aria-label={`Select ${c.label} field for deletion`}
+                          title={`Select ${c.label} field for deletion`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteField(c)}
+                          disabled={deletingKey === c.key || deletingKey === "__multiple__"}
+                          aria-label={`Delete ${c.label} field`}
+                          title={`Delete ${c.label} field`}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "var(--danger-color, #dc2626)",
+                            padding: "0.2rem",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: deletingKey === c.key ? "wait" : "pointer",
+                            opacity: deletingKey === c.key ? 0.55 : 1,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
                     )}
                   </div>
                 ))}
@@ -542,9 +629,22 @@ export default function ColumnPicker({
             <button type="button" onClick={handleReset} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
               Reset
             </button>
-            <button type="button" onClick={handleApply} disabled={saving} className="btn-primary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
-              {saving ? "Saving…" : "Apply"}
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {selectedDeleteKeys.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDeleteSelected}
+                  disabled={deletingKey !== null}
+                  className="btn-secondary"
+                  style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem", color: "var(--danger-color, #dc2626)", borderColor: "var(--danger-color, #dc2626)" }}
+                >
+                  {deletingKey === "__multiple__" ? "Deleting fields…" : `Delete selected (${selectedDeleteKeys.length})`}
+                </button>
+              )}
+              <button type="button" onClick={handleApply} disabled={saving || deletingKey !== null} className="btn-primary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
+                {saving ? "Saving…" : "Apply"}
+              </button>
+            </div>
           </div>
         </div>,
         document.body,

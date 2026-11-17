@@ -2195,6 +2195,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                 >
                   <div className="cp-lifecycle-status-head">
                     <div className="cp-label">Status</div>
+                    {!isGeneric && (
+                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
+                    )}
                   </div>
                   <div className={`cp-lifecycle-stage-scroller${statusPipelineOverflow ? ' cp-lifecycle-stage-scroller--overflow' : ' cp-lifecycle-stage-scroller--fit'}`}>
                     {isGeneric && statusPipelineOverflow && (

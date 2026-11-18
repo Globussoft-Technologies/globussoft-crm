@@ -4,6 +4,10 @@ import { superAdminFetch } from "../../utils/superAdminApi";
 
 const ORGANIZATION_PAGE_SIZE = 50;
 
+function normalizeConfirmationName(value) {
+  return String(value ?? "").normalize("NFC").trim().replace(/\s+/gu, " ");
+}
+
 function organizationDetails(organization) {
   return [
     `Organization: ${organization.name}`,
@@ -78,7 +82,7 @@ export default function SuperAdminOrganizationDeletion() {
 
   const handleDelete = async (event) => {
     event.preventDefault();
-    if (!selected || confirmationName.trim() !== selected.name || reason.trim().length < 3) return;
+    if (!selected || normalizeConfirmationName(confirmationName) !== normalizeConfirmationName(selected.name) || reason.trim().length < 3) return;
 
     setDeleting(true);
     setError("");
@@ -102,7 +106,7 @@ export default function SuperAdminOrganizationDeletion() {
     }
   };
 
-  const confirmationMatches = selected && confirmationName.trim() === selected.name;
+  const confirmationMatches = selected && normalizeConfirmationName(confirmationName) === normalizeConfirmationName(selected.name);
   const listStart = total === 0 ? 0 : offset + 1;
   const listEnd = Math.min(offset + organizations.length, total);
 

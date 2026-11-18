@@ -14,8 +14,10 @@ import { resolvePrimaryRole } from '../../lib/roleResolution.js';
 beforeEach(() => {
   prisma.userRole = prisma.userRole || {};
   prisma.role = prisma.role || {};
+  prisma.tenant = prisma.tenant || {};
   prisma.userRole.findFirst = vi.fn();
   prisma.role.findFirst = vi.fn();
+  prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'travel' });
 });
 
 describe('resolvePrimaryRole', () => {
@@ -43,6 +45,7 @@ describe('resolvePrimaryRole', () => {
       id: 7,
       role: 'USER',
       tenantId: 1,
+      vertical: 'travel',
     });
 
     expect(result).toEqual({
@@ -55,7 +58,10 @@ describe('resolvePrimaryRole', () => {
     });
     expect(prisma.userRole.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { userId: 7 },
+        where: {
+          userId: 7,
+          role: { OR: [{ tenantId: 1 }, { tenantId: null }] },
+        },
         orderBy: { assignedAt: 'desc' },
       }),
     );
@@ -73,6 +79,7 @@ describe('resolvePrimaryRole', () => {
       id: 7,
       role: 'USER',
       tenantId: 1,
+      vertical: 'travel',
     });
 
     expect(result).toEqual({
@@ -98,6 +105,7 @@ describe('resolvePrimaryRole', () => {
       id: 7,
       role: 'ADMIN',
       tenantId: 1,
+      vertical: 'travel',
     });
 
     expect(result).toEqual({
@@ -123,6 +131,7 @@ describe('resolvePrimaryRole', () => {
       id: 7,
       role: 'SOMETHING_UNKNOWN',
       tenantId: 1,
+      vertical: 'travel',
     });
 
     expect(result).toBeNull();
@@ -155,6 +164,7 @@ describe('resolvePrimaryRole', () => {
       id: 7,
       role: 'ADMIN',
       tenantId: 1,
+      vertical: 'travel',
     });
 
     expect(result).toBeNull();
@@ -162,5 +172,36 @@ describe('resolvePrimaryRole', () => {
       expect.stringContaining('failed to resolve primary role'),
     );
     warnSpy.mockRestore();
+  });
+
+  test('does not expose travel sub-brand scope for a generic tenant role', async () => {
+    prisma.userRole.findFirst.mockResolvedValueOnce({
+      id: 99,
+      userId: 7,
+      role: {
+        id: 42,
+        key: 'USER',
+        name: 'User',
+        landingPath: '/dashboard',
+        subBrandScopeJson: '["tmc"]',
+      },
+    });
+
+    const result = await resolvePrimaryRole({
+      id: 7,
+      role: 'USER',
+      tenantId: 1,
+      vertical: 'generic',
+    });
+
+    expect(result).not.toHaveProperty('subBrandScope');
+    expect(prisma.userRole.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: 7,
+          role: { OR: [{ tenantId: 1 }, { tenantId: null }] },
+        },
+      }),
+    );
   });
 });

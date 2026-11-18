@@ -98,7 +98,12 @@ router.get('/me', verifyToken, async (req, res) => {
     // assignedAt asc) for stability, but per the single-role-per-user
     // contract this should always be one row.
     const userRole = await prisma.userRole.findFirst({
-      where: { userId: req.user.userId },
+      where: {
+        userId: req.user.userId,
+        role: {
+          OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
+        },
+      },
       include: { role: { include: { widgets: true } } },
       orderBy: { assignedAt: 'desc' },
     });

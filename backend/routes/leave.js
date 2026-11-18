@@ -794,6 +794,11 @@ router.get('/availability', verifyToken, async (req, res) => {
         // before deriveWellnessRole existed or when the picked role's key
         // doesn't match a wellness-catalog entry on this tenant.
         userRoles: {
+          where: {
+            role: {
+              OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
+            },
+          },
           take: 1,
           orderBy: { assignedAt: 'desc' },
           select: {

@@ -108,16 +108,16 @@ function ResponseRows({ response, selected, expanded, onToggle }) {
       <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>{response.submittedAt ? new Date(response.submittedAt).toLocaleString() : "—"}</td>
     </tr>
     {expanded && <tr style={{ background: "var(--bg-color, #f8fafb)" }}>
-      <td colSpan={4} style={{ padding: "4px 18px 16px 62px" }}>
+      <td colSpan={4} style={{ padding: "4px 18px 16px 62px", whiteSpace: "normal" }}>
         {selected.length === 0 ? <span style={{ color: "var(--text-secondary)" }}>No catalogue details were saved.</span>
-          : <ul style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: 8, listStyle: "none", padding: 0, margin: 0 }}>
+          : <ul style={{ display: "grid", width: "100%", minWidth: 0, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: 8, listStyle: "none", padding: 0, margin: 0, whiteSpace: "normal" }}>
             {selected.map((file) => {
               const url = typeof file.driveViewLink === "string" && /^https:\/\//i.test(file.driveViewLink) ? file.driveViewLink : null;
-              return <li key={file.driveFileId || file.fileName} style={{ minWidth: 0, ...cardStyle({ padding: "10px 12px" }) }}>
-                {url ? <a href={url} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 7, color: "var(--accent-color, #315c78)", textDecoration: "none", fontWeight: 700 }}>
-                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{file.fileName || "TMC brochure"}</span><ExternalLink size={13} aria-hidden />
-                </a> : <strong>{file.fileName || "TMC brochure"}</strong>}
-                <div style={{ marginTop: 4, color: "var(--text-secondary)", fontSize: 12, overflowWrap: "anywhere" }}>{file.folderPath || "TMC"}</div>
+              return <li key={file.driveFileId || file.fileName} style={{ minWidth: 0, maxWidth: "100%", boxSizing: "border-box", overflow: "hidden", whiteSpace: "normal", ...cardStyle({ padding: "10px 12px" }) }}>
+                {url ? <a href={url} target="_blank" rel="noreferrer" title={file.fileName || "TMC brochure"} style={{ display: "flex", width: "100%", minWidth: 0, maxWidth: "100%", alignItems: "center", gap: 7, color: "var(--accent-color, #315c78)", textDecoration: "none", fontWeight: 700 }}>
+                  <span style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.fileName || "TMC brochure"}</span><ExternalLink size={13} aria-hidden style={{ flex: "0 0 13px" }} />
+                </a> : <strong title={file.fileName || "TMC brochure"} style={{ display: "block", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.fileName || "TMC brochure"}</strong>}
+                <div style={{ minWidth: 0, maxWidth: "100%", marginTop: 4, color: "var(--text-secondary)", fontSize: 12, whiteSpace: "normal", overflowWrap: "anywhere" }}>{file.folderPath || "TMC"}</div>
               </li>;
             })}
           </ul>}

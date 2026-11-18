@@ -19,6 +19,7 @@
 
 const prisma = require("./prisma");
 const { normalizeDataScope, parseSubBrandScope } = require("./rbacScope");
+const { resolveTenantVertical } = require("./tenantVertical");
 
 /**
  * Resolve the primary role for a user.
@@ -39,13 +40,27 @@ async function resolvePrimaryRole(user) {
   // Swallow any prisma error and fall through to null; the frontend falls
   // back to its vertical-default routing when landingPath is null.
   try {
+    // Sub-brand scope is a travel-only field. Callers that already loaded
+    // the tenant row may pass its authoritative vertical; otherwise resolve
+    // it from the database and fail closed by omitting travel metadata.
+    const vertical = user.vertical || (user.tenantId
+      ? await resolveTenantVertical(user.tenantId)
+      : null);
+    const includeSubBrandScope = vertical === "travel";
+
     // Use findFirst rather than findUnique because the @@unique([userId])
     // constraint is application-enforced for now (see schema.prisma comment).
     // Order by most-recent assignment so a user with legacy 2+ rows resolves
     // to the latest one — once the dedupe-then-add-unique migration lands
     // this can flip back to findUnique.
+    const roleTenantScope = user.tenantId
+      ? { OR: [{ tenantId: user.tenantId }, { tenantId: null }] }
+      : { tenantId: null };
     const userRole = await prisma.userRole.findFirst({
-      where: { userId: user.id },
+      // A stale or malformed UserRole link must never resolve role metadata
+      // from another tenant. Global platform roles remain valid for users in
+      // every tenant; tenant roles must belong to this user's tenant.
+      where: { userId: user.id, role: roleTenantScope },
       include: { role: true },
       orderBy: { assignedAt: 'desc' },
     });
@@ -57,7 +72,9 @@ async function resolvePrimaryRole(user) {
         name: userRole.role.name,
         landingPath: userRole.role.landingPath || null,
         dataScope: normalizeDataScope(userRole.role.dataScope),
-        subBrandScope: parseSubBrandScope(userRole.role.subBrandScopeJson),
+        ...(includeSubBrandScope
+          ? { subBrandScope: parseSubBrandScope(userRole.role.subBrandScopeJson) }
+          : {}),
       };
     }
 
@@ -77,7 +94,9 @@ async function resolvePrimaryRole(user) {
           name: role.name,
           landingPath: role.landingPath || null,
           dataScope: normalizeDataScope(role.dataScope),
-          subBrandScope: parseSubBrandScope(role.subBrandScopeJson),
+          ...(includeSubBrandScope
+            ? { subBrandScope: parseSubBrandScope(role.subBrandScopeJson) }
+            : {}),
         };
       }
     }

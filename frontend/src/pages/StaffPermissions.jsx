@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ShieldCheck } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { usePermissions } from '../hooks/usePermissions';
+import { AuthContext } from '../appContexts';
 import AccessDenied from '../components/AccessDenied';
 import { SUB_BRAND_LABEL } from '../utils/travelSubBrand';
 
@@ -18,42 +19,57 @@ import { SUB_BRAND_LABEL } from '../utils/travelSubBrand';
 export default function StaffPermissions() {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const { tenant, user } = useContext(AuthContext) || {};
+  const activeTenantId = tenant?.id ?? tenant?.tenantId ?? user?.tenantId ?? null;
+  const activeTenantVertical = tenant?.vertical ?? null;
+  const requestScope = `${activeTenantId ?? 'unknown'}:${activeTenantVertical || 'unknown'}:${userId}`;
   const {
     hasPermission,
     isLoading: permLoading,
   } = usePermissions();
   const canRead = hasPermission('roles', 'read');
 
-  const [data, setData] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [result, setResult] = useState({ scope: null, data: null });
+  // Do not render a previous target's permission data while a new target or
+  // tenant is loading. The scope check also hides it in the render before the
+  // effect runs after a tenant switch.
+  const data = result.scope === requestScope ? result.data : null;
+  const [isLoadingRequest, setIsLoadingRequest] = useState(true);
+  const isLoading = isLoadingRequest || result.scope !== requestScope;
   const [error, setError] = useState(null);
 
   useEffect(() => {
     // Skip the fetch entirely if the viewer lacks roles.read — backend
     // would 403 anyway, no point firing a doomed request that pollutes the
     // toast stream.
-    if (permLoading || !canRead) return;
+    if (permLoading || !canRead) {
+      setResult({ scope: null, data: null });
+      setIsLoadingRequest(true);
+      setError(null);
+      return undefined;
+    }
     let cancelled = false;
-    setIsLoading(true);
+    setResult({ scope: null, data: null });
+    setIsLoadingRequest(true);
     setError(null);
     fetchApi(`/api/users/${encodeURIComponent(userId)}/permissions`, {
       silent: true,
     })
       .then((res) => {
         if (cancelled) return;
-        setData(res);
-        setIsLoading(false);
+        setResult({ scope: requestScope, data: res });
+        setIsLoadingRequest(false);
       })
       .catch((err) => {
         if (cancelled) return;
         setError(err);
-        setData(null);
-        setIsLoading(false);
+        setResult({ scope: requestScope, data: null });
+        setIsLoadingRequest(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [userId, canRead, permLoading]);
+  }, [userId, requestScope, canRead, permLoading]);
 
   if (permLoading) {
     return (
@@ -75,6 +91,7 @@ export default function StaffPermissions() {
   const roleSubBrandScope = Array.isArray(primaryRole?.subBrandScope)
     ? primaryRole.subBrandScope
     : [];
+  const isTravelTenant = data?.vertical === 'travel';
   const grouped = groupByModule(permissions);
 
   return (
@@ -160,11 +177,13 @@ export default function StaffPermissions() {
         <Card label="Legacy role">{target?.role || '-'}</Card>
         <Card label="Primary role">{primaryRole?.name || primaryRole?.key || '-'}</Card>
         <Card label="Data scope">{roleDataScope}</Card>
-        <Card label="Sub-brand scope">
-          {roleSubBrandScope.length
-            ? roleSubBrandScope.map((id) => SUB_BRAND_LABEL[id] || id).join(', ')
-            : 'All travel sub-brands'}
-        </Card>
+        {isTravelTenant && (
+          <Card label="Sub-brand scope">
+            {roleSubBrandScope.length
+              ? roleSubBrandScope.map((id) => SUB_BRAND_LABEL[id] || id).join(', ')
+              : 'All travel sub-brands'}
+          </Card>
+        )}
         {target?.wellnessRole && (
           <Card label="Wellness role">{target.wellnessRole}</Card>
         )}

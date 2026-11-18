@@ -88,7 +88,7 @@ export default function SuperAdminOrganizationAuditLog() {
                   <th style={{ padding: "0.8rem" }}>Actor</th>
                   <th style={{ padding: "0.8rem" }}>Outcome</th>
                   <th style={{ padding: "0.8rem" }}>Reason / details</th>
-                  <th style={{ padding: "0.8rem", textAlign: "right" }}>Tenant rows removed</th>
+                  <th style={{ padding: "0.8rem", textAlign: "left" }}>Tenant rows removed</th>
                 </tr>
               </thead>
               <tbody>
@@ -100,7 +100,7 @@ export default function SuperAdminOrganizationAuditLog() {
                     <td style={{ padding: "0.8rem" }}>{entry.actor}</td>
                     <td style={{ padding: "0.8rem" }}><span style={{ ...statusStyle(entry.status), display: "inline-block", borderRadius: 999, padding: "0.25rem 0.55rem", fontWeight: 700, fontSize: "0.74rem" }}>{entry.status.replaceAll("_", " ")}</span>{entry.completedAt && <div style={{ color: "var(--text-secondary)", fontSize: "0.74rem", marginTop: 4 }}>{formatDate(entry.completedAt)}</div>}</td>
                     <td style={{ padding: "0.8rem", minWidth: 220, maxWidth: 360, overflowWrap: "anywhere" }}><div>{entry.reason || "-"}</div>{entry.errorMessage && <div style={{ color: "#ef4444", marginTop: 4 }}>{entry.errorMessage}</div>}</td>
-                    <td style={{ padding: "0.8rem", textAlign: "right" }}>{entry.deletedRowCount == null ? "-" : Number(entry.deletedRowCount).toLocaleString()}</td>
+                    <td style={{ padding: "0.8rem", textAlign: "left" }}>{entry.deletedRowCount == null ? "-" : Number(entry.deletedRowCount).toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>

@@ -4,6 +4,10 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 const router = express.Router();
 
+function normalizeOrganizationConfirmation(value) {
+  return String(value ?? "").normalize("NFC").trim().replace(/\s+/gu, " ");
+}
+
 function buildTenantDataDeletionOrder() {
   // Include legacy models with a tenantId scalar even when they do not yet
   // declare a formal Tenant relation; otherwise their rows would survive.
@@ -302,7 +306,7 @@ router.post("/organizations/:tenantId/hard-delete", async (req, res) => {
       select: { id: true, name: true, slug: true, ownerEmail: true },
     });
     if (!organization) return res.status(404).json({ error: "Organization not found", code: "TENANT_NOT_FOUND" });
-    if (confirmationName !== organization.name) {
+    if (normalizeOrganizationConfirmation(confirmationName) !== normalizeOrganizationConfirmation(organization.name)) {
       return res.status(400).json({ error: "Type the exact organization name to confirm deletion", code: "CONFIRMATION_MISMATCH" });
     }
     if (reason.length < 3 || reason.length > 2000) {

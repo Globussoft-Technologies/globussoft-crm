@@ -52,6 +52,11 @@ router.get('/', verifyToken, async (req, res) => {
       include: {
         tenant: { select: { id: true, name: true, vertical: true, defaultCurrency: true, locale: true } },
         userRoles: {
+          where: {
+            role: {
+              OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
+            },
+          },
           include: {
             role: {
               select: { id: true, key: true, name: true, landingPath: true, isSystem: true, tenantId: true },
@@ -74,7 +79,12 @@ router.get('/', verifyToken, async (req, res) => {
       const vertical = user.tenant?.vertical || 'generic';
       const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
       return res.json({
-        user: { ...user, password: undefined, tenantId: undefined },
+        user: {
+          ...user,
+          password: undefined,
+          tenantId: undefined,
+          ...(user.tenant?.vertical === 'travel' ? {} : { subBrandAccess: undefined }),
+        },
         isOwner: true,
         roles: ['OWNER'],
         effectivePermissions: [],
@@ -90,6 +100,7 @@ router.get('/', verifyToken, async (req, res) => {
       id: user.id,
       role: user.role,
       tenantId: user.tenantId,
+      vertical: user.tenant?.vertical,
     });
 
     // SPEC §B3 — effectivePermissions comes from the SAME resolver the
@@ -140,7 +151,12 @@ router.get('/', verifyToken, async (req, res) => {
       .filter(Boolean);
 
     return res.json({
-      user: { ...user, password: undefined, tenantId: undefined },
+      user: {
+        ...user,
+        password: undefined,
+        tenantId: undefined,
+        ...(user.tenant?.vertical === 'travel' ? {} : { subBrandAccess: undefined }),
+      },
       isOwner: false,
       roles: roleKeys,
       effectivePermissions,

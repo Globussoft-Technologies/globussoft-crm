@@ -1795,7 +1795,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
-  it('reorders and persists columns when dragged from the table header', async () => {
+  it('does not reorder or persist columns when dragged from the table header', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
@@ -1829,22 +1829,15 @@ describe('Leads Freshsales-style list UI affordances', () => {
     fireEvent.dragOver(sourceHeader, { dataTransfer });
     fireEvent.drop(sourceHeader, { dataTransfer });
 
-    await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/table-column-prefs/leads',
-        expect.objectContaining({
-          method: 'PUT',
-          body: JSON.stringify({
-            visible: ['name', 'campaign', 'source', 'email', 'actions'],
-          }),
-        }),
-      );
-    });
-    await waitFor(() => {
-      expect(Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
-        th.textContent.replace(/\s+/g, ' ').trim(),
-      )).toEqual(['Name', 'Callified Campaign', 'Source', 'Email', 'Actions']);
-    });
+    expect(campaignHeader).not.toHaveAttribute('draggable', 'true');
+    expect(campaignHeader).not.toHaveAttribute('aria-grabbed');
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/table-column-prefs/leads',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
+      th.textContent.replace(/\s+/g, ' ').trim(),
+    )).toEqual(['Name', 'Source', 'Callified Campaign', 'Email', 'Actions']);
   });
 
   it('keeps the saved column order in sync while moving between every Leads page', async () => {
@@ -1866,9 +1859,6 @@ describe('Leads Freshsales-style list UI affordances', () => {
           ],
         });
       }
-      if (url === '/api/table-column-prefs/leads' && opts?.method === 'PUT') {
-        return Promise.resolve({ visible: JSON.parse(opts.body).visible });
-      }
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
         const page = Number(new URL(url, 'http://crm.test').searchParams.get('page') || 1);
         return Promise.resolve({
@@ -1885,40 +1875,29 @@ describe('Leads Freshsales-style list UI affordances', () => {
     const { container } = renderLeads(authValue);
     await screen.findByText('Page 1 lead');
 
-    const dataTransfer = {
-      effectAllowed: 'all',
-      dropEffect: 'none',
-      setData: vi.fn(),
-    };
-    const campaignHeader = container.querySelector('[data-column-header="campaign"]');
-    const sourceHeader = container.querySelector('[data-column-header="source"]');
-    fireEvent.dragStart(campaignHeader, { dataTransfer });
-    fireEvent.dragOver(sourceHeader, { dataTransfer });
-    fireEvent.drop(sourceHeader, { dataTransfer });
-
     const getHeaders = () => Array.from(
       container.querySelectorAll('.leads-split-table thead th'),
     ).map((th) => th.textContent.replace(/\s+/g, ' ').trim());
-    await waitFor(() => expect(getHeaders()).toEqual([
-      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
-    ]));
+    expect(getHeaders()).toEqual([
+      'Name', 'Source', 'Callified Campaign', 'Email', 'Actions',
+    ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     await waitFor(() => expect(screen.getByText('Page 2 lead')).toBeInTheDocument());
     expect(getHeaders()).toEqual([
-      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+      'Name', 'Source', 'Callified Campaign', 'Email', 'Actions',
     ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     await waitFor(() => expect(screen.getByText('Page 3 lead')).toBeInTheDocument());
     expect(getHeaders()).toEqual([
-      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+      'Name', 'Source', 'Callified Campaign', 'Email', 'Actions',
     ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
     await waitFor(() => expect(screen.getByText('Page 2 lead')).toBeInTheDocument());
     expect(getHeaders()).toEqual([
-      'Name', 'Callified Campaign', 'Source', 'Email', 'Actions',
+      'Name', 'Source', 'Callified Campaign', 'Email', 'Actions',
     ]);
   });
 

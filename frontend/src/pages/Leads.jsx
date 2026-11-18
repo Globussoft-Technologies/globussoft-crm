@@ -3677,8 +3677,11 @@ const Leads = ({ initialListState = null } = {}) => {
     readLeadsColumnOrder(leadsColumnOrderStorageKey),
   );
   const [leadColumnCatalog, setLeadColumnCatalog] = useState([]);
-  const [draggedLeadColumnKey, setDraggedLeadColumnKey] = useState(null);
-  const [dropLeadColumnKey, setDropLeadColumnKey] = useState(null);
+  // Table-header drag-to-reorder is temporarily disabled. Keep the saved
+  // visible-column order because the table still consumes preferences from
+  // Customize table, where column reordering remains available.
+  // const [draggedLeadColumnKey, setDraggedLeadColumnKey] = useState(null);
+  // const [dropLeadColumnKey, setDropLeadColumnKey] = useState(null);
   const [sortConfig, setSortConfig] = useState(restoredLeadsTableState.sortConfig || { key: null, direction: null });
   const applyingLeadsUrlStateRef = useRef(false);
 
@@ -7461,6 +7464,7 @@ const Leads = ({ initialListState = null } = {}) => {
     },
     [supportsColumnCustomization, resolveAllowedVisibleColumns],
   );
+  /* Temporarily disabled: table headers no longer reorder columns by drag.
   const reorderLeadColumnsFromHeader = useCallback(
     async (fromKey, toKey) => {
       if (
@@ -7550,6 +7554,7 @@ const Leads = ({ initialListState = null } = {}) => {
     setDraggedLeadColumnKey(null);
     setDropLeadColumnKey(null);
   };
+  */
   const collapseColumn = (columnKey) => {
     setColumnLayout((prev) => ({
       ...prev,
@@ -8869,36 +8874,15 @@ const Leads = ({ initialListState = null } = {}) => {
     leadingControls = null,
   ) => {
     const locked = key === "select" || key === "actions";
-    const reorderable =
-      supportsColumnCustomization && key !== "name" && key !== "actions" && key !== "select";
-    const isDropTarget =
-      dropLeadColumnKey === key && draggedLeadColumnKey !== key;
     const { key: headerKey, ...restCellProps } = cellProps;
+    // Header drag-to-reorder is disabled here; saved order still comes from
+    // Customize table and resizing/menu interactions remain active.
     return (
       <th
         key={headerKey}
         {...restCellProps}
         data-column-header={key}
-        draggable={reorderable}
-        aria-grabbed={reorderable && draggedLeadColumnKey === key}
-        title={reorderable ? `Drag to reorder ${label}` : undefined}
-        onDragStart={handleLeadHeaderDragStart(key)}
-        onDragOver={handleLeadHeaderDragOver(key)}
-        onDrop={handleLeadHeaderDrop(key)}
-        onDragEnd={handleLeadHeaderDragEnd}
-        style={getHeaderCellStyle(key, {
-          ...extra,
-          cursor: reorderable
-            ? draggedLeadColumnKey === key
-              ? "grabbing"
-              : "grab"
-            : extra.cursor,
-          opacity: draggedLeadColumnKey === key ? 0.55 : 1,
-          outline: isDropTarget
-            ? "2px solid var(--accent-color)"
-            : extra.outline,
-          outlineOffset: isDropTarget ? -2 : extra.outlineOffset,
-        })}
+        style={getHeaderCellStyle(key, extra)}
         aria-label={`${label} column`}
       >
         <div

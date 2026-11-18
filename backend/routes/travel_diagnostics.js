@@ -1413,6 +1413,58 @@ router.post(
     }
   },
 );
+// GET /api/travel/tmc-catalogue-responses
+// Latest submitted brochure selections for TMC teachers. This is an admin
+// review surface; response rows and teacher contacts are tenant-scoped.
+router.get(
+  "/tmc-catalogue-responses",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+      const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
+      const where = { tenantId };
+      const [rows, total] = await Promise.all([
+        prisma.tmcTeacherCatalogueResponse.findMany({
+          where,
+          orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
+          take: limit,
+          skip: offset,
+          select: {
+            id: true,
+            selectedFilesJson: true,
+            submittedAt: true,
+            teacher: { select: { id: true, name: true, email: true } },
+          },
+        }),
+        prisma.tmcTeacherCatalogueResponse.count({ where }),
+      ]);
+      const responses = rows.map((row) => {
+        let selectedCatalogues = [];
+        try {
+          const parsed = JSON.parse(row.selectedFilesJson || "[]");
+          if (Array.isArray(parsed)) selectedCatalogues = parsed;
+        } catch (_err) {
+          selectedCatalogues = [];
+        }
+        return {
+          id: row.id,
+          teacher: row.teacher,
+          selectedCatalogues,
+          submittedAt: row.submittedAt,
+        };
+      });
+      return res.json({ responses, total, limit, offset });
+    } catch (err) {
+      console.error("[travel-diag] TMC catalogue responses error:", err.message);
+      return res.status(500).json({ error: "Failed to load TMC catalogue responses", code: "TMC_CATALOGUE_RESPONSES_FAILED" });
+    }
+  },
+);
+
 // GET /api/travel/diagnostics?subBrand=tmc&classification=level_2&contactId=42
 router.get(
   "/diagnostics",

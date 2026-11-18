@@ -21,6 +21,7 @@ import CalendarRangePicker from "../../components/CalendarRangePicker";
 import CountBadge from "../../components/CountBadge";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
+import TmcCatalogueResponses from "./TmcCatalogueResponses";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -34,6 +35,28 @@ const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const MAX_PAGE_SIZE = 200;
 const TIER_SORT_ORDER = { entry: 0, primary: 1, premium: 2 };
+
+function diagnosticsSectionTabStyle(active) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 32,
+    minHeight: 32,
+    boxSizing: "border-box",
+    padding: "0 12px",
+    border: 0,
+    borderBottom: active ? "2px solid var(--accent-color, #4f46e5)" : "2px solid transparent",
+    borderRadius: "6px 6px 0 0",
+    background: active ? "var(--surface-color)" : "transparent",
+    color: active ? "var(--text-primary, #1f2937)" : "var(--text-secondary, #667085)",
+    fontSize: 13,
+    fontWeight: active ? 750 : 600,
+    lineHeight: 1,
+    whiteSpace: "nowrap",
+    cursor: "pointer",
+  };
+}
 
 function fmt(d) {
   if (!d) return "—";
@@ -152,6 +175,7 @@ export default function Diagnostics() {
     const value = searchParams.get("sortOrder");
     return value === "asc" || value === "desc" ? value : null;
   });
+  const [diagnosticsTab, setDiagnosticsTab] = useState("submissions");
 
   const reqIdRef = useRef(0);
   const seenDiagnosticIdsRef = useRef(new Set());
@@ -463,7 +487,7 @@ export default function Diagnostics() {
           justifyContent: "space-between",
           alignItems: "flex-start",
           gap: 16,
-          marginBottom: 4,
+          marginBottom: 0,
         }}
       >
         <h1
@@ -482,7 +506,7 @@ export default function Diagnostics() {
           <ClipboardCheck size={28} aria-hidden /> <span>Diagnostics</span>
           <CountBadge count={total} title={`${total.toLocaleString()} diagnostics`} />
         </h1>
-        <div className="diagnostics-page__actions" style={{ display: "flex", gap: 8 }}>
+        <div className="diagnostics-page__actions" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <Link
             to="/travel/trip-knowledge"
             state={{ returnTo: diagnosticsListUrl, returnLabel: "Back to diagnostics" }}
@@ -510,10 +534,17 @@ export default function Diagnostics() {
           </Link>
         </div>
       </div>
-      <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
+      <p style={{ color: "var(--text-secondary)", margin: "8px 0 0", lineHeight: 1.45, maxWidth: 720 }}>
         Weighted-scoring assessments classify leads into tiers before any quote
         is shown.
       </p>
+
+      {isAdmin && <div role="tablist" aria-label="Diagnostics sections" style={{ display: "flex", alignItems: "stretch", flexWrap: "wrap", gap: 18, borderBottom: "1px solid var(--border-color)", marginTop: 14, marginBottom: 14 }}>
+        <button className="diagnostics-section-tab" type="button" role="tab" aria-selected={diagnosticsTab === "submissions"} onClick={() => setDiagnosticsTab("submissions")} style={diagnosticsSectionTabStyle(diagnosticsTab === "submissions")}>Diagnostics</button>
+        <button className="diagnostics-section-tab" type="button" role="tab" aria-selected={diagnosticsTab === "catalogues"} onClick={() => setDiagnosticsTab("catalogues")} style={diagnosticsSectionTabStyle(diagnosticsTab === "catalogues")}>TMC Catalogue Responses</button>
+      </div>}
+
+      {isAdmin && diagnosticsTab === "catalogues" ? <TmcCatalogueResponses /> : <>
 
       <div
         className="diagnostics-page__filters"
@@ -523,7 +554,7 @@ export default function Diagnostics() {
           flexWrap: "wrap",
           alignItems: "center",
           background: "var(--surface-color)",
-          padding: 14,
+          padding: "9px 12px",
           borderRadius: 12,
           border: "1px solid var(--border-color)",
           marginBottom: 16,
@@ -829,6 +860,7 @@ export default function Diagnostics() {
           />
         )}
       </div>
+      </>}
     </div>
   );
 }

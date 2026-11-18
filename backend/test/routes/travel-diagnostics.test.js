@@ -115,6 +115,11 @@ prisma.travelDiagnostic = {
   deleteMany: vi.fn(),
   count: vi.fn(),
 };
+prisma.tmcTeacherCatalogueResponse = {
+  ...(prisma.tmcTeacherCatalogueResponse || {}),
+  findMany: vi.fn(),
+  count: vi.fn(),
+};
 // FR-5 curriculum-fit lookup delegate.
 prisma.travelCurriculumMapping = {
   ...(prisma.travelCurriculumMapping || {}),
@@ -240,6 +245,8 @@ beforeEach(() => {
   prisma.travelDiagnostic.update.mockReset().mockResolvedValue({ id: 500 });
   prisma.travelDiagnostic.deleteMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(0);
+  prisma.tmcTeacherCatalogueResponse.findMany.mockReset().mockResolvedValue([]);
+  prisma.tmcTeacherCatalogueResponse.count.mockReset().mockResolvedValue(0);
   prisma.travelCurriculumMapping.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnosticRagResult.findUnique.mockReset().mockResolvedValue(null);
   prisma.travelDiagnosticRagResult.findMany.mockReset().mockResolvedValue([]);
@@ -306,6 +313,52 @@ describe('travel-diagnostics — auth + vertical gates', () => {
 });
 
 // ─── GET /diagnostic-banks ────────────────────────────────────────────
+
+describe('GET /tmc-catalogue-responses (ADMIN)', () => {
+  test('returns tenant-scoped teacher selections with parsed catalogue snapshots', async () => {
+    const selectedCatalogues = [{ driveFileId: 'tmc-pdf-1', fileName: 'Nepal School Trip.pdf' }];
+    prisma.tmcTeacherCatalogueResponse.findMany.mockResolvedValue([{
+      id: 61,
+      selectedFilesJson: JSON.stringify(selectedCatalogues),
+      submittedAt: new Date('2026-11-10T10:00:00.000Z'),
+      teacher: { id: 55, name: 'Asha Teacher', email: 'asha@example.test' },
+    }]);
+    prisma.tmcTeacherCatalogueResponse.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/tmc-catalogue-responses?limit=10&offset=0')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 1,
+      limit: 10,
+      offset: 0,
+      responses: [{
+        id: 61,
+        teacher: { id: 55, name: 'Asha Teacher', email: 'asha@example.test' },
+        selectedCatalogues,
+      }],
+    });
+    expect(prisma.tmcTeacherCatalogueResponse.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1 },
+      take: 10,
+      skip: 0,
+    }));
+    expect(prisma.tmcTeacherCatalogueResponse.count).toHaveBeenCalledWith({ where: { tenantId: 1 } });
+  });
+
+  test('rejects non-admin travel roles before reading teacher responses', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'MANAGER', subBrandAccess: null });
+
+    const res = await request(makeApp())
+      .get('/api/travel/tmc-catalogue-responses')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(prisma.tmcTeacherCatalogueResponse.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('GET /diagnostic-banks', () => {
   test('happy: lists banks scoped to tenant, active filter applied', async () => {

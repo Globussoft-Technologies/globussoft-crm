@@ -10,6 +10,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const { Prisma } = requireCJS('@prisma/client');
 
 const {
   mockGetSuperAdminTenantsOverview,
@@ -61,8 +62,11 @@ prisma.role = prisma.role || {};
 prisma.userRole = prisma.userRole || {};
 prisma.webForm = prisma.webForm || {};
 prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.superAdminAuditLog = prisma.superAdminAuditLog || {};
 prisma.tenant.findFirst = vi.fn();
 prisma.tenant.findUnique = vi.fn();
+prisma.tenant.findMany = vi.fn();
+prisma.tenant.count = vi.fn();
 prisma.tenant.create = vi.fn();
 prisma.tenant.delete = vi.fn();
 prisma.user.findFirst = vi.fn();
@@ -76,6 +80,10 @@ prisma.tenantSetting.findFirst = vi.fn();
 prisma.tenantSetting.findUnique = vi.fn();
 prisma.tenantSetting.updateMany = vi.fn();
 prisma.tenantSetting.upsert = vi.fn();
+prisma.superAdminAuditLog.create = vi.fn();
+prisma.superAdminAuditLog.update = vi.fn();
+prisma.superAdminAuditLog.findMany = vi.fn();
+prisma.superAdminAuditLog.count = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -104,6 +112,8 @@ beforeEach(() => {
   prisma.subscriptionPlan.findMany.mockReset();
   prisma.tenant.findFirst.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findMany.mockReset();
+  prisma.tenant.count.mockReset().mockResolvedValue(0);
   prisma.tenant.create.mockReset();
   prisma.tenant.delete.mockReset().mockResolvedValue({ id: 42 });
   prisma.user.findFirst.mockReset();
@@ -117,7 +127,36 @@ beforeEach(() => {
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenantSetting.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tenantSetting.upsert.mockReset().mockResolvedValue({ id: 1 });
+  prisma.superAdminAuditLog.create.mockReset().mockResolvedValue({ id: 901 });
+  prisma.superAdminAuditLog.update.mockReset().mockResolvedValue({ id: 901 });
+  prisma.superAdminAuditLog.findMany.mockReset().mockResolvedValue([]);
+  prisma.superAdminAuditLog.count.mockReset().mockResolvedValue(0);
 });
+
+function makeHardDeleteTransaction({ failDelete = false } = {}) {
+  const deleteManyCalls = [];
+  const organization = { id: 42, name: 'Acme Hard Delete', slug: 'acme-hard-delete' };
+  const txTenant = {
+    findUnique: vi.fn().mockResolvedValue(organization),
+    delete: failDelete
+      ? vi.fn().mockRejectedValue(Object.assign(new Error('foreign key blocked'), { code: 'P2003' }))
+      : vi.fn().mockResolvedValue({ id: organization.id }),
+  };
+  const txAudit = { update: vi.fn().mockResolvedValue({ id: 901 }) };
+  const tx = new Proxy({ tenant: txTenant, superAdminAuditLog: txAudit }, {
+    get(target, property) {
+      if (property in target) return target[property];
+      if (typeof property !== 'string') return undefined;
+      return {
+        deleteMany: vi.fn(async ({ where }) => {
+          deleteManyCalls.push({ model: property, where });
+          return { count: property === 'contact' ? 2 : 0 };
+        }),
+      };
+    },
+  });
+  return { tx, txTenant, txAudit, deleteManyCalls, organization };
+}
 
 describe('POST /organizations', () => {
   test('rejects an invalid email address before creating anything', async () => {
@@ -194,6 +233,148 @@ describe('POST /organizations', () => {
     expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS');
     expect(prisma.user.findFirst).toHaveBeenCalledWith({ where: { email: 'owner@example.com', tenant: { vertical: 'generic' } }, select: { id: true } });
     expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization search and deletion', () => {
+  test('lists organizations with pagination when no search query is supplied', async () => {
+    const organizations = [
+      { id: 21, name: 'Northwind', slug: 'northwind', ownerEmail: 'owner@northwind.test', vertical: 'generic' },
+      { id: 22, name: 'Southwind', slug: 'southwind', ownerEmail: 'owner@southwind.test', vertical: 'travel' },
+    ];
+    prisma.tenant.count.mockResolvedValue(63);
+    prisma.tenant.findMany.mockResolvedValue(organizations);
+
+    const res = await request(makeApp()).get('/api/super-admin/tenant-management/organizations/search?limit=10&offset=20');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ organizations, total: 63, limit: 10, offset: 20 });
+    expect(prisma.tenant.count).toHaveBeenCalledWith({ where: {} });
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {},
+      take: 10,
+      skip: 20,
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    }));
+  });
+
+  test('searches by tenant id and returns the exact organization first', async () => {
+    const organization = { id: 7, name: 'Seven Seas', slug: 'seven-seas', ownerEmail: 'owner@seven.test', vertical: 'travel' };
+    prisma.tenant.findUnique.mockResolvedValue(organization);
+
+    const res = await request(makeApp()).get('/api/super-admin/tenant-management/organizations/search?q=7');
+
+    expect(res.status).toBe(200);
+    expect(res.body.organizations[0]).toMatchObject({ id: 7, name: 'Seven Seas' });
+    expect(res.body.total).toBe(1);
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 7 } }));
+    expect(prisma.tenant.findMany).not.toHaveBeenCalled();
+  });
+
+  test('requires an exact organization name and a reason before writing an audit request', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 42, name: 'Acme Hard Delete', slug: 'acme-hard-delete' });
+
+    const mismatch = await request(makeApp())
+      .post('/api/super-admin/tenant-management/organizations/42/hard-delete')
+      .send({ confirmationName: 'Acme', reason: 'Requested by owner' });
+
+    expect(mismatch.status).toBe(400);
+    expect(mismatch.body.code).toBe('CONFIRMATION_MISMATCH');
+
+    const missingReason = await request(makeApp())
+      .post('/api/super-admin/tenant-management/organizations/42/hard-delete')
+      .send({ confirmationName: 'Acme Hard Delete', reason: '  ' });
+
+    expect(missingReason.status).toBe(400);
+    expect(missingReason.body.code).toBe('DELETION_REASON_REQUIRED');
+    expect(prisma.superAdminAuditLog.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('protects the platform default organization and records the blocked action', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Platform Default', slug: 'platform-default' });
+
+    const res = await request(makeApp({ username: 'ops_bob' }))
+      .post('/api/super-admin/tenant-management/organizations/1/hard-delete')
+      .send({ confirmationName: 'Platform Default', reason: 'Test protection' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PROTECTED_ORGANIZATION');
+    expect(prisma.superAdminAuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ actor: 'ops_bob', organizationId: 1, status: 'IN_PROGRESS' }),
+    }));
+    expect(prisma.superAdminAuditLog.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'FAILED', completedAt: expect.any(Date) }),
+    }));
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('deletes tenant rows in one transaction and commits a durable success audit entry', async () => {
+    const { tx, txTenant, txAudit, deleteManyCalls, organization } = makeHardDeleteTransaction();
+    prisma.tenant.findUnique.mockResolvedValue(organization);
+    prisma.superAdminAuditLog.create.mockResolvedValue({ id: 901 });
+    let transactionOptions;
+    prisma.$transaction.mockImplementation(async (callback, options) => {
+      transactionOptions = options;
+      return callback(tx);
+    });
+
+    const res = await request(makeApp({ username: 'ops_bob' }))
+      .post('/api/super-admin/tenant-management/organizations/42/hard-delete')
+      .send({ confirmationName: organization.name, reason: 'Customer requested account closure' });
+
+    const tenantScopedModelCount = Prisma.dmmf.datamodel.models.filter((model) =>
+      model.fields.some((field) => field.name === 'tenantId' && field.kind === 'scalar'),
+    ).length;
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, auditId: 901, organization: organization.name, deletedRowCount: 2 });
+    expect(deleteManyCalls).toHaveLength(tenantScopedModelCount);
+    expect(deleteManyCalls.every((call) => call.where.tenantId === 42)).toBe(true);
+    expect(txTenant.delete).toHaveBeenCalledWith({ where: { id: 42 } });
+    expect(txAudit.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 901 },
+      data: expect.objectContaining({ status: 'SUCCEEDED', deletedRowCount: 2, completedAt: expect.any(Date) }),
+    }));
+    expect(transactionOptions).toMatchObject({ maxWait: 10000, timeout: 120000 });
+    expect(prisma.superAdminAuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ actor: 'ops_bob', organizationId: 42, reason: 'Customer requested account closure' }),
+    }));
+  });
+
+  test('marks the platform audit entry failed when the deletion transaction aborts', async () => {
+    const { tx, deleteManyCalls, organization } = makeHardDeleteTransaction({ failDelete: true });
+    prisma.tenant.findUnique.mockResolvedValue(organization);
+    prisma.$transaction.mockImplementation((callback) => callback(tx));
+
+    const res = await request(makeApp())
+      .post('/api/super-admin/tenant-management/organizations/42/hard-delete')
+      .send({ confirmationName: organization.name, reason: 'Test blocked transaction' });
+
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('ORGANIZATION_DELETE_FAILED');
+    expect(deleteManyCalls.length).toBeGreaterThan(0);
+    expect(prisma.superAdminAuditLog.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 901 },
+      data: expect.objectContaining({ status: 'FAILED', errorMessage: 'foreign key blocked' }),
+    }));
+  });
+});
+
+describe('GET /organization-audit-log', () => {
+  test('filters by organization or actor and paginates the platform audit records', async () => {
+    prisma.superAdminAuditLog.findMany.mockResolvedValue([{ id: 901, actor: 'ops_alice', status: 'FAILED' }]);
+    prisma.superAdminAuditLog.count.mockResolvedValue(1);
+
+    const res = await request(makeApp()).get('/api/super-admin/tenant-management/organization-audit-log?q=Acme&status=FAILED&limit=10&offset=20');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, limit: 10, offset: 20, entries: [{ id: 901, status: 'FAILED' }] });
+    expect(prisma.superAdminAuditLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: 'FAILED', OR: expect.arrayContaining([{ organizationName: { contains: 'Acme' } }]) }),
+      take: 10,
+      skip: 20,
+    }));
+    expect(prisma.superAdminAuditLog.count).toHaveBeenCalledWith({ where: expect.objectContaining({ status: 'FAILED' }) });
   });
 });
 

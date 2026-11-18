@@ -10,7 +10,7 @@ const { JWT_SECRET } = require("../config/secrets");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireAnyPermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
-const { sanitizeText } = require("../lib/sanitizeJson");
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const { validateIdentitySubmission } = require("../lib/diagnosticIdentityFields");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { notifyMany } = require("../lib/notificationService");
@@ -53,6 +53,11 @@ const {
 } = require("../lib/tmcDigitalConsent");
 const { loadBundledTmcConsentTerms } = require("../lib/tmcConsentTerms");
 const { ensureTmcTripTypeBank } = require("../lib/tmcTripTypePreference");
+const travelKnowledgeBaseSync = require("../lib/travelKnowledgeBaseSync");
+const driveOAuth = require("../lib/googleDriveOAuth");
+
+const TMC_KNOWLEDGE_ROOT_KEY = "travel.knowledgeBase.rootFolderId";
+const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 
 const TMC_CONSENT_TEMPLATE_ASSETS = Object.freeze({
   day_trip: { filename: "day-tour-terms.pdf", sourceFile: "day-tour-terms.pdf" },
@@ -151,6 +156,133 @@ function requireTeacher(req, res, next) {
 
 function requireParent(req, res, next) {
   return requirePortalPersona("PARENT", req, res, next);
+}
+
+async function loadTmcCatalogueFiles(tenantId) {
+  const [rootSetting, indexedRows, generatedItineraries] = await Promise.all([
+    prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId, key: TMC_KNOWLEDGE_ROOT_KEY } },
+      select: { value: true },
+    }),
+    prisma.travelKnowledgeBaseFile.findMany({
+      where: { tenantId, subBrand: "tmc" },
+      select: { driveFileId: true, fileName: true, folderPath: true, driveViewLink: true },
+    }),
+    prisma.itinerary.findMany({
+      where: { tenantId, subBrand: "tmc", catalogueDriveFileId: { not: null } },
+      select: { destination: true, catalogueDriveFileId: true, catalogueDriveViewLink: true },
+    }),
+  ]);
+
+  const indexedById = new Map(indexedRows.map((row) => [String(row.driveFileId), row]));
+  const filesById = new Map();
+  const rootFolderId = String(rootSetting?.value || "").trim();
+
+  if (rootFolderId) {
+    const drive = await driveOAuth.getDriveClient(tenantId);
+    const rootItems = await travelKnowledgeBaseSync.listFolderChildren(drive, rootFolderId);
+    const tmcFolder = rootItems.find((item) => (
+      item.mimeType === GOOGLE_DRIVE_FOLDER_MIME
+      && String(item.name || "").replace(/[^a-z0-9]/gi, "").toLowerCase() === "tmc"
+    ));
+    if (tmcFolder) {
+      const visitedFolders = new Set();
+      const walk = async (folderId, folderPath) => {
+        if (visitedFolders.has(String(folderId))) return;
+        visitedFolders.add(String(folderId));
+        const items = await travelKnowledgeBaseSync.listFolderChildren(drive, folderId);
+        for (const item of items) {
+          const itemPath = folderPath ? `${folderPath}/${item.name}` : item.name;
+          if (item.mimeType === GOOGLE_DRIVE_FOLDER_MIME) {
+            await walk(item.id, itemPath);
+          } else if (item.mimeType === "application/pdf" || String(item.name || "").toLowerCase().endsWith(".pdf")) {
+            const indexed = indexedById.get(String(item.id));
+            filesById.set(String(item.id), {
+              driveFileId: String(item.id),
+              fileName: item.name || indexed?.fileName || "TMC brochure.pdf",
+              folderPath: folderPath ? `${folderPath}` : "TMC",
+              indexed: Boolean(indexed),
+              driveViewLink: item.webViewLink || indexed?.driveViewLink || `https://drive.google.com/file/d/${encodeURIComponent(item.id)}/view`,
+              thumbnailLink: item.thumbnailLink || null,
+            });
+          }
+        }
+      };
+      await walk(tmcFolder.id, tmcFolder.name || "TMC");
+    }
+  }
+
+  for (const itinerary of generatedItineraries) {
+    const driveFileId = String(itinerary.catalogueDriveFileId || "");
+    if (!driveFileId || filesById.has(driveFileId) || indexedById.has(driveFileId)) continue;
+    const indexed = indexedById.get(driveFileId);
+    filesById.set(driveFileId, {
+      driveFileId,
+      fileName: indexed?.fileName || `${itinerary.destination || "Itinerary"} PDF`,
+      folderPath: indexed?.folderPath || "TMC/CRM Itineraries",
+      indexed: Boolean(indexed),
+      driveViewLink: itinerary.catalogueDriveViewLink || indexed?.driveViewLink || `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/view`,
+      thumbnailLink: null,
+    });
+  }
+
+  return {
+    connected: Boolean(rootFolderId),
+    catalogues: [...filesById.values()],
+  };
+}
+
+function parseSelectedCatalogueFiles(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+function isCatalogueResponseSchemaUnavailable(err) {
+  return err?.code === "P2021"
+    || err?.code === "P2022"
+    || (err instanceof TypeError && /reading ['"](?:findUnique|upsert)['"]/.test(err.message || ""));
+}
+
+async function getAllowedTmcDriveFile(tenantId, driveFileId) {
+  const rootSetting = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key: TMC_KNOWLEDGE_ROOT_KEY } },
+    select: { value: true },
+  });
+  const rootFolderId = String(rootSetting?.value || "").trim();
+  if (!rootFolderId) return null;
+
+  const drive = await driveOAuth.getDriveClient(tenantId);
+  const result = await drive.files.get({
+    fileId: String(driveFileId),
+    fields: "id,name,mimeType,parents,thumbnailLink,webViewLink",
+  });
+  const file = result?.data;
+  if (!file || (file.mimeType !== "application/pdf" && !String(file.name || "").toLowerCase().endsWith(".pdf"))) return null;
+
+  let parentIds = Array.isArray(file.parents) ? file.parents : [];
+  let foundTmcFolder = false;
+  let reachedRoot = false;
+  for (let depth = 0; depth < 12 && parentIds.length > 0; depth += 1) {
+    const parentId = String(parentIds[0]);
+    if (parentId === rootFolderId) {
+      reachedRoot = true;
+      break;
+    }
+    const parent = await drive.files.get({
+      fileId: parentId,
+      fields: "id,name,parents,mimeType",
+    });
+    if (parent.data?.mimeType === GOOGLE_DRIVE_FOLDER_MIME
+      && String(parent.data.name || "").replace(/[^a-z0-9]/gi, "").toLowerCase() === "tmc") {
+      foundTmcFolder = true;
+    }
+    parentIds = Array.isArray(parent.data?.parents) ? parent.data.parents : [];
+  }
+  return reachedRoot && foundTmcFolder ? { drive, file } : null;
 }
 
 const TMC_PARENT_DOCUMENT_MIME_TYPES = new Set(
@@ -1724,6 +1856,180 @@ router.get(
       portalRole: "TEACHER",
       subBrand: "tmc",
     });
+  },
+);
+
+// Teacher catalogue browsing uses the same TMC Drive folder and indexed-file
+// metadata as the admin library. Only brochure metadata is returned here;
+// portal-authenticated file and thumbnail routes below proxy the Drive bytes.
+router.get(
+  "/teacher/catalogues",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const tenantId = Number(req.portal.tenantId);
+        let responseStorageAvailable = true;
+        const savedResponsePromise = Promise.resolve()
+          .then(() => prisma.tmcTeacherCatalogueResponse.findUnique({
+            where: {
+              tenantId_teacherContactId: {
+                tenantId,
+                teacherContactId: Number(req.tmcContact.id),
+              },
+            },
+            select: { selectedFilesJson: true, submittedAt: true },
+          }))
+          .catch((err) => {
+            if (!isCatalogueResponseSchemaUnavailable(err)) throw err;
+            responseStorageAvailable = false;
+            console.error("[tmc-portal][teacher/catalogues] response storage schema is unavailable:", err.message);
+            return null;
+          });
+        const [library, savedResponse] = await Promise.all([
+          loadTmcCatalogueFiles(tenantId),
+          savedResponsePromise,
+        ]);
+        res.json({
+          connected: library.connected,
+          catalogues: library.catalogues,
+          responseStorageAvailable,
+          response: savedResponse ? {
+            selectedCatalogues: parseSelectedCatalogueFiles(savedResponse.selectedFilesJson),
+            submittedAt: savedResponse.submittedAt,
+          } : null,
+        });
+    } catch (err) {
+      if (err.code === "DRIVE_NOT_CONNECTED" || err.code === "OAUTH_NOT_CONFIGURED") {
+        return res.status(503).json({ error: "The TMC brochure library is temporarily unavailable", code: "DRIVE_NOT_CONNECTED" });
+      }
+      console.error("[tmc-portal][teacher/catalogues]", err);
+      return res.status(500).json({ error: "Failed to load TMC catalogues", code: "TMC_CATALOGUES_LOAD_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/teacher/catalogues/response",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const rawIds = req.body?.selectedFileIds;
+      if (!Array.isArray(rawIds) || rawIds.length < 1 || rawIds.length > 500) {
+        return res.status(400).json({
+          error: "Select between 1 and 500 catalogues before submitting",
+          code: "INVALID_CATALOGUE_SELECTION",
+        });
+      }
+      const selectedIds = [...new Set(rawIds
+        .filter((value) => typeof value === "string" || typeof value === "number")
+        .map((value) => String(value).trim())
+        .filter((value) => value.length > 0 && value.length <= 255))];
+      if (selectedIds.length !== rawIds.length) {
+        return res.status(400).json({ error: "Catalogue selection contains invalid file ids", code: "INVALID_CATALOGUE_SELECTION" });
+      }
+
+      const tenantId = Number(req.portal.tenantId);
+      const library = await loadTmcCatalogueFiles(tenantId);
+      const filesById = new Map(library.catalogues.map((file) => [String(file.driveFileId), file]));
+      const selectedCatalogues = selectedIds.map((id) => filesById.get(id)).filter(Boolean);
+      if (selectedCatalogues.length !== selectedIds.length) {
+        return res.status(400).json({ error: "Some selected catalogues are no longer available", code: "CATALOGUE_NOT_AVAILABLE" });
+      }
+
+      const submittedAt = new Date();
+      const saved = await prisma.tmcTeacherCatalogueResponse.upsert({
+        where: {
+          tenantId_teacherContactId: {
+            tenantId,
+            teacherContactId: Number(req.tmcContact.id),
+          },
+        },
+        create: {
+          tenantId,
+          teacherContactId: Number(req.tmcContact.id),
+          selectedFilesJson: sanitizeJsonForStringColumn(selectedCatalogues),
+          submittedAt,
+        },
+        update: {
+          selectedFilesJson: sanitizeJsonForStringColumn(selectedCatalogues),
+          submittedAt,
+        },
+        select: { selectedFilesJson: true, submittedAt: true },
+      });
+      return res.status(201).json({
+        ok: true,
+        response: {
+          selectedCatalogues: parseSelectedCatalogueFiles(saved.selectedFilesJson),
+          submittedAt: saved.submittedAt,
+        },
+      });
+    } catch (err) {
+      if (isCatalogueResponseSchemaUnavailable(err)) {
+        return res.status(503).json({
+          error: "Catalogue response storage is not ready. Sync the database schema and restart the backend.",
+          code: "TMC_CATALOGUE_RESPONSE_STORAGE_NOT_READY",
+        });
+      }
+      console.error("[tmc-portal][teacher/catalogues/response]", err);
+      return res.status(500).json({ error: "Failed to submit catalogue selection", code: "TMC_CATALOGUES_SUBMIT_FAILED" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/catalogues/:fileId/thumbnail",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const fileId = String(req.params.fileId || "").trim();
+      if (!fileId || fileId.length > 255) return res.status(400).json({ error: "Invalid file id", code: "INVALID_FILE_ID" });
+      const allowed = await getAllowedTmcDriveFile(Number(req.portal.tenantId), fileId);
+      if (!allowed?.file?.thumbnailLink) return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+      const authClient = allowed.drive.context?._options?.auth;
+      const token = await authClient?.getAccessToken();
+      const thumbnail = await fetch(allowed.file.thumbnailLink, { headers: token?.token ? { Authorization: `Bearer ${token.token}` } : {} });
+      if (!thumbnail.ok) return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+      res.setHeader("Cache-Control", "private, max-age=1800");
+      res.setHeader("Content-Type", thumbnail.headers.get("content-type") || "image/jpeg");
+      return res.send(Buffer.from(await thumbnail.arrayBuffer()));
+    } catch (err) {
+      console.error("[tmc-portal][teacher/catalogues/thumbnail]", err);
+      return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/catalogues/:fileId/file",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const fileId = String(req.params.fileId || "").trim();
+      if (!fileId || fileId.length > 255) return res.status(400).json({ error: "Invalid file id", code: "INVALID_FILE_ID" });
+      const allowed = await getAllowedTmcDriveFile(Number(req.portal.tenantId), fileId);
+      if (!allowed) return res.status(404).json({ error: "Catalogue PDF not found", code: "NOT_FOUND" });
+      const pdf = await allowed.drive.files.get(
+        { fileId, alt: "media" },
+        { responseType: "arraybuffer" },
+      );
+      const originalName = String(allowed.file.name || "tmc-catalogue.pdf").replace(/[\r\n"]+/g, "_");
+      const safeName = originalName.replace(/[^\x20-\x7E]/g, "_");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(originalName)}`);
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.send(Buffer.from(pdf.data));
+    } catch (err) {
+      console.error("[tmc-portal][teacher/catalogues/file]", err);
+      return res.status(404).json({ error: "Catalogue PDF not found", code: "NOT_FOUND" });
+    }
   },
 );
 

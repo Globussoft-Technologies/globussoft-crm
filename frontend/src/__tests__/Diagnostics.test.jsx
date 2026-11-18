@@ -191,8 +191,12 @@ const DIAGNOSTICS_DEFAULT = [
 function installFetchMock({
   list = { diagnostics: DIAGNOSTICS_DEFAULT },
   bulkDelete = { deletedCount: 0, deletedIds: [] },
+  catalogueResponses = { responses: [], total: 0 },
 } = {}) {
   fetchApiMock.mockImplementation((url, options = {}) => {
+    if (typeof url === 'string' && url.startsWith('/api/travel/tmc-catalogue-responses')) {
+      return Promise.resolve(catalogueResponses);
+    }
     if (
       typeof url === 'string' &&
       url === '/api/travel/diagnostics/bulk' &&
@@ -295,6 +299,47 @@ describe('<Diagnostics /> — RBAC on "New bank" CTA (SUT lines 74-82)', () => {
     renderPage(REGULAR_USER);
     expect(screen.queryByRole('link', { name: /Create new diagnostic bank/i })).toBeNull();
     expect(screen.getByRole('link', { name: /Try out diagnostic/i })).toBeInTheDocument();
+  });
+
+  it('ADMIN can inspect teacher catalogue submissions from the TMC response tab', async () => {
+    installFetchMock({
+      catalogueResponses: {
+        total: 1,
+        responses: [{
+          id: 61,
+          submittedAt: '2026-11-10T10:00:00.000Z',
+          teacher: { id: 55, name: 'Asha Teacher', email: 'asha@example.test' },
+          selectedCatalogues: [{
+            driveFileId: 'tmc-pdf-1',
+            fileName: 'Nepal School Trip.pdf',
+            folderPath: 'TMC/CRM Itineraries',
+            driveViewLink: 'https://drive.google.com/file/d/tmc-pdf-1/view',
+          }],
+        }],
+      },
+    });
+    renderPage(ADMIN_USER);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'TMC Catalogue Responses' }));
+
+    expect(await screen.findByText('Asha Teacher')).toBeInTheDocument();
+    expect(screen.getByText('1 catalogue')).toBeInTheDocument();
+    const expandButton = screen.getByRole('button', { name: 'View catalogues selected by Asha Teacher' });
+    expect(expandButton.parentElement).toHaveStyle({ textAlign: 'center', verticalAlign: 'middle' });
+    expect(expandButton).toHaveStyle({ display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0px auto' });
+    fireEvent.click(expandButton);
+    expect(await screen.findByRole('link', { name: /Nepal School Trip\.pdf/i })).toHaveAttribute(
+      'href',
+      'https://drive.google.com/file/d/tmc-pdf-1/view',
+    );
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/tmc-catalogue-responses?limit=20&offset=0');
+  });
+
+  it('USER role cannot access the teacher catalogue response tab', async () => {
+    renderPage(REGULAR_USER);
+    expect(screen.queryByRole('tab', { name: 'TMC Catalogue Responses' })).not.toBeInTheDocument();
+    await screen.findByText('tmc');
+    expect(fetchApiMock.mock.calls.some(([url]) => String(url).startsWith('/api/travel/tmc-catalogue-responses'))).toBe(false);
   });
 });
 

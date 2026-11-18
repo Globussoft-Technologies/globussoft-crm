@@ -477,6 +477,16 @@ export default function Reports() {
     if (!options.some(option => option.value === chartType)) setChartType(options[0].value);
   }, [metric, chartType]);
 
+  const detailColumnWidths = {
+    deals: [22, 16, 16, 16, 16, 14],
+    contacts: [20, 16, 16, 14, 14, 12, 8],
+    tasks: [24, 16, 16, 20, 24],
+    calls: [24, 16, 18, 20, 22],
+    invoices: [22, 18, 16, 22, 22],
+    expenses: [24, 18, 18, 18, 22],
+  };
+  const activeDetailColumnWidths = detailColumnWidths[detailType] || detailColumnWidths.deals;
+
   return (
     <div className="reports-page" style={{ padding: 'clamp(1rem, 3vw, 2rem) 2rem 0.5rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header className="reports-page__header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -780,7 +790,7 @@ export default function Reports() {
               <button className="btn-secondary" aria-label="Next page" disabled={detailPage >= detailTotalPages} onClick={() => setDetailPage(p => Math.min(p + 1, detailTotalPages))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: detailPage >= detailTotalPages ? 0.45 : 1, cursor: detailPage >= detailTotalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
             </div>
           </div>
-          <div className="reports-page__table-shell card"
+          <div className={`reports-page__table-shell card${isGeneric ? ' reports-page__table-shell--generic' : ''}`}
             style={{
               maxHeight: '400px',
               overflowY: 'hidden',
@@ -794,9 +804,12 @@ export default function Reports() {
             ) : detailData.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No records found for the selected period.</div>
             ) : (
-              <table className="stable-table reports-page__detail-table-fixed" style={{ display: 'block', width: '100%', minWidth: '760px', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', textAlign: 'left', fontSize: '0.85rem', backgroundColor: 'var(--surface-color, #fff)' }}>
-                <thead style={{ display: 'table', width: '100%', tableLayout: 'fixed', backgroundColor: 'var(--modal-bg, #fff)', opacity: 1 }}>
-                  <tr style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
+              <table className="stable-table reports-page__detail-table-fixed" style={{ display: isGeneric ? 'table' : 'block', width: '100%', minWidth: '760px', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', textAlign: 'left', fontSize: '0.85rem', backgroundColor: 'var(--surface-color, #fff)' }}>
+                <colgroup>
+                  {activeDetailColumnWidths.map((width, index) => <col key={`detail-column-${index}`} style={{ width: `${width}%` }} />)}
+                </colgroup>
+                <thead style={{ display: isGeneric ? 'table-header-group' : 'table', width: isGeneric ? 'auto' : '100%', tableLayout: 'fixed', backgroundColor: 'var(--modal-bg, #fff)', opacity: 1 }}>
+                  <tr style={{ display: isGeneric ? 'table-row' : 'table', width: isGeneric ? 'auto' : '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
                       <th
                         style={{
@@ -1215,9 +1228,9 @@ export default function Reports() {
                     </>}
                   </tr>
                 </thead>
-                <tbody style={{ display: 'block', width: '100%', maxHeight: 'calc(400px - 3.5rem)', overflowY: 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
+                <tbody style={{ display: isGeneric ? 'table-row-group' : 'block', width: isGeneric ? 'auto' : '100%', maxHeight: 'calc(400px - 3.5rem)', overflowY: isGeneric ? 'visible' : 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
                   {detailData.map((row, i) => (
-                    <tr key={row.id || i} style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
+                    <tr key={row.id || i} style={{ display: isGeneric ? 'table-row' : 'table', width: isGeneric ? 'auto' : '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                       {detailType === 'deals' && <>
                         <td style={tdStyle}>{row.title}</td>
                         <td style={{ ...numericTdStyle, fontWeight: '600', color: 'var(--success-color)' }}>{formatDetailDealAmount(row)}</td>

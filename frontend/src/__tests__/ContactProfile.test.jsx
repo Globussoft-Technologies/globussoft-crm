@@ -549,7 +549,8 @@ describe('ContactDetail profile', () => {
 
     renderProfile();
     const panel = within(await screen.findByLabelText('Contact profile'));
-    fireEvent.click(panel.getByRole('button', { name: 'View lifecycle history' }));
+    fireEvent.click(panel.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await panel.findByRole('menuitem', { name: 'View status history' }));
     const dialog = within(await screen.findByRole('dialog', { name: 'Lifecycle history' }));
 
     expect(await dialog.findByText('Rajesh Sharma')).toBeInTheDocument();

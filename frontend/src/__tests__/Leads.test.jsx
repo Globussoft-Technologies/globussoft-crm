@@ -3242,6 +3242,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
       left: 'auto',
       boxSizing: 'border-box',
     });
+    fireEvent.click(within(menu).getByRole('button', { name: 'Select current page' }));
     await waitFor(() => {
       expect(within(menu).getByText(/3 selected/i)).toBeInTheDocument();
     });
@@ -3275,6 +3276,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
     const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    fireEvent.click(within(menu).getByRole('button', { name: 'Select current page' }));
     const rubixCheckbox = screen.getAllByRole('checkbox').slice(1)[1];
     fireEvent.click(rubixCheckbox);
     await waitFor(() => {

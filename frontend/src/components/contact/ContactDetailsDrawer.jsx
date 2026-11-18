@@ -8,6 +8,7 @@ import {
   Mail,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Phone,
   Plus,
   Search,
@@ -601,9 +602,10 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
           {(!isGeneric || activeDetailTab === 'all') && <section className="cd-all-details">
             <h4>All details</h4>
             {isGenericTagManager ? (
-              <div className="cd-tags cd-tag-manager">
+              <div className="cd-tags cd-tag-manager cd-generic-tags-card">
                 <Tag size={13} />
                 <span>Tags</span>
+                <button type="button" className="cd-generic-tag-edit" onClick={openTagPicker} aria-label="Edit tags" title="Edit tags"><Pencil size={14} /></button>
                 <div className="cd-tag-values">
                   {tags.map((tag) => {
                     const nameValue = String(tag);
@@ -627,13 +629,13 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                               <span className="cd-tag-option-check">{isPendingTag(record.name) ? '✓' : ''}</span>
                               <span className="cd-tag-chip" style={{ background: record.color, borderColor: record.color, color: tagTextColor(record.color) }}>{record.name}</span>
                             </button>
-                            <label className="cd-tag-color"><input type="color" value={record.color} onChange={(event) => changeGenericTagColor(record.name, event.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /></label>
+                            <label className="cd-tag-color"><input type="color" value={record.color} onChange={(event) => changeGenericTagColor(record.name, event.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /><span className="cd-tag-color-swatch" style={{ backgroundColor: record.color }} aria-hidden="true" /></label>
                           </div>
                         )) : <div className="cd-tag-picker-message">No tags available.</div>}
                       </div>
                       <form className="cd-create-tag" onSubmit={(event) => { event.preventDefault(); createGenericTag(); }}>
                         <strong>Create new tag</strong>
-                        <div className="cd-create-tag-row"><input value={newTagName} onChange={(event) => setNewTagName(event.target.value)} placeholder="Tag name" aria-label="New tag name" /><input type="color" value={newTagColor} onChange={(event) => setNewTagColor(event.target.value)} aria-label="New tag color" /><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div>
+                        <div className="cd-create-tag-row"><input value={newTagName} onChange={(event) => setNewTagName(event.target.value)} placeholder="Tag name" aria-label="New tag name" /><label className="cd-tag-color cd-create-tag-color"><input type="color" value={newTagColor} onChange={(event) => setNewTagColor(event.target.value)} aria-label="New tag color" /><span className="cd-tag-color-swatch" style={{ backgroundColor: newTagColor }} aria-hidden="true" /></label><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div>
                       </form>
                       {tagMutationError && <div className="cd-tag-picker-error" role="alert">{tagMutationError}</div>}
                       <div className="cd-tag-picker-actions"><button type="button" className="cd-tag-picker-cancel" onClick={() => setTagPickerOpen(false)}>Cancel</button><button type="button" className="cd-tag-picker-apply" onClick={applyPendingTags} disabled={tagSelectionSaving || tagCreating}>{tagSelectionSaving ? 'Applying...' : 'Apply tags'}</button></div>

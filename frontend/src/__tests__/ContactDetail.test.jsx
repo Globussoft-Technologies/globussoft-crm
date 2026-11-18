@@ -341,8 +341,7 @@ describe('ContactDetail — current profile contract', () => {
     );
   });
 
-  it('lets users resize and keyboard-adjust the Generic CRM status bar', async () => {
-    window.localStorage.removeItem('crm:generic-status-bar-width:v1');
+  it('does not render the removed Generic CRM status-bar resize control', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({
       listType: 'leads',
@@ -351,12 +350,8 @@ describe('ContactDetail — current profile contract', () => {
       state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
     });
 
-    const resizeHandle = await screen.findByRole('separator', { name: 'Resize status bar' });
-    expect(resizeHandle).toHaveAttribute('aria-valuenow', '100');
-    fireEvent.keyDown(resizeHandle, { key: 'ArrowLeft' });
-    expect(resizeHandle).toHaveAttribute('aria-valuenow', '95');
-    fireEvent.keyDown(resizeHandle, { key: 'End' });
-    expect(resizeHandle).toHaveAttribute('aria-valuenow', '100');
+    await screen.findByRole('group', { name: 'Lead status stages' });
+    expect(screen.queryByRole('separator', { name: 'Resize status bar' })).not.toBeInTheDocument();
   });
 
   it('keeps the URL page in the embedded Generic Leads list when profile state is stale', async () => {
@@ -752,7 +747,11 @@ describe('Generic CRM contact details', () => {
       </AuthContext.Provider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ Add tag' }));
+    const tagCard = document.querySelector('.cd-generic-tags-card');
+    expect(tagCard).toBeInTheDocument();
+    expect(tagCard.querySelector('.cd-generic-tag-edit')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Edit tags' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit tags' }));
     const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
     const vipLabel = within(picker).getByText('VIP', { exact: true });
     expect(vipLabel.closest('button')).toHaveAttribute('aria-selected', 'true');

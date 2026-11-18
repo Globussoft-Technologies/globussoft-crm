@@ -191,7 +191,7 @@ describe("TmcTeacherPortal", () => {
     await screen.findByRole("heading", { name: "Dashboard" });
     fireEvent.click(screen.getByRole("button", { name: "TMC Catalogues" }));
 
-    expect(await screen.findByRole("heading", { name: "TMC Catalogues" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "TMC Catalogues", level: 2 })).toBeInTheDocument();
     expect(await screen.findByText("Nepal School Trip.pdf")).toBeInTheDocument();
   });
 

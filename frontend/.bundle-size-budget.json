@@ -68,9 +68,9 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 10310,
+    "all-js-maxKB": 10325,
     "//contact-navigation-state-bump": "10260 -> 10280 KB: recent Contacts URL-state preservation and ContactDetail external-origin return handling add intentional route-split code without a new dependency. Local Node 24 production build measures 10267.7 KB JS; retain about 12 KB headroom for CI/platform variance while preserving every per-chunk cap.",
-    "//organization-travel-crm-workflows-bump": "10280 -> 10310 KB: organization audit/deletion, TMC teacher catalogue flows, travel diagnostics, and CRM workflow updates add intentional route-split code. Before rebasing, Node 24 CI measured 10286.1 KB and the local Windows build measured 10291.9 KB; the per-chunk caps remain unchanged.",
+    "//organization-travel-crm-workflows-bump": "10280 -> 10325 KB: organization audit/deletion, TMC teacher catalogue flows, travel diagnostics, CRM workflow updates, and rebased main changes add intentional route-split code. The rebased Node 24 Windows build measures 10302.7 KB; retain about 22 KB headroom and leave every per-chunk cap unchanged.",
     "//contact-leads-ui-bump": "10240 -> 10260 KB: searchable Lead dropdowns, persistent bulk-selection controls, and Contact Detail stage/tag UI add intentional route-split code. The production build measures 10256.9 KB JS; retain about 3 KB headroom while preserving per-chunk caps.",
     "//pr1668-settings-workspace-js": "10210 -> 10240 KB: PR #1668 adds the shared settings workspace, field-help tooltips, vertical-scoped integration tiles and connection badges without a runtime dependency. PR validation run 43862235940 measured 10218.1 KB total JS; retain 21.9 KB headroom for cross-platform build variance while preserving every per-chunk cap.",
     "//node24-cross-platform-js-bump": "10200 -> 10210 KB: the same frontend source measured 10199.3 KB in Linux CI and 10205.0 KB locally on Windows under Node 24. Retain 5 KB of local headroom for platform build-output variance; individual chunk limits remain unchanged.",

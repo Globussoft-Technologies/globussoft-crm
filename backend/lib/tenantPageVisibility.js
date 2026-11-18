@@ -494,11 +494,21 @@ function filterPermissionDomainsForTenant(domains, catalog) {
  * Permission middleware uses this conservative feature check for API routes.
  * If every catalog page that relies on a permission is hidden, the permission
  * is unavailable for the tenant even when stale RolePermission rows remain.
- * Shared permissions stay usable for the tenant's still-visible pages.
+ * Shared permissions stay usable for the tenant's still-visible pages. A
+ * dedicated settings route may pass `pagePath` to bind availability to that
+ * page rather than every page sharing the permission module.
  */
-async function isPermissionAvailableForTenant(tenantId, module, _action) {
+async function isPermissionAvailableForTenant(tenantId, module, _action, { pagePath = null } = {}) {
   const visibility = await getTenantPageVisibility(tenantId);
   const pages = getTenantPageVisibilityCatalog(visibility.vertical);
+
+  if (pagePath) {
+    const availabilityPage = pages.find((page) => page.path === pagePath);
+    if (availabilityPage) {
+      return !isPathHidden(availabilityPage.path, visibility.hiddenPaths);
+    }
+  }
+
   const matchingPages = pages.filter((page) =>
     (page.requiredPermissions || []).some(
       // Availability is a module-wide ceiling, including mutations. Catalog

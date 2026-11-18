@@ -1,7 +1,60 @@
 const express = require("express");
+const { Prisma } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
 const router = express.Router();
+
+function buildTenantDataDeletionOrder() {
+  // Include legacy models with a tenantId scalar even when they do not yet
+  // declare a formal Tenant relation; otherwise their rows would survive.
+  const tenantModels = Prisma.dmmf.datamodel.models.filter((model) =>
+    model.fields.some((field) => field.name === "tenantId" && field.kind === "scalar"),
+  );
+  const tenantModelNames = new Set(tenantModels.map((model) => model.name));
+  const childrenByParent = new Map(tenantModels.map((model) => [model.name, new Set()]));
+  const incomingCounts = new Map(tenantModels.map((model) => [model.name, 0]));
+
+  // Delete children before parents whenever the database has a restrictive
+  // foreign key. Cascades and SetNull relations need no explicit ordering.
+  for (const model of tenantModels) {
+    for (const field of model.fields) {
+      const restrictiveDelete = field.relationOnDelete === "Restrict" || (!field.relationOnDelete && field.isRequired);
+      if (
+        field.kind !== "object" ||
+        !field.relationFromFields?.length ||
+        !restrictiveDelete ||
+        !tenantModelNames.has(field.type) ||
+        childrenByParent.get(model.name).has(field.type)
+      ) continue;
+      childrenByParent.get(model.name).add(field.type);
+      incomingCounts.set(field.type, incomingCounts.get(field.type) + 1);
+    }
+  }
+
+  const ready = [...incomingCounts.entries()]
+    .filter(([, count]) => count === 0)
+    .map(([name]) => name);
+  const orderedNames = [];
+  while (ready.length) {
+    const child = ready.shift();
+    orderedNames.push(child);
+    for (const parent of childrenByParent.get(child)) {
+      const nextCount = incomingCounts.get(parent) - 1;
+      incomingCounts.set(parent, nextCount);
+      if (nextCount === 0) ready.push(parent);
+    }
+  }
+
+  if (orderedNames.length !== tenantModels.length) {
+    throw new Error("Tenant deletion dependency graph contains a restrictive relation cycle");
+  }
+
+  return orderedNames.map((name) => ({
+    delegate: `${name[0].toLowerCase()}${name.slice(1)}`,
+  }));
+}
+
+const TENANT_DATA_DELETION_ORDER = buildTenantDataDeletionOrder();
 
 const GENERIC_CHAT_KNOWLEDGE_KEY = "generic.landing.ai.knowledge";
 const GENERIC_CHAT_SETTINGS_KEY = "generic.landing.ai.settings";
@@ -181,6 +234,190 @@ router.post("/organizations", async (req, res) => {
     if (err?.code === "P2002") return res.status(409).json({ error: "This email or organization is already registered.", code: "DUPLICATE_ORGANIZATION" });
     if (err?.code === "RBAC_PROVISIONING_FAILED") return res.status(500).json({ error: "Organization permissions could not be provisioned; no organization was created.", code: "RBAC_PROVISIONING_FAILED" });
     res.status(500).json({ error: "Failed to create organization", code: "ORGANIZATION_CREATE_FAILED" });
+  }
+});
+
+router.get("/organizations/search", async (req, res) => {
+  const query = String(req.query.q || "").trim().slice(0, 191);
+  const numericId = /^\d+$/.test(query) ? Number(query) : null;
+  if (query.length > 0 && query.length < 2 && numericId == null) return res.json({ organizations: [], total: 0, limit: 50, offset: 0 });
+  const parsedLimit = Number.parseInt(req.query.limit, 10);
+  const parsedOffset = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 100) : 50;
+  const offset = Number.isSafeInteger(parsedOffset) ? Math.min(Math.max(parsedOffset, 0), 1000000) : 0;
+
+  try {
+    const select = { id: true, name: true, slug: true, ownerEmail: true, vertical: true, createdAt: true };
+    const hasTextSearch = query.length >= 2;
+    const hasNumericId = Number.isSafeInteger(numericId);
+    const textWhere = hasTextSearch ? {
+      AND: [
+        {
+          OR: [
+            { name: { contains: query } },
+            { slug: { contains: query } },
+            { ownerEmail: { contains: query } },
+          ],
+        },
+        ...(hasNumericId ? [{ id: { not: numericId } }] : []),
+      ],
+    } : {};
+    const [idMatch, textTotal] = await Promise.all([
+      hasNumericId ? prisma.tenant.findUnique({ where: { id: numericId }, select }) : null,
+      !query || hasTextSearch ? prisma.tenant.count({ where: textWhere }) : 0,
+    ]);
+    const logicalOffset = query && idMatch ? Math.max(0, offset - 1) : offset;
+    const pageSize = query && idMatch && offset === 0 ? Math.max(0, limit - 1) : limit;
+    const matches = pageSize > 0 && (!query || hasTextSearch)
+      ? await prisma.tenant.findMany({
+        where: textWhere,
+        select,
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        take: pageSize,
+        skip: logicalOffset,
+      })
+      : [];
+    const organizations = [
+      ...(idMatch && offset === 0 ? [idMatch] : []),
+      ...matches,
+    ];
+    res.json({ organizations, total: textTotal + (idMatch ? 1 : 0), limit, offset });
+  } catch (err) {
+    console.error("[super-admin-tenant-management] organization search error:", err.message);
+    res.status(500).json({ error: "Failed to search organizations", code: "ORGANIZATION_SEARCH_FAILED" });
+  }
+});
+
+router.post("/organizations/:tenantId/hard-delete", async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const confirmationName = typeof req.body?.confirmationName === "string" ? req.body.confirmationName.trim() : "";
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!Number.isSafeInteger(tenantId) || tenantId < 1) {
+    return res.status(400).json({ error: "Invalid organization id", code: "INVALID_TENANT_ID" });
+  }
+
+  try {
+    const organization = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, slug: true, ownerEmail: true },
+    });
+    if (!organization) return res.status(404).json({ error: "Organization not found", code: "TENANT_NOT_FOUND" });
+    if (confirmationName !== organization.name) {
+      return res.status(400).json({ error: "Type the exact organization name to confirm deletion", code: "CONFIRMATION_MISMATCH" });
+    }
+    if (reason.length < 3 || reason.length > 2000) {
+      return res.status(400).json({ error: "Enter a deletion reason between 3 and 2000 characters", code: "DELETION_REASON_REQUIRED" });
+    }
+
+    const auditEntry = await prisma.superAdminAuditLog.create({
+      data: {
+        actor: req.superAdmin.username,
+        action: "ORGANIZATION_HARD_DELETE",
+        status: "IN_PROGRESS",
+        organizationId: organization.id,
+        organizationName: organization.name,
+        organizationSlug: organization.slug,
+        ownerEmail: organization.ownerEmail,
+        reason,
+      },
+    });
+
+    if (organization.id === 1) {
+      await prisma.superAdminAuditLog.update({
+        where: { id: auditEntry.id },
+        data: {
+          status: "FAILED",
+          errorMessage: "The platform default organization cannot be deleted.",
+          completedAt: new Date(),
+        },
+      });
+      return res.status(409).json({
+        error: "The platform default organization cannot be deleted because system defaults depend on it.",
+        code: "PROTECTED_ORGANIZATION",
+      });
+    }
+
+    let deletedRowCount = 0;
+    try {
+      await prisma.$transaction(async (tx) => {
+        const current = await tx.tenant.findUnique({
+          where: { id: tenantId },
+          select: { id: true, name: true, slug: true },
+        });
+        if (!current || current.name !== organization.name || current.slug !== organization.slug) {
+          const error = new Error("Organization changed during deletion confirmation");
+          error.code = "ORGANIZATION_CHANGED";
+          throw error;
+        }
+
+        for (const model of TENANT_DATA_DELETION_ORDER) {
+          const result = await tx[model.delegate].deleteMany({ where: { tenantId } });
+          deletedRowCount += result.count;
+        }
+
+        await tx.tenant.delete({ where: { id: tenantId } });
+        await tx.superAdminAuditLog.update({
+          where: { id: auditEntry.id },
+          data: { status: "SUCCEEDED", deletedRowCount, completedAt: new Date() },
+        });
+      }, { maxWait: 10000, timeout: 120000 });
+    } catch (deleteError) {
+      await prisma.superAdminAuditLog.update({
+        where: { id: auditEntry.id },
+        data: {
+          status: "FAILED",
+          errorMessage: String(deleteError.message || "Organization deletion failed").slice(0, 2000),
+          completedAt: new Date(),
+        },
+      }).catch((auditError) => {
+        console.error("[super-admin-tenant-management] could not update deletion audit log:", auditError.message);
+      });
+
+      if (deleteError.code === "P2025" || deleteError.code === "ORGANIZATION_CHANGED") {
+        return res.status(409).json({ error: "The organization changed or was removed before deletion completed. Refresh and try again.", code: "ORGANIZATION_CHANGED" });
+      }
+      console.error("[super-admin-tenant-management] organization hard delete failed:", deleteError.message);
+      return res.status(500).json({ error: "Organization deletion failed. No organization data was removed.", code: "ORGANIZATION_DELETE_FAILED" });
+    }
+
+    res.json({ ok: true, auditId: auditEntry.id, organization: organization.name, deletedRowCount });
+  } catch (err) {
+    console.error("[super-admin-tenant-management] hard-delete request failed:", err.message);
+    res.status(500).json({ error: "Failed to delete organization", code: "ORGANIZATION_DELETE_FAILED" });
+  }
+});
+
+router.get("/organization-audit-log", async (req, res) => {
+  const query = String(req.query.q || "").trim().slice(0, 191);
+  const parsedLimit = Number.parseInt(req.query.limit, 10);
+  const parsedOffset = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 200) : 50;
+  const offset = Number.isSafeInteger(parsedOffset) ? Math.min(Math.max(parsedOffset, 0), 1000000) : 0;
+  const where = {};
+  if (["IN_PROGRESS", "SUCCEEDED", "FAILED"].includes(String(req.query.status || ""))) {
+    where.status = String(req.query.status);
+  }
+  if (query) {
+    const organizationId = /^\d+$/.test(query) ? Number(query) : null;
+    where.OR = [
+      { organizationName: { contains: query } },
+      { organizationSlug: { contains: query } },
+      { ownerEmail: { contains: query } },
+      { actor: { contains: query } },
+      { reason: { contains: query } },
+      ...(organizationId && Number.isSafeInteger(organizationId) ? [{ organizationId }] : []),
+    ];
+  }
+
+  try {
+    const [entries, total] = await Promise.all([
+      prisma.superAdminAuditLog.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit, skip: offset }),
+      prisma.superAdminAuditLog.count({ where }),
+    ]);
+    res.json({ entries, total, limit, offset });
+  } catch (err) {
+    console.error("[super-admin-tenant-management] organization audit log error:", err.message);
+    res.status(500).json({ error: "Failed to load organization audit log", code: "ORGANIZATION_AUDIT_LOG_FAILED" });
   }
 });
 

@@ -202,7 +202,9 @@ router.get("/calls/:callId/result", verifyToken, async (req, res) => {
 router.get(
   "/cap-status",
   verifyToken,
-  requirePermission("integrations", "read"),
+  requirePermission("integrations", "read", {
+    availabilityPagePath: "/integrations/callified",
+  }),
   async (req, res) => {
     try {
       const status = await callifiedClient.checkBudgetCap(req.user.tenantId);

@@ -1134,6 +1134,15 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function buildEmbedContainerId(form) {
+  const reference = form?.id != null && String(form.id) !== "" ? form.id : form?.slug;
+  const safeReference = String(reference == null ? "" : reference)
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `gbs-web-form-embed-${safeReference || "preview"}`;
+}
+
 const EMBED_ATTRIBUTION_QUERY_KEYS = [
   "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content",
   "gclid", "gbraid", "wbraid", "fbclid", "fbc", "fbp", "gad_source",
@@ -1144,64 +1153,58 @@ const EMBED_ATTRIBUTION_QUERY_KEYS = [
   "hsa_net", "hsa_ver",
 ];
 
-function buildEmbedHostScript(enableAttribution, cookieDomain = "") {
-  const keys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
-  const safeDomain = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(String(cookieDomain || "").trim())
-    ? String(cookieDomain).trim().toLowerCase()
-    : "";
-  const domainLiteral = JSON.stringify(safeDomain ? "; Domain=" + safeDomain : "");
-  const attributionRuntime = enableAttribution
-    ? [
-      "var keys=" + keys + ",taggedVisitKeys=[\"utm_source\",\"utm_medium\",\"utm_campaign\",\"utm_id\",\"utm_term\",\"utm_content\",\"gclid\",\"gbraid\",\"wbraid\",\"fbclid\",\"fbc\",\"fbp\",\"campaign_id\",\"adset_id\",\"ad_id\",\"campaign_name\",\"adset_name\",\"ad_name\"],maxAge=7776000;",
-      'function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}',
-      'function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}',
-      'function writeCookie(name,value){try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+' + domainLiteral + '+(location.protocol==="https:"?"; Secure":"");}catch(e){}}',
-      'function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}var isTaggedVisit=query&&taggedVisitKeys.some(function(key){return query.has(key);});for(var i=0;i<keys.length;i++){var key=keys[i],value;if(isTaggedVisit){value=query.has(key)?(query.get(key)||""):"";writeCookie("gbs_"+key,value);}else{value=storedAttribution(key);if(value&&!readCookie("gbs_"+key))writeCookie("gbs_"+key,value);}if(value)values[key]=value;}return values;}var savedAttribution=attribution();',
-    ].join("")
-    : "var savedAttribution={};";
-  const hostRuntime = [
-    "(function(frame){if(!frame)return;",
-    attributionRuntime,
-    'var lastDevice="",redirecting=false;',
-    'function frameSource(){try{var source=typeof frame.getAttribute==="function"?frame.getAttribute("src"):frame.src;return source?new URL(source,document.baseURI||location.href):null;}catch(e){return null;}}function frameUrl(){try{return frameSource()||new URL(location.href,document.baseURI||location.href);}catch(e){return null;}}',
-    'function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}',
-    'function sendDevice(){try{var target=frameUrl();if(!target)return;var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},target.origin);}catch(e){}}',
-    'function send(){try{var target=frameUrl();if(!target)return;var context={source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title' + (enableAttribution ? ',attribution:savedAttribution' : '') + '};frame.contentWindow.postMessage(context,target.origin);}catch(e){}sendDevice();}',
-    'function isFrameMessage(event){var target=frameUrl(),source=frameSource(),hasOrigin=typeof event.origin==="string"&&event.origin!=="";return Boolean(target&&event.source===frame.contentWindow&&(source?event.origin===target.origin:!hasOrigin)&&event.data&&event.data.source==="gbs-web-form");}',
-    'function safeRedirect(value){if(typeof value!=="string"||!value.trim()||value.length>2048)return "";try{var target=new URL(value.trim());if((target.protocol!=="http:"&&target.protocol!=="https:")||!target.hostname||target.username||target.password)return "";return target.href;}catch(e){return "";}}',
-    'window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(!isFrameMessage(event))return;var data=event.data;if(data.type==="ready")send();if(data.type==="size"){var height=Number(data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}if(data.type==="success-redirect"&&!redirecting){var target=frameUrl();if(!target)return;var expectedId=target.searchParams.get("id"),expectedSlug=target.searchParams.get("slug");var formMatches=expectedId?String(data.formId||"")===expectedId:expectedSlug?String(data.formSlug||"")===expectedSlug:false;var redirectUrl=safeRedirect(data.redirectUrl);if(!formMatches||!redirectUrl)return;redirecting=true;window.location.assign(redirectUrl);}});frame.addEventListener("load",send);})',
-    '(document.currentScript.previousElementSibling);',
-  ].join("");
-  return "<script>" + hostRuntime + "</script>";
+function buildEmbedHostRuntime(config, shouldCreateContainer = false) {
+  const safeConfig = JSON.stringify(config).replace(/</g, "\\u003c");
+  return `(function(script){
+if(!script||!script.parentNode)return;
+var config=${safeConfig};
+var keys=${JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS)};
+var taggedVisitKeys=["utm_source","utm_medium","utm_campaign","utm_id","utm_term","utm_content","gclid","gbraid","wbraid","fbclid","fbc","fbp","campaign_id","adset_id","ad_id","campaign_name","adset_name","ad_name"];
+var container=null;
+if(!${shouldCreateContainer ? "true" : "false"}){var previous=script.previousElementSibling;if(previous&&previous.id===config.containerId&&previous.classList.contains("gbs-web-form-embed"))container=previous;}
+if(!container){container=document.createElement("div");container.className="gbs-web-form-embed";container.id=config.containerId;container.style.cssText="display:block;width:100%;";var suffix=1;while(document.getElementById(container.id)){container.id=config.containerId+"-"+suffix++;}script.parentNode.insertBefore(container,script.nextSibling);}
+if(container.id===config.containerId&&document.getElementById(config.containerId)!==container){var requestedId=config.containerId,suffix=1;do{container.id=requestedId+"-"+suffix++;}while(document.getElementById(container.id)&&document.getElementById(container.id)!==container);}
+if(container.dataset.gbsWebFormLoaded==="true")return;
+container.dataset.gbsWebFormLoaded="true";
+var frame=document.createElement("iframe");frame.className="gbs-web-form-iframe";frame.title=config.title;frame.allow="geolocation *";frame.loading="lazy";frame.style.cssText="width:100%;height:620px;min-height:0;border:0;display:block;";
+var frameUrl=new URL(config.frameUrl,document.baseURI);
+function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}
+function writeCookie(name,value){try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age=7776000; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}}
+function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}
+var pageQuery=new URLSearchParams(location.search);var isTaggedVisit=taggedVisitKeys.some(function(key){return pageQuery.has(key);});var attribution={};
+keys.forEach(function(key){var value;if(isTaggedVisit){value=pageQuery.has(key)?(pageQuery.get(key)||""):"";writeCookie("gbs_"+key,value);}else{value=storedAttribution(key);if(value&&!readCookie("gbs_"+key))writeCookie("gbs_"+key,value);}if(value){value=String(value).slice(0,2000);attribution[key]=value;frameUrl.searchParams.set(key,value);}});
+var frameOrigin=frameUrl.origin;var lastDevice="";var redirecting=false;
+function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}
+function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:attribution},frameOrigin);sendDevice();}catch(e){}}
+function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},frameOrigin);}catch(e){}}
+function safeRedirect(value){if(typeof value!=="string"||!value.trim()||value.length>2048)return "";try{var target=new URL(value.trim());if((target.protocol!=="http:"&&target.protocol!=="https:")||!target.hostname||target.username||target.password)return "";return target.href;}catch(e){return "";}}
+function isFrameMessage(event){return event.source===frame.contentWindow&&event.origin===frameOrigin&&event.data&&event.data.source==="gbs-web-form";}
+window.addEventListener("resize",sendDevice);
+window.addEventListener("message",function(event){if(!isFrameMessage(event))return;var data=event.data;if(data.type==="ready")send();if(data.type==="size"){var height=Number(data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}if(data.type==="success-redirect"&&!redirecting){var expectedId=frameUrl.searchParams.get("id"),expectedSlug=frameUrl.searchParams.get("slug");var matches=expectedId?String(data.formId||"")===expectedId:expectedSlug?String(data.formSlug||"")===expectedSlug:false;var redirectUrl=safeRedirect(data.redirectUrl);if(matches&&redirectUrl){redirecting=true;window.location.assign(redirectUrl);}}});
+frame.addEventListener("load",send);container.appendChild(frame);frame.src=frameUrl.toString();
+})(document.currentScript);`;
 }
 
-function buildEmbedCode(form, origin, trackingCookieDomainOverride = "") {
-  const configuredBase =
-    origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
-  const base = String(configuredBase).replace(
-    /\/+$/,
-    "",
-  );
-
-  const safeTitle = escapeHtml(form?.name || "Web form");
-  let trackingCookieDomain = "";
-  try {
-    const settings = JSON.parse(String(form?.settingsJson || "{}"));
-    trackingCookieDomain = String(trackingCookieDomainOverride || settings?.trackingCookieDomain || "").trim();
-  } catch (_err) {
-    trackingCookieDomain = "";
-  }
-
-  const query =
-    form?.id != null && String(form.id) !== ""
-      ? `id=${encodeURIComponent(form.id)}`
-      : `slug=${encodeURIComponent(form?.slug || "")}`;
-
+function buildEmbedCode(form, origin) {
+  const configuredBase = origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
+  const base = String(configuredBase).replace(/\/+$/, "");
+  const containerId = buildEmbedContainerId(form);
+  const formId = form?.id != null && String(form.id) !== "" ? String(form.id) : "";
+  const formSlug = String(form?.slug || "");
+  const params = new URLSearchParams(formId ? { id: formId } : { slug: formSlug });
+  if (form?.scope && form.scope !== "generic") params.set("scope", form.scope);
+  const frameUrl = `${base}/embed/web-form.html?${params.toString()}`;
+  const config = {
+    containerId,
+    frameUrl,
+    formId,
+    formSlug,
+    title: `${String(form?.name || "Globus CRM").trim()} web form`,
+  };
   return [
     "<!-- Globussoft CRM web form -->",
-
-    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" allow="geolocation *" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
-    buildEmbedHostScript(!form?.scope || form.scope === "generic", trackingCookieDomain),
+    `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;"></div>`,
+    `<script>${buildEmbedHostRuntime(config)}</script>`,
   ].join("\n");
 }
 
@@ -1288,7 +1291,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, le
     if (supportsAdvancedWebFormFeatures(row.scope || "generic") && payload.settings?.recaptchaEnabled) {
       payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
     }
-    if (origin) payload.embedCode = buildEmbedCode(row, origin, trackingCookieDomain);
+    if (origin) payload.embedCode = buildEmbedCode(row, origin);
     return payload;
   }
 
@@ -1308,7 +1311,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, le
     payload.settings.recaptchaSiteKey = textOr(process.env.RECAPTCHA_SITE_KEY);
   }
 
-  if (origin) payload.embedCode = buildEmbedCode(row, origin, trackingCookieDomain);
+  if (origin) payload.embedCode = buildEmbedCode(row, origin);
 
   return payload;
 }

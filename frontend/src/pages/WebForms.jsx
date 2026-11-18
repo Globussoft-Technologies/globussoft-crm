@@ -20537,7 +20537,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
          {builderOpen && dirty ? <span style={{ padding: "0.25rem 0.5rem", borderRadius: 999, background: "rgba(91,107,255,0.14)", color: "#8ea0ff", fontSize: "0.75rem", fontWeight: 600 }}>Unsaved changes</span> : null}
    </div>
        <p style={{ margin: "0.45rem 0 0", color: "var(--text-secondary)", maxWidth: 780 }}>
-          Build forms that pull from contact fields, lead custom fields, or custom inputs, then share a public URL or iframe snippet.
+          Build forms that pull from contact fields, lead custom fields, or custom inputs, then share a public URL or iframe embed snippet.
           </p>
      </div>
        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -21138,7 +21138,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
             <div className="wf-embed-modal-head">
               <div>
                 <strong>Embed code and URL</strong>
-                <p>Use this public link or iframe snippet anywhere you want to collect submissions.</p>
+                <p>Use the public link or iframe snippet to place the form inside a dedicated container on your page while keeping its existing form flow isolated.</p>
               </div>
               <button type="button" className="btn-secondary wf-modal-close" onClick={() => setShowEmbed(false)} aria-label="Close embed code modal"><X size={16} /></button>
             </div>

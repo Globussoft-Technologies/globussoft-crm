@@ -37,6 +37,43 @@ test.describe('TMC portal API security contract', () => {
     expect(await res.json()).toMatchObject({ code: 'PORTAL_TOKEN_REQUIRED' });
   });
 
+  test('TMC catalogue browsing and selection require a teacher portal token', async ({ request }) => {
+    const [cataloguesRes, selectionRes] = await Promise.all([
+      request.get(`${BASE_URL}/api/portal/tmc/teacher/catalogues`, { timeout: REQUEST_TIMEOUT }),
+      request.post(`${BASE_URL}/api/portal/tmc/teacher/catalogues/response`, {
+        data: { selectedFileIds: [] },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    ]);
+
+    expect(cataloguesRes.status()).toBe(401);
+    expect(await cataloguesRes.json()).toMatchObject({ code: 'PORTAL_TOKEN_REQUIRED' });
+    expect(selectionRes.status()).toBe(401);
+    expect(await selectionRes.json()).toMatchObject({ code: 'PORTAL_TOKEN_REQUIRED' });
+  });
+
+  test('teacher can read TMC catalogues and empty submissions are rejected', async ({ request }) => {
+    const token = await loginTeacherPortal(request);
+    const headers = { Authorization: `Bearer ${token}` };
+    const [cataloguesRes, selectionRes] = await Promise.all([
+      request.get(`${BASE_URL}/api/portal/tmc/teacher/catalogues`, { headers, timeout: REQUEST_TIMEOUT }),
+      request.post(`${BASE_URL}/api/portal/tmc/teacher/catalogues/response`, {
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        data: { selectedFileIds: [] },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    ]);
+
+    expect([200, 503]).toContain(cataloguesRes.status());
+    if (cataloguesRes.status() === 200) {
+      const body = await cataloguesRes.json();
+      expect(body).toEqual(expect.objectContaining({ connected: expect.any(Boolean), catalogues: expect.any(Array) }));
+      expect(body).not.toHaveProperty('selectedFilesJson');
+    }
+    expect(selectionRes.status()).toBe(400);
+    expect(await selectionRes.json()).toMatchObject({ code: 'INVALID_CATALOGUE_SELECTION' });
+  });
+
   test('a staff JWT cannot be substituted for a contact portal JWT', async ({ request }) => {
     const token = await login(request, 'yasin@travelstall.in');
     const res = await request.get(`${BASE_URL}/api/portal/tmc/teacher/me`, {

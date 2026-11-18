@@ -462,6 +462,9 @@ function requirePermission(module, action, opts = {}) {
             req.user.tenantId,
             module,
             action,
+            opts.availabilityPagePath
+              ? { pagePath: opts.availabilityPagePath }
+              : undefined,
           );
           if (!available) {
             return res.status(403).json({

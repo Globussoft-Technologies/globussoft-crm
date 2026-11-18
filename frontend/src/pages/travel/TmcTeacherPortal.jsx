@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BedDouble,
   Bell,
+  BookOpen,
   ChevronDown,
   CheckCircle2,
   Clipboard,
@@ -26,13 +27,14 @@ import {
   WalletCards,
 } from "lucide-react";
 import TmcTeacherDiagnostics from "./TmcTeacherDiagnostics";
+import TmcTeacherCatalogues from "./TmcTeacherCatalogues";
 import { PaymentTab, RoomingTab } from "./TripDetail";
 import { persistTmcPortalView, readTmcPortalView } from "../../utils/tmcPortalView";
 import { useNotify } from "../../utils/notify";
 
 const TOKEN_KEY = "tmcTeacherPortalToken";
 const THEME_KEY = "tmcTeacherPortalTheme";
-const TEACHER_PORTAL_VIEWS = new Set(["dashboard", "diagnostic", "trips", "reviews", "profile"]);
+const TEACHER_PORTAL_VIEWS = new Set(["dashboard", "diagnostic", "catalogues", "trips", "reviews", "profile"]);
 
 const portalInteractionStyles = `
   [data-tmc-teacher-portal="true"] button:not([disabled]):not([data-tmc-no-hover]),
@@ -132,7 +134,7 @@ const portalInteractionStyles = `
 
     [data-tmc-teacher-portal="true"] aside nav {
       display: grid !important;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
       overflow: visible;
     }
 
@@ -184,6 +186,26 @@ const portalInteractionStyles = `
 
     [data-tmc-teacher-portal="true"] .tmc-teacher-title-row {
       flex-wrap: wrap;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-catalogues-content="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-page="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-fixed-header="true"] {
+      margin-bottom: 16px;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-browser="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-scroll="true"] {
+      overflow: visible !important;
     }
   }
 
@@ -403,6 +425,10 @@ export default function TmcTeacherPortal() {
     navigate("/login", { replace: true });
   }, [navigate]);
 
+  const handlePortalExpired = useCallback((message) => {
+    logout(message || "Your teacher session is no longer available. Please sign in again.");
+  }, [logout]);
+
   const loadTrips = useCallback(async (activeToken = token) => {
     setLoading(true);
     setError("");
@@ -548,6 +574,8 @@ export default function TmcTeacherPortal() {
     ? "Dashboard"
     : activeView === "diagnostic"
       ? "Complete diagnostic"
+      : activeView === "catalogues"
+        ? "TMC Catalogues"
       : activeView === "trips"
         ? "Your trips"
         : activeView === "reviews"
@@ -566,10 +594,11 @@ export default function TmcTeacherPortal() {
         <nav style={styles.sidebarNav} aria-label="Teacher portal sections">
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => openView("dashboard")} />
           <PortalNavButton icon={ClipboardCheck} label="Diagnostic" active={activeView === "diagnostic"} onClick={() => openView("diagnostic")} />
+          <PortalNavButton icon={BookOpen} label="TMC Catalogues" active={activeView === "catalogues"} onClick={() => openView("catalogues")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => openView("trips")} />
           <PortalNavButton icon={Clipboard} label="Trip review" active={activeView === "reviews"} onClick={() => openView("reviews")} />
         </nav>
-        <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, view assigned trips, submit trip reports, and review trip landing pages.</div>
+        <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, browse TMC catalogues, view assigned trips, and submit trip reports.</div>
       </aside>
 
       <div data-tmc-teacher-shell="true" style={styles.shell}>
@@ -597,7 +626,13 @@ export default function TmcTeacherPortal() {
           </div>
         </header>
         <main style={styles.main}>
-          <div style={styles.contentScroll}>
+          <div
+            data-tmc-teacher-catalogues-content={activeView === "catalogues" ? "true" : undefined}
+            style={{
+              ...styles.contentScroll,
+              ...(activeView === "catalogues" ? styles.cataloguesContentScroll : {}),
+            }}
+          >
             {error && <div role="alert" style={styles.error}>{error}</div>}
             {activeView === "dashboard" && <TeacherDashboard
               contact={contact}
@@ -615,7 +650,8 @@ export default function TmcTeacherPortal() {
               onOpenReviews={() => openView("reviews")}
               onOpenTrip={(trip) => { openView("trips"); openTrip(trip); }}
             />}
-            {activeView === "diagnostic" && <TmcTeacherDiagnostics token={token} tenantSlug={tenant?.slug} contact={contact} onSessionExpired={(message) => logout(message || "Your teacher session is no longer available. Please sign in again.")} />}
+            {activeView === "diagnostic" && <TmcTeacherDiagnostics token={token} tenantSlug={tenant?.slug} contact={contact} onSessionExpired={handlePortalExpired} />}
+            {activeView === "catalogues" && <TmcTeacherCatalogues token={token} onSessionExpired={handlePortalExpired} />}
             {activeView === "trips" && <TripsView
               trips={trips}
               loading={loading}
@@ -1204,6 +1240,7 @@ const styles = {
   logoutConfirmButton: { minHeight: 38, padding: "0 16px", border: "1px solid #ef5149", borderRadius: 8, background: "#ef5149", color: "#fff", cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 700 },
   main: { minWidth: 0, minHeight: 0, height: "100%", overflow: "hidden" },
   contentScroll: { width: "100%", minHeight: 0, height: "100%", boxSizing: "border-box", padding: 32, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" },
+  cataloguesContentScroll: { display: "flex", flexDirection: "column", overflow: "hidden" },
   dashboard: { display: "grid", gap: 18 },
   reviewPage: { display: "grid", gap: 18, width: "min(100%, 1180px)", maxWidth: 1180, margin: "0 auto", paddingBottom: 24, boxSizing: "border-box" },
   reviewSelectCard: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, .9fr)", alignItems: "center", gap: "16px 24px", padding: 22, border: "1px solid var(--tmc-info-border)", borderRadius: 14, background: "linear-gradient(135deg, var(--tmc-info-bg) 0%, var(--tmc-surface) 72%)", boxShadow: "var(--tmc-question-shadow)" },

@@ -1,11 +1,11 @@
 // @ts-check
 /**
- * Super Admin organization provisioning contract.
+ * Super Admin organization provisioning and permanent-deletion contract.
  *
  * This spec is intentionally local-stack-only: it creates a real tenant and
- * owner, verifies their RBAC-backed login, and removes the tenant directly
- * from the ephemeral CI database in afterAll. It must never create test
- * organizations on the live demo.
+ * owner, verifies their RBAC-backed login, then exercises the audited
+ * hard-delete path. It must never create or delete organizations on the live
+ * demo.
  */
 const { test, expect } = require('@playwright/test');
 const { spawnSync } = require('node:child_process');
@@ -25,6 +25,7 @@ const BACKEND_DIR = path.resolve(__dirname, '../../backend');
 
 let superAdminToken = null;
 let createdTenantId = null;
+let createdAuditId = null;
 let tenantOwnerToken = null;
 
 const superHeaders = () => ({
@@ -53,13 +54,21 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(() => {
-  if (!IS_LOCAL_STACK || !createdTenantId || !process.env.DATABASE_URL) return;
-  const cleanup = spawnSync(process.execPath, ['-e', [
+  if (!IS_LOCAL_STACK || (!createdTenantId && !createdAuditId) || !process.env.DATABASE_URL) return;
+  const cleanupStatements = [
     "const { PrismaClient } = require('@prisma/client');",
     'const prisma = new PrismaClient();',
-    `prisma.$transaction(async (tx) => { await tx.auditLog.deleteMany({ where: { tenantId: ${createdTenantId} } }); return tx.tenant.delete({ where: { id: ${createdTenantId} } }); })`,
-    ".catch((error) => { if (error.code !== 'P2025') throw error; })",
-    '.finally(() => prisma.$disconnect());',
+    'const cleanupTasks = [];',
+  ];
+  if (createdAuditId) {
+    cleanupStatements.push(`cleanupTasks.push(prisma.superAdminAuditLog.deleteMany({ where: { id: ${createdAuditId} } }));`);
+  }
+  if (createdTenantId) {
+    cleanupStatements.push(`cleanupTasks.push(prisma.$transaction(async (tx) => { await tx.auditLog.deleteMany({ where: { tenantId: ${createdTenantId} } }); return tx.tenant.delete({ where: { id: ${createdTenantId} } }); }).catch((error) => { if (error.code !== 'P2025') throw error; }));`);
+  }
+  cleanupStatements.push("Promise.all(cleanupTasks).catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());");
+  const cleanup = spawnSync(process.execPath, ['-e', [
+    ...cleanupStatements,
   ].join(' ')], {
     cwd: BACKEND_DIR,
     env: process.env,
@@ -197,5 +206,56 @@ test.describe('POST /api/super-admin/tenant-management/organizations', () => {
     });
     expect(response.status()).toBe(409);
     expect(await response.json()).toMatchObject({ code: 'ORGANIZATION_NAME_ALREADY_EXISTS' });
+  });
+
+  test('searches, confirms, permanently deletes the tenant, and retains its platform audit entry', async ({ request }) => {
+    const search = await request.get(`${API}/super-admin/tenant-management/organizations/search?q=${encodeURIComponent(RUN_TAG)}`, {
+      headers: superHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(search.status()).toBe(200);
+    expect((await search.json()).organizations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: createdTenantId, name: organizationName, ownerEmail }),
+    ]));
+
+    const missingConfirmation = await request.post(`${API}/super-admin/tenant-management/organizations/${createdTenantId}/hard-delete`, {
+      data: { confirmationName: `${organizationName} wrong`, reason: 'E2E cleanup' },
+      headers: superHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(missingConfirmation.status()).toBe(400);
+    expect(await missingConfirmation.json()).toMatchObject({ code: 'CONFIRMATION_MISMATCH' });
+
+    const deletion = await request.post(`${API}/super-admin/tenant-management/organizations/${createdTenantId}/hard-delete`, {
+      data: { confirmationName: organizationName, reason: `E2E account cleanup ${RUN_TAG}` },
+      headers: superHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(deletion.status()).toBe(200);
+    const deletionBody = await deletion.json();
+    expect(deletionBody).toMatchObject({ ok: true, auditId: expect.any(Number), organization: organizationName });
+    createdAuditId = deletionBody.auditId;
+
+    const detail = await request.get(`${API}/super-admin/tenant-management/tenants/${createdTenantId}`, {
+      headers: superHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(detail.status()).toBe(404);
+
+    const audit = await request.get(`${API}/super-admin/tenant-management/organization-audit-log?q=${createdTenantId}&status=SUCCEEDED`, {
+      headers: superHeaders(),
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(audit.status()).toBe(200);
+    expect((await audit.json()).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: createdAuditId,
+        organizationId: createdTenantId,
+        organizationName,
+        actor: expect.any(String),
+        status: 'SUCCEEDED',
+        reason: `E2E account cleanup ${RUN_TAG}`,
+      }),
+    ]));
   });
 });

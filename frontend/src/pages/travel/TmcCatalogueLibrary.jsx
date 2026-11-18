@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, CheckCircle2, Cloud, ExternalLink, FileText, Folder, Loader2, Search, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { Link } from "react-router-dom";
-import { fetchApi, getAuthToken } from "../../utils/api";
+import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import Pagination from "../../components/ui/Pagination";
+import TmcCataloguePdfCard from "../../components/travel/TmcCataloguePdfCard";
 
 function cardStyle(extra = {}) {
   return {
-    background: "var(--surface-color, #ffffff)",
-    border: "1px solid var(--border-color, #303746)",
+    background: "var(--tmc-surface, var(--surface-color, #ffffff))",
+    border: "1px solid var(--tmc-border, var(--border-color, #303746))",
     borderRadius: 14,
     ...extra,
   };
@@ -220,7 +221,7 @@ export default function TmcCatalogueLibrary() {
 
         <section style={{ ...cardStyle({ padding: 18 }) }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 18 }}><div><h2 style={{ margin: 0, fontSize: 22 }}>TMC brochures</h2><span style={{ color: "var(--text-secondary)", fontSize: 13 }}>{lastJob?.status === "running" ? "Knowledge sync is running…" : `${visibleFiles.length} PDF${visibleFiles.length === 1 ? "" : "s"} in this view`}</span></div><div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }} aria-label="Filter brochure files" style={{ border: "1px solid var(--border-color)", borderRadius: 8, padding: "9px 10px", background: "var(--surface-color, #20242c)", color: "inherit" }}><option value="all">All files</option><option value="indexed">Indexed</option><option value="pending">Waiting for sync</option><option value="crm-itineraries">CRM Itineraries</option></select><div style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--border-color)", borderRadius: 9, padding: "8px 11px", minWidth: 240 }}><Search size={15} color="var(--text-secondary)" /><input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Search brochures…" style={{ border: 0, outline: 0, background: "transparent", color: "inherit", width: "100%" }} /></div></div></div>
-          {loading && files.length === 0 ? <div role="status" aria-live="polite" style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><Loader2 size={30} aria-hidden="true" style={{ display: "block", margin: "0 auto 12px", animation: "spin 0.9s linear infinite" }} /><strong style={{ display: "block", color: "var(--text-primary)", fontSize: 15 }}>Loading your brochure library…</strong><p style={{ margin: "8px 0 0", lineHeight: 1.5 }}>This may take a few seconds while we check Drive and indexing status.</p></div> : visibleFiles.length === 0 ? <div style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><FileText size={30} /><p>No PDFs match this filter.</p></div> : <><div ref={brochureGridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 245px), 1fr))", gap: 16 }}>{pageFiles.map((file) => <PdfCard key={`${file.subBrand}-${file.driveFileId}`} file={file} onDelete={connected && /(^|\/)CRM Itineraries(\/|$)/i.test(String(file.folderPath || "")) ? deleteDriveFile : null} />)}</div>{totalPages > 1 && <Pagination page={safePage} pageSize={pageSize} total={visibleFiles.length} onChange={(p) => setPage(p)} showRangeLabel={false} style={{ margin: 0, marginTop: 20, padding: 0, justifyContent: "flex-end" }} />}</>}
+          {loading && files.length === 0 ? <div role="status" aria-live="polite" style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><Loader2 size={30} aria-hidden="true" style={{ display: "block", margin: "0 auto 12px", animation: "spin 0.9s linear infinite" }} /><strong style={{ display: "block", color: "var(--text-primary)", fontSize: 15 }}>Loading your brochure library…</strong><p style={{ margin: "8px 0 0", lineHeight: 1.5 }}>This may take a few seconds while we check Drive and indexing status.</p></div> : visibleFiles.length === 0 ? <div style={{ padding: 50, textAlign: "center", color: "var(--text-secondary)" }}><FileText size={30} /><p>No PDFs match this filter.</p></div> : <><div ref={brochureGridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 245px), 1fr))", gap: 16 }}>{pageFiles.map((file) => <TmcCataloguePdfCard key={`${file.subBrand}-${file.driveFileId}`} file={file} onDelete={connected && /(^|\/)CRM Itineraries(\/|$)/i.test(String(file.folderPath || "")) ? deleteDriveFile : null} />)}</div>{totalPages > 1 && <Pagination page={safePage} pageSize={pageSize} total={visibleFiles.length} onChange={(p) => setPage(p)} showRangeLabel={false} style={{ margin: 0, marginTop: 20, padding: 0, justifyContent: "flex-end" }} />}</>}
         </section>
       </div>
     </main>
@@ -228,41 +229,6 @@ export default function TmcCatalogueLibrary() {
 }
 
 function Stat({ label, value, icon, tone = "#8c95aa" }) { return <div style={{ display: "flex", gap: 11, alignItems: "center", minWidth: 0 }}><span style={{ width: 38, height: 38, display: "grid", placeItems: "center", borderRadius: 10, color: tone, background: `${tone}18` }}>{icon}</span><div style={{ minWidth: 0 }}><div style={{ color: "var(--text-secondary)", fontSize: 12 }}>{label}</div><strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 3 }}>{value}</strong></div></div>; }
-
-function PdfCard({ file, onDelete }) {
-  const indexed = file.indexed;
-  const driveUrl = file.driveViewLink || "#";
-  return <article style={{ ...cardStyle({ overflow: "hidden", transition: "transform .2s ease, border-color .2s ease" }) }}>
-    <a href={driveUrl} target="_blank" rel="noreferrer" aria-label={`Open ${file.fileName} PDF`} title="Open PDF in Drive" style={{ height: 158, display: "grid", placeItems: "center", background: "var(--bg-color, #f6f8fb)", position: "relative", textDecoration: "none" }}>
-      <FileText size={44} color="var(--accent-color, #8fb8ff)" style={{ position: "absolute" }} />
-      {file.thumbnailLink && <PdfThumbnail fileId={file.driveFileId} />}
-      <span style={{ position: "absolute", top: 10, left: 10, padding: "5px 8px", borderRadius: 6, background: indexed ? "rgba(5,8,14,.78)" : "#4b1820", color: indexed ? "#9ee3bf" : "#ffb2bb", fontSize: 11, fontWeight: 700 }}>{indexed ? "Indexed" : "Unindexed"}</span>
-      <span style={{ position: "absolute", right: 10, bottom: 10, display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: 7, background: "rgba(5,8,14,.82)", color: "#fff" }}><ExternalLink size={15} /></span>
-    </a>
-    <div style={{ padding: 14 }}>
-      <h3 title={file.fileName} style={{ margin: 0, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.fileName}</h3>
-      <p title={file.folderPath} style={{ margin: "7px 0 14px", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45, overflowWrap: "anywhere" }}><strong style={{ color: "inherit" }}>Path:</strong> {file.folderPath || "TMC"}</p>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <a href={driveUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--accent-color, #9dbdff)", fontSize: 12, textDecoration: "none" }}>Open PDF <ExternalLink size={13} /></a>
-        {onDelete && <button type="button" onClick={() => onDelete(file)} aria-label={`Delete ${file.fileName}`} title="Delete from TMC Drive" style={{ border: "1px solid #8f3f4b", background: "transparent", color: "#ff9da8", borderRadius: 6, padding: 6, cursor: "pointer" }}><Trash2 size={14} /></button>}
-      </div>
-    </div>
-  </article>;
-}
-
-function PdfThumbnail({ fileId }) {
-  const [src, setSrc] = useState(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl = null;
-    fetch(`/api/travel/knowledge-base/tmc-catalogue/drive-files/${encodeURIComponent(fileId)}/thumbnail`, { headers: { Authorization: `Bearer ${getAuthToken()}` }, signal: controller.signal })
-      .then((response) => response.ok ? response.blob() : null)
-      .then((blob) => { if (blob) { objectUrl = URL.createObjectURL(blob); setSrc(objectUrl); } })
-      .catch(() => {});
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [fileId]);
-  return src ? <img src={src} alt="" decoding="async" style={{ position: "relative", width: "100%", height: "100%", objectFit: "cover", background: "var(--surface-color, #20242c)" }} /> : null;
-}
 
 function PendingFileRow({ file, onDelete }) {
   const driveUrl = file.driveViewLink || "#";

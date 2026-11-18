@@ -514,6 +514,38 @@ test.describe('Travel diagnostics API — list + fetch submissions', () => {
 //   - subsequent GET returns the persisted talkingPointsJson
 //   - 404 for unknown / 400 for non-numeric id
 //
+test.describe('Travel diagnostics API — TMC catalogue responses', () => {
+  test('ADMIN can list tenant-scoped teacher catalogue selections', async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, 'travel admin not available');
+
+    const res = await get(request, token, '/api/travel/tmc-catalogue-responses?limit=10&offset=0');
+    expect(res.status(), await res.text()).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({
+      responses: expect.any(Array),
+      total: expect.any(Number),
+      limit: 10,
+      offset: 0,
+    }));
+    for (const response of body.responses) {
+      expect(response).toEqual(expect.objectContaining({
+        teacher: expect.objectContaining({ id: expect.any(Number) }),
+        selectedCatalogues: expect.any(Array),
+      }));
+      expect(response).not.toHaveProperty('selectedFilesJson');
+      expect(response).not.toHaveProperty('tenantId');
+    }
+  });
+
+  test('generic-tenant admin cannot access TMC catalogue responses', async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, 'generic admin not available');
+    const res = await get(request, token, '/api/travel/tmc-catalogue-responses');
+    expect(res.status()).toBe(403);
+  });
+});
+
 // USER login uses telecaller@travelstall.demo (seeded by seed-travel.js
 // with role=USER). When the seed file is absent the cross-role test
 // skips (matches the existing pattern in the WRONG_VERTICAL block).

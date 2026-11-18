@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, Key, PanelsTopLeft, UsersRound, Eye, TrendingUp } from "lucide-react";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, Key, PanelsTopLeft, UsersRound, Eye, TrendingUp, Trash2, ClipboardList } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
@@ -18,6 +18,8 @@ const MODULES = [
   { path: "/super-admin/ai-management/api-keys", label: "API Key Management", icon: Key },
   { path: "/super-admin/ai-management/plans", label: "AI Subscription Plans", icon: CreditCard },
   { path: "/super-admin/tenant-management", label: "Tenant Management", icon: Building2 },
+  { path: "/super-admin/organization-deletion", label: "Delete Organization", icon: Trash2 },
+  { path: "/super-admin/organization-audit-log", label: "Organization Audit Log", icon: ClipboardList },
   { path: "/super-admin/role-management", label: "Role Management", icon: UsersRound },
   { path: "/super-admin/page-visibility", label: "Page Visibility", icon: Eye },
   { path: "/super-admin/revenue", label: "Revenue Analytics", icon: TrendingUp },
@@ -108,7 +110,7 @@ export default function SuperAdminLayout() {
           <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>Super Admin</span>
         </div>
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
+        <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minHeight: 0, overflowY: "auto" }}>
           {MODULES.map((m) => {
             const active = isModuleActive(location.pathname, m.path);
             return (

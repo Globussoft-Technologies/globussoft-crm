@@ -34,7 +34,6 @@ router.use(async (req, res, next) => {
         code: "VERTICAL_NOT_SUPPORTED",
       });
     }
-    req.leadTenantVertical = tenant.vertical;
     next();
   } catch (err) {
     console.error("[lead-custom-fields] vertical-check error:", err && err.message);
@@ -45,13 +44,6 @@ router.use(async (req, res, next) => {
 const VALID_FIELD_TYPES = new Set(["text", "textarea", "number", "dropdown", "radio", "date", "url", "checkbox", "multiselect"]);
 const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
 const FIELD_KEY_RE = /^[a-z][a-z0-9_]{0,49}$/;
-
-const TRAVEL_DEFAULT_LEAD_FIELDS = [
-  { fieldKey: "trip_name", label: "Trip Name", fieldType: "text", placeholder: "e.g. Deoghar 2026" },
-  { fieldKey: "traveler_type", label: "Traveler Type", fieldType: "dropdown", options: ["Student", "Parent / Guardian", "Teacher", "Adult Traveler", "Child Traveler", "Pilgrim"] },
-  { fieldKey: "destination", label: "Destination", fieldType: "text", placeholder: "e.g. Deoghar" },
-  { fieldKey: "package_code", label: "Package Code", fieldType: "text", placeholder: "e.g. TMC-DEO-2026" },
-];
 
 function slugifyLabel(label) {
   return String(label || "")
@@ -75,7 +67,7 @@ router.get("/", async (req, res) => {
     const parsedOffset = Number.parseInt(req.query.offset, 10);
     const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : (page - 1) * limit;
     const where = { tenantId: req.user.tenantId };
-    let [rows, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       prisma.leadCustomFieldDefinition.findMany({
       where: { tenantId: req.user.tenantId },
       orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
@@ -83,35 +75,6 @@ router.get("/", async (req, res) => {
       }),
       paginationRequested ? prisma.leadCustomFieldDefinition.count({ where }) : Promise.resolve(null),
     ]);
-    if (!paginationRequested && req.leadTenantVertical === "travel") {
-      const existingKeys = new Set(rows.map((row) => row.fieldKey));
-      const missing = TRAVEL_DEFAULT_LEAD_FIELDS.filter((field) => !existingKeys.has(field.fieldKey));
-      if (missing.length) {
-        const maxOrder = rows.reduce((max, row) => Math.max(max, Number(row.displayOrder) || 0), 0);
-        const created = [];
-        for (const [index, field] of missing.entries()) {
-          const createdField = await prisma.leadCustomFieldDefinition.create({
-            data: {
-              tenantId: req.user.tenantId,
-              fieldKey: field.fieldKey,
-              label: field.label,
-              fieldType: field.fieldType,
-              options: field.options ? JSON.stringify(field.options) : null,
-              tooltip: null,
-              placeholder: field.placeholder || null,
-              isRequired: false,
-              displayOrder: maxOrder + index + 1,
-            },
-          });
-          created.push(createdField || {
-            ...field,
-            tenantId: req.user.tenantId,
-            displayOrder: maxOrder + index + 1,
-          });
-        }
-        rows = [...rows, ...created];
-      }
-    }
     const withParsedOptions = rows.map((r) => ({
       ...r,
       options: Array.isArray(r.options) ? r.options : (r.options ? JSON.parse(r.options) : null),

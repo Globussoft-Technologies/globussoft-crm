@@ -3176,7 +3176,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'email', label: 'Email' },
-            { key: 'company', label: 'Trip Name' },
+            { key: 'company', label: 'School Name' },
             { key: 'source', label: 'Source' },
             { key: 'cf_school', label: 'School', filterField: 'custom_91', filterKind: 'text' },
             { key: 'actions', label: 'Actions', lockedVisible: true },
@@ -3210,7 +3210,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
     fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
 
-    expect(await within(dialog).findByRole('button', { name: 'Trip Name' })).toBeInTheDocument();
+    expect(await within(dialog).findByRole('button', { name: 'School Name' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'School' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Status' })).toBeNull();
     expect(within(dialog).queryByRole('button', { name: 'Territory' })).toBeNull();
@@ -4005,13 +4005,86 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     notifyError.mockReset();
   });
 
+  it('keeps Travel actions beside search and shows Sub-brand as a default filter section', async () => {
+    const { container } = renderLeads(TRAVEL_AUTH);
+    await screen.findByRole('link', { name: 'Lily' });
+
+    expect(container.querySelector('.leads-page-root--travel')).toBeInTheDocument();
+    const toolbar = container.querySelector('.travel-leads-actions-toolbar');
+    const searchControls = container.querySelector('.travel-leads-search-controls');
+    expect(toolbar).toBeInTheDocument();
+    expect(searchControls).toContainElement(toolbar);
+    expect(searchControls).toContainElement(screen.getByPlaceholderText('Search leads...'));
+    expect(searchControls).toContainElement(screen.getByRole('button', { name: 'Filter by' }));
+    expect(toolbar).toContainElement(screen.getByRole('button', { name: /^Refresh$/i }));
+    expect(toolbar).toContainElement(screen.getByRole('button', { name: /Bulk actions/i }));
+    expect(screen.queryByRole('combobox', { name: 'Filter by sub-brand' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Filter by stage' })).toBeNull();
+    expect(toolbar.querySelector('.travel-leads-count')).toBeNull();
+    expect(container.querySelector('.travel-leads-filters')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Scrollable lead columns' })).toHaveAttribute('tabindex', '0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter by' }));
+    const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    expect(await within(dialog).findByText('Sub-brand')).toBeInTheDocument();
+  });
+
+  it('disables row and card hover hooks for the Travel Leads table', async () => {
+    const { container } = renderLeads(TRAVEL_AUTH);
+    await screen.findByRole('link', { name: 'Lily' });
+
+    expect(container.querySelector('.travel-leads-table-card')).toBeInTheDocument();
+    const lilyRows = container.querySelectorAll('tr[data-lead-row-id="50"]');
+    expect(lilyRows.length).toBeGreaterThan(0);
+    lilyRows.forEach((row) => expect(row).not.toHaveClass('table-row-hover'));
+  });
+
   it('navigates to the travel lead profile when clicking a name in the Name column', async () => {
     renderLeads(TRAVEL_AUTH);
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
-    expect(lilyLink).toHaveAttribute('href', '/travel/leads/50');
+    expect(lilyLink).toHaveAttribute('href', '/travel/leads/50?page=1&limit=10');
 
     fireEvent.click(lilyLink);
     expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+  });
+
+  it('preserves Travel pagination, rows, search, and sorting through lead details', async () => {
+    const manyLeads = Array.from({ length: 25 }, (_, index) => ({
+      id: 100 + index,
+      name: `Traveler ${String(index + 1).padStart(2, '0')}`,
+      email: `traveler${index + 1}@example.com`,
+      subBrand: 'TMC',
+      createdAt: '2026-07-17T10:00:00Z',
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve(manyLeads);
+      }
+      return travelFetchMock(url, opts);
+    });
+
+    const firstRender = renderLeads(
+      TRAVEL_AUTH,
+      ['/leads?page=2&limit=10&q=Traveler&sortBy=name&sortDirection=asc'],
+    );
+    const leadLink = await screen.findByRole('link', { name: 'Traveler 11' });
+    fireEvent.click(leadLink);
+
+    const location = screen.getByTestId('router-location');
+    expect(location).toHaveAttribute('data-pathname', '/travel/leads/110');
+    const detailParams = new URLSearchParams(location.getAttribute('data-search'));
+    expect(detailParams.get('page')).toBe('2');
+    expect(detailParams.get('limit')).toBe('10');
+    expect(detailParams.get('q')).toBe('Traveler');
+    expect(detailParams.get('sortBy')).toBe('name');
+    expect(detailParams.get('sortDirection')).toBe('asc');
+    const detailState = JSON.parse(location.getAttribute('data-state'));
+    expect(detailState.leadsListState).toEqual({ pageIndex: 1, pageSize: 10 });
+
+    firstRender.unmount();
+    renderLeads(TRAVEL_AUTH, [detailState.returnTo]);
+    expect(await screen.findByRole('link', { name: 'Traveler 11' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveValue('10');
   });
 
   it('keeps travel lead name editing behind the Name column edit icon', async () => {

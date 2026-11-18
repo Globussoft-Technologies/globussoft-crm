@@ -455,6 +455,11 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     && !requestedBackTo.startsWith('//')
     ? requestedBackTo
     : defaultListPath);
+  const requestedBackPath = typeof requestedBackTo === 'string'
+    ? requestedBackTo.split(/[?#]/, 1)[0]
+    : null;
+  const shouldRenderListBackdrop = renderBackdrop
+    && (!requestedBackPath || requestedBackPath === '/contacts' || requestedBackPath === '/leads');
   const closeLabel = typeof (location.state?.returnLabel || location.state?.backLabel) === 'string'
     ? (location.state.returnLabel || location.state.backLabel)
     : `Back to ${defaultListPath === '/leads' ? 'Leads' : 'Contacts'}`;
@@ -1487,7 +1492,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
 
     return (
       <div className="cp-slide-root">
-        {renderBackdrop && (
+        {shouldRenderListBackdrop && (
           <div className="cp-slide-bg">
             {showGenericLeadsBackdrop
               ? <Leads initialListState={leadsBackdropListState} />

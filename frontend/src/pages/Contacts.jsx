@@ -4,7 +4,7 @@ import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
 import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, UserPlus } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import ColumnPicker from '../components/ColumnPicker';
@@ -163,14 +163,16 @@ function validateCsvRow(row) {
 
 const Contacts = () => {
   const notify = useNotify();
+  const location = useLocation();
+  const [contactParams, setContactParams] = useSearchParams();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   // Server-driven pagination (?limit=&offset=&page=) — `contacts` holds ONLY
   // the current page's rows; header/footer totals come from the envelope's
   // `total`, falling back to the loaded rows when the backend (or a test
   // mock) answers with the legacy plain array.
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(() => Math.max(1, Number(contactParams.get('page')) || 1));
+  const [pageSize, setPageSize] = useState(() => Math.max(1, Number(contactParams.get('limit')) || 10));
   const [pageInput, setPageInput] = useState('1');
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -210,7 +212,7 @@ const Contacts = () => {
   // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts".
   // Membership filtering is applied by the contacts API so it covers the
   // entire view before limit/offset are applied.
-  const [activeViewId, setActiveViewId] = useState(null);
+  const [activeViewId, setActiveViewId] = useState(() => contactParams.get('viewId') || null);
   // Generic + Travel tenant-scoped Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // Generic + Travel "Customize table" column-visibility picker
@@ -265,41 +267,106 @@ const Contacts = () => {
   // and the table read straight from `contacts`, so neither one filtered.
   // Wire both to local state and derive a filtered view client-side
   // (mirrors the existing Leads.jsx pattern). Status === 'All' = show all.
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
+  const [searchTerm, setSearchTerm] = useState(() => contactParams.get('q') || '');
+  const [statusFilter, setStatusFilter] = useState(() => contactParams.get('status') || 'All');
 
   // Drill-down entry from the Lead Reports cluster — e.g. the funnel's
   // "Converted" stage links to /contacts?status=Customer. Seeds the existing
   // status dropdown so the applied filter is visible and clearable.
-  const [drillParams] = useSearchParams();
-  useEffect(() => {
-    const status = drillParams.get('status');
-    if (status) setStatusFilter(status);
-  }, [drillParams]);
   // Assigned-To + Lead Score range filters, same client-side pattern as
   // search/status above. assignedToFilter: '' = all, 'unassigned' = no
   // assignee, else a staff id (string, matches <option value>). scoreFilter:
   // '' = all, else "min-max" bucket key parsed at filter time.
-  const [assignedToFilter, setAssignedToFilter] = useState('');
-  const [scoreFilter, setScoreFilter] = useState('');
+  const [assignedToFilter, setAssignedToFilter] = useState(() => contactParams.get('unassigned') === 'true' ? 'unassigned' : (contactParams.get('assignedToId') || ''));
+  const [scoreFilter, setScoreFilter] = useState(() => {
+    const min = contactParams.get('scoreMin');
+    const max = contactParams.get('scoreMax');
+    return min && max ? `${min}-${max}` : '';
+  });
   // Debounced search term for the server-side ?q= param so typing doesn't
   // fire a request per keystroke (mirrors Clients.jsx). Client-side
   // narrowing below stays instant on the raw `searchTerm`.
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(() => (contactParams.get('q') || '').trim());
   useEffect(() => {
+    const nextSearchTerm = searchTerm.trim();
+    // The URL initializer already seeded the debounced value. Do not treat
+    // that initial synchronization as a new filter and reset a restored page.
+    if (nextSearchTerm === debouncedSearchTerm) return undefined;
     const t = setTimeout(() => {
       setPage(1);
-      setDebouncedSearchTerm(searchTerm.trim());
+      setDebouncedSearchTerm(nextSearchTerm);
     }, 300);
     return () => clearTimeout(t);
-  }, [searchTerm]);
+  }, [debouncedSearchTerm, searchTerm]);
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
   // dynamic field-picker + operator + checkbox-values panel, separate from
   // the fixed dropdowns above. Applied server-side via ?filters=<JSON>
   // (backend/routes/contacts.js FILTERABLE_FIELDS) so it isn't bounded by
   // the same-page 500-row client cap the way the dropdowns above are.
-  const [advancedFilters, setAdvancedFilters] = useState([]);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [advancedFilters, setAdvancedFilters] = useState(() => {
+    try { return JSON.parse(contactParams.get('filters') || '[]'); } catch { return []; }
+  });
+  const [sortConfig, setSortConfig] = useState(() => ({
+    key: contactParams.get('sortBy') || null,
+    direction: contactParams.get('sortDirection') || null,
+  }));
+  const urlSyncRef = useRef({ written: null, applying: false, initialized: false });
+
+  // Keep the complete list view in the URL so opening a contact and browser
+  // Back/Forward restore the same server-side result set. The URL is also the
+  // durable source when this component remounts after a detail/preview route.
+  useEffect(() => {
+    const serialized = contactParams.toString();
+    if (!urlSyncRef.current.initialized) {
+      urlSyncRef.current.initialized = true;
+      return;
+    }
+    if (urlSyncRef.current.written === serialized) {
+      urlSyncRef.current.written = null;
+      return;
+    }
+    urlSyncRef.current.applying = true;
+    setPage(Math.max(1, Number(contactParams.get('page')) || 1));
+    setPageSize(Math.max(1, Number(contactParams.get('limit')) || 10));
+    setSearchTerm(contactParams.get('q') || '');
+    setStatusFilter(contactParams.get('status') || 'All');
+    setAssignedToFilter(contactParams.get('unassigned') === 'true' ? 'unassigned' : (contactParams.get('assignedToId') || ''));
+    const min = contactParams.get('scoreMin');
+    const max = contactParams.get('scoreMax');
+    setScoreFilter(min && max ? `${min}-${max}` : '');
+    setActiveViewId(contactParams.get('viewId') || null);
+    try { setAdvancedFilters(JSON.parse(contactParams.get('filters') || '[]')); } catch { setAdvancedFilters([]); }
+    setSortConfig({ key: contactParams.get('sortBy') || null, direction: contactParams.get('sortDirection') || null });
+  }, [contactParams, setContactParams]);
+
+  useEffect(() => {
+    if (urlSyncRef.current.applying) {
+      urlSyncRef.current.applying = false;
+      return;
+    }
+    const next = new URLSearchParams();
+    next.set('page', String(page));
+    next.set('limit', String(pageSize));
+    if (searchTerm.trim()) next.set('q', searchTerm.trim());
+    if (statusFilter !== 'All') next.set('status', statusFilter);
+    if (assignedToFilter === 'unassigned') next.set('unassigned', 'true');
+    else if (assignedToFilter) next.set('assignedToId', assignedToFilter);
+    const scoreBucket = CONTACTS_SCORE_BUCKETS.find(bucket => bucket.value === scoreFilter);
+    if (scoreBucket) {
+      next.set('scoreMin', String(scoreBucket.min));
+      next.set('scoreMax', String(scoreBucket.max));
+    }
+    if (activeViewId != null) next.set('viewId', String(activeViewId));
+    if (advancedFilters.length) next.set('filters', JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
+    if (sortConfig.key && sortConfig.direction) {
+      next.set('sortBy', sortConfig.key);
+      next.set('sortDirection', sortConfig.direction);
+    }
+    if (next.toString() !== contactParams.toString()) {
+      urlSyncRef.current.written = next.toString();
+      setContactParams(next);
+    }
+  }, [activeViewId, advancedFilters, assignedToFilter, contactParams, page, pageSize, searchTerm, scoreFilter, setContactParams, sortConfig.direction, sortConfig.key, statusFilter]);
   const [columnLayout, setColumnLayout] = useState(() => {
     if (typeof window === 'undefined') return { widths: {} };
     try {
@@ -1101,7 +1168,8 @@ const Contacts = () => {
         >
           <div style={{ minWidth: 0, flex: 1 }}>
             <Link
-                to={isTravel ? `/travel/leads/${contact.id}` : `/contacts/${contact.id}`}
+                to={`${isTravel ? `/travel/leads/${contact.id}` : `/contacts/${contact.id}`}${location.search}`}
+                state={location.search ? { backTo: `/contacts${location.search}`, backLabel: 'Back to Contacts' } : (isTravel ? { backTo: '/contacts', backLabel: 'Back to Contacts' } : undefined)}
                 style={{
                   color: 'var(--text-primary)',
                   textDecoration: 'none',
@@ -1680,7 +1748,7 @@ const Contacts = () => {
               {total === 0 ? 'No contacts' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
             </span>
             <select className="input-field" aria-label="Contacts per page" value={pageSize} onChange={e => { setPageSize(parseInt(e.target.value) || 10); setPage(1); }} style={{ padding: '0.2rem 0.35rem', fontSize: '0.75rem', borderRadius: '7px', width: 'auto' }}>
-              {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
+              {[5, 10, 20, 25, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
             </select>
             <button className="btn-secondary" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage(p => Math.max(p - 1, 1))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: page <= 1 ? 0.45 : 1, cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{page} / {totalPages}</span>
@@ -1904,7 +1972,7 @@ const Contacts = () => {
                     setPage(1);
                   }}
                 >
-                  {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                  {[5, 10, 20, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
               </div>
               <div className="contacts-pagination-navigation">

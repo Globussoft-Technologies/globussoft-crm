@@ -20,7 +20,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -156,7 +156,100 @@ function getScrollableContactRowByName(name) {
   return row;
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="location-search">{location.search}</span>;
+}
+
+function HistoryProbe() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate(-1)}>Browser back</button>
+      <button type="button" onClick={() => navigate(1)}>Browser forward</button>
+    </>
+  );
+}
+
 describe('Contacts.jsx — top-level page contract', () => {
+  it('restores pagination and list state from the URL and carries it into contact navigation', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (isContactsListRequest(url)) {
+        return Promise.resolve({ ...contactsEnvelope(SEEDED_CONTACTS), total: 100, totalPages: 4 });
+      }
+      return defaultFetchImpl(url);
+    });
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter initialEntries={['/contacts?page=3&limit=25&q=priya&status=Customer&sortBy=name&sortDirection=desc']}>
+          <Contacts />
+          <LocationProbe />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
+    // Wait past the search debounce window: restoring a URL with an existing
+    // query must not be mistaken for a newly changed filter.
+    await waitFor(() => expect(screen.getByLabelText('Page number')).toHaveValue(3));
+    expect(screen.getAllByLabelText('Contacts per page')[1]).toHaveValue('25');
+    expect(screen.getByLabelText('Page number')).toHaveValue(3);
+    expect(screen.getByTestId('location-search')).toHaveTextContent('page=3');
+    const listRequest = fetchApiMock.mock.calls.find(([url]) => isContactsListRequest(url));
+    const params = new URL(listRequest[0], 'http://localhost').searchParams;
+    expect(params.get('page')).toBe('3');
+    expect(params.get('limit')).toBe('25');
+    expect(params.get('q')).toBe('priya');
+    expect(screen.getByRole('link', { name: 'Priya Iyer' })).toHaveAttribute(
+      'href',
+      '/travel/leads/2?page=3&limit=25&q=priya&status=Customer&sortBy=name&sortDirection=desc',
+    );
+  });
+
+  it('updates the URL when pagination changes without losing the current table state', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (isContactsListRequest(url)) return Promise.resolve({ ...contactsEnvelope(SEEDED_CONTACTS), total: 30, totalPages: 3 });
+      return defaultFetchImpl(url);
+    });
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter>
+          <Contacts />
+          <LocationProbe />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Next page' })[1]);
+    await waitFor(() => expect(screen.getByLabelText('Page number')).toHaveValue(2));
+    expect(screen.getByTestId('location-search')).toHaveTextContent('page=2');
+    expect(screen.getByTestId('location-search')).toHaveTextContent('limit=10');
+  });
+
+  it('restores the correct page when browser Back and Forward change the list URL', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (isContactsListRequest(url)) return Promise.resolve({ ...contactsEnvelope(SEEDED_CONTACTS), total: 100, totalPages: 4 });
+      return defaultFetchImpl(url);
+    });
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter initialEntries={['/contacts?page=1&limit=10', '/contacts?page=3&limit=25']} initialIndex={1}>
+          <Contacts />
+          <LocationProbe />
+          <HistoryProbe />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText('Page number')).toHaveValue(3));
+    fireEvent.click(screen.getByRole('button', { name: 'Browser back' }));
+    await waitFor(() => expect(screen.getByLabelText('Page number')).toHaveValue(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }));
+    await waitFor(() => expect(screen.getByLabelText('Page number')).toHaveValue(3));
+    expect(screen.getAllByLabelText('Contacts per page')[1]).toHaveValue('25');
+  });
+
   it('shows the loading row before the contacts fetch settles, then renders the rows', async () => {
     // Defer the /api/contacts response so we can assert the loading row.
     let resolveContacts;
@@ -507,7 +600,7 @@ describe('Contacts.jsx — top-level page contract', () => {
       </AuthContext.Provider>,
     );
     const contactLink = await screen.findByRole('link', { name: 'Aarav Sharma' });
-    expect(contactLink).toHaveAttribute('href', '/travel/leads/1');
+    expect(contactLink).toHaveAttribute('href', '/travel/leads/1?page=1&limit=10');
     fireEvent.click(contactLink);
     expect(screen.queryByRole('dialog', { name: 'Contact preview' })).not.toBeInTheDocument();
   });

@@ -769,7 +769,7 @@ describe('PUT /api/contacts/:id/assign - travel agent reassignment', () => {
       category: 'lead',
       entityType: 'lead',
       entityId: 9001,
-      link: '/contacts/9001',
+      link: '/travel/leads/9001',
     }));
   });
 

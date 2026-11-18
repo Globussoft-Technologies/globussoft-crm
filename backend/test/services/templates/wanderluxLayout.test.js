@@ -32,16 +32,82 @@ const wanderlux = require('../../../services/templates/wanderlux');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', '..', 'services', 'templates', 'wanderlux', 'landing-page.dc.html');
 const TEMPLATE_HTML = fs.readFileSync(TEMPLATE_PATH, 'utf8');
+const INDIAN_MOBILE_ERROR = 'Please enter a valid 10-digit mobile number starting with 6, 7, 8, or 9';
 
-test('parent registration phone validation requires exactly 10 national digits after +91', () => {
+test('parent registration phone validation requires a valid 10-digit Indian mobile number', () => {
   const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
   const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };
   vm.runInNewContext(`${script}\nglobalThis.validateRegistrationField = validateField;`, context);
   const field = { label: 'Phone', type: 'tel', required: true, exactPhoneDigits: 10, phoneCountryCode: '91' };
 
   expect(context.validateRegistrationField(field, '+91 98765 43210')).toBe('');
-  expect(context.validateRegistrationField(field, '+91 98765 4321')).toMatch(/exactly 10 digits/i);
-  expect(context.validateRegistrationField(field, '+91 98765 43210 9')).toMatch(/exactly 10 digits/i);
+  expect(context.validateRegistrationField(field, '9876543210')).toBe('');
+  for (const phone of ['+91 98765 4321', '+91 65756756', '+91 98765 43210 9', '276653562456353765', '1234567890']) {
+    expect(context.validateRegistrationField(field, phone)).toBe(INDIAN_MOBILE_ERROR);
+  }
+});
+
+test('parent registration keeps +91 fixed, rejects invalid input, and blocks Next until valid', () => {
+  const script = TEMPLATE_HTML.match(/<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/)?.[1];
+  const context = { DCLogic: class {}, window: { location: { search: '' } }, URLSearchParams };
+  vm.runInNewContext(`${script}\nglobalThis.PageComponent = Component;`, context);
+  const page = new context.PageComponent();
+  const phone = { name: 'phone', label: 'Phone', type: 'tel', required: true, placeholder: '+91 XXXXX XXXXX' };
+  page.props = { config: {
+    register: { deadline: null, submitLabel: 'Reserve Orientation Seat', steps: [{ title: 'Parent', fields: [phone] }] },
+    investment: { payment: { enabled: false } },
+  } };
+  page.setState = (next) => {
+    page.state = { ...page.state, ...(typeof next === 'function' ? next(page.state) : next) };
+  };
+
+  let phoneField = page.renderVals().regFields[0];
+  expect(phoneField.phonePrefix).toBe('+91');
+  expect(phoneField.maxLength).toBe(10);
+  expect(phoneField.value).toBe('');
+  expect(page.renderVals().regPaymentActionDisabled).toBe(false);
+  const firstStep = page.state.regStep;
+  page.renderVals().regPrimary();
+  expect(page.state.regError).toBe('Phone is required');
+  expect(page.state.regStep).toBe(firstStep);
+
+  phoneField.onInput({ target: { value: '1' } });
+  expect(page.state.regValues.phone).toBe('');
+  expect(page.renderVals().regFields[0].error).toBe(INDIAN_MOBILE_ERROR);
+
+  page.renderVals().regFields[0].onInput({ target: { value: '8abc' } });
+  expect(page.state.regValues.phone).toBe('');
+  expect(page.renderVals().regFields[0].error).toBe(INDIAN_MOBILE_ERROR);
+
+  page.renderVals().regFields[0].onInput({ target: { value: '65756756' } });
+  expect(page.state.regValues.phone).toBe('+9165756756');
+  expect(page.renderVals().regFields[0].value).toBe('65756756');
+  expect(page.renderVals().regFields[0].error).toBe(INDIAN_MOBILE_ERROR);
+  expect(page.renderVals().regPaymentActionDisabled).toBe(false);
+  const stepWithIncompletePhone = page.state.regStep;
+  page.renderVals().regPrimary();
+  expect(page.state.regError).toBe(INDIAN_MOBILE_ERROR);
+  expect(page.state.regStep).toBe(stepWithIncompletePhone);
+
+  page.renderVals().regFields[0].onInput({ target: { value: '897567123456' } });
+  phoneField = page.renderVals().regFields[0];
+  expect(phoneField.value).toBe('8975671234');
+  expect(page.state.regValues.phone).toBe('+918975671234');
+  expect(phoneField.error).toBe('');
+  expect(page.renderVals().regPaymentActionDisabled).toBe(false);
+
+  phoneField.onInput({ target: { value: '8975671234x' } });
+  expect(page.state.regValues.phone).toBe('+918975671234');
+  expect(page.renderVals().regFields[0].error).toBe(INDIAN_MOBILE_ERROR);
+  expect(page.renderVals().regPaymentActionDisabled).toBe(false);
+  const stepWithRejectedInput = page.state.regStep;
+  page.renderVals().regPrimary();
+  expect(page.state.regError).toBe(INDIAN_MOBILE_ERROR);
+  expect(page.state.regStep).toBe(stepWithRejectedInput);
+
+  page.renderVals().regFields[0].onInput({ target: { value: '8975671234' } });
+  expect(page.renderVals().regFields[0].error).toBe('');
+  expect(page.renderVals().regPaymentActionDisabled).toBe(false);
 });
 
 test('a successful payment changes the final action to Register', () => {

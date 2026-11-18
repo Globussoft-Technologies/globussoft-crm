@@ -1418,7 +1418,7 @@ router.get("/public/featured", async (req, res) => {
 
 
 
-async function getTmcParentRegistrationUrl(page, req) {
+async function getTmcParentRegistrationUrl(page, req, { draftToken = "" } = {}) {
   if (!page?.tripId || String(page.subBrand || "").toLowerCase() !== "tmc") return null;
   const trip = await prisma.tmcTrip.findFirst({
     where: {
@@ -1429,12 +1429,15 @@ async function getTmcParentRegistrationUrl(page, req) {
     select: { teacherContactId: true },
   });
   if (!trip?.teacherContactId) return null;
-  return buildTmcParentRegistrationUrl({
+  const registrationUrl = buildTmcParentRegistrationUrl({
     baseUrl: getFrontendUrlFromRequest(req),
     tenantId: page.tenantId || 1,
     teacherContactId: trip.teacherContactId,
     tripId: page.tripId,
   });
+  if (!draftToken) return registrationUrl;
+  const separator = registrationUrl.includes("?") ? "&" : "?";
+  return `${registrationUrl}${separator}draftToken=${encodeURIComponent(String(draftToken))}`;
 }
 
 async function getExistingParticipantPortalRedirect(page, req, { studentName, parentEmail, parentPhone }) {
@@ -7911,6 +7914,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   // Convert the staging row immediately so the participant and its payment
   // schedule are available to CRM and portal users without approval.
   let completedDraftId = draft.id;
+  let completedDraftToken = draft.draftToken;
   if (!draft.convertedToParticipantId) {
     const participant = await createParticipantFromLeadSubmission(
       page.tripId,
@@ -7928,7 +7932,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     if (participant) {
       const findConvertedDraft = () => prisma.pendingTripRegistration.findFirst({
         where: { tenantId, tripId: page.tripId, convertedToParticipantId: participant.id },
-        select: { id: true },
+        select: { id: true, draftToken: true },
       });
       let convertedDraft = await findConvertedDraft();
       if (!convertedDraft) {
@@ -7951,6 +7955,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
         }
         await prisma.pendingTripRegistration.delete({ where: { id: draft.id } });
         completedDraftId = convertedDraft.id;
+        completedDraftToken = convertedDraft.draftToken;
       }
     }
   }
@@ -7986,7 +7991,9 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   //
 
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
-  const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
+  const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req, {
+    draftToken: completedDraftToken,
+  });
   const portalRedirect = tmcParentRegistrationUrl
     || `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(resolvedParentName)}&email=${encodeURIComponent(resolvedParentEmail)}&next=${encodeURIComponent('/travel/portal')}`;
   return res.status(201).json({

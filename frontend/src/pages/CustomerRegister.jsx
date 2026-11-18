@@ -94,6 +94,27 @@ function scoreOrganizationMatch(tenant, queryKey) {
   return Number.POSITIVE_INFINITY;
 }
 
+function readLandingRegistrationPrefill() {
+  if (typeof window === "undefined") return null;
+  const storages = [window.localStorage, window.sessionStorage];
+  for (const storage of storages) {
+    try {
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (!key || !key.startsWith("landing-registration-draft:")) continue;
+        const saved = JSON.parse(storage.getItem(key) || "null");
+        const fields = saved?.regValues && typeof saved.regValues === "object" ? saved.regValues : saved;
+        const email = String(fields?.parent_email || fields?.parentEmail || fields?.email || "").trim().toLowerCase();
+        const name = String(fields?.parent_name || fields?.parentName || fields?.fullName || fields?.name || "").trim();
+        if (email || name) return { email, name };
+      }
+    } catch {
+      // Ignore unavailable or malformed browser storage.
+    }
+  }
+  return null;
+}
+
 export default function CustomerRegister() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -108,11 +129,13 @@ export default function CustomerRegister() {
   // safeNext() rejects external URLs so a hostile ?next= can't redirect off-app.
   const nextParam = searchParams.get("next");
   const tenantSlugParam = searchParams.get("tenantSlug");
+  const registrationDraftToken = searchParams.get("draftToken") || "";
   const isTmcTeacherRegistration = searchParams.get("tmcRole") === "TEACHER";
   const registrationTenantSlug = isTmcTeacherRegistration ? TMC_TENANT_SLUG : (tenantSlugParam || "");
   const lockedToTenantSlug = Boolean(registrationTenantSlug);
-  const initialEmail = (searchParams.get("email") || "").trim().toLowerCase();
-  const initialName = (searchParams.get("name") || "").trim();
+  const landingPrefill = registrationDraftToken ? null : readLandingRegistrationPrefill();
+  const initialEmail = (searchParams.get("email") || landingPrefill?.email || "").trim().toLowerCase();
+  const initialName = (searchParams.get("name") || landingPrefill?.name || "").trim();
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
@@ -130,6 +153,27 @@ export default function CustomerRegister() {
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  // Payment-created landing registrations keep their identity in the
+  // server-side PendingTripRegistration row. Fetch it by opaque draft token
+  // after the TMC entry route has established the signed registration cookie.
+  useEffect(() => {
+    if (!registrationDraftToken) return undefined;
+    let alive = true;
+    fetch(`/api/portal/tmc/registration-context?draftToken=${encodeURIComponent(registrationDraftToken)}`, {
+      credentials: "include",
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!alive || !data?.prefill) return;
+        setForm((prev) => ({
+          ...prev,
+          email: prev.email || String(data.prefill.email || "").trim().toLowerCase(),
+          name: prev.name || String(data.prefill.name || "").trim(),
+        }));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [registrationDraftToken]);
 
   // Fetch tenants from backend
   useEffect(() => {

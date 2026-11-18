@@ -19,11 +19,13 @@
  *
  * Route: /notifications (mounted in App.jsx under the protected Layout).
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, Check, CheckCheck, X, AlertCircle, Info, AlertTriangle, CircleCheck } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { resolveNotificationLink } from '../utils/notificationLinks';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
 
 const FILTERS = [
   { value: 'all', label: 'All' },
@@ -57,6 +59,8 @@ function formatTimeAgo(iso) {
 export default function NotificationsCenter() {
   const navigate = useNavigate();
   const notify = useNotify();
+  const { user, tenant } = useContext(AuthContext);
+  const tenantVertical = tenant?.vertical || user?.tenant?.vertical || user?.vertical || 'generic';
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -133,7 +137,8 @@ export default function NotificationsCenter() {
 
   const openRow = (n) => {
     if (!n.isRead) markRead(n.id);
-    if (n.link) navigate(n.link);
+    const notificationLink = resolveNotificationLink(n, tenantVertical);
+    if (notificationLink) navigate(notificationLink);
   };
 
   return (

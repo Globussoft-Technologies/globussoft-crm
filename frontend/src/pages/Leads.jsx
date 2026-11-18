@@ -56,7 +56,6 @@ import ScrollableSelect from "../components/ScrollableSelect";
 import SearchableSelect from "../components/ui/SearchableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import {
-  SUB_BRAND_IDS,
   accessibleSubBrands,
   subBrandShortLabel,
 } from "../utils/travelSubBrand";
@@ -453,6 +452,74 @@ const readLeadsPaginationStateFromQuery = (search) => {
   };
 };
 
+const LEADS_TABLE_QUERY_KEYS = [
+  "q",
+  "nameStartsWith",
+  "source",
+  "subBrand",
+  "stage",
+  "campaign",
+  "leadStatus",
+  "assignee",
+  "scoreMin",
+  "scoreMax",
+  "filters",
+  "sortBy",
+  "sortDirection",
+];
+
+const readLeadsTableStateFromQuery = (search) => {
+  if (typeof search !== "string") return null;
+  const params = new URLSearchParams(search);
+  if (
+    !params.has("page") &&
+    !params.has("limit") &&
+    !LEADS_TABLE_QUERY_KEYS.some((key) => params.has(key))
+  ) {
+    return null;
+  }
+  let advancedFilters = [];
+  try {
+    const parsed = JSON.parse(params.get("filters") || "[]");
+    if (Array.isArray(parsed)) {
+      advancedFilters = parsed.filter(
+        (filter) =>
+          filter &&
+          typeof filter.field === "string" &&
+          typeof filter.operator === "string" &&
+          Array.isArray(filter.values),
+      );
+    }
+  } catch {
+    advancedFilters = [];
+  }
+  const sortDirection = params.get("sortDirection");
+  const sortBy = params.get("sortBy");
+  return {
+    searchTerm: params.get("q") || "",
+    nameStartsWith: params.get("nameStartsWith") || "",
+    sourceFilter: params.get("source") || "",
+    subBrandFilter: params.get("subBrand") || "",
+    stageFilter: params.get("stage") || "",
+    campaignFilter: params.get("campaign") || "",
+    leadStatusFilter: params.get("leadStatus") || "",
+    assigneeFilter: params.get("assignee") || "",
+    scoreMin: params.get("scoreMin") || "",
+    scoreMax: params.get("scoreMax") || "",
+    advancedFilters,
+    sortConfig:
+      sortBy && ["asc", "desc"].includes(sortDirection)
+        ? { key: sortBy, direction: sortDirection }
+        : { key: null, direction: null },
+  };
+};
+
+const setOptionalQueryParam = (params, key, value) => {
+  const normalized = String(value ?? "").trim();
+  if (normalized) params.set(key, normalized);
+  else params.delete(key);
+};
+
 const buildLeadsListPath = (search, pageIndex, pageSize) => {
   const params = new URLSearchParams(search || "");
   params.set("page", String(Math.max(0, Number(pageIndex) || 0) + 1));
@@ -654,19 +721,19 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   description: "textarea",
 };
+const GENERIC_STATUS_FILTER_OPTIONS = Object.freeze([
+  { value: "new", label: "New" },
+  { value: "contacted", label: "Contacted" },
+  { value: "interested", label: "Interested" },
+  { value: "unqualified", label: "Unqualified" },
+  { value: "qualified", label: "Qualified" },
+  { value: "lost", label: "Lost" },
+  { value: "won", label: "Won" },
+  { value: "churned", label: "Churned" },
+]);
 const GENERIC_BACKEND_STATUS_OPTIONS = ["New", "Contacted", "Won", "Churned", "Junk", "Interested", "Unqualified", "Qualified", "Lost"];
 const GENERIC_STATUS_DISPLAY_MAP = { Lead: "New", Prospect: "Contacted", Customer: "Won" };
-const GENERIC_STATUS_FILTER_OPTIONS = [
-  { value: "New", label: "New" },
-  { value: "Contacted", label: "Contacted" },
-  { value: "Interested", label: "Interested" },
-  { value: "Unqualified", label: "Unqualified" },
-  { value: "Qualified", label: "Qualified" },
-  { value: "Lost", label: "Lost" },
-  { value: "Won", label: "Won" },
-  { value: "Churned", label: "Churned" },
-  { value: "Junk", label: "Junk" },
-];
+const TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS = Object.freeze(["subBrand"]);
 // The import mapper must offer CRM fields even when a user has hidden those
 // columns from their personal Leads table layout. Keep this catalog separate
 // from `leadColumnCatalog`, which is driven by table-column preferences.
@@ -2820,13 +2887,17 @@ const Leads = ({ initialListState = null } = {}) => {
     ? String(drillParams.get("leadSearch") || "").trim()
     : "";
   const leadsPaginationStorageKey = `${LEADS_PAGINATION_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const queryLeadsTableState = isTravel
+    ? readLeadsTableStateFromQuery(location.search)
+    : null;
   const restoredLeadsTableState = (() => {
     try {
-      return location.state?.leadsTableState
+      return queryLeadsTableState
+        || location.state?.leadsTableState
         || JSON.parse(window.sessionStorage.getItem(leadsPaginationStorageKey) || "null")?.tableState
         || {};
     } catch {
-      return location.state?.leadsTableState || {};
+      return queryLeadsTableState || location.state?.leadsTableState || {};
     }
   })();
   const [leadTableDensity, setLeadTableDensity] = useState(() => {
@@ -2979,6 +3050,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
   const [genericBulkActionsHost, setGenericBulkActionsHost] = useState(null);
+  const [travelActionsToolbarHost, setTravelActionsToolbarHost] = useState(null);
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -3021,7 +3093,7 @@ const Leads = ({ initialListState = null } = {}) => {
       ? restoredPageSize
       : 10;
   const [leadsPage, setLeadsPage] = useState(initialLeadsPage);
-  const [leadsPageSize, setLeadsPageSize] = useState(10);
+  const [leadsPageSize, setLeadsPageSize] = useState(initialPageSize);
   // Generic CRM uses API pagination; other verticals keep their existing
   // client-side pagination behavior.
   const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(
@@ -3047,16 +3119,19 @@ const Leads = ({ initialListState = null } = {}) => {
   // detail view. This also repairs a transient page-one state if another
   // mount effect runs before the first page-2 request completes.
   useEffect(() => {
-    if (!isGeneric || location.pathname !== "/leads") return;
+    if ((!isGeneric && !isTravel) || location.pathname !== "/leads") return;
     const queryState = readLeadsPaginationStateFromQuery(location.search);
     if (!queryState) return;
     setLeadsPage((current) => (
       current === queryState.pageIndex ? current : queryState.pageIndex
     ));
-    setGenericLeadsPageSize((current) => (
+    const setPageSize = isGeneric
+      ? setGenericLeadsPageSize
+      : setLeadsPageSize;
+    setPageSize((current) => (
       current === queryState.pageSize ? current : queryState.pageSize
     ));
-  }, [isGeneric, location.pathname, location.search]);
+  }, [isGeneric, isTravel, location.pathname, location.search]);
 
   // Keep the current Generic Leads page available even when the detail route
   // is opened without React Router location state (for example from a stale
@@ -3064,11 +3139,11 @@ const Leads = ({ initialListState = null } = {}) => {
   // source on the list route; session storage is the same-tab fallback used by
   // the Leads backdrop rendered inside ContactDetail.
   useEffect(() => {
-    if (!isGeneric) return;
+    if (!isGeneric && !isTravel) return;
     const pageIndex = Math.max(0, leadsPage);
     const pageSize = Math.min(
       MAX_LEADS_PAGE_SIZE,
-      Math.max(1, genericLeadsPageSize),
+      Math.max(1, isGeneric ? genericLeadsPageSize : leadsPageSize),
     );
     try {
       const stored = JSON.parse(
@@ -3094,24 +3169,15 @@ const Leads = ({ initialListState = null } = {}) => {
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
-    if (location.pathname !== "/leads") return;
-    setDrillParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.set("page", String(pageIndex + 1));
-        next.set("limit", String(pageSize));
-        return next.toString() === previous.toString() ? previous : next;
-      },
-      { replace: true },
-    );
   }, [
     genericLeadsPageSize,
     isGeneric,
+    isTravel,
     leadsPage,
+    leadsPageSize,
     leadsPaginationStorageKey,
     location.pathname,
     location.search,
-    setDrillParams,
   ]);
 
   useEffect(() => {
@@ -3248,7 +3314,9 @@ const Leads = ({ initialListState = null } = {}) => {
   const [nameStartsWith, setNameStartsWith] = useState(restoredLeadsTableState.nameStartsWith || "");
   const [sourceFilter, setSourceFilter] = useState(restoredLeadsTableState.sourceFilter || "");
   const [subBrandFilter, setSubBrandFilter] = useState(
-    isTravel ? activeSubBrand || "" : "",
+    isTravel
+      ? restoredLeadsTableState.subBrandFilter ?? activeSubBrand ?? ""
+      : "",
   );
   const [stageFilter, setStageFilter] = useState(restoredLeadsTableState.stageFilter || "");
 
@@ -3291,7 +3359,7 @@ const Leads = ({ initialListState = null } = {}) => {
     ? String(drillParams.get("webForm") || "").trim()
     : "";
   const [advancedFilters, setAdvancedFilters] = useState(() => {
-    if (!isGeneric || typeof window === "undefined") return [];
+    if (!supportsLeadCustomFields || typeof window === "undefined") return [];
     if (Array.isArray(restoredLeadsTableState.advancedFilters)) return restoredLeadsTableState.advancedFilters;
     try {
       const saved = JSON.parse(
@@ -3342,7 +3410,7 @@ const Leads = ({ initialListState = null } = {}) => {
   }, [isGeneric]);
 
   useEffect(() => {
-    if (!isGeneric) return;
+    if (!supportsLeadCustomFields) return;
     try {
       if (advancedFilters.length === 0) {
         window.sessionStorage.removeItem(leadFiltersStorageKey);
@@ -3355,7 +3423,7 @@ const Leads = ({ initialListState = null } = {}) => {
     } catch (_err) {
       // Session storage is an enhancement; filters still work on this mount.
     }
-  }, [advancedFilters, isGeneric, leadFiltersStorageKey]);
+  }, [advancedFilters, leadFiltersStorageKey, supportsLeadCustomFields]);
   // Sequential one-by-one call queue
   const [callQueue, setCallQueue] = useState([]);
   const [callQueueActive, setCallQueueActive] = useState(false);
@@ -3391,7 +3459,6 @@ const Leads = ({ initialListState = null } = {}) => {
   const [assignStaffLogic, setAssignStaffLogic] = useState("round_robin");
   const [assignStaffLeadsPerUser, setAssignStaffLeadsPerUser] = useState(1);
   const [assignSettingsLoading, setAssignSettingsLoading] = useState(false);
-  const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
   // TMC instalment paid totals keyed by parent contact email  supplements
@@ -3613,6 +3680,107 @@ const Leads = ({ initialListState = null } = {}) => {
   const [draggedLeadColumnKey, setDraggedLeadColumnKey] = useState(null);
   const [dropLeadColumnKey, setDropLeadColumnKey] = useState(null);
   const [sortConfig, setSortConfig] = useState(restoredLeadsTableState.sortConfig || { key: null, direction: null });
+  const applyingLeadsUrlStateRef = useRef(false);
+
+  // Query parameters are the canonical list state. Rehydrate these controls
+  // when browser Back/Forward changes the current /leads history entry.
+  useEffect(() => {
+    if (!isTravel || location.pathname !== "/leads") return;
+    const next = readLeadsTableStateFromQuery(location.search);
+    if (!next) return;
+    applyingLeadsUrlStateRef.current = true;
+    setSearchTerm(next.searchTerm);
+    setNameStartsWith(next.nameStartsWith);
+    setSourceFilter(next.sourceFilter);
+    if (isTravel) setSubBrandFilter(next.subBrandFilter);
+    setStageFilter(next.stageFilter);
+    setCampaignFilter(next.campaignFilter);
+    setLeadStatusFilter(next.leadStatusFilter);
+    setAssigneeFilter(next.assigneeFilter);
+    setScoreMin(next.scoreMin);
+    setScoreMax(next.scoreMax);
+    setAdvancedFilters((current) =>
+      JSON.stringify(current) === JSON.stringify(next.advancedFilters)
+        ? current
+        : next.advancedFilters,
+    );
+    setSortConfig((current) =>
+      current.key === next.sortConfig.key &&
+      current.direction === next.sortConfig.direction
+        ? current
+        : next.sortConfig,
+    );
+  }, [isTravel, location.pathname, location.search]);
+
+  // Keep pagination, rows-per-page, search, filters, and sorting together in
+  // one URL update. replace avoids a history entry for every search keystroke;
+  // explicit page navigation below uses push semantics.
+  useEffect(() => {
+    if (!isTravel || location.pathname !== "/leads") return;
+    if (applyingLeadsUrlStateRef.current) {
+      applyingLeadsUrlStateRef.current = false;
+      return;
+    }
+    setDrillParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("page", String(Math.max(0, leadsPage) + 1));
+        next.set(
+          "limit",
+          String(isGeneric ? genericLeadsPageSize : leadsPageSize),
+        );
+        setOptionalQueryParam(next, "q", searchTerm);
+        setOptionalQueryParam(next, "nameStartsWith", nameStartsWith);
+        setOptionalQueryParam(next, "source", sourceFilter);
+        setOptionalQueryParam(next, "subBrand", isTravel ? subBrandFilter : "");
+        setOptionalQueryParam(next, "stage", stageFilter);
+        setOptionalQueryParam(next, "campaign", campaignFilter);
+        setOptionalQueryParam(next, "leadStatus", leadStatusFilter);
+        setOptionalQueryParam(next, "assignee", assigneeFilter);
+        setOptionalQueryParam(next, "scoreMin", scoreMin);
+        setOptionalQueryParam(next, "scoreMax", scoreMax);
+        if (advancedFilters.length) {
+          next.set(
+            "filters",
+            JSON.stringify(
+              advancedFilters.map(({ field, operator, values }) => ({
+                field,
+                operator,
+                values,
+              })),
+            ),
+          );
+        } else {
+          next.delete("filters");
+        }
+        setOptionalQueryParam(next, "sortBy", sortConfig.key);
+        setOptionalQueryParam(next, "sortDirection", sortConfig.direction);
+        return next.toString() === previous.toString() ? previous : next;
+      },
+      { replace: true },
+    );
+  }, [
+    advancedFilters,
+    assigneeFilter,
+    campaignFilter,
+    genericLeadsPageSize,
+    isGeneric,
+    isTravel,
+    leadStatusFilter,
+    leadsPage,
+    leadsPageSize,
+    location.pathname,
+    nameStartsWith,
+    scoreMax,
+    scoreMin,
+    searchTerm,
+    setDrillParams,
+    sortConfig.direction,
+    sortConfig.key,
+    sourceFilter,
+    stageFilter,
+    subBrandFilter,
+  ]);
   const [headerMenuState, setHeaderMenuState] = useState(null);
   const [headerMenuSubmenu, setHeaderMenuSubmenu] = useState(null);
   const [headerMenuSearch, setHeaderMenuSearch] = useState("");
@@ -5017,9 +5185,6 @@ const Leads = ({ initialListState = null } = {}) => {
     });
     loadLeadTagCatalog();
     if (isTravel) {
-      fetchApi("/api/pipeline_stages", { silent: true })
-        .then((data) => setPipelineStages(Array.isArray(data) ? data : []))
-        .catch(() => setPipelineStages([]));
       fetchApi("/api/deals?limit=500", { silent: true })
         .then((data) => {
           const map = {};
@@ -6705,14 +6870,6 @@ const Leads = ({ initialListState = null } = {}) => {
     );
   };
 
-  const travelSubBrandOptions = SUB_BRAND_IDS.map((id) => ({
-    value: id,
-    label: subBrandShortLabel(id),
-  }));
-  const travelStageOptions = pipelineStages.map((stage) => ({
-    value: String(stage.id ?? stage.name ?? stage.title),
-    label: stage.title || stage.name || `Stage ${stage.id}`,
-  }));
   const leadMatchesStage = (lead) => {
     if (!stageFilter) return true;
     const deals = dealsByContact[lead.id] || [];
@@ -6823,6 +6980,13 @@ const Leads = ({ initialListState = null } = {}) => {
                   ? "boolean"
                   : "text"
             : null),
+      });
+    }
+    if (isTravel) {
+      fieldsByKey.set("subBrand", {
+        field: "subBrand",
+        label: "Sub-brand",
+        kind: "text",
       });
     }
     return [...fieldsByKey.values()];
@@ -6957,7 +7121,7 @@ const Leads = ({ initialListState = null } = {}) => {
     .map((key) => {
       if (key === "email") return { key, label: "Email" };
       if (key === "company")
-        return { key, label: isTravel ? "Trip Name" : "Company" };
+        return { key, label: isTravel ? "School Name" : "Company" };
       if (key === "phone") return { key, label: "Phone" };
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
@@ -7116,7 +7280,7 @@ const Leads = ({ initialListState = null } = {}) => {
       case "company":
         return {
           fieldKey: "company",
-          label: isTravel ? "Trip Name" : "Company",
+          label: isTravel ? "School Name" : "Company",
           kind: "text",
         };
       case "phone":
@@ -7856,12 +8020,13 @@ const Leads = ({ initialListState = null } = {}) => {
 
   const leadDetailPathWithListState = (lead) => {
     const path = leadDetailPath(lead);
-    if (!isGeneric) return path;
-    const params = new URLSearchParams({
-      page: String(Math.max(1, leadsPage + 1)),
-      limit: String(currentLeadsPageSize),
-    });
-    return `${path}?${params.toString()}`;
+    if (!isGeneric && !isTravel) return path;
+    const query = isTravel
+      ? new URLSearchParams(location.search)
+      : new URLSearchParams();
+    query.set("page", String(Math.max(1, leadsPage + 1)));
+    query.set("limit", String(currentLeadsPageSize));
+    return `${path}?${query.toString()}`;
   };
 
   const leadTagOptions = Array.from(
@@ -8227,6 +8392,10 @@ const Leads = ({ initialListState = null } = {}) => {
       ? "custom"
       : String(currentLeadsPageSize);
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
+  useEffect(() => {
+    if (!isTravel || loading || leadsPage === currentLeadsPage) return;
+    setLeadsPage(currentLeadsPage);
+  }, [currentLeadsPage, isTravel, leadsPage, loading]);
   const pageStart =
     sortedLeads.length === 0
       ? 0
@@ -8250,6 +8419,8 @@ const Leads = ({ initialListState = null } = {}) => {
     searchTerm,
     nameStartsWith,
     sourceFilter,
+    subBrandFilter,
+    stageFilter,
     campaignFilter,
     leadStatusFilter,
     assigneeFilter,
@@ -8280,7 +8451,7 @@ const Leads = ({ initialListState = null } = {}) => {
     leadsTableState,
   };
   const rememberLeadListState = () => {
-    if (!isGeneric || typeof window === "undefined") return;
+    if ((!isGeneric && !isTravel) || typeof window === "undefined") return;
     try {
       window.sessionStorage.setItem(
         leadsPaginationStorageKey,
@@ -8424,15 +8595,34 @@ const Leads = ({ initialListState = null } = {}) => {
     syncGenericHeaderHeight,
   ]);
 
+  const changeLeadsPage = (nextPageIndex) => {
+    const clampedIndex = Math.max(
+      0,
+      Math.min(Number(nextPageIndex) || 0, leadsPageCount - 1),
+    );
+    if (isTravel) {
+      setDrillParams(
+        (previous) => {
+          const next = new URLSearchParams(previous);
+          next.set("page", String(clampedIndex + 1));
+          next.set("limit", String(currentLeadsPageSize));
+          return next;
+        },
+        { replace: false },
+      );
+    }
+    setLeadsPage(clampedIndex);
+  };
+
   const goToLeadsPage = () => {
     const nextPage = Number(pageInput);
     if (!Number.isFinite(nextPage) || nextPage < 1) {
-      setLeadsPage(0);
+      changeLeadsPage(0);
       setPageInput("1");
       return;
     }
     const clampedPage = Math.min(nextPage, leadsPageCount);
-    setLeadsPage(clampedPage - 1);
+    changeLeadsPage(clampedPage - 1);
     setPageInput(String(clampedPage));
   };
 
@@ -8991,7 +9181,7 @@ const Leads = ({ initialListState = null } = {}) => {
         return renderBuiltInLeadCell({
           lead,
           field: "company",
-          label: isTravel ? "Trip Name" : "Company",
+          label: isTravel ? "School Name" : "Company",
           value: lead.company,
           extraStyle: { color: "var(--text-secondary)" },
         });
@@ -9956,11 +10146,11 @@ const Leads = ({ initialListState = null } = {}) => {
 
   return (
     <div
-      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}`}
+      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}${isTravel ? " leads-page-root--travel" : ""}`}
       style={{
         padding: "2rem",
         animation: "fadeIn 0.3s ease",
-        ...(isGeneric
+        ...(isGeneric || isTravel
           ? {
               width: "100%",
               maxWidth: "100%",
@@ -10079,7 +10269,10 @@ const Leads = ({ initialListState = null } = {}) => {
           </div>
         )}
       </header>
-      <PortalWhenReady enabled={isGeneric} target={genericActionsToolbarHost}>
+      <PortalWhenReady
+        enabled={isGeneric || isTravel}
+        target={isGeneric ? genericActionsToolbarHost : travelActionsToolbarHost}
+      >
         <div
           id={isGeneric ? "leads-secondary-actions" : undefined}
           className={
@@ -10091,7 +10284,11 @@ const Leads = ({ initialListState = null } = {}) => {
           }
           style={{
             ...compactToolbarSurfaceStyle,
-            marginBottom: isGeneric && genericActionsToolbarHost ? 0 : "1rem",
+            marginBottom:
+              (isGeneric && genericActionsToolbarHost) ||
+              (isTravel && travelActionsToolbarHost)
+                ? 0
+                : "1rem",
             justifyContent: "flex-start",
             ...(isGeneric
               ? genericActionsToolbarHost
@@ -10110,7 +10307,17 @@ const Leads = ({ initialListState = null } = {}) => {
                     flex: "0 0 auto",
                     boxSizing: "border-box",
                   }
-              : {}),
+              : isTravel && travelActionsToolbarHost
+                ? {
+                    flex: "0 1 auto",
+                    width: "auto",
+                    padding: 0,
+                    border: 0,
+                    borderRadius: 0,
+                    background: "transparent",
+                    boxShadow: "none",
+                  }
+                : {}),
           }}
         >
           <button
@@ -11162,74 +11369,9 @@ const Leads = ({ initialListState = null } = {}) => {
               <Plus size={16} /> Create Lead
             </button>
           )}
+
         </div>
       </PortalWhenReady>
-
-      {isTravel && (
-        <div
-          className="card travel-leads-filters"
-          style={{
-            padding: "0.75rem 1rem",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.75rem",
-            flexWrap: "wrap",
-            marginBottom: "0.75rem",
-          }}
-        >
-          <div
-            className="travel-leads-filter-controls"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.6rem",
-              flexWrap: "wrap",
-            }}
-          >
-            <Filter size={15} style={{ color: "var(--text-secondary)" }} />
-            <select
-              className="input-field"
-              value={subBrandFilter}
-              onChange={(e) => {
-                setSubBrandFilter(e.target.value);
-                setLeadsPage(0);
-              }}
-              aria-label="Filter by sub-brand"
-              style={{ width: "auto", minWidth: 140 }}
-            >
-              <option value="">All sub-brands</option>
-              {travelSubBrandOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input-field"
-              value={stageFilter}
-              onChange={(e) => {
-                setStageFilter(e.target.value);
-                setLeadsPage(0);
-              }}
-              aria-label="Filter by stage"
-              style={{ width: "auto", minWidth: 160 }}
-            >
-              <option value="">All stages</option>
-              {travelStageOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <span
-            style={{ color: "var(--text-secondary)", fontSize: "0.8125rem" }}
-          >
-            {filteredLeads.length} leads
-          </span>
-        </div>
-      )}
 
       {callQueueActive && (
         <div
@@ -11327,7 +11469,13 @@ const Leads = ({ initialListState = null } = {}) => {
       )}
 
       <div
-        className={isGeneric ? "leads-content-shell" : "card"}
+        className={
+          isGeneric
+            ? "leads-content-shell"
+            : isTravel
+              ? "card travel-leads-table-card"
+              : "card"
+        }
         style={
           isGeneric
             ? { display: "flex", flexDirection: "column", gap: "1rem" }
@@ -11396,6 +11544,7 @@ const Leads = ({ initialListState = null } = {}) => {
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
+                  if (isTravel) setLeadsPage(0);
                 }}
                 style={{
                   backgroundColor: "var(--surface-hover)",
@@ -11411,7 +11560,10 @@ const Leads = ({ initialListState = null } = {}) => {
                 `/api/contacts/filter-values/${field}?status=Lead`
               }
               filters={advancedFilters}
-              onChange={setAdvancedFilters}
+              onChange={(filters) => {
+                setAdvancedFilters(filters);
+                if (isTravel) setLeadsPage(0);
+              }}
               triggerLabel="Filter by"
               triggerIcon={
                 <span
@@ -11438,7 +11590,13 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
-              allowedValueOptions={isGeneric ? { status: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
+              allowedValueOptions={isGeneric ? {
+                status: GENERIC_STATUS_FILTER_OPTIONS,
+                lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS,
+              } : undefined}
+              additionalDefaultFieldKeys={
+                isTravel ? TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS : undefined
+              }
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -11446,6 +11604,13 @@ const Leads = ({ initialListState = null } = {}) => {
                 fontSize: "0.85rem",
               }}
             />
+            {isTravel && (
+              <div
+                ref={setTravelActionsToolbarHost}
+                className="travel-leads-actions-host"
+                style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}
+              />
+            )}
             {isGeneric && (
               <div
                 className="leads-density-control"
@@ -12473,7 +12638,7 @@ const Leads = ({ initialListState = null } = {}) => {
         <div
           className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : isTravel ? " leads-split-table--no-topbar leads-split-table--density-compact leads-split-table--travel-generic" : ""}`}
           onWheel={
-            isGeneric
+            isGeneric || isTravel
               ? (event) => {
                   const grid = event.currentTarget;
                   const scrollbar = grid.querySelector(
@@ -12505,7 +12670,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchStart={
-            isGeneric
+            isGeneric || isTravel
               ? (event) => {
                   const touch = event.touches[0];
                   const scrollbar = event.currentTarget.querySelector(
@@ -12522,7 +12687,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchMove={
-            isGeneric
+            isGeneric || isTravel
               ? (event) => {
                   const gesture = leadsHorizontalTouchRef.current;
                   const touch = event.touches[0];
@@ -12540,7 +12705,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchEnd={
-            isGeneric
+            isGeneric || isTravel
               ? () => {
                   leadsHorizontalTouchRef.current = null;
                 }
@@ -12643,7 +12808,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         style={{
                           cursor: isTravel ? "default" : "pointer",
                         }}
-                        className="table-row-hover"
+                        className={isTravel ? undefined : "table-row-hover"}
                         onClick={() => {
                           if (!isTravel) openLeadDetail(lead);
                         }}
@@ -12747,6 +12912,9 @@ const Leads = ({ initialListState = null } = {}) => {
               // the frozen and scrollable panes share the outer vertical flow.
               hideBottomScrollbar={usesGenericLeadTableLayout}
               verticalOverflow="visible"
+              contentRole={isTravel ? "region" : undefined}
+              contentAriaLabel={isTravel ? "Scrollable lead columns" : undefined}
+              contentTabIndex={isTravel ? 0 : undefined}
             >
               <table
                 ref={leadsScrollableTableRef}
@@ -12817,7 +12985,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         style={{
                           cursor: isTravel ? "default" : "pointer",
                         }}
-                        className="table-row-hover"
+                        className={isTravel ? undefined : "table-row-hover"}
                         onClick={() => {
                           if (!isTravel) openLeadDetail(lead);
                         }}
@@ -14848,7 +15016,10 @@ const Leads = ({ initialListState = null } = {}) => {
               `/api/contacts/filter-values/${field}?status=Lead`
             }
             filters={advancedFilters}
-            onChange={setAdvancedFilters}
+            onChange={(filters) => {
+              setAdvancedFilters(filters);
+              if (isTravel) setLeadsPage(0);
+            }}
             fieldKey={headerFilterRequest.fieldKey}
             fieldLabel={headerFilterRequest.label}
             fieldKind={headerFilterRequest.kind}
@@ -15160,7 +15331,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   type="button"
                   title="Previous page"
                   aria-label="Previous page"
-                  onClick={() => setLeadsPage(currentLeadsPage - 1)}
+                  onClick={() => changeLeadsPage(currentLeadsPage - 1)}
                   disabled={currentLeadsPage === 0}
                   style={{
                     ...actionIconBtn,
@@ -15224,7 +15395,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   type="button"
                   title="Next page"
                   aria-label="Next page"
-                  onClick={() => setLeadsPage(currentLeadsPage + 1)}
+                  onClick={() => changeLeadsPage(currentLeadsPage + 1)}
                   disabled={currentLeadsPage >= leadsPageCount - 1}
                   style={{
                     ...actionIconBtn,
@@ -15465,7 +15636,7 @@ const Leads = ({ initialListState = null } = {}) => {
               {[
                 ["Email", previewLeadCurrent.email],
                 ["Phone", previewLeadCurrent.phone],
-                [isTravel ? "Trip Name" : "Company", previewLeadCurrent.company],
+                [isTravel ? "School Name" : "Company", previewLeadCurrent.company],
                 ["Title", previewLeadCurrent.title],
                 ["Created", formatDate(previewLeadCurrent.createdAt)],
               ].map(([label, value]) => (
@@ -15743,7 +15914,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     htmlFor="create-lead-company"
                     style={createLeadFieldLabelStyle}
                   >
-                    {isTravel ? "Trip Name" : "Company"}
+                    {isTravel ? "School Name" : "Company"}
                     {isGeneric && createLeadRequiredFieldSet.has("company") && (
                       <span
                         aria-hidden="true"
@@ -15759,7 +15930,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     type="text"
                     placeholder={
                       isTravel
-                        ? "Trip Name (e.g. Deoghar 2026, Umrah, Family Holiday)"
+                        ? "School Name"
                         : "Company"
                     }
                     maxLength={191}

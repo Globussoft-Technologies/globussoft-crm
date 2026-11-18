@@ -142,7 +142,9 @@ async function notifyLeadAssignee({ assigneeId, contact, req }) {
       category: "lead",
       entityType: "lead",
       entityId: contact.id,
-      link: "/contacts/" + contact.id,
+      link:
+        (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
+        contact.id,
       io: req.io,
     });
   } catch (notifyErr) {

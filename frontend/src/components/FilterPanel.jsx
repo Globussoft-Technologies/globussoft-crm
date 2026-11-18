@@ -78,6 +78,7 @@ export default function FilterPanel({
   allowedFieldDefinitions = null,
   allowedValueOptions = null,
   panelClassName = "",
+  additionalDefaultFieldKeys = null,
 }) {
   const isSingleFieldMode = Boolean(fieldKey);
   const isFreshsalesLayout = layoutVariant === "freshsales";
@@ -538,7 +539,13 @@ export default function FilterPanel({
       return;
     }
 
-    const defaults = FRESHSALES_DEFAULT_FIELD_KEYS.map((key) =>
+    const defaultFieldKeys = [
+      ...FRESHSALES_DEFAULT_FIELD_KEYS,
+      ...(Array.isArray(additionalDefaultFieldKeys)
+        ? additionalDefaultFieldKeys
+        : []),
+    ];
+    const defaults = [...new Set(defaultFieldKeys)].map((key) =>
       fields.find((field) => field.field === key),
     ).filter(Boolean);
     if (defaults.length === 0) return;
@@ -565,6 +572,7 @@ export default function FilterPanel({
     });
   }, [
     activeField,
+    additionalDefaultFieldKeys,
     clearSectionsOnReset,
     fields,
     filters,

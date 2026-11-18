@@ -37,6 +37,7 @@ const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 const {
   buildTmcParentRegistrationUrl,
   verifyTmcRegistrationToken,
+  getTmcRegistrationContext,
   setTmcRegistrationContext,
 } = require("../lib/tmcRegistrationContext");
 const {
@@ -1607,7 +1608,7 @@ async function loadTeacherTrip(req, res) {
 // signed token in an HttpOnly cookie, then the shared registration form can
 // submit normally without adding TMC-specific fields.
 router.get("/registration-context", async (req, res) => {
-  let context = verifyTmcRegistrationToken(req.query?.token);
+  let context = verifyTmcRegistrationToken(req.query?.token) || getTmcRegistrationContext(req);
   if (
     !context &&
     req.query?.registrationType === "TEACHER" &&
@@ -1675,11 +1676,35 @@ router.get("/registration-context", async (req, res) => {
         code: "REGISTRATION_LINK_REVOKED",
       });
   }
-  setTmcRegistrationContext(res, String(req.query.token));
+  if (req.query?.token) setTmcRegistrationContext(res, String(req.query.token));
+  let prefill = null;
+  const draftToken = String(req.query?.draftToken || "").trim();
+  if (draftToken && context.registrationType === "PARENT") {
+    const draft = await prisma.pendingTripRegistration.findUnique({
+      where: { draftToken },
+      select: {
+        tenantId: true,
+        tripId: true,
+        parentName: true,
+        parentEmail: true,
+      },
+    });
+    if (!draft || Number(draft.tenantId) !== Number(context.tenantId) || Number(draft.tripId) !== Number(context.tripId)) {
+      return res.status(400).json({
+        error: "This registration draft is not valid for this parent link",
+        code: "INVALID_REGISTRATION_DRAFT",
+      });
+    }
+    prefill = {
+      name: draft.parentName || "",
+      email: draft.parentEmail || "",
+    };
+  }
   res.json({
     ok: true,
     registrationType: context.registrationType,
     tenantSlug: tenant?.slug || null,
+    ...(prefill ? { prefill } : {}),
     next:
       context.registrationType === "TEACHER"
         ? "/tmc/teacher-portal"

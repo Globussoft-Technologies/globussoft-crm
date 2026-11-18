@@ -40,6 +40,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../App';
 
 // Stable navigate mock — captured at module scope so each test can inspect
 // recent navigation calls. Re-using the same object reference avoids the
@@ -123,10 +124,14 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderCenter() {
+function renderCenter(auth = null) {
   return render(
     <MemoryRouter>
-      <NotificationsCenter />
+      {auth ? (
+        <AuthContext.Provider value={auth}>
+          <NotificationsCenter />
+        </AuthContext.Provider>
+      ) : <NotificationsCenter />}
     </MemoryRouter>
   );
 }
@@ -278,6 +283,36 @@ describe('<NotificationsCenter /> — page surface (#853)', () => {
         ([u, o]) => u === '/api/notifications/101/read' && o?.method === 'PUT'
       );
       expect(call).toBeTruthy();
+    });
+  });
+
+  it('opens legacy travel lead links on the travel lead detail page', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/notifications/unread-count')) return Promise.resolve({ count: 1 });
+      if (url.startsWith('/api/notifications?')) {
+        return Promise.resolve({
+          notifications: [{
+            ...sampleNotifications[0],
+            entityType: 'lead',
+            link: '/contacts/501',
+          }],
+          total: 1,
+          page: 1,
+          pages: 1,
+        });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderCenter({
+      user: { id: 7 },
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+    fireEvent.click(await screen.findByText('New lead assigned'));
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith('/travel/leads/501');
     });
   });
 

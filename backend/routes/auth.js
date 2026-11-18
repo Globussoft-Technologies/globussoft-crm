@@ -20,6 +20,7 @@ const {
 } = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
+const { resolveTenantVertical } = require("../lib/tenantVertical");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
 // Canonicalises a self-entered phone to E.164 so downstream dialer / SMS /
@@ -1934,8 +1935,11 @@ router.post("/login", async (req, res) => {
       id: user.id,
       role: user.role,
       tenantId,
+      vertical: user.tenant?.vertical,
     });
-    const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
+    const roleSubBrandAccess = user.tenant?.vertical === "travel"
+      ? await getSubBrandAccessSet(user.id)
+      : null;
 
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.json({
@@ -1950,12 +1954,11 @@ router.post("/login", async (req, res) => {
         userType: user.userType || "STAFF",
         wellnessRole: user.wellnessRole || null,
         themePreference: user.themePreference || "system",
-        // Sub-brand access scope (travel vertical). Lets the sidebar switcher
-        // render only the brands this user may activate; the authoritative gate
-        // stays server-side (travelGuards.getSubBrandAccessSet). Null = full
-        // access (admins / unset). Harmless extra field for non-travel clients.
-        subBrandAccess:
-          roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
+        // Travel-only field: keep travel sub-brand metadata out of generic and
+        // wellness login payloads. The authoritative gate stays server-side.
+        ...(user.tenant?.vertical === "travel"
+          ? { subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess) }
+          : {}),
         // #1123 — include profilePicture so the header avatar matches the
         // /me payload after re-login. Without this the frontend persists a
         // user object missing profilePicture, falls back to initials, and
@@ -2379,13 +2382,17 @@ router.get("/me", verifyToken, async (req, res) => {
       id: user.id,
       role: user.role,
       tenantId: user.tenantId,
+      vertical: user.tenant?.vertical,
     });
-    const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
-
+    const isTravelTenant = user.tenant?.vertical === "travel";
+    const roleSubBrandAccess = isTravelTenant
+      ? await getSubBrandAccessSet(user.id)
+      : null;
     res.json({
       ...user,
-      subBrandAccess:
-        roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
+      ...(isTravelTenant
+        ? { subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess) }
+        : { subBrandAccess: undefined }),
       tenantId: undefined, // hide raw FK; client should use user.tenant.id
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
@@ -2406,6 +2413,11 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
       where: { id: req.user.userId },
       include: {
         userRoles: {
+          where: {
+            role: {
+              OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
+            },
+          },
           include: { role: true },
         },
       },
@@ -2427,9 +2439,13 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
       });
     }
 
+    // Use the tenant row, not the JWT's cached vertical claim, when deciding
+    // whether travel-only scope metadata belongs in this response.
+    const vertical = await resolveTenantVertical(user.tenantId);
+
     // Load merged permissions for non-OWNER users
     const permissions = await getUserPermissions(
-      req.user.tenantId,
+      user.tenantId,
       req.user.userId,
     );
     const permissionArray = Array.from(permissions).sort((a, b) =>
@@ -2446,9 +2462,12 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
     const primaryRole = await resolvePrimaryRole({
       id: user.id,
       role: user.role,
-      tenantId: req.user.tenantId,
+      tenantId: user.tenantId,
+      vertical,
     });
-    const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
+    const roleSubBrandAccess = vertical === "travel"
+      ? await getSubBrandAccessSet(user.id)
+      : null;
 
     res.json({
       isOwner: false,
@@ -2457,8 +2476,9 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
       permissions: permissionArray,
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
-      subBrandAccess:
-        roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
+      ...(vertical === "travel"
+        ? { subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess) }
+        : {}),
     });
   } catch (_error) {
     console.error("[auth/me/permissions] error:", _error);

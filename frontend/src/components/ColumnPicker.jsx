@@ -230,7 +230,10 @@ export default function ColumnPicker({
         next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
         return normalizeColumnOrder(next);
       }
-      next.splice(toIndex, 0, moved);
+      // A downward drop should occupy the target row's original position.
+      // Since removing the source shifts that target up by one slot, insert
+      // after it; upward drops continue to insert before the target.
+      next.splice(fromIndex < prev.indexOf(toKey) ? toIndex + 1 : toIndex, 0, moved);
       return normalizeColumnOrder(next);
     });
   };

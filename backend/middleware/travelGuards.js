@@ -90,7 +90,7 @@ async function requireTravelTenant(req, res, next) {
 async function getSubBrandAccessSet(userId) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { subBrandAccess: true, role: true, userRoles: { include: { role: { select: { id: true, key: true, subBrandScopeJson: true } } } } },
+    select: { subBrandAccess: true, role: true },
   });
   if (!user) return new Set();
   if (user.role === "ADMIN") return null;

@@ -629,6 +629,8 @@ describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', 
       createdAt: true,
       deactivatedAt: true,
     }));
+    expect(args.select.subBrandAccess).toBeUndefined();
+    expect(args.select.userRoles.select.role.select.subBrandScopeJson).toBeUndefined();
     // Never include the sensitive fields in either branch.
     expect(args.select.password).toBeUndefined();
     expect(args.select.twoFactorSecret).toBeUndefined();
@@ -677,6 +679,8 @@ describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', 
     expect(select).not.toHaveProperty('reportingToId');
     expect(select).not.toHaveProperty('defaultPipelineId');
     expect(select).not.toHaveProperty('teamMemberships');
+    expect(select).not.toHaveProperty('subBrandAccess');
+    expect(select.userRoles.select.role.select).not.toHaveProperty('subBrandScopeJson');
     expect(prisma.territory.findMany).not.toHaveBeenCalled();
   });
 

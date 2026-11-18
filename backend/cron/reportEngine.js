@@ -435,6 +435,17 @@ function initReportCron() {
   // Older installations may already have the original hourly CronConfig row;
   // migrate only that known legacy value so schedules such as 12:15 are not
   // missed while preserving any intentional admin configuration changes.
+  // Register immediately so cron startup is not blocked by the optional
+  // persistence migration (and so a slow/unavailable database cannot prevent
+  // the engine from being registered).
+  cronRegistry.register({
+    name: 'reportEngine',
+    description: 'Minute-by-minute check for due ReportSchedule rows + email dispatch',
+    defaultSchedule: '* * * * *',
+    cronOptions: { timezone: REPORT_SCHEDULE_TIMEZONE },
+    tickFn: tick,
+  }).catch((e) => console.error('[Report Engine] cronRegistry registration failed:', e.message));
+
   prisma.cronConfig.findUnique({ where: { name: 'reportEngine' }, select: { schedule: true } })
     .then(existing => {
       if (existing?.schedule === '0 * * * *') {
@@ -445,16 +456,7 @@ function initReportCron() {
       }
       return null;
     })
-    .catch(error => console.warn(`[Report Engine] Could not migrate legacy cron schedule: ${error.message}`))
-    .finally(() => {
-      cronRegistry.register({
-        name: 'reportEngine',
-        description: 'Minute-by-minute check for due ReportSchedule rows + email dispatch',
-        defaultSchedule: '* * * * *',
-        cronOptions: { timezone: REPORT_SCHEDULE_TIMEZONE },
-        tickFn: tick,
-      }).catch((e) => console.error('[Report Engine] cronRegistry registration failed:', e.message));
-    });
+    .catch(error => console.warn(`[Report Engine] Could not migrate legacy cron schedule: ${error.message}`));
 }
 
 function cronFieldMatches(field, value) {

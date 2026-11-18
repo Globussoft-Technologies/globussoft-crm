@@ -152,7 +152,7 @@ export const GENERIC_SIDEBAR_PAGE_SPECS = [
   // Generic CRM: Lead Routing is intentionally removed from search/navigation.
   // { path: '/lead-routing', label: 'Lead Routing', description: 'Rules that auto-assign incoming leads', managerOnly: true },
   { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, requiredPermission: { module: 'territories', action: 'read' }, parent: 'Team & Territories' },
-  { path: '/sales-teams', label: 'Sales Teams', description: 'Manage sales team membership and ownership', managerOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, parent: 'Team & Territories' },
+  { path: '/sales-teams', label: 'Teams', description: 'Manage sales team membership and ownership', managerOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing Sequences', description: 'Email, SMS, WhatsApp, template, and webhook sequences', aliases: ['sequence', 'sequences', 'email sequences', 'sms sequences', 'whatsapp sequences', 'templates', 'webhooks'], managerOnly: true },
   { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true, sidebarHidden: true },
   { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },

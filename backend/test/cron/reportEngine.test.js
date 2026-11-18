@@ -47,15 +47,18 @@ prisma.deal = {
   findMany: vi.fn(),
 };
 prisma.task = { count: vi.fn(), findMany: vi.fn() };
-prisma.callLog = { count: vi.fn() };
-prisma.emailMessage = { count: vi.fn() };
+prisma.callLog = { count: vi.fn(), findMany: vi.fn() };
+prisma.emailMessage = { count: vi.fn(), create: vi.fn() };
 prisma.contact = { count: vi.fn() };
+prisma.invoice = { findMany: vi.fn() };
+prisma.expense = { findMany: vi.fn() };
 prisma.tenant = { findUnique: vi.fn() };
 prisma.reportSchedule = {
   findMany: vi.fn(),
   update: vi.fn(),
 };
 prisma.tenantSetting = { findUnique: vi.fn() };
+prisma.cronConfig = { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() };
 
 // ── Fake cronRegistry module in require cache (BEFORE requiring SUT) ──
 const registerMock = vi.fn().mockResolvedValue({ name: 'reportEngine' });
@@ -66,6 +69,9 @@ Module._cache[cronRegistryPath] = {
   loaded: true,
   exports: { register: registerMock },
 };
+
+const emailSender = requireCJS('../../lib/emailSender.js');
+emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true, source: 'test' });
 
 // ── Require SUT ───────────────────────────────────────────────────────
 const sutPath = requireCJS.resolve('../../cron/reportEngine.js');
@@ -80,13 +86,21 @@ beforeEach(() => {
   prisma.task.count.mockReset();
   prisma.task.findMany.mockReset();
   prisma.callLog.count.mockReset();
+  prisma.callLog.findMany.mockReset();
   prisma.emailMessage.count.mockReset();
+  prisma.emailMessage.create.mockReset();
   prisma.contact.count.mockReset();
+  prisma.invoice.findMany.mockReset();
+  prisma.expense.findMany.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.reportSchedule.findMany.mockReset();
   prisma.reportSchedule.update.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
+  prisma.cronConfig.findUnique.mockReset();
+  prisma.cronConfig.findMany.mockReset();
+  prisma.cronConfig.update.mockReset();
   registerMock.mockReset().mockResolvedValue({ name: 'reportEngine' });
+  emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true, source: 'test' });
 
   // Defaults
   prisma.user.findMany.mockResolvedValue([]);
@@ -96,8 +110,12 @@ beforeEach(() => {
   prisma.task.count.mockResolvedValue(0);
   prisma.task.findMany.mockResolvedValue([]);
   prisma.callLog.count.mockResolvedValue(0);
+  prisma.callLog.findMany.mockResolvedValue([]);
   prisma.emailMessage.count.mockResolvedValue(0);
+  prisma.emailMessage.create.mockResolvedValue({});
   prisma.contact.count.mockResolvedValue(0);
+  prisma.invoice.findMany.mockResolvedValue([]);
+  prisma.expense.findMany.mockResolvedValue([]);
   prisma.tenant.findUnique.mockResolvedValue({
     defaultCurrency: 'USD',
     locale: 'en-US',
@@ -105,6 +123,9 @@ beforeEach(() => {
   prisma.reportSchedule.update.mockResolvedValue({});
   prisma.reportSchedule.findMany.mockResolvedValue([]);
   prisma.tenantSetting.findUnique.mockResolvedValue(null);
+  prisma.cronConfig.findUnique.mockResolvedValue(null);
+  prisma.cronConfig.findMany.mockResolvedValue([]);
+  prisma.cronConfig.update.mockResolvedValue({});
 });
 
 /** Build a ReportSchedule row. */
@@ -306,14 +327,14 @@ describe('cron/reportEngine — error containment + initReportCron registration'
     logSpy.mockRestore();
   });
 
-  test('initReportCron registers an hourly schedule via cronRegistry', () => {
+  test('initReportCron registers a minute schedule via cronRegistry', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     reportEngine.initReportCron();
     logSpy.mockRestore();
     expect(registerMock).toHaveBeenCalledTimes(1);
     const opts = registerMock.mock.calls[0][0];
     expect(opts.name).toBe('reportEngine');
-    expect(opts.defaultSchedule).toBe('0 * * * *');
+    expect(opts.defaultSchedule).toBe('* * * * *');
     expect(typeof opts.tickFn).toBe('function');
   });
 

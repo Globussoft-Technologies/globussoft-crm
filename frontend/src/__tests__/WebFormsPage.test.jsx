@@ -701,7 +701,7 @@ describe('WebForms builder page', () => {
 
     expect(screen.getAllByDisplayValue(/embed\/web-form\.html\?id=101/).length).toBeGreaterThan(0);
 
-    expect(screen.getAllByDisplayValue(/iframe src=/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByDisplayValue(/document\.createElement\("iframe"\)/i).length).toBeGreaterThan(0);
 
 
 

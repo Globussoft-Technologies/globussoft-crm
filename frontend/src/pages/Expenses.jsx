@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
+import { createPortal } from 'react-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../appContexts';
@@ -221,6 +222,20 @@ export default function Expenses() {
   const [availableCurrencies, setAvailableCurrencies] = useState([]);
   const [currencyFilter, setCurrencyFilter] = useState('ALL');
   const [currencyFilterOpen, setCurrencyFilterOpen] = useState(false);
+  const [currencyFilterMenuPosition, setCurrencyFilterMenuPosition] = useState({ top: 0, left: 0 });
+  const currencyFilterRef = useRef(null);
+  const currencyFilterMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!currencyFilterOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!currencyFilterRef.current?.contains(event.target) && !currencyFilterMenuRef.current?.contains(event.target)) {
+        setCurrencyFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [currencyFilterOpen]);
 
   useEffect(() => {
     if (!isGeneric) return undefined;
@@ -361,6 +376,22 @@ export default function Expenses() {
     const el = tableScrollRef.current;
     if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
     setReloadTick((n) => n + 1);
+  };
+
+  const toggleCurrencyFilter = (event) => {
+    const nextOpen = !currencyFilterOpen;
+    setCurrencyFilterOpen(nextOpen);
+    // Opening the header control must not leave the table horizontally
+    // scrolled to the Amount column. This is scoped to Generic CRM only
+    // because the currency control is rendered only for that vertical.
+    if (nextOpen) {
+      const filterButton = event.currentTarget;
+      requestAnimationFrame(() => {
+        if (tableScrollRef.current) tableScrollRef.current.scrollLeft = 0;
+        const rect = filterButton.getBoundingClientRect();
+        setCurrencyFilterMenuPosition({ top: rect.bottom + 6, left: rect.left });
+      });
+    }
   };
 
   // Filter by expenseDate when set, fall back to createdAt for legacy rows
@@ -552,10 +583,31 @@ export default function Expenses() {
     defaultExpenseCurrency,
     ...availableCurrencies.map((row) => row.code),
   ])], [availableCurrencies, defaultExpenseCurrency]);
+  const genericSummaryCardStyle = {
+    flex: '1 1 0', minWidth: 170, padding: '1rem 1.1rem', borderRadius: 12,
+    border: '1px solid var(--border-color)', background: 'var(--surface-color, var(--card-bg))',
+    boxShadow: '0 2px 8px rgba(15, 23, 42, 0.05)',
+  };
+  const genericSummaryLabelStyle = {
+    display: 'block', color: 'var(--text-secondary)', fontSize: '0.72rem', fontWeight: 700,
+    letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '0.35rem',
+  };
+  const genericSummaryValueStyle = { display: 'block', fontSize: '1.25rem', fontWeight: 700 };
+  const genericSummaryHintStyle = { display: 'block', marginTop: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.75rem' };
+  const newExpenseButton = (
+    <button
+      type="button"
+      className="btn-primary finance-page__primary-action"
+      onClick={() => setIsCreateFormOpen(true)}
+      style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
+    >
+      <Plus size={16} /> New Expense
+    </button>
+  );
 
   return (
-    <div className="expenses-page finance-page" style={{ padding: '2rem', height: '100%', maxHeight: '100%', minHeight: 0, boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
-      <header className="finance-page__header" style={{ marginBottom: '2rem' }}>
+    <div className={`expenses-page finance-page${isGeneric ? ' expenses-page--generic' : ''}`} style={{ padding: '2rem', height: isGeneric ? 'auto' : '100%', maxHeight: isGeneric ? 'none' : '100%', minHeight: isGeneric ? 'max-content' : 0, boxSizing: 'border-box', overflow: isGeneric ? 'visible' : 'hidden', ...(isGeneric ? { overflowY: 'visible' } : {}), display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+      <header className="finance-page__header" style={{ marginBottom: '2rem', ...(isGeneric ? { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' } : {}) }}>
         <div>
         <h1 className="finance-page__title" style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Receipt size={26} color="var(--accent-color)" /> Expense Management
@@ -564,11 +616,12 @@ export default function Expenses() {
           Track, approve, and reimburse team expenses.
         </p>
         </div>
+        {isGeneric && newExpenseButton}
       </header>
 
       {/* Summary Stats */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', ...(isGeneric ? { flex: '1 1 auto', minWidth: 0 } : {}) }}>
           {isTravel ? <button
               type="button"
               aria-label={`Show pending expenses (${totalPending})`}
@@ -580,11 +633,8 @@ export default function Expenses() {
                 display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
                 outline: statusFilter === 'Pending' ? '2px solid #f59e0b' : 'none', outlineOffset: '2px',
               }}
-            ><IndianRupee size={12} /> Pending: {totalPending}</button> : <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-            background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
-            display: 'flex', alignItems: 'center', gap: '0.4rem',
-          }}><IndianRupee size={12} /> Pending: {totalPending}</span>}
+            ><IndianRupee size={12} /> Pending: {totalPending}</button> : <span style={{ ...genericSummaryCardStyle, color: '#f59e0b', borderColor: 'rgba(245,158,11,0.35)' }}>
+            <span style={genericSummaryLabelStyle}>Total pending</span><span style={genericSummaryValueStyle}>{totalPending}</span><span style={genericSummaryHintStyle}>Pending expenses</span></span>}
           {isTravel ? <button
               type="button"
               aria-label={`Show approved expenses (${totalApproved})`}
@@ -596,11 +646,8 @@ export default function Expenses() {
                 display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
                 outline: statusFilter === 'Approved' ? '2px solid #10b981' : 'none', outlineOffset: '2px',
               }}
-            ><CheckCircle2 size={12} /> Approved: {totalApproved}</button> : <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-            background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
-            display: 'flex', alignItems: 'center', gap: '0.4rem',
-          }}><CheckCircle2 size={12} /> Approved: {totalApproved}</span>}
+            ><CheckCircle2 size={12} /> Approved: {totalApproved}</button> : <span style={{ ...genericSummaryCardStyle, color: '#10b981', borderColor: 'rgba(16,185,129,0.35)' }}>
+            <span style={genericSummaryLabelStyle}>Total approved</span><span style={genericSummaryValueStyle}>{totalApproved}</span><span style={genericSummaryHintStyle}>Approved expenses</span></span>}
           {isTravel ? <button
               type="button"
               aria-label={`Show paid-back expenses (${totalReimbursed})`}
@@ -612,11 +659,8 @@ export default function Expenses() {
                 display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
                 outline: statusFilter === 'Reimbursed' ? '2px solid #3b82f6' : 'none', outlineOffset: '2px',
               }}
-            ><IndianRupee size={12} /> Reimbursed: {totalReimbursed}</button> : <span style={{
-            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-            background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
-            display: 'flex', alignItems: 'center', gap: '0.4rem',
-          }}><IndianRupee size={12} /> Reimbursed: {totalReimbursed}</span>}
+            ><IndianRupee size={12} /> Reimbursed: {totalReimbursed}</button> : <span style={{ ...genericSummaryCardStyle, color: '#3b82f6', borderColor: 'rgba(59,130,246,0.35)' }}>
+            <span style={genericSummaryLabelStyle}>Total reimbursed</span><span style={genericSummaryValueStyle}>{totalReimbursed}</span><span style={genericSummaryHintStyle}>Reimbursed expenses</span></span>}
           {isTravel ? <button
               type="button"
               aria-label={`Show all expenses (${expenseStats.total ?? expenses.length})`}
@@ -627,19 +671,10 @@ export default function Expenses() {
                 background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
                 cursor: 'pointer', outline: statusFilter === 'all' ? '2px solid var(--accent-color)' : 'none', outlineOffset: '2px',
               }}
-            >{expenseStats.total ?? expenses.length} total expenses</button> : <span style={{
-              padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-              background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
-            }}>{expenseStats.total ?? expenses.length} total expenses</span>}
+            >{expenseStats.total ?? expenses.length} total expenses</button> : <span style={genericSummaryCardStyle}>
+            <span style={genericSummaryLabelStyle}>Total expenses</span><span style={genericSummaryValueStyle}>{expenseStats.total ?? expenses.length}</span><span style={genericSummaryHintStyle}>All expense records</span></span>}
         </div>
-        <button
-          type="button"
-          className="btn-primary finance-page__primary-action"
-          onClick={() => setIsCreateFormOpen(true)}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
-        >
-          <Plus size={16} /> New Expense
-        </button>
+        {!isGeneric && newExpenseButton}
       </div>
 
       {isCreateFormOpen && (
@@ -923,7 +958,7 @@ export default function Expenses() {
       )}
 
       {/* Expenses Table */}
-        <div className="card finance-page__table-card" style={{ padding: '2rem', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="card finance-page__table-card" style={{ padding: '2rem', flex: isGeneric ? '0 0 auto' : 1, minHeight: isGeneric ? 600 : 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <div className="finance-page__section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Receipt size={20} color="var(--accent-color)" />
@@ -978,49 +1013,53 @@ export default function Expenses() {
                 overflow: 'auto',
                 overflowX: 'auto',
                 scrollbarGutter: 'stable',
-                minHeight: 0,
-                maxHeight: 'none',
-                flex: 1,
+                minHeight: isGeneric ? 520 : 0,
+                maxHeight: isGeneric ? 520 : 'none',
+                height: isGeneric ? 520 : undefined,
+                flex: isGeneric ? '0 0 520px' : 1,
                 border: '1px solid var(--border-color)',
                 borderRadius: 8,
                 background: 'var(--surface-color)',
               }}
             >
-              <table className="expenses-table" style={{ width: '100%', minWidth: '1540px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
+              <table className={`expenses-table${isGeneric ? ' expenses-table--generic' : ''}`} style={{ width: '100%', minWidth: isGeneric ? '1120px' : '1540px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem', tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>
                       {isGeneric ? (
-                        <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span ref={currencyFilterRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                           <span>Amount</span>
                           <button
                             type="button"
                             aria-label="Filter expenses by currency"
                             title="Filter by currency"
-                            onClick={() => setCurrencyFilterOpen((open) => !open)}
-                            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, padding: 0, border: '1px solid transparent', borderRadius: 4, background: currencyFilter !== 'ALL' ? 'var(--subtle-bg-4)' : 'transparent', color: currencyFilter !== 'ALL' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)', cursor: 'pointer' }}
+                            onClick={toggleCurrencyFilter}
+                            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, padding: 0, border: `1px solid ${currencyFilter !== 'ALL' ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`, borderRadius: 5, background: currencyFilter !== 'ALL' ? 'var(--subtle-bg-4)' : 'var(--surface-color)', color: currencyFilter !== 'ALL' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)', cursor: 'pointer' }}
                           >
                             <Filter size={14} aria-hidden="true" />
                           </button>
                           {currencyFilterOpen && (
-                            <div style={{ position: 'absolute', top: 'calc(100% + 0.35rem)', left: 0, zIndex: 20, padding: '0.5rem', minWidth: 140, background: 'var(--modal-bg, #fff)', border: '1px solid var(--border-color)', borderRadius: 6, boxShadow: '0 8px 20px rgba(0,0,0,0.15)' }}>
-                              <select
-                                value={currencyFilter}
-                                onChange={(event) => {
-                                  setCurrencyFilter(event.target.value);
-                                  setCurrencyFilterOpen(false);
-                                }}
-                                aria-label="Filter expenses by currency"
-                                autoFocus
-                                style={{ width: '100%', padding: '0.35rem', border: '1px solid var(--border-color)', borderRadius: 4, background: 'var(--card-bg)', color: 'var(--text-primary)', fontSize: '0.75rem' }}
-                              >
-                                <option value="ALL">Original currency</option>
-                                {expenseCurrencyOptions.map((currency) => (
-                                  <option key={currency} value={currency}>{currency}</option>
+                            createPortal(
+                              <div ref={currencyFilterMenuRef} role="listbox" aria-label="Filter expenses by currency" style={{ position: 'fixed', top: currencyFilterMenuPosition.top, left: currencyFilterMenuPosition.left, zIndex: 2000, minWidth: 190, overflow: 'hidden', background: 'var(--modal-bg, #fff)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: '0 10px 24px rgba(0,0,0,0.18)' }}>
+                                {[['ALL', 'Original currency'], ...expenseCurrencyOptions.map((currency) => [currency, currency])].map(([value, label]) => (
+                                  <button
+                                    key={value}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={currencyFilter === value}
+                                    onClick={() => {
+                                      setCurrencyFilter(value);
+                                      setCurrencyFilterOpen(false);
+                                    }}
+                                    style={{ display: 'block', width: '100%', padding: '0.45rem 0.65rem', border: 0, background: currencyFilter === value ? 'var(--primary-color, var(--accent-color))' : 'transparent', color: currencyFilter === value ? '#fff' : 'var(--text-primary)', textAlign: 'left', font: 'inherit', fontSize: '0.8rem', cursor: 'pointer' }}
+                                  >
+                                    {label}
+                                  </button>
                                 ))}
-                              </select>
-                            </div>
+                              </div>,
+                              document.body,
+                            )
                           )}
                         </span>
                       ) : 'Amount'}
@@ -1034,14 +1073,14 @@ export default function Expenses() {
                   </tr>
                 </thead>
                   <colgroup>
-                    <col style={{ width: '220px' }} /> {/* Title */}
-                    <col style={{ width: '140px' }} /> {/* Amount */}
-                    <col style={{ width: '190px' }} /> {/* Payment Mode */}
-                    <col style={{ width: '150px' }} /> {/* Category */}
-                    <col style={{ width: '130px' }} /> {/* Status */}
-                    <col style={{ width: '220px' }} /> {/* User */}
-                    <col style={{ width: '150px' }} /> {/* Date */}
-                    <col style={{ width: '340px' }} /> {/* Actions */}
+                    <col style={{ width: isGeneric ? '180px' : '220px' }} /> {/* Title */}
+                    <col style={{ width: isGeneric ? '120px' : '140px' }} /> {/* Amount */}
+                    <col style={{ width: isGeneric ? '145px' : '190px' }} /> {/* Payment Mode */}
+                    <col style={{ width: isGeneric ? '120px' : '150px' }} /> {/* Category */}
+                    <col style={{ width: isGeneric ? '105px' : '130px' }} /> {/* Status */}
+                    <col style={{ width: isGeneric ? '150px' : '220px' }} /> {/* User */}
+                    <col style={{ width: isGeneric ? '120px' : '150px' }} /> {/* Date */}
+                    <col style={{ width: isGeneric ? '260px' : '340px' }} /> {/* Actions */}
                   </colgroup>
                 <tbody>
                   {visibleExpenses.map(exp => {
@@ -1208,6 +1247,63 @@ export default function Expenses() {
         }
         .expenses-page .expenses-table__actions > button {
           flex: 0 0 auto;
+        }
+        /* Generic CRM keeps the full actions column available, but uses a
+           smaller footprint on compact desktop viewports so the data columns
+           remain readable before horizontal scrolling is needed. */
+        .expenses-page .expenses-table--generic .expenses-table__actions-header,
+        .expenses-page .expenses-table--generic .expenses-table__actions-cell {
+          min-width: 260px;
+        }
+        @media (max-width: 1200px) {
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.expenses-page--generic) {
+            height: auto !important;
+            min-height: 0 !important;
+            overflow-y: visible !important;
+            scrollbar-gutter: auto;
+            scrollbar-width: auto;
+          }
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.expenses-page--generic)::-webkit-scrollbar {
+            width: 12px;
+          }
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.expenses-page--generic)::-webkit-scrollbar-track {
+            background: var(--subtle-bg-2, #f1f3f6);
+          }
+          body[data-vertical="generic"] .app-main > main.generic-page-content:has(.expenses-page--generic)::-webkit-scrollbar-thumb {
+            background: var(--border-color, #aab1bd);
+            border-radius: 8px;
+            border: 3px solid var(--subtle-bg-2, #f1f3f6);
+          }
+          .expenses-page--generic {
+            height: max-content !important;
+            max-height: none !important;
+            min-height: calc(100vh + 1px) !important;
+            flex: 0 0 auto !important;
+            overflow-y: visible !important;
+            touch-action: pan-y;
+            overscroll-behavior-y: auto;
+          }
+          .expenses-page--generic .finance-page__table-card {
+            flex: 0 0 auto !important;
+            min-height: 600px !important;
+            margin-bottom: 3rem !important;
+            overflow: visible !important;
+          }
+          .expenses-page--generic .expenses-table-scroll {
+            height: 520px !important;
+            min-height: 520px !important;
+            max-height: 520px !important;
+            flex: 0 0 520px !important;
+          }
+          .expenses-page .expenses-table--generic th,
+          .expenses-page .expenses-table--generic td {
+            padding-left: 0.4rem !important;
+            padding-right: 0.4rem !important;
+            font-size: 0.8rem;
+          }
+          .expenses-page--generic {
+            padding-bottom: 4rem !important;
+          }
         }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.
            Same pattern as #478 (Tickets) and #480 (Tasks). minmax(0, ...) on the

@@ -1,16 +1,16 @@
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Label, LineChart, Line } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
-import { formatMoney, formatMoneyCompact, currencySymbol, tenantCurrency, tenantLocale } from '../utils/money';
+import { formatMoney, formatMoneyCompact, tenantCurrency, tenantLocale } from '../utils/money';
 import { convertCurrency } from '../utils/currency';
 import { getReportMetricOptions } from '../utils/reportMetrics';
-import { formatDateMedium } from '../utils/date';
+import { formatDateMedium, formatDateTime } from '../utils/date';
 import { useNotify } from '../utils/notify';
 import { useSearchParams } from "react-router-dom";
 import { readDateRange, setDateRangeParams } from '../utils/dateRangeNavigation';
 import { AuthContext } from '../App';
 
-import { PieChart as PieChartIcon, CircleDot, Upload, Filter, Calendar, Table, BarChart3, AreaChart as AreaChartIcon, Clock, Mail, ArrowLeft } from 'lucide-react';
+import { PieChart as PieChartIcon, CircleDot, Upload, Filter, Calendar, Table, BarChart3, AreaChart as AreaChartIcon, Clock, Mail, ArrowLeft, ChevronDown, RefreshCw } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 const STAGE_COLORS = {
@@ -188,13 +188,41 @@ export default function Reports() {
   const [detailLimit, setDetailLimit] = useState(10);
   const [detailTotal, setDetailTotal] = useState(0);
   const [detailTotalPages, setDetailTotalPages] = useState(1);
+  const detailBodyScrollRef = useRef(null);
+  const detailScrollbarRef = useRef(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [showScheduledReportsModal, setShowScheduledReportsModal] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef(null);
+  const [showScheduleReportMenu, setShowScheduleReportMenu] = useState(false);
+  const scheduleReportMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!showExportMenu) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!exportMenuRef.current?.contains(event.target)) setShowExportMenu(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [showExportMenu]);
+
+  useEffect(() => {
+    if (!showScheduleReportMenu) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!scheduleReportMenuRef.current?.contains(event.target)) setShowScheduleReportMenu(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [showScheduleReportMenu]);
   const [schedules, setSchedules] = useState([]);
   const [schedPage, setSchedPage] = useState(1);
   const [schedLimit, setSchedLimit] = useState(10);
   const [schedTotal, setSchedTotal] = useState(0);
   const [schedTotalPages, setSchedTotalPages] = useState(1);
-  const [newSchedule, setNewSchedule] = useState({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
+  const [editingScheduleId, setEditingScheduleId] = useState(null);
+  const [newSchedule, setNewSchedule] = useState({ name: '', reportTypes: ['deals'], frequency: 'weekly', cronExpression: '', recipients: '', format: 'PDF' });
+  const [customCronParts, setCustomCronParts] = useState({ minute: '0', hour: '8', dayOfMonth: '*', month: '*', dayOfWeek: '*' });
+  const [useAdvancedCron, setUseAdvancedCron] = useState(false);
 
   // #117: skip queries entirely if the range is inverted — the backend rejects
   // these now, but bailing on the client also avoids spurious red flashes.
@@ -367,6 +395,14 @@ export default function Reports() {
 
   const handleCreateSchedule = async (e) => {
     e.preventDefault();
+    if (!newSchedule.reportTypes.length) {
+      notify.error('Select at least one report type.');
+      return;
+    }
+    if (newSchedule.frequency === 'custom' && !newSchedule.cronExpression.trim()) {
+      notify.error('Add a cron expression for the custom frequency.');
+      return;
+    }
     const recipients = newSchedule.recipients.split(',').map(r => r.trim()).filter(Boolean);
     if (recipients.length === 0) {
       notify.error('Add at least one recipient email.');
@@ -377,18 +413,60 @@ export default function Reports() {
       notify.error(`Invalid email address(es): ${invalid.join(', ')}\n\nFix these before creating the schedule.`);
       return;
     }
+    const isEditing = editingScheduleId !== null;
     try {
-      await fetchApi('/api/report-schedules', {
-        method: 'POST',
+      await fetchApi(isEditing ? `/api/report-schedules/${editingScheduleId}` : '/api/report-schedules', {
+        method: isEditing ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newSchedule, recipients }),
+        body: JSON.stringify({ ...newSchedule, reportType: newSchedule.reportTypes, recipients }),
       });
     } catch (err) {
       notify.error(`Failed to create schedule: ${err.message || err}`);
       return;
     }
-    setNewSchedule({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
+    setEditingScheduleId(null);
+    setNewSchedule({ name: '', reportTypes: ['deals'], frequency: 'weekly', cronExpression: '', recipients: '', format: 'PDF' });
+    setUseAdvancedCron(false);
     refreshSchedules();
+    setShowScheduleModal(false);
+  };
+
+  const handleEditSchedule = (schedule) => {
+    let reportTypes = [schedule.reportType || 'deals'];
+    try {
+      const parsed = typeof schedule.reportType === 'string' && schedule.reportType.trim().startsWith('[')
+        ? JSON.parse(schedule.reportType)
+        : reportTypes;
+      if (Array.isArray(parsed) && parsed.length) reportTypes = parsed;
+    } catch { /* keep the legacy scalar type */ }
+    let recipients = '';
+    try {
+      const parsedRecipients = typeof schedule.recipients === 'string' ? JSON.parse(schedule.recipients) : schedule.recipients;
+      recipients = Array.isArray(parsedRecipients) ? parsedRecipients.join(', ') : String(schedule.recipients || '');
+    } catch { recipients = String(schedule.recipients || ''); }
+    setEditingScheduleId(schedule.id);
+    setNewSchedule({
+      name: schedule.name || '',
+      reportTypes,
+      frequency: schedule.frequency || 'weekly',
+      cronExpression: schedule.cronExpression || '',
+      recipients,
+      format: schedule.format || 'PDF',
+    });
+    setUseAdvancedCron(schedule.frequency === 'custom');
+    setShowScheduleReportMenu(false);
+    setShowScheduleModal(true);
+  };
+
+  const openCreateSchedule = () => {
+    setEditingScheduleId(null);
+    setNewSchedule({ name: '', reportTypes: ['deals'], frequency: 'weekly', cronExpression: '', recipients: '', format: 'PDF' });
+    setUseAdvancedCron(false);
+    setShowScheduleModal(true);
+  };
+
+  const closeScheduleModal = () => {
+    setEditingScheduleId(null);
     setShowScheduleModal(false);
   };
 
@@ -449,19 +527,44 @@ export default function Reports() {
     const params = viewMode === 'table'
       ? `type=${detailType}${dateParams()}`
       : `${format === 'pdf' ? 'type=chart&' : ''}metric=${metric}&groupBy=${groupBy}&currency=${encodeURIComponent(displayCurrency)}${needsGroupBy && dealType ? `&dealType=${encodeURIComponent(dealType)}` : ''}${dateParams()}`;
-    fetch(`/api/reports/${endpoint}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(res => {
-        if (!res.ok) throw new Error(`${format.toUpperCase()} export failed`);
+    const exportParams = `${params}&format=${encodeURIComponent(format)}`;
+    fetch(`/api/reports/${endpoint}?${exportParams}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async res => {
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            if (body?.error) detail = body.error;
+          } catch {
+            // The failed response was not JSON.
+          }
+          throw new Error(detail);
+        }
         return res.blob();
       })
       .then(blob => {
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `report.${format}`;
+        const tableNames = {
+          deals: 'deals',
+          contacts: 'contacts',
+          calls: 'call-logs',
+          invoices: 'invoices',
+          expenses: 'expenses',
+          tasks: 'tasks',
+          'agent-performance': 'agent-performance',
+        };
+        const downloadName = viewMode === 'table' ? (tableNames[detailType] || detailType) : 'report';
+        link.download = `${downloadName}.${format === 'xlsx' ? 'xlsx' : format}`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
         link.click();
-        URL.revokeObjectURL(link.href);
+        setTimeout(() => {
+          URL.revokeObjectURL(link.href);
+          link.remove();
+        }, 0);
       })
-      .catch(() => notify.error(`Failed to export ${format.toUpperCase()}`));
+      .catch(err => notify.error(`Failed to export ${format.toUpperCase()}: ${err.message}`));
   };
 
   const needsGroupBy = metric === 'revenue' || metric === 'count' || metric === 'win_rate';
@@ -498,7 +601,7 @@ export default function Reports() {
           </div>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Business intelligence dashboard — real-time revenue, pipeline, and deal analytics.</p>
         </div>
-        <div className="reports-page__header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div className={`reports-page__header-actions ${viewMode === 'table' ? 'reports-page__header-actions--table' : 'reports-page__header-actions--chart'}`} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div className="reports-page__date-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexDirection: 'column' }}>
             <select aria-label="Date range" value={datePreset} onChange={e => updateDatePreset(e.target.value)} className="input-field" style={{ padding: '0.5rem', fontSize: '0.8rem', minWidth: '150px' }}>
               {REPORT_DATE_PRESETS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -517,20 +620,33 @@ export default function Reports() {
               </span>
             )}
           </div>
-          <button className="btn-secondary" onClick={() => exportFile('csv')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Upload size={16} /> CSV
-          </button>
-          <button className="btn-primary" onClick={() => exportFile('pdf')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div ref={exportMenuRef} style={{ position: 'relative' }}>
+            <button type="button" className="btn-secondary" onClick={() => setShowExportMenu(open => !open)} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }} aria-haspopup="menu" aria-expanded={showExportMenu}>
+              <Upload size={16} /> Excel / CSV <ChevronDown size={14} />
+            </button>
+            {showExportMenu && (
+              <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 0.35rem)', right: 0, zIndex: 30, minWidth: '150px', padding: '0.35rem', border: '1px solid var(--border-color)', borderRadius: '9px', background: 'var(--popover-bg, var(--modal-bg))', boxShadow: '0 8px 24px rgba(15, 23, 42, 0.16)' }}>
+                <button type="button" role="menuitem" onClick={() => { setShowExportMenu(false); exportFile('xlsx'); }} style={{ display: 'block', width: '100%', padding: '0.5rem 0.6rem', border: 0, borderRadius: '6px', background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer' }}>Excel (.xlsx)</button>
+                <button type="button" role="menuitem" onClick={() => { setShowExportMenu(false); exportFile('csv'); }} style={{ display: 'block', width: '100%', padding: '0.5rem 0.6rem', border: 0, borderRadius: '6px', background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer' }}>CSV (.csv)</button>
+              </div>
+            )}
+          </div>
+          <button type="button" className="btn-primary" onClick={() => exportFile('pdf')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Upload size={16} /> PDF
           </button>
-          <button className="btn-secondary" onClick={() => setShowScheduleModal(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {isGeneric && viewMode === 'table' && (
+            <button type="button" className="btn-secondary" onClick={() => setShowScheduledReportsModal(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} aria-expanded={showScheduledReportsModal}>
+              <Mail size={16} /> Scheduled Reports
+            </button>
+          )}
+          <button type="button" className="btn-secondary" onClick={openCreateSchedule} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Clock size={16} /> Schedule
           </button>
         </div>
       </header>
 
       {/* View Mode Tabs */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+      <div className="reports-page__view-mode-tabs" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={() => setViewMode('chart')} style={{ padding: '0.5rem 1.25rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', background: viewMode === 'chart' ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)', color: viewMode === 'chart' ? '#fff' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', transition: 'var(--transition)' }}>
             <BarChart3 size={16} /> Charts
@@ -765,7 +881,7 @@ export default function Reports() {
       ) : (
         /* Detailed Data Table View */
         <div>
-          <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div className="reports-page__detail-tabs" style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             {DETAIL_TYPES.map(t => (
               <button key={t.value} onClick={() => { setDetailType(t.value); setDetailPage(1); }} style={{
                 padding: '0.5rem 1rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.85rem',
@@ -777,7 +893,7 @@ export default function Reports() {
             ))}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
+          {!isGeneric && <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', maxWidth: '100%' }}>
               <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                 {detailTotal === 0 ? 'No records' : `${(detailPage - 1) * detailLimit + 1}–${Math.min(detailPage * detailLimit, detailTotal)} of ${detailTotal}`}
@@ -789,8 +905,9 @@ export default function Reports() {
               <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{detailPage} / {detailTotalPages}</span>
               <button className="btn-secondary" aria-label="Next page" disabled={detailPage >= detailTotalPages} onClick={() => setDetailPage(p => Math.min(p + 1, detailTotalPages))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: detailPage >= detailTotalPages ? 0.45 : 1, cursor: detailPage >= detailTotalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
             </div>
-          </div>
-          <div className={`reports-page__table-shell card${isGeneric ? ' reports-page__table-shell--generic' : ''}`}
+          </div>}
+          <div className={isGeneric ? 'card reports-page__generic-table-card' : undefined}>
+          <div className={`reports-page__table-shell${isGeneric ? ' reports-page__table-shell--generic' : ' card'}`}
             style={{
               maxHeight: '400px',
               overflowY: 'hidden',
@@ -1228,7 +1345,13 @@ export default function Reports() {
                     </>}
                   </tr>
                 </thead>
-                <tbody style={{ display: isGeneric ? 'table-row-group' : 'block', width: isGeneric ? 'auto' : '100%', maxHeight: 'calc(400px - 3.5rem)', overflowY: isGeneric ? 'visible' : 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}>
+                <tbody
+                  ref={isGeneric ? detailBodyScrollRef : undefined}
+                  onScroll={isGeneric ? event => {
+                    if (detailScrollbarRef.current) detailScrollbarRef.current.scrollTop = event.currentTarget.scrollTop;
+                  } : undefined}
+                  style={{ display: isGeneric ? 'table-row-group' : 'block', width: isGeneric ? 'auto' : '100%', maxHeight: 'calc(400px - 3.5rem)', overflowY: isGeneric ? 'visible' : 'auto', overflowX: 'hidden', scrollbarGutter: 'stable' }}
+                >
                   {detailData.map((row, i) => (
                     <tr key={row.id || i} style={{ display: isGeneric ? 'table-row' : 'table', width: isGeneric ? 'auto' : '100%', tableLayout: 'fixed', borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                       {detailType === 'deals' && <>
@@ -1281,18 +1404,71 @@ export default function Reports() {
                 </tbody>
               </table>
             )}
+            {isGeneric && detailData.length > 0 && (
+              <div
+                ref={detailScrollbarRef}
+                className="reports-page__generic-scrollbar"
+                aria-label="Scroll report rows"
+                onScroll={event => {
+                  if (detailBodyScrollRef.current) detailBodyScrollRef.current.scrollTop = event.currentTarget.scrollTop;
+                }}
+              >
+                <div style={{ height: `${Math.max(detailData.length * 52, 1)}px` }} />
+              </div>
+            )}
+          </div>
+          {isGeneric && !detailLoading && detailTotal > 0 && (
+            <div className="reports-page__generic-pagination">
+              <p>
+                Showing {(detailPage - 1) * detailLimit + 1}-{Math.min(detailPage * detailLimit, detailTotal)} of {detailTotal} records
+              </p>
+              <div className="reports-page__generic-pagination-controls">
+                <label>
+                  <span>Rows per page</span>
+                  <select
+                    aria-label="Rows per page"
+                    value={detailLimit}
+                    onChange={e => { setDetailLimit(parseInt(e.target.value, 10) || 10); setDetailPage(1); }}
+                  >
+                    {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                <button type="button" aria-label="Previous page" disabled={detailPage <= 1} onClick={() => setDetailPage(p => Math.max(p - 1, 1))}>
+                  Previous
+                </button>
+                <span>Page {detailPage} of {detailTotalPages}</span>
+                <button type="button" aria-label="Next page" disabled={detailPage >= detailTotalPages} onClick={() => setDetailPage(p => Math.min(p + 1, detailTotalPages))}>
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
           </div>
         </div>
       )}
 
       {/* Scheduled Reports Section */}
-      {viewMode === 'table' && (schedules.length > 0 || schedTotal > 0) && (
-        <div className="reports-page__schedule" style={{ marginTop: '2rem' }}>
+      {viewMode === 'table' && (!isGeneric || showScheduledReportsModal) && (schedules.length > 0 || schedTotal > 0) && (
+        <div
+          className={`reports-page__schedule${isGeneric ? ' reports-page__schedule-modal' : ''}`}
+          onClick={isGeneric ? event => { if (event.target === event.currentTarget) setShowScheduledReportsModal(false); } : undefined}
+          style={isGeneric
+            ? { position: 'fixed', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'var(--overlay-bg)', backdropFilter: 'blur(5px)' }
+            : { marginTop: '2rem' }}
+        >
+          <div
+            className={isGeneric ? 'card' : undefined}
+            onClick={isGeneric ? event => event.stopPropagation() : undefined}
+            style={isGeneric
+              ? { width: 'min(1280px, 96vw)', maxHeight: '88vh', overflow: 'auto', padding: '1.25rem' }
+              : undefined}
+          >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
               <Mail size={18} color="var(--accent-color)" /> Scheduled Email Reports
             </h3>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', marginLeft: 'auto' }}>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content' }}>
               <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                 {schedTotal === 0 ? 'No schedules' : `${(schedPage - 1) * schedLimit + 1}–${Math.min(schedPage * schedLimit, schedTotal)} of ${schedTotal}`}
               </span>
@@ -1302,6 +1478,15 @@ export default function Reports() {
               <button className="btn-secondary" aria-label="Previous page" disabled={schedPage <= 1} onClick={() => setSchedPage(p => Math.max(p - 1, 1))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: schedPage <= 1 ? 0.45 : 1, cursor: schedPage <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{schedPage} / {schedTotalPages}</span>
               <button className="btn-secondary" aria-label="Next page" disabled={schedPage >= schedTotalPages} onClick={() => setSchedPage(p => Math.min(p + 1, schedTotalPages))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: schedPage >= schedTotalPages ? 0.45 : 1, cursor: schedPage >= schedTotalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
+            </div>
+            {isGeneric && (
+              <button type="button" onClick={refreshSchedules} className="btn-secondary" title="Refresh scheduled reports" aria-label="Refresh scheduled reports" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.65rem' }}>
+                <RefreshCw size={14} /> Refresh
+              </button>
+            )}
+            {isGeneric && (
+              <button type="button" onClick={() => setShowScheduledReportsModal(false)} className="btn-secondary" style={{ padding: '0.35rem 0.75rem' }}>Close</button>
+            )}
             </div>
           </div>
           <div className="reports-page__table-shell card" style={{
@@ -1321,13 +1506,13 @@ export default function Reports() {
               minWidth: 0,
             }}>
               <colgroup>
-                <col style={{ width: '14%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '10%' }} />
-                <col style={{ width: '7%' }} />
-                <col style={{ width: '18%' }} />
                 <col style={{ width: '13%' }} />
+                <col style={{ width: '13%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '17%' }} />
                 <col style={{ width: '12%' }} />
+                <col style={{ width: '8%' }} />
                 <col style={{ width: '15%' }} />
               </colgroup>
 
@@ -1456,18 +1641,20 @@ export default function Reports() {
               <tbody>
                 {schedules.map(s => (
                   <tr key={s.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
-                    <td style={{ ...tdStyle }}>{s.name}</td>
-                    <td style={tdStyle}>{s.reportType}</td>
-                    <td style={tdStyle}>{s.frequency}</td>
-                    <td style={tdStyle}>{s.format}</td>
-                    <td style={{
+                    <td style={{ ...tdStyle }} title={s.name || ''}>{s.name}</td>
+                    <td style={tdStyle} title={formatScheduledReportTypes(s.reportType)}>{formatScheduledReportTypes(s.reportType)}</td>
+                    <td style={tdStyle} title={formatScheduleFrequency(s.frequency, s.cronExpression)}>{formatScheduleFrequency(s.frequency, s.cronExpression)}</td>
+                    <td style={tdStyle} title={s.format || ''}>{s.format}</td>
+                    <td
+                      title={formatScheduleRecipients(s.recipients)}
+                      style={{
                       ...tdStyle,
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                    }}>{(() => { try { return JSON.parse(s.recipients).join(', '); } catch { return s.recipients; } })()}</td>
-                    <td style={numericTdStyle}>{s.lastRunAt ? fmtDate(s.lastRunAt) : 'Never'}</td>
-                    <td style={tdStyle}>
+                    }}>{formatScheduleRecipients(s.recipients)}</td>
+                    <td style={numericTdStyle} title={s.lastRunAt ? fmtDateTimeValue(s.lastRunAt) : 'Never'}>{s.lastRunAt ? fmtDateTimeValue(s.lastRunAt) : 'Never'}</td>
+                    <td style={tdStyle} title={s.enabled ? 'Active' : 'Paused'}>
                       <span
                         className={`report-schedule-status-badge ${s.enabled ? 'report-schedule-status-badge--active' : 'report-schedule-status-badge--paused'}`}
                         style={{ padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 'bold' }}
@@ -1480,6 +1667,9 @@ export default function Reports() {
                         wrapping div so the cell still behaves as a table cell. */}
                     <td style={{ ...tdStyle, paddingLeft: '0.5rem', paddingRight: '0.5rem', textAlign: 'center', verticalAlign: 'middle' }}>
                       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: '0.65rem', justifyContent: 'center', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => handleEditSchedule(s)} style={{ display: 'inline-flex', alignItems: 'center', padding: 0, lineHeight: 1.2, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                          Edit
+                        </button>
                         <button onClick={() => handleToggleSchedule(s.id)} style={{ display: 'inline-flex', alignItems: 'center', padding: 0, lineHeight: 1.2, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                           {s.enabled ? 'Pause' : 'Enable'}
                         </button>
@@ -1494,6 +1684,7 @@ export default function Reports() {
 
             </table>
           </div>
+          </div>
         </div>
       )}
 
@@ -1501,7 +1692,7 @@ export default function Reports() {
       {showScheduleModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div className="card" style={{ padding: '2rem', width: '480px' }}>
-            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 'bold' }}>Schedule Email Report</h3>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: 'bold' }}>{editingScheduleId !== null ? 'Edit Scheduled Report' : 'Schedule Email Report'}</h3>
             <form onSubmit={handleCreateSchedule} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
                 <label style={labelStyle}>Report Name</label>
@@ -1509,22 +1700,79 @@ export default function Reports() {
               </div>
               <div>
                 <label style={labelStyle}>Report Type</label>
-                <select className="input-field" value={newSchedule.reportType} onChange={e => setNewSchedule({ ...newSchedule, reportType: e.target.value })}>
-                  <option value="deals">Deals Summary</option>
-                  <option value="agent-performance">Agent Performance</option>
-                  <option value="pipeline">Pipeline Overview</option>
-                  <option value="tasks">Tasks Summary</option>
-                  <option value="contacts">Contacts Summary</option>
-                </select>
+                <div ref={scheduleReportMenuRef} style={{ position: 'relative' }}>
+                  <button type="button" className="input-field" aria-haspopup="menu" aria-expanded={showScheduleReportMenu} onClick={() => setShowScheduleReportMenu(open => !open)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', textAlign: 'left', cursor: 'pointer' }}>
+                    <span>{newSchedule.reportTypes.length === 1 ? formatScheduledReportTypes(newSchedule.reportTypes[0]) : `${newSchedule.reportTypes.length} report types selected`}</span>
+                    <ChevronDown size={15} />
+                  </button>
+                  {showScheduleReportMenu && (
+                    <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 0.25rem)', left: 0, right: 0, zIndex: 50, display: 'grid', gap: '0.2rem', padding: '0.45rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--popover-bg, var(--modal-bg))', boxShadow: '0 8px 20px rgba(15, 23, 42, 0.18)' }}>
+                      {[['deals', 'Deals'], ['contacts', 'Contacts'], ['calls', 'Call Logs'], ['invoices', 'Invoices'], ['expenses', 'Expenses'], ['tasks', 'Tasks']].map(([value, label]) => (
+                        <label key={value} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', padding: '0.35rem 0.4rem', borderRadius: '5px', color: 'var(--text-primary)', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={newSchedule.reportTypes.includes(value)} onChange={() => setNewSchedule(current => ({ ...current, reportTypes: current.reportTypes.includes(value) ? current.reportTypes.filter(type => type !== value) : [...current.reportTypes, value] }))} />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <div>
                 <label style={labelStyle}>Frequency</label>
-                <select className="input-field" value={newSchedule.frequency} onChange={e => setNewSchedule({ ...newSchedule, frequency: e.target.value })}>
+                <select className="input-field" value={newSchedule.frequency} onChange={e => setNewSchedule({ ...newSchedule, frequency: e.target.value, cronExpression: e.target.value === 'custom' ? (newSchedule.cronExpression || '0 8 * * *') : '' })}>
                   <option value="daily">Daily (8am)</option>
                   <option value="weekly">Weekly (Monday 8am)</option>
                   <option value="monthly">Monthly (1st of month)</option>
+                  <option value="weekly-last">Weekly (last day of week)</option>
+                  <option value="monthly-last">Monthly (last day of month)</option>
+                  <option value="quarterly-last">Quarterly (last day of quarter)</option>
+                  <option value="custom">Custom frequency</option>
                 </select>
               </div>
+              {newSchedule.frequency === 'custom' && (
+                <div>
+                  <label style={labelStyle}>Choose custom frequency</label>
+                  {!useAdvancedCron && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.65rem' }}>
+                      {[
+                        ['minute', 'Minute', [['0', 'At minute 0'], ['15', 'At minute 15'], ['30', 'At minute 30'], ['45', 'At minute 45'], ['*', 'Every minute']]],
+                        ['hour', 'Hour', [['8', '8 AM'], ['9', '9 AM'], ['12', '12 PM'], ['17', '5 PM'], ['*', 'Every hour']]],
+                        ['dayOfMonth', 'Day of month', [['*', 'Every day'], ['1', '1st'], ['15', '15th'], ['30', '30th']]],
+                        ['month', 'Month', [['*', 'Every month'], ['1-3', 'Jan–Mar'], ['4-6', 'Apr–Jun'], ['7-9', 'Jul–Sep'], ['10-12', 'Oct–Dec']]],
+                        ['dayOfWeek', 'Day of week', [['*', 'Every day'], ['1-5', 'Weekdays'], ['0', 'Sunday'], ['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday']]],
+                      ].map(([key, label, options]) => (
+                        <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                          {label}
+                          <select
+                            className="input-field"
+                            value={customCronParts[key]}
+                            onChange={e => {
+                              const nextParts = { ...customCronParts, [key]: e.target.value };
+                              setCustomCronParts(nextParts);
+                              setNewSchedule(current => ({ ...current, cronExpression: [nextParts.minute, nextParts.hour, nextParts.dayOfMonth, nextParts.month, nextParts.dayOfWeek].join(' ') }));
+                            }}
+                          >
+                            {options.map(([value, optionLabel]) => <option key={value} value={value}>{optionLabel}</option>)}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginTop: '0.65rem', color: 'var(--text-secondary)', fontSize: '0.8rem', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={useAdvancedCron} onChange={e => {
+                      setUseAdvancedCron(e.target.checked);
+                      if (e.target.checked === false) {
+                        setNewSchedule(current => ({ ...current, cronExpression: [customCronParts.minute, customCronParts.hour, customCronParts.dayOfMonth, customCronParts.month, customCronParts.dayOfWeek].join(' ') }));
+                      }
+                    }} />
+                    Enter advanced cron expression manually
+                  </label>
+                  {useAdvancedCron && (
+                    <input type="text" className="input-field" style={{ marginTop: '0.55rem' }} placeholder="e.g. 0 9 * * 1-5" required value={newSchedule.cronExpression} onChange={e => setNewSchedule({ ...newSchedule, cronExpression: e.target.value })} />
+                  )}
+                  <small style={{ display: 'block', marginTop: '0.35rem', color: 'var(--text-secondary)' }}>Generated schedule: {newSchedule.cronExpression || 'Choose the timing above'}</small>
+                </div>
+              )}
               <div>
                 <label style={labelStyle}>Format</label>
                 <select className="input-field" value={newSchedule.format} onChange={e => setNewSchedule({ ...newSchedule, format: e.target.value })}>
@@ -1537,8 +1785,8 @@ export default function Reports() {
                 <input type="text" className="input-field" placeholder="admin@company.com, manager@company.com" required value={newSchedule.recipients} onChange={e => setNewSchedule({ ...newSchedule, recipients: e.target.value })} />
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '0.5rem' }}>
-                <button type="button" onClick={() => setShowScheduleModal(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
-                <button type="submit" className="btn-primary">Create Schedule</button>
+                <button type="button" onClick={closeScheduleModal} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" className="btn-primary">{editingScheduleId !== null ? 'Save Changes' : 'Create Schedule'}</button>
               </div>
             </form>
           </div>
@@ -1561,6 +1809,89 @@ const labelStyle = { display: 'block', marginBottom: '0.4rem', fontSize: '0.85re
 // #627: locale-aware date formatter — was hardcoded en-US.
 function fmtDate(d) {
   return formatDateMedium(d);
+}
+
+function fmtDateTimeValue(d) {
+  return formatDateTime(d);
+}
+
+function formatScheduledReportTypes(value) {
+  const labels = { deals: 'Deals', contacts: 'Contacts', calls: 'Call Logs', invoices: 'Invoices', expenses: 'Expenses', tasks: 'Tasks' };
+  try {
+    const parsed = typeof value === 'string' && value.trim().startsWith('[') ? JSON.parse(value) : [value];
+    return parsed.map(type => labels[type] || type).join(', ');
+  } catch {
+    return value || 'Deals';
+  }
+}
+
+function formatScheduleRecipients(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.join(', ') : String(value || '');
+  } catch {
+    return String(value || '');
+  }
+}
+
+function formatScheduleFrequency(value, cronExpression) {
+  const labels = {
+    daily: 'Daily (8am)',
+    weekly: 'Weekly (Monday 8am)',
+    monthly: 'Monthly (1st of month)',
+    quarterly: 'Quarterly (1st month of quarter)',
+    'weekly-last': 'Weekly (last day of week)',
+    'monthly-last': 'Monthly (last day of month)',
+    'quarterly-last': 'Quarterly (last day of quarter)',
+    custom: describeCronFrequency(cronExpression),
+  };
+  return labels[value] || value || 'Weekly (Monday 8am)';
+}
+
+function describeCronFrequency(expression) {
+  const fields = String(expression || '').trim().split(/\s+/);
+  if (fields.length !== 5) return 'Custom schedule';
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const formatTime = (hourValue, minuteValue) => {
+    const h = Number(hourValue);
+    const m = Number(minuteValue);
+    if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const displayHour = h % 12 || 12;
+    return `${displayHour}:${String(m).padStart(2, '0')} ${suffix}`;
+  };
+  if (/^\*\/\d+$/.test(minute) && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Every ${minute.slice(2)} minutes`;
+  }
+  if (/^\d+$/.test(minute) && /^\*\/\d+$/.test(hour) && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Every ${hour.slice(2)} hours at minute ${minute}`;
+  }
+  if (minute === '*' && /^\d+$/.test(hour) && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Every minute during the ${formatTime(hour, '0').replace(':00', '')} hour`;
+  }
+  if (/^\d+$/.test(minute) && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Every hour at minute ${Number(minute)}`;
+  }
+  if (minute === '0' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return 'Every hour on the hour';
+  }
+  if (minute === '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return 'Every minute';
+  }
+  const time = formatTime(hour, minute);
+  if (time) {
+    if (dayOfWeek === '1-5' && dayOfMonth === '*' && month === '*') return `Every weekday at ${time}`;
+    if (/^[0-6]$/.test(dayOfWeek) && dayOfMonth === '*' && month === '*') return `Every ${weekdays[Number(dayOfWeek)]} at ${time}`;
+    if (/^\d+$/.test(dayOfMonth) && month === '*' && dayOfWeek === '*') return `Monthly on the ${dayOfMonth}${ordinalSuffix(Number(dayOfMonth))} at ${time}`;
+    if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*') return `Every day at ${time}`;
+  }
+  return `Custom schedule (${fields.join(' ')})`;
+}
+
+function ordinalSuffix(value) {
+  if (value % 100 >= 11 && value % 100 <= 13) return 'th';
+  return ({ 1: 'st', 2: 'nd', 3: 'rd' }[value % 10] || 'th');
 }
 
 function StageBadge({ stage }) {

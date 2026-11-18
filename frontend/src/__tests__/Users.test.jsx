@@ -11,7 +11,7 @@ beforeEach(() => { fetchApi.mockResolvedValue([{ id: 1, name: "Priya Patel", ema
 test("renders the independent Users directory with reference columns", async () => {
   render(<Users />);
   expect(await screen.findByText("Priya Patel")).toBeInTheDocument();
-  for (const heading of ["Name", "Email", "Reporting Manager", "Role", "Last Login", "Territories", "Teams", "Default Pipeline", "Joined At", "Action"]) {
+  for (const heading of ["Name", "Email", "Reporting Manager", "Role", "Territories", "Teams", "Joined At", "Action"]) {
     expect(screen.getByRole("columnheader", { name: heading })).toBeInTheDocument();
   }
   expect(fetchApi).toHaveBeenCalledWith("/api/staff");

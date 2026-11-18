@@ -3565,6 +3565,13 @@ model LeadRoutingRule {
 model Territory {
   id              Int      @id @default(autoincrement())
   name            String
+  code            String?
+  description     String?  @db.Text
+  country         String?
+  states          String?  @db.Text // JSON array of selected state/region codes
+  city            String?
+  managerId       Int?
+  isActive        Boolean  @default(true)
   regions         String?  @db.Text // JSON array
   assignedUserIds String?  @db.Text // JSON array
   tenantId        Int      @default(1)

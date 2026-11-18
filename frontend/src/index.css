@@ -813,10 +813,86 @@ body:has([data-testid="commission-page"])::-webkit-scrollbar,
   }
 }
 
+/* Generic Reports detail tables must not reserve an unused second grid column. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+  grid-template-columns: minmax(0, 1fr) !important;
+  column-gap: 0 !important;
+}
+
 /* Generic CRM pages share the same fluid inset as the Deals and Pipelines
    reference view. Keep verticalized modules on their existing page spacing. */
 .app-main > main.generic-page-content {
   padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 3vw, 2rem);
+}
+
+/* Generic Expenses is rendered inside the fixed application shell. Make its
+   main pane the page-level scroll owner so the full expense page remains
+   reachable on short desktop and mobile viewports. Keep this scoped to the
+   Generic CRM Expenses route; other verticals retain their existing shell. */
+.app-main > main.generic-expenses-page-content {
+  flex: 1 1 auto;
+  height: 0;
+  min-height: 0;
+  overflow-y: auto !important;
+  overscroll-behavior-y: auto;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.app-main > main.generic-expenses-page-content::-webkit-scrollbar {
+  width: 12px;
+}
+
+.app-main > main.generic-expenses-page-content::-webkit-scrollbar-track {
+  background: var(--subtle-bg-2, #f1f3f6);
+}
+
+.app-main > main.generic-expenses-page-content::-webkit-scrollbar-thumb {
+  background: var(--border-color, #aab1bd);
+  border: 3px solid var(--subtle-bg-2, #f1f3f6);
+  border-radius: 8px;
+}
+
+/* On compact Generic CRM screens, let the document grow naturally. The
+   shared shell is fixed for desktop workspaces, but that prevents the browser
+   page scrollbar from appearing when the Expenses content is taller than the
+   viewport. This route-only flow preserves the table's own horizontal/row
+   behavior while restoring normal page scrolling. */
+@media (max-width: 1200px) {
+  html:has(body[data-vertical="generic"] .expenses-page--generic),
+  body[data-vertical="generic"]:has(.expenses-page--generic),
+  #root:has(.expenses-page--generic) {
+    overflow-y: auto !important;
+  }
+
+  body[data-vertical="generic"]:has(.expenses-page--generic) #root {
+    height: auto !important;
+    min-height: 100dvh;
+    overflow: visible !important;
+  }
+
+  body[data-vertical="generic"]:has(.expenses-page--generic) .app-shell {
+    position: absolute !important;
+    inset: 0 0 auto 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100dvh;
+    overflow: visible !important;
+  }
+
+  body[data-vertical="generic"]:has(.expenses-page--generic) .app-main {
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: 100dvh;
+    overflow: visible !important;
+  }
+
+  body[data-vertical="generic"]:has(.expenses-page--generic) .app-shell .app-main > main.generic-expenses-page-content {
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow-y: visible !important;
+  }
 }
 
 /* Generic Marketing is a viewport workspace on desktop. Keep its page chrome
@@ -2605,6 +2681,183 @@ button {
   .tally-setup-action {
     width: 100%;
     justify-content: center;
+  }
+}
+
+@media (max-width: 1000px) {
+  .app-main > main.generic-page-content:has(.reports-page) {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+
+  main.generic-page-content .reports-page {
+    box-sizing: border-box;
+    padding-left: 0.25rem !important;
+    padding-right: 0.25rem !important;
+  }
+
+  main.generic-page-content .reports-page__generic-table-card,
+  main.generic-page-content .reports-page__table-shell--generic {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page {
+    box-sizing: border-box;
+    padding-left: 0.25rem !important;
+    padding-right: 0.25rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header {
+    align-items: flex-start !important;
+    margin-bottom: 0.35rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell {
+    max-width: 100%;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__generic-table-card {
+    padding: 0.75rem 0.25rem 0.75rem 0.75rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed th,
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed td {
+    padding: 0.5rem 0.35rem !important;
+    max-width: none !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed td {
+    white-space: normal !important;
+    overflow: visible !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+    align-items: stretch;
+    scrollbar-width: thin;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed {
+    align-self: stretch;
+    flex: 1 1 auto;
+    width: 100% !important;
+    max-width: none !important;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-main > main.generic-page-content:has(.reports-page) {
+    padding-left: 0.25rem !important;
+    padding-right: 0.25rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page {
+    padding-left: 0.25rem !important;
+    padding-right: 0.25rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions > * {
+    flex: 1 1 auto;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions .reports-page__date-group {
+    flex-basis: 100%;
+    align-items: stretch !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions .reports-page__date-group > .input-field {
+    width: 100%;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__generic-table-card {
+    padding: 0.5rem 0.25rem 0.5rem 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed {
+    font-size: 0.72rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+    scrollbar-width: thin;
+    align-items: stretch;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed {
+    align-self: stretch;
+    flex: 1 1 auto;
+    width: 100% !important;
+    max-width: none !important;
+    box-sizing: border-box;
+  }
+}
+
+/* Remove the legacy empty rail column from the Generic Reports detail table. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+  grid-template-columns: minmax(0, 1fr) !important;
+  column-gap: 0 !important;
+}
+
+/* Keep the five report controls on the right for compact desktop widths. */
+@media (min-width: 769px) and (max-width: 1200px) {
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header {
+    align-items: flex-start !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, max-content);
+    width: max-content;
+    max-width: 100%;
+    justify-content: flex-end !important;
+    margin-left: auto;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions > * {
+    min-width: 0;
+    flex: none;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions--table > :nth-child(4) {
+    grid-column: 2;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions--table > :nth-child(5) {
+    grid-column: 3;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions--chart {
+    grid-template-columns: repeat(2, max-content);
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions--chart > :nth-child(3) {
+    grid-column: 1;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__header-actions--chart > :nth-child(4) {
+    grid-column: 2;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__view-mode-tabs {
+    margin-bottom: 0.65rem !important;
+  }
+
+  body[data-vertical="generic"] main.generic-page-content .reports-page__detail-tabs {
+    margin-bottom: 0.6rem !important;
   }
 }
 
@@ -6192,6 +6445,94 @@ table.leads-table thead th {
   }
 }
 
+/* Generic Reports schedule modal: keep controls usable on narrow screens and
+   let the schedule table scroll horizontally instead of compressing columns. */
+.reports-page__schedule-modal {
+  box-sizing: border-box;
+}
+
+.reports-page__schedule-modal > .card {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.reports-page__schedule-modal .reports-page__table-shell {
+  min-width: 0;
+  overflow-x: auto !important;
+}
+
+.reports-page__schedule-modal .reports-page__schedule-table {
+  min-width: 1080px !important;
+}
+
+.reports-page__schedule-modal .reports-page__schedule-table th:nth-child(3),
+.reports-page__schedule-modal .reports-page__schedule-table td:nth-child(3) {
+  min-width: 170px !important;
+  max-width: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+.reports-page__schedule-modal .reports-page__schedule-table th:last-child,
+.reports-page__schedule-modal .reports-page__schedule-table td:last-child {
+  min-width: 170px !important;
+  max-width: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 900px) {
+  .reports-page__schedule-modal {
+    align-items: flex-start !important;
+    overflow-y: auto;
+    padding: 0.75rem !important;
+  }
+
+  .reports-page__schedule-modal > .card {
+    width: 100% !important;
+    max-height: calc(100dvh - 1.5rem) !important;
+    padding: 0.85rem !important;
+  }
+
+  .reports-page__schedule-modal > .card > div:first-child {
+    align-items: flex-start !important;
+  }
+
+  .reports-page__schedule-modal > .card > div:first-child > div {
+    width: 100%;
+    margin-left: 0 !important;
+    justify-content: space-between !important;
+  }
+
+  .reports-page__schedule-modal .reports-page__table-shell {
+    max-height: calc(100dvh - 9rem) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .reports-page__schedule-modal {
+    padding: 0.45rem !important;
+  }
+
+  .reports-page__schedule-modal > .card {
+    max-height: calc(100dvh - 0.9rem) !important;
+    padding: 0.65rem !important;
+  }
+
+  .reports-page__schedule-modal > .card > div:first-child {
+    gap: 0.55rem !important;
+  }
+
+  .reports-page__schedule-modal > .card > div:first-child > div {
+    flex-wrap: wrap;
+  }
+
+  .reports-page__schedule-modal .reports-page__table-shell {
+    max-height: calc(100dvh - 10rem) !important;
+  }
+}
+
 /* Tablet landscape uses the full-width app shell, but the Leads controls still
    need an explicit two-row shape so search/filter controls cannot compete
    with the action toolbar at 900–1099px. */
@@ -7705,6 +8046,242 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 @media (max-width: 899px) {
   .reports-page__overview {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Generic Reports detail tables use the same bounded card and footer rhythm
+   as the Generic CRM Tickets table. Other verticals keep their existing
+   report pagination and table treatment. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-table-card {
+  padding: 1.25rem !important;
+  overflow: hidden;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic::after {
+  display: none !important;
+}
+
+/* Keep the scrollbar on the table viewport, never on tbody. A block tbody
+   gets a narrower content box than the header and causes column drift. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+  max-height: 400px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed {
+  display: table !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed thead,
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed tbody {
+  display: table-row-group !important;
+  width: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed thead {
+  display: table-header-group !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed tr {
+  display: table-row !important;
+  width: auto !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed th,
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed td {
+  min-width: 0 !important;
+  width: auto !important;
+}
+
+/* The row scrollbar is a sibling rail, so it cannot change table column
+   widths or introduce a header/body alignment offset. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 12px;
+  align-items: stretch;
+  column-gap: 0.35rem;
+  height: 400px !important;
+  max-height: 400px !important;
+  overflow: hidden !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 100%;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed thead {
+  display: table !important;
+  width: 100% !important;
+  table-layout: fixed !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed tbody {
+  display: block !important;
+  width: 100% !important;
+  max-height: calc(400px - 3.5rem) !important;
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+  scrollbar-width: none;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed tbody::-webkit-scrollbar {
+  display: none;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed tbody tr {
+  display: table !important;
+  width: 100% !important;
+  table-layout: fixed !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar {
+  display: block;
+  width: 12px;
+  height: 100% !important;
+  min-height: 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-width: auto;
+  scrollbar-color: #9ca3af #e5e7eb;
+  scrollbar-gutter: stable;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar > div {
+  width: 1px;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar::-webkit-scrollbar {
+  width: 12px;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar::-webkit-scrollbar-track {
+  background: #e5e7eb;
+  border-radius: 999px;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar::-webkit-scrollbar-thumb {
+  background: #9ca3af;
+  border-radius: 999px;
+  border: 2px solid #e5e7eb;
+}
+
+/* Generic Reports header emphasis. Use theme tokens so the same contrast
+   treatment works in light, dark, and branded CRM themes. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed thead th {
+  background: var(--subtle-bg-2) !important;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 24%, var(--surface-color, #fff)) !important;
+  color: var(--text-primary) !important;
+  font-size: 0.86rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.025em;
+  padding: 0.85rem 0.65rem !important;
+  border-top: 1px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 48%, var(--border-color)) !important;
+  border-bottom: 2px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 58%, var(--border-color)) !important;
+}
+
+[data-theme="light"] body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed thead th {
+  background: #f1f3f6 !important;
+  color: #1f2937 !important;
+  border-color: #cbd5e1 !important;
+}
+
+[data-theme="dark"] body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed thead th {
+  background: #252b36 !important;
+  color: #f8fafc !important;
+  border-color: #3f4a5a !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic > table.reports-page__detail-table-fixed {
+  flex: 1 1 auto;
+  min-height: 0 !important;
+}
+
+/* Keep the separate Generic Reports scrollbar in a narrow right-side rail. */
+body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
+  grid-template-columns: minmax(0, 1fr) 8px !important;
+  column-gap: 0.25rem !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar {
+  width: 8px !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-scrollbar::-webkit-scrollbar {
+  width: 8px !important;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination p {
+  margin: 0;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination-controls select,
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination-controls button {
+  min-height: 34px;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+@media (max-width: 700px) {
+  body[data-vertical="generic"] main.generic-page-content .reports-page__generic-pagination-controls {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
   }
 }
 

@@ -73,6 +73,8 @@ const sampleTerritories = [
     id: 1,
     name: 'North America West',
     regions: ['US-CA', 'US-OR', 'US-WA', 'US-NV', 'US-AZ', 'US-UT'],
+    country: 'US',
+    states: ['CA', 'OR', 'WA', 'NV', 'AZ', 'UT'],
     assignedUserIds: [10, 20],
     contactCount: 42,
   },
@@ -189,7 +191,7 @@ describe('<Territories /> — page surface', () => {
     resolveT([]);
   });
 
-  it('clicking "Add Territory" opens the modal with empty Name + Regions inputs', async () => {
+  it('clicking "Add Territory" opens the generic modal with country + state controls', async () => {
     renderTerritories();
     await screen.findByText('North America West');
     fireEvent.click(screen.getByRole('button', { name: /Add Territory/i }));
@@ -198,9 +200,8 @@ describe('<Territories /> — page surface', () => {
     // Name input is empty.
     const nameInput = screen.getByPlaceholderText(/e\.g\. North America West/i);
     expect(nameInput).toHaveValue('');
-    // Regions input is empty.
-    const regionsInput = screen.getByPlaceholderText(/US-CA, US-NY, US-WA/i);
-    expect(regionsInput).toHaveValue('');
+    expect(screen.getByLabelText(/Country/i)).toHaveValue('');
+    expect(screen.getByText(/Select a country first/i)).toBeInTheDocument();
     // Primary CTA reads "Create Territory" (not "Save Changes").
     expect(screen.getByRole('button', { name: /Create Territory/i })).toBeInTheDocument();
   });
@@ -221,7 +222,7 @@ describe('<Territories /> — page surface', () => {
     expect(postCall).toBeUndefined();
   });
 
-  it('saving a NEW territory POSTs /api/territories with parsed regions[] body', async () => {
+  it('saving a NEW territory POSTs the generic geographic and assignment fields', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/territories' && opts?.method === 'POST') {
         return Promise.resolve({ id: 99 });
@@ -235,11 +236,10 @@ describe('<Territories /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. North America West/i), {
       target: { value: 'APAC South' },
     });
-    // Mixed whitespace + an empty entry between commas to pin the trim+filter
-    // shape: "IN, , SG ,  AU" → ['IN','SG','AU'].
-    fireEvent.change(screen.getByPlaceholderText(/US-CA, US-NY, US-WA/i), {
-      target: { value: 'IN, , SG ,  AU' },
-    });
+    fireEvent.focus(screen.getByLabelText(/Country/i));
+    fireEvent.click(await screen.findByRole('option', { name: 'India' }));
+    fireEvent.click(screen.getByRole('button', { name: /States \/ regions/i }));
+    fireEvent.click(await screen.findByLabelText('Maharashtra'));
 
     fireEvent.click(screen.getByRole('button', { name: /Create Territory/i }));
 
@@ -250,7 +250,9 @@ describe('<Territories /> — page surface', () => {
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
       expect(body.name).toBe('APAC South');
-      expect(body.regions).toEqual(['IN', 'SG', 'AU']);
+      expect(body.country).toBe('IN');
+      expect(body.states).toEqual(['MH']);
+      expect(body.regions).toEqual(['IN-MH']);
       expect(body.assignedUserIds).toEqual([]);
     });
   });
@@ -274,10 +276,9 @@ describe('<Territories /> — page surface', () => {
     expect(screen.getByRole('heading', { name: /Edit Territory/i })).toBeInTheDocument();
     // Name pre-populated.
     expect(screen.getByPlaceholderText(/e\.g\. North America West/i)).toHaveValue('North America West');
-    // Regions joined by ", ".
-    expect(screen.getByPlaceholderText(/US-CA, US-NY, US-WA/i)).toHaveValue(
-      'US-CA, US-OR, US-WA, US-NV, US-AZ, US-UT',
-    );
+    expect(screen.getByLabelText(/Country/i)).toHaveValue('United States');
+    fireEvent.click(screen.getByRole('button', { name: /States \/ regions/i }));
+    expect(await screen.findByLabelText('California')).toBeChecked();
 
     // Click Save Changes — fires PUT, not POST.
     fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));

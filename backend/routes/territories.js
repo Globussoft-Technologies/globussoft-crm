@@ -13,19 +13,84 @@ function safeJson(str, fallback) {
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
-function shape(t, extra = {}) {
-  return {
+function shape(t, extra = {}, includeGenericFields = false) {
+  const shaped = {
     ...t,
     regions: safeJson(t.regions, []),
     assignedUserIds: safeJson(t.assignedUserIds, []),
     ...extra,
   };
+  if (includeGenericFields) {
+    shaped.states = safeJson(t.states, []);
+    shaped.isActive = t.isActive !== false;
+  }
+  else {
+    delete shaped.code;
+    delete shaped.description;
+    delete shaped.country;
+    delete shaped.states;
+    delete shaped.city;
+    delete shaped.managerId;
+    delete shaped.isActive;
+  }
+  return shaped;
+}
+
+function normalizedRole(user) {
+  const role = user?.userRoles?.[0]?.role?.key || user?.role || "";
+  return String(role).toUpperCase().replace(/[ _-]+/g, "");
+}
+
+async function resolveGenericAssignment(req, assignedIds, requestedManagerId) {
+  const body = req.body || {};
+  const managerId = requestedManagerId === undefined || requestedManagerId === "" || requestedManagerId === null
+    ? null
+    : Number(requestedManagerId);
+  if (managerId !== null && (!Number.isInteger(managerId) || managerId <= 0)) {
+    const error = new Error("Select a valid territory manager");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const manager = managerId === null ? null : await prisma.user.findFirst({
+    where: { id: managerId, tenantId: req.user.tenantId, userType: { in: ["STAFF", "OWNER"] }, deactivatedAt: null },
+    select: { id: true, role: true, userRoles: { take: 1, orderBy: { assignedAt: "desc" }, select: { role: { select: { key: true } } } } },
+  });
+  if (managerId !== null && (!manager || ["USER", "CUSTOMER", "SALESPERSON", "SALESREPRESENTATIVE", "SALESREP"].includes(normalizedRole(manager)))) {
+    const error = new Error("Territory manager must be an eligible staff manager");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const teamUsers = assignedIds.length ? await prisma.user.findMany({
+    where: { id: { in: assignedIds }, tenantId: req.user.tenantId, userType: { in: ["STAFF", "OWNER"] }, deactivatedAt: null },
+    select: { id: true },
+  }) : [];
+  if (teamUsers.length !== assignedIds.length) {
+    const error = new Error("Team members must be active staff in this organization");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const data = {};
+  if (body.code !== undefined) data.code = body.code ? String(body.code).trim() : null;
+  if (body.description !== undefined) data.description = body.description ? String(body.description).trim() : null;
+  if (body.country !== undefined) data.country = body.country ? String(body.country).trim() : null;
+  if (body.states !== undefined) {
+    const states = Array.isArray(body.states) ? body.states.map(String).map(s => s.trim()).filter(Boolean) : [];
+    data.states = JSON.stringify(states);
+  }
+  if (body.city !== undefined) data.city = body.city ? String(body.city).trim() : null;
+  if (requestedManagerId !== undefined) data.managerId = managerId;
+  if (body.isActive !== undefined) data.isActive = body.isActive !== false;
+  return data;
 }
 
 // GET /?fields=summary — list territories with counts
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const isGeneric = req.user.vertical === "generic";
     // #920 slice 22: ?fields=summary slim-shape opt-in. Mirrors slices 1-20.
     // Territory is a thin model — when the caller passes ?fields=summary we
     // drop tenantId (leaks tenant identity to clients that don't need it),
@@ -73,7 +138,7 @@ router.get("/", async (req, res) => {
       counts = Object.fromEntries(grouped.map(g => [g.territoryId, g._count._all]));
     }
 
-    res.json(territories.map(t => shape(t, { contactCount: counts[t.id] || 0 })));
+    res.json(territories.map(t => shape(t, { contactCount: counts[t.id] || 0 }, isGeneric)));
   } catch (err) {
     console.error("territories GET / error:", err);
     res.status(500).json({ error: "Failed to load territories" });
@@ -84,23 +149,27 @@ router.get("/", async (req, res) => {
 router.post("/", ...adminOnly, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const isGeneric = req.user.vertical === "generic";
     const { name, regions, assignedUserIds } = req.body || {};
     if (!name) return res.status(400).json({ error: "Name is required" });
+    if (isGeneric && !String(req.body?.country || "").trim()) return res.status(400).json({ error: "Country is required", code: "TERRITORY_COUNTRY_REQUIRED" });
+
+    const assignedIds = Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
+    const genericData = isGeneric ? await resolveGenericAssignment(req, assignedIds, req.body?.managerId) : {};
 
     const territory = await prisma.territory.create({
       data: {
         name,
         regions: JSON.stringify(Array.isArray(regions) ? regions : []),
-        assignedUserIds: JSON.stringify(
-          Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => !Number.isNaN(n)) : []
-        ),
+        assignedUserIds: JSON.stringify(assignedIds),
+        ...genericData,
         tenantId,
       },
     });
-    res.status(201).json(shape(territory, { contactCount: 0 }));
+    res.status(201).json(shape(territory, { contactCount: 0 }, isGeneric));
   } catch (err) {
     console.error("territories POST / error:", err);
-    res.status(500).json({ error: "Failed to create territory" });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to create territory" });
   }
 });
 
@@ -115,22 +184,25 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Territory not found" });
 
     const { name, regions, assignedUserIds } = req.body || {};
+    const isGeneric = req.user.vertical === "generic";
+    if (isGeneric && req.body?.country !== undefined && !String(req.body.country || "").trim()) return res.status(400).json({ error: "Country is required", code: "TERRITORY_COUNTRY_REQUIRED" });
+    const assignedIds = Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
+    const genericData = isGeneric ? await resolveGenericAssignment(req, assignedIds, req.body?.managerId) : {};
     const updated = await prisma.territory.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
         ...(regions !== undefined && { regions: JSON.stringify(Array.isArray(regions) ? regions : []) }),
         ...(assignedUserIds !== undefined && {
-          assignedUserIds: JSON.stringify(
-            Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => !Number.isNaN(n)) : []
-          ),
+          assignedUserIds: JSON.stringify(assignedIds),
         }),
+        ...genericData,
       },
     });
-    res.json(shape(updated));
+    res.json(shape(updated, {}, isGeneric));
   } catch (err) {
     console.error("territories PUT /:id error:", err);
-    res.status(500).json({ error: "Failed to update territory" });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : "Failed to update territory" });
   }
 });
 

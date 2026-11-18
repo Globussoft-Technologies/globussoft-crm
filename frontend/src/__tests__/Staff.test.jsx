@@ -405,6 +405,17 @@ describe('<Staff /> — Invite modal (#891)', () => {
     expect(screen.queryByTestId('staff-add-button')).not.toBeInTheDocument();
   });
 
+  it('generic staff UI omits the pipeline column and field', async () => {
+    renderStaff('ADMIN', {}, 'generic');
+    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
+
+    expect(screen.queryByRole('columnheader', { name: /default pipeline/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('staff-add-button'));
+    const createModal = await screen.findByTestId('staff-create-modal');
+    expect(within(createModal).queryByText(/^Pipeline$/i)).not.toBeInTheDocument();
+  });
+
   it('clicking Add Staff opens the modal, shows selectable sub-brands, and X closes it', async () => {
     renderStaff('ADMIN', {}, 'travel');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());

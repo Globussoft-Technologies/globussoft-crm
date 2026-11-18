@@ -13,7 +13,6 @@ import prisma from '../../lib/prisma.js';
 
 const requireCJS = createRequire(import.meta.url);
 const fs = requireCJS('node:fs');
-const { runInNewContext } = requireCJS('node:vm');
 const axios = requireCJS('axios');
 axios.post = vi.fn();
 
@@ -204,49 +203,7 @@ beforeEach(() => {
 
 });
 
-describe('web-form embed sizing', () => {
-  test('server-generated embeds preserve extended attribution across host navigation and blocked iframe cookies', () => {
-    const attribution = {
-      utm_id: 'utm-123', gbraid: 'gb-123', wbraid: 'wb-123',
-      campaign_id: 'campaign-123', adset_id: 'set-123', ad_id: 'ad-123',
-      campaign_name: 'Launch', adset_name: 'Audience', ad_name: 'Creative',
-      placement: 'feed', site_source_name: 'facebook',
-      landing_page: 'https://external.example/landing', referrer: 'https://search.example/',
-    };
-    const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
-    const runtime = code.match(/<script>([\s\S]*?)<\/script>/)[1];
-    const cookies = new Map();
-    const visit = (query) => {
-      const messages = [];
-      const listeners = {};
-      const frame = { contentWindow: { postMessage: (message) => messages.push(message) }, addEventListener: () => {} };
-      const document = { currentScript: { previousElementSibling: frame }, documentElement: { clientWidth: 1000 }, title: 'External website' };
-      Object.defineProperty(document, 'cookie', {
-        get: () => [...cookies].map(([key, value]) => `${key}=${value}`).join('; '),
-        set: (value) => {
-          const pair = value.split(';')[0];
-          const separator = pair.indexOf('=');
-          cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
-        },
-      });
-      const location = new URL(`https://external.example/contact?${query}`);
-      const window = { innerWidth: 1000, addEventListener: (type, callback) => { listeners[type] = callback; } };
-      runInNewContext(runtime, { window, document, location, URLSearchParams });
-      listeners.message({ source: frame.contentWindow, data: { source: 'gbs-web-form', type: 'ready' } });
-      return messages.find((message) => message.type === 'context').attribution;
-    };
-    expect(visit(new URLSearchParams(attribution).toString())).toMatchObject(attribution);
-    // The next page has no campaign query string; only first-party host cookies survive.
-    const savedAttribution = visit('');
-    expect(savedAttribution).toMatchObject(attribution);
-
-    const html = fs.readFileSync(requireCJS.resolve('../../../frontend/public/embed/web-form.html'), 'utf8');
-    const start = html.indexOf('function resolveTrackingAttribution(');
-    const end = html.indexOf('function pageUrlWithoutQueryOrHash(', start);
-    const iframe = { TRACKING_QUERY_KEYS: Object.keys(attribution), readCookie: () => '', rememberCookie: () => {} };
-    runInNewContext(html.slice(start, end), iframe);
-    expect(iframe.resolveTrackingAttribution(new URLSearchParams(), savedAttribution)).toMatchObject(attribution);
-  });
+describe('iframe web-form embeds', () => {
 
   test.each([
     ['custom', undefined, undefined],
@@ -274,18 +231,17 @@ describe('web-form embed sizing', () => {
     expect(prisma.contact.create.mock.calls[0][0].data.firstTouchSource || undefined).toBe(expected || undefined);
   });
 
-  test('generates a content-sized iframe without a fixed minimum or internal scroll cap', () => {
+  test('generates one root div and preserves the isolated iframe runtime', () => {
     const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' }, 'https://crm.example.com');
 
-    expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
-    expect(code).not.toContain('min-height:760px');
-    expect(code).toContain('source!=="gbs-web-form"');
-    expect(code).toContain('type:"responsive-device"');
-    expect(code).toContain('window.innerWidth');
-    expect(code).toContain('Max-Age="+maxAge');
-    expect(code).toContain('attribution:savedAttribution');
-    expect(code).toContain('"utm_source"');
-    expect(code).toContain('"hsa_ver"');
+    expect(code).toContain('<div class="gbs-web-form-embed" id="gbs-web-form-embed-7"');
+    expect(code).toContain('document.createElement("iframe")');
+    expect(code).toContain('https://crm.example.com/embed/web-form.html?id=7');
+    expect(code).toContain('gbs-web-form-host');
+    expect(code.match(/<div\b/g)).toHaveLength(1);
+    expect(code).not.toMatch(/<\/?(?:html|head|body)\b/i);
+    const script = code.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+    expect(() => Function(script)).not.toThrow();
   });
 
   test('uses the configured frontend base when no origin is supplied', () => {
@@ -305,12 +261,10 @@ describe('web-form embed sizing', () => {
     }
   });
 
-  test('keeps host attribution cookies scoped to Generic CRM forms', () => {
+  test('preserves non-generic scope in the iframe URL', () => {
     const code = buildEmbedCode({ id: 8, name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' }, 'https://crm.example.com');
 
-    expect(code).not.toContain('Max-Age="+maxAge');
-    expect(code).not.toContain('attribution:savedAttribution');
-    expect(code).toContain('type:"responsive-device"');
+    expect(code).toContain('scope=travel');
   });
 });
 
@@ -1078,6 +1032,7 @@ describe('GET /api/forms/public/:slug', () => {
     expect(res.headers['cache-control']).toBe('no-store');
 
     expect(res.body.embedCode).toContain('/embed/web-form.html?id=1');
+    expect(res.body.embedCode).toContain('document.createElement("iframe")');
 
     // Existing forms that predate the setting remain branded by default.
     expect(res.body.settings.showPoweredBy).toBe(true);

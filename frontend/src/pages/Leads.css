@@ -230,7 +230,37 @@
   background: var(--bg-color);
 }
 
+/* Keep the bulk-actions surface inside the viewport. It is anchored to the
+ * toolbar on wider screens, becomes right-aligned at tablet widths, and turns
+ * into a bottom sheet on phones so narrow toolbars never push it off-screen. */
+.lead-bulk-actions-menu {
+  box-sizing: border-box;
+  max-width: calc(100vw - 1.5rem);
+}
+
+@media (min-width: 641px) and (max-width: 900px) {
+  .lead-bulk-actions-menu {
+    left: auto !important;
+    right: 0 !important;
+    width: min(420px, calc(100vw - 1.5rem)) !important;
+  }
+}
+
 @media (max-width: 640px) {
+  .lead-bulk-actions-menu {
+    position: fixed !important;
+    top: auto !important;
+    right: 0.75rem !important;
+    bottom: 0.75rem !important;
+    left: 0.75rem !important;
+    width: auto !important;
+    max-width: none;
+    max-height: calc(100dvh - 1.5rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.75rem !important;
+  }
+
   .create-lead-backdrop--generic {
     align-items: stretch !important;
     padding: 0.5rem !important;

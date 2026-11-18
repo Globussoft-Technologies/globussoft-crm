@@ -111,10 +111,12 @@ describe("TmcParentPortal", () => {
           }),
         });
       }
-      if (url === "/api/portal/tmc/parent/documents/11/file") {
+      if (url === "/api/portal/tmc/parent/documents/11/view-url") {
         return Promise.resolve({
           ok: true,
-          blob: () => Promise.resolve(new Blob(["passport"], { type: "application/pdf" })),
+          json: () => Promise.resolve({
+            url: "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/insurance-certificate.pdf?sig=parent-view",
+          }),
         });
       }
       if (url === "/api/portal/tmc/parent/trips/7/review" && options.method === "POST") {
@@ -187,9 +189,25 @@ describe("TmcParentPortal", () => {
 
     await screen.findByRole("heading", { name: "Dashboard" });
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Sign out?" });
+    expect(dialog).toHaveTextContent("Are you sure you want to sign out of your account?");
+    expect(localStorage.getItem("tmcParentPortalToken")).toBe("parent-token");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => expect(window.location.pathname).toBe("/login"));
     expect(localStorage.getItem("tmcParentPortalToken")).toBeNull();
+  });
+
+  it("keeps the parent signed in when logout confirmation is cancelled", async () => {
+    render(<TmcParentPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(localStorage.getItem("tmcParentPortalToken")).toBe("parent-token");
+    expect(window.location.pathname).toBe("/tmc/parent-portal");
   });
 
   it("shows assigned trips and links parents to the registration landing page", async () => {
@@ -299,10 +317,15 @@ describe("TmcParentPortal", () => {
     expect(within(uploadedDocumentRow).getByText("Submitted")).toBeInTheDocument();
     fireEvent.click(uploadedDocumentRow.querySelector('button[aria-label="View insurance-certificate.pdf"]'));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/portal/tmc/parent/documents/11/file",
+      "/api/portal/tmc/parent/documents/11/view-url",
       expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
     ));
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith("blob:parent-document", "_blank", "noopener,noreferrer"));
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(
+      "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test/b/globus/o/visa-docs/insurance-certificate.pdf?sig=parent-view",
+      "_blank",
+      "noopener,noreferrer",
+    ));
+    expect(globalThis.URL.createObjectURL).not.toHaveBeenCalled();
     openSpy.mockRestore();
   });
 
@@ -345,10 +368,10 @@ describe("TmcParentPortal", () => {
           }),
         });
       }
-      if (url === "/api/portal/tmc/parent/documents/103/file" || url === "/api/portal/tmc/parent/documents/103/file?download=1") {
+      if (url === "/api/portal/tmc/parent/documents/103/view-url") {
         return Promise.resolve({
           ok: true,
-          blob: () => Promise.resolve(new Blob(["consent pdf"], { type: "application/pdf" })),
+          json: () => Promise.resolve({ url: "https://objectstorage.example.com/signed-consent-document" }),
         });
       }
       if (url === "/api/portal/tmc/parent/documents/103/consent") {
@@ -406,8 +429,6 @@ describe("TmcParentPortal", () => {
     expect(screen.queryByText(/This consent form has already been submitted/)).not.toBeInTheDocument();
 
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
-    globalThis.URL.createObjectURL = vi.fn(() => "blob:parent-consent");
-    globalThis.URL.revokeObjectURL = vi.fn();
     const consentRow = document.querySelector('[data-tmc-parent-document="103"]');
     expect(consentRow.querySelector('button[aria-label="View digital-consent.json"]')).toBeInTheDocument();
     expect(consentRow.querySelector('button[aria-label="Download digital-consent.json"]')).toBeInTheDocument();
@@ -420,7 +441,7 @@ describe("TmcParentPortal", () => {
     expect(screen.getByRole("button", { name: "Download PDF" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download PDF" }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
-      "/api/portal/tmc/parent/documents/103/file?download=1",
+      "/api/portal/tmc/parent/documents/103/view-url",
       expect.objectContaining({ headers: { Authorization: "Bearer parent-token" } }),
     ));
     openSpy.mockRestore();

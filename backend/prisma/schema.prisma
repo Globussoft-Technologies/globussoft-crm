@@ -234,6 +234,7 @@ model Tenant {
   tmcParentTrips                      TmcParentTrip[]
   tmcParentDocuments                  TmcParentDocument[]
   tmcConsentTemplates                 TmcConsentTemplate[]
+  tmcTeacherCatalogueResponses        TmcTeacherCatalogueResponse[]
   tmcTripTeacherReviews               TmcTripTeacherReview[]
   webCheckins                         WebCheckin[]
   webCheckinAutomationRuns            WebCheckinAutomationRun[]
@@ -1103,6 +1104,7 @@ model Contact {
   tmcParentTrips            TmcParentTrip[]            @relation("TmcParentTripParent")
   tmcTeacherParentTrips     TmcParentTrip[]            @relation("TmcParentTripTeacher")
   tmcTeacherReviews         TmcTripTeacherReview[]     @relation("TmcTripTeacherReviewTeacher")
+  tmcCatalogueResponses     TmcTeacherCatalogueResponse[] @relation("TmcTeacherCatalogueResponseTeacher")
   customerPickups           CustomerPickup[]
 
   /// [GP-CRM integration] One Contact per externalId-per-tenant. NULL != NULL in
@@ -8640,6 +8642,25 @@ model TmcTripTeacherReview {
   @@index([tenantId, teacherContactId])
 }
 
+/// A TMC teacher's latest submitted selection from the shared brochure library.
+/// The selected PDF metadata is snapshotted so admin review remains useful if
+/// files are later renamed or removed from Google Drive.
+model TmcTeacherCatalogueResponse {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int      @default(1)
+  teacherContactId  Int
+  selectedFilesJson String   @db.LongText
+  submittedAt       DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  teacher Contact @relation("TmcTeacherCatalogueResponseTeacher", fields: [teacherContactId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, teacherContactId])
+  @@index([tenantId, submittedAt])
+}
+
 model TripParticipant {
   id                     Int                      @id @default(autoincrement())
   tripId                 Int
@@ -11708,6 +11729,30 @@ model SystemSetting {
   @@index([category])
 }
 
+// Platform-level audit history for destructive Super Admin actions. This is
+// intentionally not related to Tenant so the record survives organization
+// hard deletion.
+model SuperAdminAuditLog {
+  id                   Int       @id @default(autoincrement())
+  actor                String    @db.VarChar(191)
+  action               String    @db.VarChar(64)
+  status               String    @db.VarChar(24)
+  organizationId       Int? // Snapshot only; deliberately no Tenant foreign key
+  organizationName     String    @db.VarChar(191)
+  organizationSlug     String?   @db.VarChar(191)
+  ownerEmail           String?   @db.VarChar(191)
+  reason               String?   @db.Text
+  errorMessage         String?   @db.Text
+  deletedRowCount      Int?
+  createdAt            DateTime  @default(now())
+  completedAt          DateTime?
+
+  @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([status, createdAt])
+  @@map("super_admin_audit_logs")
+}
+
 // Public status-page models (PRD_STATUS_PAGE.md). These are intentionally
 // GLOBAL / instance-level: the status page describes the health of the whole
 // CRM deployment, not a single tenant. Tenant isolation is irrelevant here.
@@ -12098,6 +12143,7 @@ model GenericImportHistory {
   updated     Int      @default(0)
   skipped     Int      @default(0)
   errors      Int      @default(0)
+  columns     Json?
   contacts    Json?
   errorRows   Json?
   completedAt DateTime @default(now())

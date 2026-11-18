@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+// CSS formatting is not part of these contracts. Flatten multiline selectors
+// and declarations before matching so a readable multiline var() or selector
+// is equivalent to its single-line form.
+const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
+  .replace(/\s+/g, ' ')
+  .replace(/\(\s+/g, '(');
 const pickupCustomersCss = readFileSync(resolve(process.cwd(), 'src/pages/PickupCustomers.css'), 'utf8');
 
 const PICKUP_PLOT_TABLE_SOURCES = [
@@ -67,7 +72,14 @@ describe('Pickup & Plot table scroll cards', () => {
   });
 
   it('uses theme tokens for Generic CRM Pickup & Plot table headers', () => {
-    expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+tr,[\s\S]*?background-color:\s*var\(--popover-bg,\s*var\(--modal-bg,\s*var\(--surface-color\)\)\)/);
+    const headerRule = css.match(
+      /body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+tr,[\s\S]*?\{([^}]*)\}/,
+    );
+
+    expect(headerRule).not.toBeNull();
+    expect(headerRule[1]).toMatch(
+      /background-color:\s*var\(\s*--popover-bg,\s*var\(\s*--modal-bg,\s*var\(\s*--surface-color\s*\)\s*\)\s*\)/,
+    );
     expect(css).not.toMatch(/table\.pickup-plot-leads-table\s+thead\s+th[^{}]*\{[^}]*background-color:\s*var\(--table-header-bg/s);
     expect(css).toMatch(/body\[data-vertical="generic"\]\s+table\.pickup-plot-leads-table\s+thead\s+th\s*\{\s*color:\s*var\(--text-primary\)\s*!important\s*;/);
   });

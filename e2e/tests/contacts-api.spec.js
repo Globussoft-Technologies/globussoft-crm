@@ -1002,8 +1002,12 @@ test.describe('Contacts API — PUT /:id/assign', () => {
   });
 
   test('200 assigns contact to admin', async ({ request }) => {
-    const c = await createContact(request, { label: 'single-assign' });
     const { token, userId } = await getAdmin(request);
+    const { userId: otherUserId } = await getUser(request);
+    // Start with a different owner so this exercises an actual reassignment.
+    // The endpoint intentionally returns 409 for an idempotent assignment to
+    // the contact's existing owner.
+    const c = await createContact(request, { label: 'single-assign', assignedToId: otherUserId });
     const res = await put(request, token, `/api/contacts/${c.id}/assign`, {
       assignedToId: userId,
     });

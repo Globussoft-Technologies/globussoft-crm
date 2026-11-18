@@ -46,6 +46,57 @@ const FORMAT_META = {
   xlsx: { label: "Excel (XLSX)", ext: "xlsx" },
 };
 
+const DROPDOWN_VIEWPORT_GUTTER = 8;
+const DROPDOWN_GAP = 4;
+
+const getViewportDropdownPosition = (anchorRef, preferredWidth) => {
+  if (typeof window === "undefined" || !anchorRef?.current) return null;
+  const rect = anchorRef.current.getBoundingClientRect();
+  const viewportWidth = document.documentElement?.clientWidth || window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const width = Math.min(
+    preferredWidth,
+    Math.max(0, viewportWidth - DROPDOWN_VIEWPORT_GUTTER * 2),
+  );
+  const left = Math.max(
+    DROPDOWN_VIEWPORT_GUTTER,
+    Math.min(
+      rect.right - width,
+      viewportWidth - width - DROPDOWN_VIEWPORT_GUTTER,
+    ),
+  );
+  const estimatedHeight = 84;
+  const spaceBelow = viewportHeight - rect.bottom - DROPDOWN_GAP - DROPDOWN_VIEWPORT_GUTTER;
+  const spaceAbove = rect.top - DROPDOWN_GAP - DROPDOWN_VIEWPORT_GUTTER;
+  const openAbove = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+
+  return {
+    position: "fixed",
+    left,
+    top: openAbove ? undefined : rect.bottom + DROPDOWN_GAP,
+    bottom: openAbove ? viewportHeight - rect.top + DROPDOWN_GAP : undefined,
+    width,
+    maxWidth: `calc(100vw - ${DROPDOWN_VIEWPORT_GUTTER * 2}px)`,
+    boxSizing: "border-box",
+  };
+};
+
+const modalCloseButtonStyle = {
+  width: 38,
+  height: 38,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+  border: "1px solid rgba(148, 163, 184, 0.45)",
+  borderRadius: 10,
+  background: "#e5e7eb",
+  color: "#1f2937",
+  cursor: "pointer",
+  padding: 0,
+  boxShadow: "0 1px 3px rgba(15, 23, 42, 0.16)",
+};
+
 const IMPORT_FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
   { value: "textarea", label: "Textarea" },
@@ -98,6 +149,14 @@ const normalizeFieldType = (fieldType) => (
 // header such as "12006225923" must be rejected before that API call rather
 // than surfacing the backend's less actionable INVALID_FIELD_KEY response.
 const canDeriveLeadFieldKey = (label) => {
+  const normalizedLabel = String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  // These headers are native CRM aliases. If an exact native field is not
+  // available in the mapping catalog, leave them unchecked rather than
+  // proposing a custom field that would shadow the native import mapping.
+  if (["mobile", "mobilenumber", "mobilephone", "workphone", "workmobile", "phonenumber", "jobtitle"].includes(normalizedLabel)) return false;
   const key = String(label || "")
     .trim()
     .toLowerCase()
@@ -146,6 +205,31 @@ const parseCsvReport = (text) => {
   }
   const headers = rows.shift() || [];
   return rows.map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] || ""])));
+};
+
+const normalizeImportErrorRows = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const makeStableImportHeaders = (rawHeaders, rows) => {
+  const used = new Set();
+  return rawHeaders.map((rawHeader, index) => {
+    const hasValue = rows.some((cells) => String(cells?.[index] ?? '').trim() !== '');
+    const base = String(rawHeader || '').trim() || (hasValue ? `Unnamed: ${index + 1}` : '');
+    if (!base) return '';
+    let header = base;
+    let suffix = 2;
+    while (used.has(header)) header = `${base} (${suffix++})`;
+    used.add(header);
+    return header;
+  });
 };
 
 const buildAvailableMappingFields = (mappingFields, dynamicLeadFields, includeAutomaticFields = false) => {
@@ -208,6 +292,94 @@ const findAvailableMappingField = (fields, value) => {
   }) || null;
 };
 
+const findExactMappingField = (fields, value) => {
+  const normalized = normalizeMappingIdentity(value);
+  if (!normalized) return null;
+  return fields.find((field) => (
+    normalizeMappingIdentity(field.fieldKey || field.key || field.id) === normalized
+      || normalizeMappingIdentity(field.label || field.name || field.fieldKey || field.key) === normalized
+  )) || null;
+};
+
+const getMappingFieldLabel = (field) => String(field?.label || field?.name || field?.fieldKey || field?.key || field?.id || "");
+
+function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, title, triggerLabel = "", highlightEmpty = false }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+  const selected = options.find((field) => (field.fieldKey || field.key || field.id) === value);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = options.filter((field) => {
+    if (!normalizedQuery) return true;
+    const key = String(field.fieldKey || field.key || field.id || "").toLowerCase();
+    return getMappingFieldLabel(field).toLowerCase().includes(normalizedQuery) || key.includes(normalizedQuery);
+  });
+  const emptyLabel = triggerLabel ? "Choose CRM field" : "Select CRM field";
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [open]);
+
+  const choose = (nextValue) => {
+    onChange(nextValue);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} data-proposed-field={triggerLabel ? "true" : undefined} style={{ position: "relative", minWidth: 0 }}>
+      <select
+        value={value}
+        aria-label={ariaLabel}
+        onChange={(event) => choose(event.target.value)}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+        tabIndex={-1}
+      >
+        <option value="">{emptyLabel}</option>
+        <option value="__add_new_field__">＋ Add new field</option>
+        {options.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{getMappingFieldLabel(field)}</option>)}
+      </select>
+      <button
+        type="button"
+        title={title}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        style={{ width: "100%", height: 36, minHeight: 0, padding: "0.4rem 0.65rem", border: `1px solid ${highlightEmpty && !value ? "var(--accent-color)" : "var(--border-color)"}`, borderRadius: 8, background: highlightEmpty && !value ? "var(--accent-bg, #eef2ff)" : "#fff", color: "inherit", font: "inherit", fontWeight: highlightEmpty && !value ? 600 : "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{triggerLabel || getMappingFieldLabel(selected) || emptyLabel}</span>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="listbox" aria-label={`${ariaLabel} options`} style={{ position: "absolute", zIndex: 100, top: "calc(100% + 4px)", left: 0, right: 0, minWidth: 220, maxHeight: 280, overflowY: "auto", padding: 6, border: "1px solid var(--border-color)", borderRadius: 8, background: "#fff", opacity: 1, boxShadow: "0 12px 28px rgba(0,0,0,.18)" }}>
+          <input
+            type="search"
+            autoFocus
+            className="input-field"
+            placeholder="Search fields"
+            aria-label={`${ariaLabel} search`}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            style={{ width: "100%", boxSizing: "border-box", marginBottom: 6, minHeight: 32, height: 32 }}
+          />
+          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, background: !value ? "var(--accent-bg, #eef2ff)" : "transparent", color: "inherit", textAlign: "left", cursor: "pointer" }}>{emptyLabel}</button>
+          <button type="button" role="option" aria-selected={value === "__add_new_field__"} onClick={() => choose("__add_new_field__")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, background: value === "__add_new_field__" ? "var(--accent-bg, #eef2ff)" : "transparent", color: "inherit", textAlign: "left", cursor: "pointer" }}>＋ Add new field</button>
+          {filteredOptions.map((field) => {
+            const fieldValue = field.fieldKey || field.key || field.id;
+            return <button key={field.id || fieldValue} type="button" role="option" aria-selected={fieldValue === value} onClick={() => choose(fieldValue)} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, background: fieldValue === value ? "var(--accent-bg, #eef2ff)" : "transparent", color: "inherit", textAlign: "left", cursor: "pointer" }}>{getMappingFieldLabel(field)}</button>;
+          })}
+          {!filteredOptions.length && <div style={{ padding: "0.5rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>No CRM fields found</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CsvImportExportToolbar({
   entity,
   filters = {},
@@ -236,6 +408,7 @@ export default function CsvImportExportToolbar({
   // can only ever 403.
   allowImport = true,
   genericLeadWizard = false,
+  genericCrm = false,
   mappingFields = [],
 }) {
   const notify = useNotify();
@@ -243,6 +416,8 @@ export default function CsvImportExportToolbar({
   const [showImport, setShowImport] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [exportMenuPos, setExportMenuPos] = useState(null);
+  const [importMenuPos, setImportMenuPos] = useState(null);
   const [recentImport, setRecentImport] = useState(() => {
     if (typeof window === "undefined") return null;
     try { return JSON.parse(window.sessionStorage.getItem("generic-crm-latest-import") || "null"); } catch { return null; }
@@ -257,6 +432,8 @@ export default function CsvImportExportToolbar({
   });
   const exportMenuRef = useRef(null);
   const importMenuRef = useRef(null);
+  const exportMenuContentRef = useRef(null);
+  const importMenuContentRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
   const safeEndpoints = endpoints || {};
   const toolbarButtonStyle = compact ? compactSecondaryBtnStyle : secondaryBtnStyle;
@@ -292,10 +469,10 @@ export default function CsvImportExportToolbar({
     return parts.length ? `?${parts.join("&")}` : "";
   };
 
-  const downloadImportReport = async (item, format) => {
+  const downloadImportReport = async (item, format, scope = "successful") => {
     try {
       const token = getAuthToken();
-      const response = await fetch(`/api/csv/contacts/import-history/${item.id}/report?format=${format}`, {
+      const response = await fetch(`/api/csv/contacts/import-history/${item.id}/report?format=${format}&scope=${scope}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("Failed to download import report");
@@ -303,7 +480,7 @@ export default function CsvImportExportToolbar({
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${String(item.fileName || "import").replace(/\.[^.]+$/, "")}-import-report.${format}`;
+      anchor.download = `${String(item.fileName || "import").replace(/\.[^.]+$/, "")}-${scope === "successful" ? "created-updated" : "import-report"}.${format}`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -330,8 +507,9 @@ export default function CsvImportExportToolbar({
     const contacts = item.contacts || [];
     const hasActionDetails = contacts.some((contact) => contact.action);
     const actionCount = action === "created" ? item.inserted : action === "updated" ? item.updated : item[action];
+    const errorRows = normalizeImportErrorRows(item.errorRows);
     const storedRows = action === "skipped" || action === "errors"
-      ? (item.errorRows || []).map((row) => ({ ...row.data, rowNumber: row.rowNumber, field: row.field || "row", reason: row.reason || "Import failed", action: action === "errors" ? "error" : "skipped" }))
+      ? errorRows.map((row) => ({ ...row.data, rowNumber: row.rowNumber, field: row.field || "row", reason: row.reason || "Import failed", action: action === "errors" ? "error" : "skipped" }))
       : (hasActionDetails ? contacts : []).filter((contact) => contact.action === action);
     const rows = storedRows.length || !actionCount ? storedRows : [{
       rowNumber: "—",
@@ -345,6 +523,7 @@ export default function CsvImportExportToolbar({
   const doExport = async (format = "csv") => {
     setExporting(true);
     setExportMenuOpen(false);
+    setExportMenuPos(null);
     try {
       const qs = formats.length > 1 ? buildQueryString({ format }) : buildQueryString();
       const url = `${exportUrl}${qs}`;
@@ -377,23 +556,79 @@ export default function CsvImportExportToolbar({
   // Close the export dropdown on outside click.
   useEffect(() => {
     if (!exportMenuOpen) return undefined;
+    const recompute = () => {
+      setExportMenuPos(getViewportDropdownPosition(exportMenuRef, 180));
+    };
+    recompute();
     const onDocClick = (e) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+      if (
+        exportMenuRef.current &&
+        !exportMenuRef.current.contains(e.target) &&
+        !exportMenuContentRef.current?.contains(e.target)
+      ) {
         setExportMenuOpen(false);
+        setExportMenuPos(null);
       }
     };
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    window.addEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
   }, [exportMenuOpen]);
 
   useEffect(() => {
     if (!importMenuOpen) return undefined;
+    const recompute = () => {
+      setImportMenuPos(getViewportDropdownPosition(importMenuRef, 220));
+    };
+    recompute();
     const onDocClick = (event) => {
-      if (importMenuRef.current && !importMenuRef.current.contains(event.target)) setImportMenuOpen(false);
+      if (
+        importMenuRef.current &&
+        !importMenuRef.current.contains(event.target) &&
+        !importMenuContentRef.current?.contains(event.target)
+      ) {
+        setImportMenuOpen(false);
+        setImportMenuPos(null);
+      }
     };
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    window.addEventListener("resize", recompute);
+    window.addEventListener("scroll", recompute, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("scroll", recompute, true);
+    };
   }, [importMenuOpen]);
+
+  const toggleExportMenu = () => {
+    if (exportMenuOpen) {
+      setExportMenuOpen(false);
+      setExportMenuPos(null);
+      return;
+    }
+    setImportMenuOpen(false);
+    setImportMenuPos(null);
+    setExportMenuPos(getViewportDropdownPosition(exportMenuRef, 180));
+    setExportMenuOpen(true);
+  };
+
+  const toggleImportMenu = () => {
+    if (importMenuOpen) {
+      setImportMenuOpen(false);
+      setImportMenuPos(null);
+      return;
+    }
+    setExportMenuOpen(false);
+    setExportMenuPos(null);
+    setImportMenuPos(getViewportDropdownPosition(importMenuRef, 220));
+    setImportMenuOpen(true);
+  };
 
   const actionEye = (item, action, label) => (
     <button type="button" aria-label={`View ${label} import data`} title={`View ${label} import data`} disabled={!(action === "created" ? item.inserted : action === "updated" ? item.updated : item[action])} onClick={() => viewImportAction(item, action)} style={{ border: 0, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: 2, verticalAlign: "middle", opacity: (action === "created" ? item.inserted : action === "updated" ? item.updated : item[action]) ? 1 : 0.35 }}>
@@ -417,7 +652,7 @@ export default function CsvImportExportToolbar({
           <div ref={exportMenuRef} style={{ position: "relative" }}>
             <button
               type="button"
-              onClick={() => setExportMenuOpen((v) => !v)}
+              onClick={toggleExportMenu}
               disabled={exporting}
               aria-haspopup="menu"
               aria-expanded={exportMenuOpen}
@@ -427,25 +662,6 @@ export default function CsvImportExportToolbar({
               <Upload size={14} /> {exporting ? "Exporting..." : "Export"}
               <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
             </button>
-            {exportMenuOpen && (
-              <div
-                role="menu"
-                aria-label={`Export ${displayLabel} format`}
-                style={dropdownMenuStyle}
-              >
-                {formats.map((f) => (
-                  <button
-                    key={f}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => doExport(f)}
-                    style={dropdownItemStyle}
-                  >
-                    {FORMAT_META[f].label || f.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         ) : showExport ? (
           <button
@@ -460,18 +676,12 @@ export default function CsvImportExportToolbar({
         ) : null}
         {allowImport && genericLeadWizard ? (
           <div ref={importMenuRef} style={{ position: "relative", display: "inline-flex" }}>
-            <button type="button" onClick={() => setShowImport(true)} aria-label="Import contacts" style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
-              <Download size={14} /> Import contacts
+            <button type="button" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImport(true); }} aria-label={`Import ${displayLabel}`} style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
+              <Download size={14} /> Import {displayLabel}
             </button>
-            <button type="button" onClick={() => setImportMenuOpen((open) => !open)} aria-label="Import contacts options" aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
+            <button type="button" onClick={toggleImportMenu} aria-label={`Import ${displayLabel} options`} aria-haspopup="menu" aria-expanded={importMenuOpen} style={{ ...toolbarButtonStyle, borderLeft: "1px solid var(--border-color)", borderTopLeftRadius: 0, borderBottomLeftRadius: 0, paddingLeft: "0.45rem", paddingRight: "0.45rem" }}>
               <ChevronDown size={13} />
             </button>
-            {importMenuOpen && (
-              <div role="menu" aria-label="Import contacts options" style={{ ...dropdownMenuStyle, right: 0, left: "auto", minWidth: 190 }}>
-                <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
-                <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowImportHistory(true); }} style={dropdownItemStyle}>View import history</button>
-              </div>
-            )}
           </div>
         ) : allowImport ? (
           <button
@@ -485,10 +695,45 @@ export default function CsvImportExportToolbar({
         ) : null}
       </div>
 
+      {exportMenuOpen && exportMenuPos && createPortal(
+        <div
+          ref={exportMenuContentRef}
+          role="menu"
+          aria-label={`Export ${displayLabel} format`}
+          style={{ ...dropdownMenuStyle, ...exportMenuPos, zIndex: 1200 }}
+        >
+          {formats.map((f) => (
+            <button
+              key={f}
+              type="button"
+              role="menuitem"
+              onClick={() => doExport(f)}
+              style={dropdownItemStyle}
+            >
+              {FORMAT_META[f].label || f.toUpperCase()}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+
+      {importMenuOpen && importMenuPos && createPortal(
+        <div
+          ref={importMenuContentRef}
+          role="menu"
+          aria-label={`Import ${displayLabel} options`}
+          style={{ ...dropdownMenuStyle, ...importMenuPos, zIndex: 1200 }}
+        >
+          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
+          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImportHistory(true); }} style={dropdownItemStyle}>View import history</button>
+        </div>,
+        document.body,
+      )}
+
       {showRecentImport && (
-        <div role="dialog" aria-modal="true" aria-labelledby="recent-import-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowRecentImport(false)}>
-          <div className="glass" style={{ width: "min(380px, 100%)", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><h2 id="recent-import-title" style={{ margin: 0, fontSize: "1rem" }}>Your recent import</h2><button type="button" aria-label="Close recent import" onClick={() => setShowRecentImport(false)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+        <div role="dialog" aria-modal="true" aria-labelledby="recent-import-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowRecentImport(false)}>
+          <div className="glass" style={{ width: "min(380px, 100%)", padding: 16, background: "var(--modal-bg, #fff)", opacity: 1, backdropFilter: "none", WebkitBackdropFilter: "none", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><h2 id="recent-import-title" style={{ margin: 0, fontSize: "1rem" }}>Your recent import</h2><button type="button" aria-label="Close recent import" onClick={() => setShowRecentImport(false)} style={modalCloseButtonStyle}><X size={18} strokeWidth={2.25} aria-hidden="true" /></button></div>
             {recentImport ? (
               <div style={{ border: "1px solid var(--border-color)", borderRadius: 8, padding: 14 }}>
                 <strong style={{ display: "block", marginBottom: 10, overflowWrap: "anywhere" }}>{recentImport.fileName}</strong>
@@ -501,22 +746,22 @@ export default function CsvImportExportToolbar({
       )}
 
       {showImportHistory && (
-        <div role="dialog" aria-modal="true" aria-labelledby="import-history-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setShowImportHistory(false)}>
-          <div className="glass" style={{ width: "min(1500px, calc(100vw - 32px))", maxHeight: "90vh", overflow: "auto", padding: 20, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))" }} onClick={(event) => event.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-history-title" style={{ margin: 0, fontSize: "1.05rem" }}>Past imports</h2><button type="button" aria-label="Close import history" onClick={() => setShowImportHistory(false)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
+        <div role="dialog" aria-modal="true" aria-labelledby="import-history-title" style={{ position: "fixed", inset: 0, zIndex: 1100, background: genericCrm ? "rgba(0, 0, 0, 0.6)" : "rgba(15, 23, 42, 0.58)", opacity: 1, backdropFilter: genericCrm ? "blur(8px)" : "blur(6px)", WebkitBackdropFilter: genericCrm ? "blur(8px)" : "blur(6px)", display: "grid", placeItems: "center", padding: 16, ...(genericCrm ? { boxSizing: "border-box", overflow: "hidden", isolation: "isolate" } : {}) }} onClick={() => setShowImportHistory(false)}>
+          <div className="glass" style={{ width: "min(1500px, calc(100vw - 32px))", maxHeight: "90vh", overflow: genericCrm ? "hidden" : "auto", padding: 20, background: genericCrm ? "#fff" : "var(--modal-bg, #fff)", opacity: 1, backdropFilter: "none", WebkitBackdropFilter: "none", border: "1px solid var(--border-color)", borderRadius: 10, boxShadow: "var(--shadow-lg, 0 18px 45px rgba(0,0,0,.2))", ...(genericCrm ? { boxSizing: "border-box", height: "calc(100% - 32px)", maxHeight: "calc(100% - 32px)", display: "flex", flexDirection: "column" } : {}) }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, ...(genericCrm ? { flex: "0 0 auto" } : {}) }}><h2 id="import-history-title" style={{ margin: 0, fontSize: "1.05rem" }}>Past imports</h2><button type="button" aria-label="Close import history" onClick={() => setShowImportHistory(false)} style={modalCloseButtonStyle}><X size={18} strokeWidth={2.25} aria-hidden="true" /></button></div>
             {importHistory.length ? (
-              <div style={{ overflowX: "auto" }}>
+              <div style={{ overflowX: "auto", ...(genericCrm ? { overflowY: "auto", flex: "1 1 auto", minHeight: 0 } : {}) }}>
                 <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse", fontSize: "0.82rem" }}>
-                  <thead><tr>{["Import label", "Created", "Updated", "Skipped", "Errors", "Status", "Imported at", "Contacts"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{heading}</th>)}</tr></thead>
+                  <thead><tr>{["Import label", "Created", "Updated", "Skipped", "Errors", "Status", "Imported at", "Contacts"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", ...(heading === "Contacts" ? { position: "sticky", right: 0, zIndex: 2, minWidth: 280, background: genericCrm ? "#fff" : "var(--modal-bg, #fff)" } : {}) }}>{heading}</th>)}</tr></thead>
                   <tbody>{importHistory.map((item) => <tr key={item.id}>
-                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", fontWeight: 600, minWidth: 180, maxWidth: 280, overflowWrap: "anywhere" }}>{item.fileName}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", fontWeight: 600, minWidth: 180, maxWidth: 280, overflowWrap: "anywhere" }}><div>{item.fileName}</div>{(Number(item.inserted || 0) + Number(item.updated || 0)) > 0 && <button type="button" className="btn-secondary" title="Download created and updated records" aria-label={`Download created and updated records from ${item.fileName}`} onClick={() => downloadImportReport(item, "csv")} style={{ marginTop: 6, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 112, padding: "0.45rem 0.7rem" }}><Download size={14} /> Download</button>}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.inserted} {actionEye(item, "created", "created")}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.updated} {actionEye(item, "updated", "updated")}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.skipped} {actionEye(item, "skipped", "skipped")}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", color: item.errors ? "var(--danger-color, #dc2626)" : "inherit", whiteSpace: "nowrap" }}>{item.errors} {actionEye(item, "errors", "error")}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 150 }}><span style={{ color: item.errors ? "#d97706" : "#059669", fontWeight: 600 }}>{item.errors ? "Completed, with errors" : "Completed"}</span></td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap", minWidth: 190 }}>{new Date(item.completedAt).toLocaleString()}</td>
-                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 130 }}><button type="button" className="btn-secondary" disabled={!item.contacts?.length} onClick={() => setContactsImport(item)}>{item.contacts?.length ? "View contacts" : "No contacts"}</button></td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 140, whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "var(--modal-bg, #fff)", boxShadow: "-8px 0 12px -12px rgba(15, 23, 42, 0.45)" }}><button type="button" className="btn-secondary" disabled={!item.contacts?.length} onClick={() => setContactsImport(item)}>{item.contacts?.length ? "View contacts" : "No contacts"}</button></td>
                   </tr>)}</tbody>
                 </table>
               </div>
@@ -526,28 +771,28 @@ export default function CsvImportExportToolbar({
       )}
 
       {contactsImport && (
-        <div role="dialog" aria-modal="true" aria-labelledby="import-contacts-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setContactsImport(null)}>
-          <div className="glass" style={{ width: "min(1000px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-contacts-title" style={{ margin: 0, fontSize: "1.05rem" }}>Contacts from {contactsImport.fileName}</h2><button type="button" aria-label="Close imported contacts" onClick={() => setContactsImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
-            <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{["Name", "Email", "Phone", "Company", "Title", "Status", "Source"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>{heading}</th>)}</tr></thead><tbody>{contactsImport.contacts.map((contact) => <tr key={contact.id}>{[contact.name, contact.email, contact.phone, contact.company, contact.title, contact.status, contact.source].map((value, index) => <td key={index} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)" }}>{value || "—"}</td>)}</tr>)}</tbody></table></div>
+        <div role="dialog" aria-modal="true" aria-labelledby="import-contacts-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 16, ...(genericCrm ? { boxSizing: "border-box", overflow: "hidden" } : {}) }} onClick={() => setContactsImport(null)}>
+          <div className="glass" style={{ width: "min(1000px, 100%)", maxHeight: "85vh", overflow: genericCrm ? "hidden" : "auto", padding: 16, background: "var(--modal-bg, #fff)", opacity: 1, backdropFilter: "none", WebkitBackdropFilter: "none", border: "1px solid var(--border-color)", borderRadius: 10, ...(genericCrm ? { boxSizing: "border-box", height: "calc(100% - 32px)", maxHeight: "calc(100% - 32px)", display: "flex", flexDirection: "column" } : {}) }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-contacts-title" style={{ margin: 0, fontSize: "1.05rem" }}>Contacts from {contactsImport.fileName}</h2><button type="button" aria-label="Close imported contacts" onClick={() => setContactsImport(null)} style={modalCloseButtonStyle}><X size={18} strokeWidth={2.25} aria-hidden="true" /></button></div>
+            <div style={{ overflowX: "auto", ...(genericCrm ? { overflowY: "auto", flex: "1 1 auto", minHeight: 0 } : {}) }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{["Name", "Email", "Phone", "Company", "Title", "Status", "Source"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>{heading}</th>)}</tr></thead><tbody>{contactsImport.contacts.map((contact) => <tr key={contact.id}>{[contact.name, contact.email, contact.phone, contact.company, contact.title, contact.status, contact.source].map((value, index) => <td key={index} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)" }}>{value || "—"}</td>)}</tr>)}</tbody></table></div>
           </div>
         </div>
       )}
 
       {actionImport && (
-        <div role="dialog" aria-modal="true" aria-labelledby="import-action-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setActionImport(null)}>
-          <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-action-title" style={{ margin: 0, fontSize: "1.05rem" }}>{actionImport.action === "errors" ? "Errors" : `${actionImport.action[0].toUpperCase()}${actionImport.action.slice(1)} records`} from {actionImport.fileName}</h2><button type="button" aria-label="Close import action data" onClick={() => setActionImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
-            {actionImport.rows.length ? <div style={{ overflowX: "auto", maxWidth: "100%" }}><table className="csv-import-data-table" style={{ width: "max-content", minWidth: "100%", tableLayout: "auto", borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(actionImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", minWidth: heading === "reason" ? 260 : 120 }}>{heading}</th>)}</tr></thead><tbody>{actionImport.rows.map((row, index) => <tr key={`${row.id || row.rowNumber || "row"}-${index}`} style={{ color: actionImport.action === "skipped" || actionImport.action === "errors" ? "#dc2626" : actionImport.action === "updated" ? "#b45309" : "inherit" }}>{Object.keys(actionImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: heading === "reason" ? 260 : 120 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>{actionImport.expectedCount ? "Detailed row data was not stored for this older import." : "No records in this category."}</p>}
+        <div role="dialog" aria-modal="true" aria-labelledby="import-action-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 16, ...(genericCrm ? { boxSizing: "border-box", overflow: "hidden" } : {}) }} onClick={() => setActionImport(null)}>
+          <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: genericCrm ? "hidden" : "auto", padding: 16, background: "var(--modal-bg, #fff)", opacity: 1, backdropFilter: "none", WebkitBackdropFilter: "none", border: "1px solid var(--border-color)", borderRadius: 10, ...(genericCrm ? { boxSizing: "border-box", height: "calc(100% - 32px)", maxHeight: "calc(100% - 32px)", display: "flex", flexDirection: "column" } : {}) }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-action-title" style={{ margin: 0, fontSize: "1.05rem" }}>{actionImport.action === "errors" ? "Errors" : `${actionImport.action[0].toUpperCase()}${actionImport.action.slice(1)} records`} from {actionImport.fileName}</h2><button type="button" aria-label="Close import action data" onClick={() => setActionImport(null)} style={modalCloseButtonStyle}><X size={18} strokeWidth={2.25} aria-hidden="true" /></button></div>
+            {actionImport.rows.length ? <div style={{ overflowX: "auto", maxWidth: "100%", ...(genericCrm ? { overflowY: "auto", flex: "1 1 auto", minHeight: 0 } : {}) }}><table className="csv-import-data-table" style={{ width: "max-content", minWidth: "100%", tableLayout: "auto", borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(actionImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", minWidth: heading === "reason" ? 260 : 120 }}>{heading}</th>)}</tr></thead><tbody>{actionImport.rows.map((row, index) => <tr key={`${row.id || row.rowNumber || "row"}-${index}`} style={{ color: actionImport.action === "skipped" || actionImport.action === "errors" ? "#dc2626" : actionImport.action === "updated" ? "#b45309" : "inherit" }}>{Object.keys(actionImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: heading === "reason" ? 260 : 120 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>{actionImport.expectedCount ? "Detailed row data was not stored for this older import." : "No records in this category."}</p>}
           </div>
         </div>
       )}
 
       {errorsImport && (
-        <div role="dialog" aria-modal="true" aria-labelledby="import-errors-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(0,0,0,0.35)", display: "grid", placeItems: "center", padding: 16 }} onClick={() => setErrorsImport(null)}>
-          <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: "auto", padding: 16, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", borderRadius: 10 }} onClick={(event) => event.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-errors-title" style={{ margin: 0, fontSize: "1.05rem" }}>Import errors from {errorsImport.fileName}</h2><button type="button" aria-label="Close import errors" onClick={() => setErrorsImport(null)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button></div>
-            {errorsImport.rows.length ? <div style={{ overflowX: "auto", maxWidth: "100%" }}><table className="csv-import-data-table" style={{ width: "max-content", minWidth: "100%", tableLayout: "auto", borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(errorsImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", minWidth: heading === "reason" ? 260 : 120 }}>{heading}</th>)}</tr></thead><tbody>{errorsImport.rows.map((row, index) => <tr key={`${row.rowNumber || "row"}-${index}`}>{Object.keys(errorsImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: heading === "reason" ? 260 : 120 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No error details were recorded for this import.</p>}
+        <div role="dialog" aria-modal="true" aria-labelledby="import-errors-title" style={{ position: "fixed", inset: 0, zIndex: 1150, background: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 16, ...(genericCrm ? { boxSizing: "border-box", overflow: "hidden" } : {}) }} onClick={() => setErrorsImport(null)}>
+          <div className="glass" style={{ width: "min(1200px, 100%)", maxHeight: "85vh", overflow: genericCrm ? "hidden" : "auto", padding: 16, background: "var(--modal-bg, #fff)", opacity: 1, backdropFilter: "none", WebkitBackdropFilter: "none", border: "1px solid var(--border-color)", borderRadius: 10, ...(genericCrm ? { boxSizing: "border-box", height: "calc(100% - 32px)", maxHeight: "calc(100% - 32px)", display: "flex", flexDirection: "column" } : {}) }} onClick={(event) => event.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><h2 id="import-errors-title" style={{ margin: 0, fontSize: "1.05rem" }}>Import errors from {errorsImport.fileName}</h2><button type="button" aria-label="Close import errors" onClick={() => setErrorsImport(null)} style={modalCloseButtonStyle}><X size={18} strokeWidth={2.25} aria-hidden="true" /></button></div>
+            {errorsImport.rows.length ? <div style={{ overflowX: "auto", maxWidth: "100%", ...(genericCrm ? { overflowY: "auto", flex: "1 1 auto", minHeight: 0 } : {}) }}><table className="csv-import-data-table" style={{ width: "max-content", minWidth: "100%", tableLayout: "auto", borderCollapse: "collapse", fontSize: "0.82rem" }}><thead><tr>{Object.keys(errorsImport.rows[0]).map((heading) => <th key={heading} style={{ textAlign: "left", padding: "0.7rem", borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap", minWidth: heading === "reason" ? 260 : 120 }}>{heading}</th>)}</tr></thead><tbody>{errorsImport.rows.map((row, index) => <tr key={`${row.rowNumber || "row"}-${index}`}>{Object.keys(errorsImport.rows[0]).map((heading) => <td key={heading} style={{ padding: "0.7rem", borderBottom: "1px solid var(--border-color)", verticalAlign: "top", whiteSpace: "pre-wrap", overflowWrap: "anywhere", minWidth: heading === "reason" ? 260 : 120 }}>{row[heading] || "—"}</td>)}</tr>)}</tbody></table></div> : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No error details were recorded for this import.</p>}
           </div>
         </div>
       )}
@@ -568,6 +813,9 @@ export default function CsvImportExportToolbar({
           onClose={() => setShowImport(false)}
           genericLeadWizard={genericLeadWizard}
           mappingFields={mappingFields}
+          refreshImportHistory={() => fetchApi("/api/csv/contacts/import-history", { silent: true })
+            .then((rows) => setImportHistory(Array.isArray(rows) ? rows : []))
+            .catch(() => {})}
           onImported={(result) => {
             if (genericLeadWizard) {
               const latest = { fileName: result.fileName || "Uploaded contacts file", completedAt: new Date().toISOString(), inserted: result.inserted || 0, updated: result.updated || 0, skipped: result.skipped || 0, errors: result.errors?.length || 0, contacts: result.importedContacts || [] };
@@ -604,6 +852,7 @@ function ImportModal({
   initialExpectedHeaders = [],
   genericLeadWizard = false,
   mappingFields = [],
+  refreshImportHistory = null,
 }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
@@ -613,6 +862,7 @@ function ImportModal({
   const [file, setFile] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [previewHeaders, setPreviewHeaders] = useState([]);
+  const [excludedHeaders, setExcludedHeaders] = useState([]);
   const [mappingSelections, setMappingSelections] = useState({});
   const [mappingFieldTypes, setMappingFieldTypes] = useState({});
   const [previewError, setPreviewError] = useState(null);
@@ -637,8 +887,15 @@ function ImportModal({
   const [savingNewField, setSavingNewField] = useState(false);
 
   const optionFieldTypes = new Set(["dropdown", "radio", "multiselect"]);
+  const displayedPreviewHeaders = previewHeaders.length ? previewHeaders : expectedHeaders;
+  const visibleDataPreviewHeaders = genericLeadWizard
+    ? previewHeaders.filter((header) => !excludedHeaders.includes(header))
+    : previewHeaders;
 
   const availableMappingFields = buildAvailableMappingFields(mappingFields, dynamicLeadFields, genericLeadWizard);
+  const sortedMappingFields = [...availableMappingFields].sort((left, right) => (
+    getMappingFieldLabel(left).localeCompare(getMappingFieldLabel(right), undefined, { sensitivity: "base" })
+  ));
 
   const findMappingField = (value) => {
     return findAvailableMappingField(availableMappingFields, value);
@@ -647,15 +904,22 @@ function ImportModal({
   const initializeMapping = (headers) => {
     const selections = {};
     const types = {};
+    const unmatched = [];
     headers.forEach((header) => {
-      const field = findMappingField(header);
-      if (!field) return;
+      const field = genericLeadWizard ? findExactMappingField(availableMappingFields, header) : findMappingField(header);
+      if (!field) {
+        if (genericLeadWizard) unmatched.push(header);
+        return;
+      }
       const key = field.fieldKey || field.key || field.id;
       selections[header] = key;
       types[header] = normalizeFieldType(field.fieldType);
     });
     setMappingSelections(selections);
     setMappingFieldTypes(types);
+    // Unmapped columns are opt-in: keep them visible for review, but do not
+    // import them until the user maps them to a CRM field.
+    if (genericLeadWizard) setExcludedHeaders(unmatched);
   };
 
   const openAddFieldFor = (header, mode = "add") => {
@@ -674,6 +938,9 @@ function ImportModal({
       (field) => (field.fieldKey || field.key || field.id) === value,
     );
     setMappingSelections((current) => ({ ...current, [header]: value }));
+    if (genericLeadWizard && value) {
+      setExcludedHeaders((current) => current.filter((item) => item !== header));
+    }
     setMappingFieldTypes((current) => ({
       ...current,
       [header]: normalizeFieldType(selectedField?.fieldType || current[header]),
@@ -760,7 +1027,7 @@ function ImportModal({
       let changed = false;
       for (const header of previewHeaders) {
         if (next[header]) continue;
-        const field = findAvailableMappingField(fields, header);
+        const field = findExactMappingField(fields, header);
         if (!field) continue;
         next[header] = field.fieldKey || field.key || field.id;
         changed = true;
@@ -772,12 +1039,22 @@ function ImportModal({
       let changed = false;
       for (const header of previewHeaders) {
         if (mappingSelections[header] || next[header]) continue;
-        const field = findAvailableMappingField(fields, header);
+        const field = findExactMappingField(fields, header);
         if (!field) continue;
         next[header] = normalizeFieldType(field.fieldType);
         changed = true;
       }
       return changed ? next : current;
+    });
+    setExcludedHeaders((current) => {
+      const next = current.filter((header) => !findExactMappingField(fields, header) && !mappingSelections[header]);
+      const excluded = new Set(next);
+      for (const header of previewHeaders) {
+        if (!mappingSelections[header] && !findExactMappingField(fields, header) && !canDeriveLeadFieldKey(header)) excluded.add(header);
+      }
+      return next.length === current.length && excluded.size === current.length
+        ? current
+        : [...excluded];
     });
   }, [dynamicLeadFields, genericLeadWizard, mappingFields, mappingSelections, previewHeaders]);
 
@@ -818,6 +1095,7 @@ function ImportModal({
     setPreviewError(null);
     setPreviewRows([]);
     setPreviewHeaders([]);
+    setExcludedHeaders([]);
     setMappingSelections({});
     setMappingFieldTypes({});
     if (!f) return;
@@ -838,11 +1116,10 @@ function ImportModal({
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
         const rawHeaders = (rows[0] || []).map((header) => String(header).trim());
-        const headers = rawHeaders.filter(Boolean);
-        // Use header-keyed records for both CSV and XLSX. Dropping blank
-        // headers must never shift the positions of the remaining values.
+        const stableHeaders = makeStableImportHeaders(rawHeaders, rows.slice(1));
+        const headers = stableHeaders.filter(Boolean);
         const records = rows.slice(1).map((cells) => Object.fromEntries(
-          rawHeaders.flatMap((header, index) => header ? [[header, cells[index] ?? ""]] : []),
+          stableHeaders.flatMap((header, index) => header ? [[header, cells[index] ?? ""]] : []),
         ));
         importRowsRef.current = records;
         setPreviewHeaders(headers);
@@ -855,14 +1132,10 @@ function ImportModal({
     }
     try {
       const text = await f.text();
-      const { headers, rows } = parseCsvClient(text);
+      const { headers, rows } = parseCsvClient(text, genericLeadWizard);
       importRowsRef.current = rows;
-      // Blank spreadsheet columns have no stable database-field identity.
-      // Generic CRM silently ignores them instead of surfacing a misleading
-      // "label is required" error during automatic field creation.
-      const namedHeaders = headers.filter(Boolean);
-      setPreviewHeaders(namedHeaders);
-      initializeMapping(namedHeaders);
+      setPreviewHeaders(headers);
+      initializeMapping(headers);
       setPreviewRows(rows.slice(0, 10));
       // Generic CRM has a dedicated mapping step where arbitrary spreadsheet
       // columns can be mapped to an existing field or turned into a new custom
@@ -872,7 +1145,7 @@ function ImportModal({
       // the existing strict template validation.
       if (!genericLeadWizard) {
         const optional = new Set(optionalHeaders);
-        const missing = expectedHeaders.filter((h) => !namedHeaders.includes(h) && !optional.has(h));
+        const missing = expectedHeaders.filter((h) => !headers.includes(h) && !optional.has(h));
         if (missing.length) {
           setPreviewError(`Missing required column(s): ${missing.join(", ")}`);
         }
@@ -882,12 +1155,35 @@ function ImportModal({
     }
   };
 
+  const goToFinalize = () => {
+    if (!file) return;
+
+    if (genericLeadWizard) {
+      const invalidHeaders = previewHeaders
+        .filter((header) => {
+        if (excludedHeaders.includes(header)) return false;
+        if (mappingSelections[header] || findExactMappingField(availableMappingFields, header)) return false;
+        return !canDeriveLeadFieldKey(header);
+      });
+      if (invalidHeaders.length) {
+        const message = `Invalid or missing column headers: ${invalidHeaders.slice(0, 5).join(", ")}. The first row must contain column names (for example: name, email, phone). Download the Excel template and copy your data below its header row.`;
+        setPreviewError(message);
+        notify.error(message);
+        return;
+      }
+    }
+
+    setWizardStep(4);
+  };
+
   const doImport = async () => {
     if (!file) return;
 
     if (genericLeadWizard) {
-      const invalidHeaders = previewHeaders.filter((header) => {
-        if (mappingSelections[header] || findMappingField(header)) return false;
+      const invalidHeaders = previewHeaders
+        .filter((header) => {
+        if (excludedHeaders.includes(header)) return false;
+        if (mappingSelections[header] || findExactMappingField(availableMappingFields, header)) return false;
         return !canDeriveLeadFieldKey(header);
       });
       if (invalidHeaders.length) {
@@ -915,8 +1211,12 @@ function ImportModal({
       : (importUrl || `/api/wellness/csv/${entity}/import`);
 
     try {
-      let resolvedMappings = { ...mappingSelections };
-      let resolvedFieldTypes = { ...mappingFieldTypes };
+      let resolvedMappings = Object.fromEntries(
+        Object.entries(mappingSelections).filter(([header]) => !excludedHeaders.includes(header)),
+      );
+      let resolvedFieldTypes = Object.fromEntries(
+        Object.entries(mappingFieldTypes).filter(([header]) => !excludedHeaders.includes(header)),
+      );
       const fieldsCreatedDuringImport = [];
 
       if (genericLeadWizard) {
@@ -924,6 +1224,7 @@ function ImportModal({
         // out of the auto-create-field path so every import uses the same
         // status/lifecycle mapping even when the UI payload is stale.
         for (const header of previewHeaders) {
+          if (excludedHeaders.includes(header)) continue;
           const normalizedHeader = String(header || "")
             .trim()
             .toLowerCase()
@@ -938,10 +1239,11 @@ function ImportModal({
         }
         let knownFields = [...availableMappingFields];
         for (const header of previewHeaders) {
+          if (excludedHeaders.includes(header)) continue;
           if (!String(header || "").trim()) continue;
           if (resolvedMappings[header]) continue;
 
-          let field = findAvailableMappingField(knownFields, header);
+          let field = findExactMappingField(knownFields, header);
           if (!field) {
             const fieldType = normalizeFieldType(resolvedFieldTypes[header]);
             const payload = {
@@ -979,7 +1281,7 @@ function ImportModal({
               const latest = await fetchApi("/api/lead-custom-fields", { silent: true });
               const latestFields = Array.isArray(latest) ? latest : (latest?.fields || latest?.customFields || []);
               knownFields = buildAvailableMappingFields(mappingFields, latestFields, genericLeadWizard);
-              field = findAvailableMappingField(knownFields, header);
+              field = findExactMappingField(knownFields, header);
               if (!field) throw error;
             }
           }
@@ -1012,7 +1314,7 @@ function ImportModal({
           errors: [],
           importedContacts: [],
         };
-        const headers = previewHeaders;
+        const headers = previewHeaders.filter((header) => !excludedHeaders.includes(header));
 
         for (let offset = 0; offset < genericRows.length; offset += genericChunkSize) {
           const chunkRows = genericRows.slice(offset, offset + genericChunkSize);
@@ -1091,12 +1393,25 @@ function ImportModal({
         } else if (normalizedResult.errors.length) {
           notify.error(`Import had ${normalizedResult.errors.length} row error(s).`);
         }
-        setSubmitting(false);
-        return;
       }
 
       const fd = new FormData();
-      fd.append("file", file);
+      // Send the checked columns only. This is important for generic imports:
+      // the backend also performs automatic header detection, so merely
+      // omitting an unchecked column from the mapping would still allow it to
+      // be detected from the original spreadsheet.
+      const uploadFile = genericLeadWizard
+        ? new File([
+          [
+            previewHeaders.filter((header) => !excludedHeaders.includes(header)).map(csvCell).join(","),
+            ...genericRows.map((row) => previewHeaders
+              .filter((header) => !excludedHeaders.includes(header))
+              .map((header) => csvCell(row?.[header]))
+              .join(",")),
+          ].join("\n"),
+        ], file.name.replace(/\.(xlsx?|xls)$/i, ".csv"), { type: "text/csv" })
+        : file;
+      fd.append("file", uploadFile);
       if (genericLeadWizard) {
         fd.append("mapping", JSON.stringify(resolvedMappings));
         fd.append("mappingFieldTypes", JSON.stringify(resolvedFieldTypes));
@@ -1136,6 +1451,11 @@ function ImportModal({
           errors: normalizedBody.errors || [],
         };
         setResult(normalizedResult);
+
+          // The history dialog is kept mounted outside the import modal. Pull
+          // the just-written history row immediately so it cannot display a
+          // stale older import that only has an error count.
+          if (genericLeadWizard && refreshImportHistory) refreshImportHistory();
 
         if (normalizedResult.inserted || normalizedResult.updated) {
           notify.success(
@@ -1273,97 +1593,71 @@ function ImportModal({
             <p style={{ textAlign: "center", color: "var(--text-secondary)", marginBottom: "1.5rem" }}>We've mapped the columns in your file to CRM fields — take a look</p>
             <div style={{ border: "1px solid var(--border-color)", borderRadius: 10, overflow: "hidden" }}>
               <div style={{ display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, padding: "0.8rem", background: "var(--table-header-bg, #eef2f7)", fontWeight: 700, fontSize: "0.8rem", minWidth: 620 }}><span>Import</span><span>CSV column</span><span>Mapped</span><span>CRM field</span><span>Field type</span></div>
-              {(previewHeaders.length ? previewHeaders : expectedHeaders).map((header) => (
+              {displayedPreviewHeaders.map((header) => {
+                const sampleValue = previewRows[0]?.[header];
+                const hasSampleValue = sampleValue !== undefined && sampleValue !== null && String(sampleValue) !== "";
+                const displayedSampleValue = hasSampleValue ? expandScientificNotation(sampleValue) : "";
+                return (
                 <div key={header} style={{ display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, alignItems: "center", padding: "0.8rem", borderTop: "1px solid var(--border-color)", fontSize: "0.85rem", minWidth: 620 }}>
-                  <input type="checkbox" defaultChecked aria-label={`Import ${header}`} />
-                  <strong>{header}</strong>
-                  <span style={{ color: "#059669", fontSize: "1.1rem" }}>✓</span>
+                  <input
+                    type="checkbox"
+                    checked={!excludedHeaders.includes(header)}
+                    onChange={(event) => setExcludedHeaders((current) => (
+                      event.target.checked
+                        ? current.filter((item) => item !== header)
+                        : [...current, header]
+                    ))}
+                    aria-label={`Import ${header}`}
+                  />
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{header}</strong>
+                    {hasSampleValue && (
+                      <span
+                        data-testid={`import-sample-${header}`}
+                        title={displayedSampleValue}
+                        style={{ display: "block", marginTop: 4, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      >
+                        {displayedSampleValue}
+                      </span>
+                    )}
+                  </div>
+                  {mappingSelections[header] ? (
+                    <CheckCircle2 size={18} aria-label={`Mapped ${header}`} style={{ color: "#059669" }} />
+                  ) : (
+                    <AlertTriangle size={18} aria-label={`Unmapped ${header}`} style={{ color: "#d97706" }} />
+                  )}
                   {!mappingSelections[header] ? (
-                    <div
-                      data-proposed-field="true"
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) 42px",
-                        height: 36,
-                        border: "1px solid var(--accent-color)",
-                        borderRadius: 8,
-                        background: "var(--accent-bg, #eef2ff)",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        aria-label={`Edit proposed CRM field ${header}`}
-                        title="Edit and create this CRM field"
-                        onClick={() => openAddFieldFor(header, "edit")}
-                        style={{
-                          minWidth: 0,
-                          padding: "0.4rem 0.65rem",
-                          border: 0,
-                          background: "transparent",
-                          color: "var(--text-primary)",
-                          font: "inherit",
-                          fontWeight: 600,
-                          textAlign: "left",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          cursor: "pointer",
-                        }}
-                      >
-                        ＋ {header} (new field)
-                      </button>
-                      <div
-                        style={{
-                          position: "relative",
-                          height: 36,
-                          borderLeft: "1px solid var(--accent-color)",
-                          display: "grid",
-                          placeItems: "center",
-                          color: "var(--text-primary)",
-                        }}
-                      >
-                        <ChevronDown size={16} aria-hidden="true" />
-                        <select
-                          value=""
-                          aria-label={`CRM field for ${header}`}
-                          title="Choose an existing CRM field"
-                          onChange={(event) => updateMappingFor(header, event.target.value)}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            opacity: 0,
-                            cursor: "pointer",
-                          }}
-                        >
-                          <option value="">Choose CRM field</option>
-                          <option value="__add_new_field__">＋ Add new field</option>
-                          {availableMappingFields.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
-                        </select>
-                      </div>
+                    <div data-proposed-field={canDeriveLeadFieldKey(header) ? "true" : undefined} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                      <SearchableMappingFieldSelect
+                        value=""
+                        options={sortedMappingFields}
+                        ariaLabel={`CRM field for ${header}`}
+                        title="Choose an existing CRM field or add a new one"
+                        triggerLabel={`＋ ${header} (new field)`}
+                        highlightEmpty
+                        onChange={(value) => updateMappingFor(header, value || "")}
+                      />
+                      {canDeriveLeadFieldKey(header) && (
+                        <button type="button" aria-label={`Edit proposed CRM field ${header}`} title={`Edit proposed CRM field ${header}`} onClick={() => openAddFieldFor(header, "edit")} style={{ ...secondaryBtnStyle, flex: "0 0 auto", minHeight: 36, padding: "0.35rem 0.55rem", whiteSpace: "nowrap" }}>Edit</button>
+                      )}
                     </div>
                   ) : (
-                    <select
-                      className="input-field"
-                      style={{ height: 36, maxHeight: 220, minHeight: 0, padding: "0.4rem 0.65rem", lineHeight: 1.2 }}
+                    <SearchableMappingFieldSelect
                       value={mappingSelections[header]}
-                      aria-label={`CRM field for ${header}`}
-                      onChange={(event) => updateMappingFor(header, event.target.value)}
-                    >
-                      <option value="">Select CRM field</option>
-                      <option value="__add_new_field__">＋ Add new field</option>
-                      {availableMappingFields.map((field) => <option key={field.id || field.fieldKey || field.key} value={field.fieldKey || field.key}>{field.label || field.name || field.fieldKey || field.key}</option>)}
-                    </select>
+                      options={sortedMappingFields}
+                      ariaLabel={`CRM field for ${header}`}
+                      title="Choose an existing CRM field"
+                      onChange={(value) => updateMappingFor(header, value)}
+                    />
                   )}
                   <select className="input-field" style={{ height: 36, minHeight: 0, padding: "0.4rem 0.65rem" }} value={normalizeFieldType(mappingFieldTypes[header] || findMappingField(mappingSelections[header])?.fieldType)} aria-label={`Field type for ${header}`} onChange={(event) => setMappingFieldTypes((current) => ({ ...current, [header]: event.target.value }))}>
                     {IMPORT_FIELD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </div>
-              ))}
+                );
+              })}
             </div>
-            <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", marginTop: "1.25rem", paddingBottom: "0.5rem" }}><button type="button" onClick={() => setWizardStep(2)} style={secondaryBtnStyle}>Back</button><button type="button" onClick={doImport} disabled={submitting || !file} style={primaryBtnStyle}>{submitting ? "Importing…" : "Import contact"}</button></div>
+            <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", marginTop: "1.25rem", paddingBottom: "0.5rem" }}><button type="button" onClick={() => setWizardStep(2)} style={secondaryBtnStyle}>Back</button><button type="button" onClick={goToFinalize} disabled={submitting || !file} style={primaryBtnStyle}>Go to next page to see preview</button></div>
           </div>
         )}
         {genericLeadWizard && showAddField && (
@@ -1388,9 +1682,15 @@ function ImportModal({
             position: "absolute",
             top: "1rem",
             right: "1rem",
+            width: 36,
+            height: 36,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 8,
             background: "transparent",
             border: "none",
-            fontSize: "1.5rem",
+            fontSize: "1.6rem",
             cursor: "pointer",
             color: "inherit",
           }}
@@ -1469,7 +1769,7 @@ function ImportModal({
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", color: "var(--text-primary, inherit)" }}>
                 <thead>
                   <tr>
-                    {previewHeaders.map((h) => (
+                    {visibleDataPreviewHeaders.map((h) => (
                       <th key={h} style={tableHeaderCellStyle}>{h}</th>
                     ))}
                   </tr>
@@ -1477,7 +1777,7 @@ function ImportModal({
                 <tbody>
                   {previewRows.map((r, i) => (
                     <tr key={i}>
-                      {previewHeaders.map((h) => (
+                      {visibleDataPreviewHeaders.map((h) => (
                         <td key={h} style={tableCellStyle}>{String(r[h] || "")}</td>
                       ))}
                     </tr>
@@ -1556,7 +1856,7 @@ function ImportModal({
               onClick={doImport}
               style={{ ...primaryBtnStyle, opacity: !file || submitting || previewError ? 0.5 : 1 }}
             >
-              {submitting ? "Importing..." : "Confirm import"}
+              {submitting ? "Importing..." : genericLeadWizard && wizardStep === 4 ? "Import" : "Confirm import"}
             </button>
           )}
         </div>
@@ -1572,7 +1872,7 @@ function ImportModal({
 // client (header detection + first-10-row preview). Kept self-contained so
 // the toolbar component is drop-in without a separate utils file.
 
-function parseCsvClient(text) {
+function parseCsvClient(text, preserveUnnamed = false) {
   if (!text) return { headers: [], rows: [] };
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   const records = [];
@@ -1607,13 +1907,33 @@ function parseCsvClient(text) {
     else break;
   }
   if (records.length === 0) return { headers: [], rows: [] };
-  const headers = records[0].map((h) => String(h).trim());
+  const rawHeaders = records[0].map((h) => String(h).trim());
+  const stableHeaders = preserveUnnamed
+    ? makeStableImportHeaders(rawHeaders, records.slice(1))
+    : rawHeaders;
+  const headers = stableHeaders.filter(Boolean);
   const rows = records.slice(1).map((cells) => {
     const obj = {};
-    headers.forEach((h, idx) => { if (h) obj[h] = idx < cells.length ? cells[idx] : ""; });
+    stableHeaders.forEach((h, idx) => { if (h) obj[h] = idx < cells.length ? cells[idx] : ""; });
     return obj;
   });
   return { headers, rows };
+}
+
+// Spreadsheet exports sometimes serialize long identifiers as scientific
+// notation. Expand only the review-stage sample; keep the original cell value
+// untouched so the import payload remains exactly as uploaded.
+function expandScientificNotation(value) {
+  const raw = String(value);
+  const match = raw.trim().match(/^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return raw;
+
+  const [, sign, integerPart, fractionPart = "", exponentText] = match;
+  const digits = integerPart + fractionPart;
+  const decimalIndex = integerPart.length + Number(exponentText);
+  if (decimalIndex <= 0) return `${sign}0.${"0".repeat(-decimalIndex)}${digits}`;
+  if (decimalIndex >= digits.length) return `${sign}${digits}${"0".repeat(decimalIndex - digits.length)}`;
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
 }
 
 function csvCell(value) {
@@ -1772,10 +2092,8 @@ const tableCellStyle = {
 };
 
 const dropdownMenuStyle = {
-  position: "absolute",
-  top: "calc(100% + 4px)",
-  right: 0,
-  minWidth: 160,
+  position: "fixed",
+  minWidth: 0,
   // --bg-color: opaque in both themes. (--surface-color is rgba(...,0.6)
   // in dark wellness, which makes menu items hard to read against the
   // page behind them.)

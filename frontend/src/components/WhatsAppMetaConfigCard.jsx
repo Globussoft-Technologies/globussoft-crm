@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { fetchApi } from "../utils/api";
+import SettingsHelp from "./settings/SettingsHelp";
 
 // Per-tenant WhatsApp (Meta Cloud API) configuration.
 //
@@ -150,7 +151,12 @@ function StatusBadge({ status }) {
   );
 }
 
-function CopyRow({ label, value, hint }) {
+function FieldLabel({ label, htmlFor, hint, required, compactHints }) {
+  const content = <label htmlFor={htmlFor} style={labelStyle}>{label}{required && <span style={{ color: "var(--danger-color)" }}> *</span>}</label>;
+  return compactHints ? <div className="gs-field-label">{content}<SettingsHelp label={label}>{hint}</SettingsHelp></div> : content;
+}
+
+function CopyRow({ label, value, hint, compactHints }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -163,7 +169,7 @@ function CopyRow({ label, value, hint }) {
   };
   return (
     <div style={{ marginBottom: "0.75rem" }}>
-      <label style={labelStyle}>{label}</label>
+      <FieldLabel label={label} hint={hint} compactHints={compactHints} />
       <div style={{ display: "flex", gap: "0.5rem" }}>
         <input
           readOnly
@@ -202,16 +208,24 @@ function CopyRow({ label, value, hint }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      {hint && <p style={hintStyle}>{hint}</p>}
+      {hint && !compactHints && <p style={hintStyle}>{hint}</p>}
     </div>
   );
 }
 
-export default function WhatsAppMetaConfigCard({ embedded = false }) {
+export default function WhatsAppMetaConfigCard({ embedded = false, compactHints = false, onConnectionStatusChange }) {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [state, setState] = useState(null);
+  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
+
+  useEffect(() => {
+    onConnectionStatusChange?.({
+      ready: !statusLoadFailed && typeof state?.status?.status === "string" ? state.status.status === "CONNECTED" : null,
+      loading,
+    });
+  }, [onConnectionStatusChange, state, loading, statusLoadFailed]);
   const [error, setError] = useState("");
   const [errorFields, setErrorFields] = useState([]);
   const [success, setSuccess] = useState("");
@@ -227,6 +241,7 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
 
   const load = async () => {
     setLoading(true);
+    setStatusLoadFailed(false);
     try {
       // This card renders its own inline error state.  Keep a transient load
       // failure from also triggering the global "Something went wrong" toast
@@ -245,6 +260,7 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
         webhookVerifyToken: res?.config?.webhookVerifyToken?.last4 || "",
       });
     } catch (err) {
+      setStatusLoadFailed(true);
       setError(err.message || "Failed to load WhatsApp configuration.");
     } finally {
       setLoading(false);
@@ -417,10 +433,7 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
             </p>
             {META_FIELDS.map((f) => (
               <div key={f.key} style={{ marginBottom: "0.75rem" }}>
-                <label htmlFor={`wa-${f.key}`} style={labelStyle}>
-                  {f.label}
-                  {f.required && <span style={{ color: "var(--danger-color)" }}> *</span>}
-                </label>
+                <FieldLabel htmlFor={`wa-${f.key}`} label={f.label} required={f.required} hint={f.hint} compactHints={compactHints} />
                 <input
                   id={`wa-${f.key}`}
                   type={f.secret ? "password" : "text"}
@@ -431,16 +444,15 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
                   onChange={(e) => setForm((p) => ({ ...p, [f.key]: e.target.value }))}
                   style={inputStyle(errorFields.includes(f.key))}
                 />
-                <p style={hintStyle}>{f.hint}</p>
+                {!compactHints && <p style={hintStyle}>{f.hint}</p>}
               </div>
             ))}
 
             {/* ── Group 2: value the CLIENT invents, used on BOTH sides ─── */}
             <p style={groupHeadingStyle}>You choose this — enter the same value in Meta</p>
             <div style={{ marginBottom: "0.75rem" }}>
-              <label htmlFor="wa-verify-token" style={labelStyle}>
-                Webhook verify token<span style={{ color: "var(--danger-color)" }}> *</span>
-              </label>
+              <FieldLabel htmlFor="wa-verify-token" label="Webhook verify token" required compactHints={compactHints}
+                hint="Pick any random string. Paste the identical value into Meta → WhatsApp → Configuration → Webhook → ‘Verify token’. Meta uses it once, to prove the callback URL below is really ours." />
               <input
                 id="wa-verify-token"
                 type="password"
@@ -451,15 +463,16 @@ export default function WhatsAppMetaConfigCard({ embedded = false }) {
                 onChange={(e) => setForm((p) => ({ ...p, webhookVerifyToken: e.target.value }))}
                 style={inputStyle(errorFields.includes("webhookVerifyToken"))}
               />
-              <p style={hintStyle}>
+              {!compactHints && <p style={hintStyle}>
                 Pick any random string. Paste the identical value into Meta → WhatsApp → Configuration →
                 Webhook → &ldquo;Verify token&rdquo;. Meta uses it once, to prove the callback URL below is really ours.
-              </p>
+              </p>}
             </div>
 
             {/* ── Group 3: values OUR system generates ──────────────────── */}
             <p style={groupHeadingStyle}>Generated by us — copy these into Meta</p>
             <CopyRow
+              compactHints={compactHints}
               label="Callback URL"
               value={state?.ours?.callbackUrl || ""}
               hint={

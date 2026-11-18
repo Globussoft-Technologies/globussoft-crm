@@ -1294,6 +1294,52 @@ router.get(
   },
 );
 
+// GET /api/travel/trips/:id/report.csv
+// This literal route must stay before /trips/:id so Express does not treat
+// "report.csv" as a trip id.
+router.get(
+  "/trips/:id/report.csv",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      const trip = await prisma.tmcTrip.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: {
+          id: true, tripCode: true, destination: true, status: true,
+          departDate: true, returnDate: true, pricePerStudent: true,
+          participants: { orderBy: { id: "asc" }, select: { fullName: true, applicationStatus: true } },
+        },
+      });
+      if (!trip) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
+      const csvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const date = (value) => value ? new Date(value).toISOString().slice(0, 10) : "";
+      const rows = [
+        ["Trip code", trip.tripCode || `Trip #${trip.id}`],
+        ["Destination", trip.destination || ""],
+        ["Status", trip.status || ""],
+        ["Departure", date(trip.departDate)],
+        ["Return", date(trip.returnDate)],
+        ["Price per student", trip.pricePerStudent ?? ""],
+        ["Participant count", trip.participants.length],
+        [],
+        ["Participant", "Application status"],
+        ...trip.participants.map((participant) => [participant.fullName || "", participant.applicationStatus || ""]),
+      ];
+      const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n") + "\n";
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=trip-${trip.id}-report.csv`);
+      res.send(csv);
+    } catch (e) {
+      console.error("[travel-trips] report export error:", e.message);
+      res.status(500).json({ error: "Failed to export trip report" });
+    }
+  },
+);
+
 // GET /api/travel/trips/:id
 router.get(
   "/trips/:id",
@@ -2524,6 +2570,14 @@ async function loadStaffParentDocument({ tenantId, tripId, parentEmail, document
   });
 }
 
+async function resolveStaffParentDocumentViewUrl(document) {
+  return visaDocStore.resolveViewUrl({
+    attachmentUrl: document?.fileUrl,
+    attachmentStorage: document?.storage,
+    attachmentKey: document?.storageKey,
+  });
+}
+
 const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
 
 // GET /api/travel/trips/:id/participants/import-template
@@ -2873,6 +2927,70 @@ router.get(
 // Staff-only generic view for any parent-portal document on a participant.
 // The document id is still constrained by tenant, trip and matching parent
 // email so an operator cannot use this route to cross participant boundaries.
+router.get(
+  "/trips/:id/participants/:pid/parent-documents/:documentId/view-url",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const participantId = parseInt(req.params.pid, 10);
+      const documentId = parseInt(req.params.documentId, 10);
+      if (!Number.isFinite(participantId) || !Number.isFinite(documentId)) {
+        return res.status(400).json({ error: "Invalid participant or document id", code: "INVALID_DOCUMENT_ID" });
+      }
+      const participant = await prisma.tripParticipant.findFirst({
+        where: { id: participantId, tripId: trip.id },
+        select: { parentEmail: true },
+      });
+      if (!participant) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
+      const document = await loadStaffParentDocument({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        parentEmail: participant.parentEmail,
+        documentId,
+      });
+      if (!document) return res.status(404).json({ error: "Parent document not found", code: "DOCUMENT_NOT_FOUND" });
+      const url = await resolveStaffParentDocumentViewUrl(document);
+      if (!url) return res.status(404).json({ error: "Parent document has no direct view URL", code: "DOCUMENT_VIEW_URL_UNAVAILABLE" });
+      return res.json({ url, expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant parent document view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to generate parent document URL" });
+    }
+  },
+);
+
+router.get(
+  "/trips/:id/registrations/:rid/parent-documents/:documentId/view-url",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const { trip, draft } = await loadPendingRegistration(req);
+      const documentId = parseInt(req.params.documentId, 10);
+      if (!Number.isFinite(documentId)) return res.status(400).json({ error: "documentId must be a number", code: "INVALID_DOCUMENT_ID" });
+      const document = await loadStaffParentDocument({
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        parentEmail: draft.parentEmail,
+        documentId,
+      });
+      if (!document) return res.status(404).json({ error: "Parent document not found", code: "DOCUMENT_NOT_FOUND" });
+      const url = await resolveStaffParentDocumentViewUrl(document);
+      if (!url) return res.status(404).json({ error: "Parent document has no direct view URL", code: "DOCUMENT_VIEW_URL_UNAVAILABLE" });
+      return res.json({ url, expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] registration parent document view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to generate parent document URL" });
+    }
+  },
+);
+
 router.get(
   "/trips/:id/participants/:pid/parent-documents/:documentId/file",
   verifyToken,

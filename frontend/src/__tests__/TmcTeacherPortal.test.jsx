@@ -44,6 +44,21 @@ describe("TmcTeacherPortal", () => {
             json: () => Promise.resolve({ diagnostics: [{ id: 12, createdAt: "2026-09-09T00:00:00.000Z", reportPdfUrl: "/api/travel/diagnostics/12/readiness-report.pdf" }] }),
         });
       }
+      if (url === "/api/portal/tmc/teacher/catalogues") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            connected: true,
+            catalogues: [{
+              driveFileId: "tmc-pdf-1",
+              fileName: "Nepal School Trip.pdf",
+              folderPath: "TMC/CRM Itineraries",
+              indexed: true,
+            }],
+            response: null,
+          }),
+        });
+      }
       if (url === "/api/portal/tmc/teacher/reviews") {
         return Promise.resolve({
           ok: true,
@@ -168,6 +183,16 @@ describe("TmcTeacherPortal", () => {
       overflowY: "auto",
     });
     expect(document.querySelector('[data-tmc-teacher-shell="true"]')).toHaveStyle({ marginLeft: "250px" });
+  });
+
+  it("opens TMC Catalogues from the teacher portal navigation", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "TMC Catalogues" }));
+
+    expect(await screen.findByRole("heading", { name: "TMC Catalogues", level: 2 })).toBeInTheDocument();
+    expect(await screen.findByText("Nepal School Trip.pdf")).toBeInTheDocument();
   });
 
   it("clears the teacher session and redirects to the main login page on sign out", async () => {
@@ -300,6 +325,28 @@ describe("TmcTeacherPortal", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New trip assigned to you" }));
 
     expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
+  });
+
+  it("opens participant, payment, and rooming tabs from the trips page", async () => {
+    render(<TmcTeacherPortal />);
+
+    await screen.findByRole("heading", { name: "Dashboard" });
+    fireEvent.click(screen.getByRole("button", { name: "Trips" }));
+    await screen.findByRole("heading", { name: "Your trips" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Singapore.*participants/ }));
+    expect(await screen.findByText("Manish")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Participants" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Payments" }));
+    expect(await screen.findByRole("tab", { name: "Payments" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("No per-participant instalments yet")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Rooming" }));
+    expect(await screen.findByRole("tab", { name: "Rooming" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("button", { name: "Add room" })).toBeInTheDocument();
+    expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/trips/7/payment-plan")).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/trips/7/rooming")).toBe(true);
   });
 
   it("restores the selected section from the URL after a refresh", async () => {

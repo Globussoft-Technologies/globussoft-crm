@@ -16,7 +16,6 @@ import IntlTelInput from "@intl-tel-input/react";
 import "intl-tel-input/styles";
 import {
   Link,
-  Outlet,
   useLocation,
   useNavigate,
   useSearchParams,
@@ -57,7 +56,6 @@ import ScrollableSelect from "../components/ScrollableSelect";
 import SearchableSelect from "../components/ui/SearchableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import {
-  SUB_BRAND_IDS,
   accessibleSubBrands,
   subBrandShortLabel,
 } from "../utils/travelSubBrand";
@@ -76,6 +74,7 @@ import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolba
 import DuplicateContactModal from "../components/DuplicateContactModal";
 import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
+import { richTextToPlainText } from "../utils/richText";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
 import "./Leads.css";
@@ -140,17 +139,149 @@ const AUTO_CAMPAIGN_RULE_COLUMN_KEYS = new Set([
   "gst",
   "billingStateCode",
 ]);
+
+function AutoCampaignSelect({ value, options, disabled, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const selected = options.find((option) => String(option.id) === String(value));
+  const filteredOptions = options.filter((option) => {
+    const search = query.trim().toLowerCase();
+    return !search || String(option.name || `Campaign ${option.id}`).toLowerCase().includes(search);
+  });
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const updateMenuPosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setMenuPosition({ left: rect.left, top: rect.bottom, width: Math.max(138, rect.width) });
+    };
+    const closeOnOutsideClick = (event) => {
+      if (!rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+    };
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [open]);
+
+  const choose = (nextValue) => {
+    onChange(nextValue);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", minWidth: 0 }}>
+      <select className="input-field" value={value} disabled={disabled} tabIndex={-1} onChange={(event) => choose(event.target.value)} style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}>
+        <option value="">Select campaign</option>
+        {options.map((option) => <option key={option.id} value={String(option.id)}>{option.name || `Campaign ${option.id}`}</option>)}
+      </select>
+      <button ref={triggerRef} type="button" className="input-field" disabled={disabled} aria-label="Select campaign" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} style={{ width: "100%", minWidth: 0, minHeight: 36, padding: "0.35rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, textAlign: "left", cursor: disabled ? "not-allowed" : "pointer", borderColor: open ? "#4b61d1" : undefined }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected?.name || "Select campaign"}</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && menuPosition && createPortal(
+        <div ref={menuRef} role="listbox" aria-label="Select campaign options" style={{ position: "fixed", left: menuPosition.left, top: menuPosition.top, zIndex: 9999, width: Math.max(238, menuPosition.width), maxHeight: 300, overflowY: "auto", padding: 6, boxSizing: "border-box", border: "1px solid #d8dce5", borderRadius: 9, background: "#fff", boxShadow: "0 12px 28px rgba(15, 23, 42, 0.18)" }}>
+          <input type="search" autoFocus aria-label="Search campaigns" placeholder="Search campaigns" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: "100%", height: 34, boxSizing: "border-box", marginBottom: 5, padding: "0.4rem 0.55rem", border: "1px solid #5865f2", borderRadius: 5, outline: "none", font: "inherit" }} />
+          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: !value ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>Select campaign</button>
+          {filteredOptions.map((option) => {
+            const optionValue = String(option.id);
+            const isSelected = optionValue === String(value);
+            return <button key={option.id} type="button" role="option" aria-selected={isSelected} onClick={() => choose(optionValue)} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: isSelected ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>{option.name || `Campaign ${option.id}`}</button>;
+          })}
+          {!filteredOptions.length && <div style={{ padding: "0.5rem", color: "var(--text-secondary)", fontSize: "0.8rem" }}>No campaigns found</div>}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function AutoLeadColumnSelect({ value, options, disabled, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const selected = options.find((option) => option.key === value);
+  const filteredOptions = options.filter((option) => {
+    const search = query.trim().toLowerCase();
+    return !search || `${option.label} ${option.key}`.toLowerCase().includes(search);
+  });
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const updateMenuPosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setMenuPosition({ left: rect.left, top: rect.bottom, width: Math.max(238, rect.width) });
+    };
+    const closeOnOutsideClick = (event) => {
+      if (!rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+    };
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [open]);
+
+  const choose = (nextValue) => {
+    onChange(nextValue);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", minWidth: 0 }}>
+      <select className="input-field" value={value} disabled={disabled} tabIndex={-1} onChange={(event) => choose(event.target.value)} style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}>
+        <option value="">Select column</option>
+        {options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+      </select>
+      <button ref={triggerRef} type="button" className="input-field" disabled={disabled} aria-label="Select column" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} style={{ width: "100%", minWidth: 0, minHeight: 36, padding: "0.35rem 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, textAlign: "left", cursor: disabled ? "not-allowed" : "pointer", borderColor: open ? "#4b61d1" : undefined }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected?.label || "Select column"}</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && menuPosition && createPortal(
+        <div ref={menuRef} role="listbox" aria-label="Select column options" style={{ position: "fixed", left: menuPosition.left, top: menuPosition.top, zIndex: 9999, width: menuPosition.width, maxHeight: 300, overflowY: "auto", padding: 6, boxSizing: "border-box", border: "1px solid #d8dce5", borderRadius: 9, background: "#fff", boxShadow: "0 12px 28px rgba(15, 23, 42, 0.18)" }}>
+          <input type="search" autoFocus aria-label="Search CRM fields" placeholder="Search fields" value={query} onChange={(event) => setQuery(event.target.value)} style={{ width: "100%", height: 34, boxSizing: "border-box", marginBottom: 5, padding: "0.4rem 0.55rem", border: "1px solid #5865f2", borderRadius: 5, outline: "none", font: "inherit" }} />
+          <button type="button" role="option" aria-selected={!value} onClick={() => choose("")} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: !value ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>Select CRM field</button>
+          {filteredOptions.map((option) => {
+            const isSelected = option.key === value;
+            return <button key={option.key} type="button" role="option" aria-selected={isSelected} onClick={() => choose(option.key)} style={{ width: "100%", padding: "0.45rem 0.5rem", border: 0, borderRadius: 4, background: isSelected ? "#eef0ff" : "transparent", color: "#111827", textAlign: "left", cursor: "pointer" }}>{option.label}</button>;
+          })}
+          {!filteredOptions.length && <div style={{ padding: "0.5rem", color: "var(--text-secondary)", fontSize: "0.8rem" }}>No CRM fields found</div>}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
 const TRAVEL_SOURCE_OPTIONS = [
-  { value: "tmc_registration", label: "TMC Registration" },
-  { value: "brochure_request", label: "Brochure Request" },
+  { value: "tmc_registration", label: "School Trip Registration" },
+  { value: "brochure_request", label: "Trip Brochure Request" },
   { value: "whatsapp", label: "WhatsApp" },
-  { value: "referral", label: "Referral" },
-  { value: "website", label: "Website" },
+  { value: "referral", label: "Traveler Referral" },
+  { value: "website", label: "Travel Website" },
   { value: "phone", label: "Phone Call" },
-  { value: "event", label: "Event / Expo" },
+  { value: "event", label: "Travel Event / Expo" },
   { value: "other", label: "Other" },
 ];
 const WELLNESS_SOURCE_OPTIONS = [
@@ -221,6 +352,7 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
 ]);
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
+const LEADS_COLUMN_ORDER_STORAGE_PREFIX = "globuscrm.leads.columnOrder.v1";
 const LEADS_PAGINATION_STORAGE_PREFIX = "globuscrm.leads.pagination.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
@@ -291,6 +423,20 @@ const readLeadsPaginationState = (storageKey) => {
   }
 };
 
+const readLeadsColumnOrder = (storageKey) => {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = JSON.parse(
+      window.sessionStorage.getItem(storageKey) || "null",
+    );
+    return Array.isArray(stored)
+      ? stored.filter((key) => typeof key === "string")
+      : null;
+  } catch {
+    return null;
+  }
+};
+
 const readLeadsPaginationStateFromQuery = (search) => {
   if (typeof search !== "string") return null;
   const params = new URLSearchParams(search);
@@ -304,6 +450,74 @@ const readLeadsPaginationStateFromQuery = (search) => {
         ? pageSize
         : GENERIC_LEADS_PAGE_SIZE,
   };
+};
+
+const LEADS_TABLE_QUERY_KEYS = [
+  "q",
+  "nameStartsWith",
+  "source",
+  "subBrand",
+  "stage",
+  "campaign",
+  "leadStatus",
+  "assignee",
+  "scoreMin",
+  "scoreMax",
+  "filters",
+  "sortBy",
+  "sortDirection",
+];
+
+const readLeadsTableStateFromQuery = (search) => {
+  if (typeof search !== "string") return null;
+  const params = new URLSearchParams(search);
+  if (
+    !params.has("page") &&
+    !params.has("limit") &&
+    !LEADS_TABLE_QUERY_KEYS.some((key) => params.has(key))
+  ) {
+    return null;
+  }
+  let advancedFilters = [];
+  try {
+    const parsed = JSON.parse(params.get("filters") || "[]");
+    if (Array.isArray(parsed)) {
+      advancedFilters = parsed.filter(
+        (filter) =>
+          filter &&
+          typeof filter.field === "string" &&
+          typeof filter.operator === "string" &&
+          Array.isArray(filter.values),
+      );
+    }
+  } catch {
+    advancedFilters = [];
+  }
+  const sortDirection = params.get("sortDirection");
+  const sortBy = params.get("sortBy");
+  return {
+    searchTerm: params.get("q") || "",
+    nameStartsWith: params.get("nameStartsWith") || "",
+    sourceFilter: params.get("source") || "",
+    subBrandFilter: params.get("subBrand") || "",
+    stageFilter: params.get("stage") || "",
+    campaignFilter: params.get("campaign") || "",
+    leadStatusFilter: params.get("leadStatus") || "",
+    assigneeFilter: params.get("assignee") || "",
+    scoreMin: params.get("scoreMin") || "",
+    scoreMax: params.get("scoreMax") || "",
+    advancedFilters,
+    sortConfig:
+      sortBy && ["asc", "desc"].includes(sortDirection)
+        ? { key: sortBy, direction: sortDirection }
+        : { key: null, direction: null },
+  };
+};
+
+const setOptionalQueryParam = (params, key, value) => {
+  const normalized = String(value ?? "").trim();
+  if (normalized) params.set(key, normalized);
+  else params.delete(key);
 };
 
 const buildLeadsListPath = (search, pageIndex, pageSize) => {
@@ -472,7 +686,19 @@ const TRAVEL_LEAD_COLUMN_KEYS = new Set([
   "assignedTo",
   "createdAt",
 ]);
+const TRAVEL_TAXONOMY_FIELD_KEYS = new Set([
+  "trip_name",
+  "traveler_type",
+  "destination",
+  "package_code",
+]);
+const TRAVEL_TAG_LABELS = {
+  tmc_registration: "School Trip Registration",
+  brochure_request: "Trip Brochure Request",
+};
+const travelTagLabel = (tag) => TRAVEL_TAG_LABELS[String(tag || "").toLowerCase()] || tag;
 const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set();
+const GENERIC_HIDDEN_COLUMN_PICKER_KEYS = Object.freeze(["status"]);
 const CSV_IMPORT_FIELD_TYPES = {
   aiScore: "number",
   callifiedScore: "number",
@@ -495,6 +721,60 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   description: "textarea",
 };
+const GENERIC_STATUS_FILTER_OPTIONS = Object.freeze([
+  { value: "new", label: "New" },
+  { value: "contacted", label: "Contacted" },
+  { value: "interested", label: "Interested" },
+  { value: "unqualified", label: "Unqualified" },
+  { value: "qualified", label: "Qualified" },
+  { value: "lost", label: "Lost" },
+  { value: "won", label: "Won" },
+  { value: "churned", label: "Churned" },
+]);
+const GENERIC_BACKEND_STATUS_OPTIONS = ["New", "Contacted", "Won", "Churned", "Junk", "Interested", "Unqualified", "Qualified", "Lost"];
+const GENERIC_STATUS_DISPLAY_MAP = { Lead: "New", Prospect: "Contacted", Customer: "Won" };
+const TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS = Object.freeze(["subBrand"]);
+// The import mapper must offer CRM fields even when a user has hidden those
+// columns from their personal Leads table layout. Keep this catalog separate
+// from `leadColumnCatalog`, which is driven by table-column preferences.
+const GENERIC_LEAD_IMPORT_DEFAULT_FIELDS = [
+  { key: "name", label: "Name", fieldType: "text" },
+  { key: "firstName", label: "First Name", fieldType: "text" },
+  { key: "lastName", label: "Last Name", fieldType: "text" },
+  { key: "email", label: "Email", fieldType: "text" },
+  { key: "phone", label: "Phone", fieldType: "text" },
+  { key: "whatsappPhone", label: "WhatsApp Number", fieldType: "text" },
+  { key: "company", label: "Company", fieldType: "text" },
+  { key: "title", label: "Job Title", fieldType: "text" },
+  { key: "website", label: "Website URL", fieldType: "url" },
+  { key: "linkedin", label: "LinkedIn", fieldType: "url" },
+  { key: "industry", label: "Service Type", fieldType: "text" },
+  { key: "companySize", label: "No Of Employee", fieldType: "number" },
+  { key: "description", label: "Note", fieldType: "textarea" },
+  { key: "stateCode", label: "State", fieldType: "text" },
+  { key: "status", label: "Status", fieldType: "dropdown" },
+  { key: "source", label: "Source", fieldType: "text" },
+  { key: "lifecycleStageKey", label: "Status", fieldType: "dropdown" },
+  { key: "medium", label: "Medium", fieldType: "text" },
+  { key: "firstTouchSource", label: "First Touch Source", fieldType: "text" },
+  { key: "lastTouchSource", label: "Last Touch Source", fieldType: "text" },
+  { key: "tags", label: "Tags", fieldType: "text" },
+  { key: "aiScore", label: "Lead Score", fieldType: "number" },
+  { key: "webForm", label: "Web Form", fieldType: "text" },
+  { key: "location", label: "Location", fieldType: "text" },
+  { key: "assignedTo", label: "Assigned To", fieldType: "text" },
+  { key: "createdAt", label: "Created", fieldType: "date" },
+  { key: "lastUpdated", label: "Last Updated", fieldType: "date" },
+  { key: "interestedPlotArea", label: "Interested plot area", fieldType: "text" },
+  { key: "pickupLocation", label: "Pickup Location", fieldType: "text" },
+  { key: "plotAssign", label: "Plot Assign", fieldType: "text" },
+  { key: "overallPickupStatus", label: "Overall Status", fieldType: "text" },
+  { key: "subBrand", label: "Sub-brand", fieldType: "text" },
+  { key: "campaign", label: "Callified Campaign", fieldType: "text" },
+  { key: "callStatus", label: "Call Status", fieldType: "dropdown" },
+  { key: "callifiedAi", label: "Callified AI call", fieldType: "text" },
+  { key: "callifiedScore", label: "Callified Score", fieldType: "number" },
+];
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
   name: 240,
@@ -698,7 +978,7 @@ function removeLeadTagFromList(rawTags, tagKey) {
   return nextTags.length === currentTags.length ? null : nextTags;
 }
 
-function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
+function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labelForTag = (tag) => tag }) {
   const tags = normalizeLeadTags(lead.tags);
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
@@ -871,7 +1151,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
     >
       <div
         className="lead-tags-display"
-        title={tags.join(", ") || (canEdit ? "Add tags" : "No tags")}
+        title={tags.map(labelForTag).join(", ") || (canEdit ? "Add travel tags" : "No travel tags")}
       >
         {tags.length === 0 ? (
           <span
@@ -886,7 +1166,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
           <>
             {tags.map((tag) => (
               <span key={tag} className="lead-tag-chip">
-                {tag}
+                {labelForTag(tag)}
               </span>
             ))}
           </>
@@ -974,12 +1254,12 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true }) {
                   className="lead-tags-draft-list"
                   aria-label="Selected tags"
                 >
-                  {draftTags.map((tag) => (
+                {draftTags.map((tag) => (
                     <span
                       key={tag}
                       className="lead-tag-chip lead-tag-chip--selected"
                     >
-                      <span className="lead-tag-chip__label">{tag}</span>
+                      <span className="lead-tag-chip__label">{labelForTag(tag)}</span>
                       {canEdit && (
                         <button
                           type="button"
@@ -1245,6 +1525,18 @@ const stripDangerousTags = (str) => {
     /<(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
   const stripped = str.replace(DANGEROUS_TAG_RE, "");
   return { value: stripped, stripped: stripped !== str };
+};
+
+const plainTextLeadNote = (value) => {
+  const input = String(value ?? "");
+  if (!input) return "";
+  return richTextToPlainText(
+    input
+      .replace(/<br\s*\/?\s*>/gi, " ")
+      .replace(/<\/(?:blockquote|div|h[1-6]|li|p)>/gi, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
 };
 
 const COUNTRY_CODES = [
@@ -1820,7 +2112,13 @@ function BuiltInInlineCellEditor({
         onClick={editOnDisplayClick ? () => setEditing(true) : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        title={editOnDisplayClick ? `Click to edit ${label}` : undefined}
+        title={
+          isEmpty
+            ? editOnDisplayClick
+              ? `Click to edit ${label}`
+              : undefined
+            : String(value)
+        }
         style={{
           ...inlineBuiltinCellStyle,
           cursor: editOnDisplayClick
@@ -2580,6 +2878,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  const usesGenericLeadTableLayout = isGeneric || isTravel;
   const [drillParams, setDrillParams] = useSearchParams();
   const focusedCallifiedLeadId = isGeneric
     ? Number(drillParams.get("callifiedLeadId"))
@@ -2587,7 +2886,22 @@ const Leads = ({ initialListState = null } = {}) => {
   const focusedLeadSearch = isGeneric
     ? String(drillParams.get("leadSearch") || "").trim()
     : "";
+  const leadsPaginationStorageKey = `${LEADS_PAGINATION_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const queryLeadsTableState = isTravel
+    ? readLeadsTableStateFromQuery(location.search)
+    : null;
+  const restoredLeadsTableState = (() => {
+    try {
+      return queryLeadsTableState
+        || location.state?.leadsTableState
+        || JSON.parse(window.sessionStorage.getItem(leadsPaginationStorageKey) || "null")?.tableState
+        || {};
+    } catch {
+      return queryLeadsTableState || location.state?.leadsTableState || {};
+    }
+  })();
   const [leadTableDensity, setLeadTableDensity] = useState(() => {
+    if (restoredLeadsTableState.leadTableDensity) return restoredLeadsTableState.leadTableDensity;
     if (!isGeneric || typeof window === "undefined") return "comfortable";
     try {
       return window.localStorage.getItem(LEADS_TABLE_DENSITY_STORAGE_KEY) ===
@@ -2604,9 +2918,8 @@ const Leads = ({ initialListState = null } = {}) => {
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
-  // The Generic CRM grid keeps horizontal movement at the bottom of the
-  // records. Other verticals retain their existing top scrollbar.
-  const showLeadsTopScrollbar = !isGeneric;
+  // Generic and Travel keep horizontal movement at the bottom of the records.
+  const showLeadsTopScrollbar = !usesGenericLeadTableLayout;
   // Assignment/deletion UI is driven by the effective Leads grants. Travel
   // non-admins can still use the separate owner-scoped assignment flow below.
   const isAdmin = auth?.user?.role === "ADMIN";
@@ -2736,6 +3049,8 @@ const Leads = ({ initialListState = null } = {}) => {
   }, [loadPlotAssignmentInventory]);
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
+  const [genericBulkActionsHost, setGenericBulkActionsHost] = useState(null);
+  const [travelActionsToolbarHost, setTravelActionsToolbarHost] = useState(null);
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -2743,13 +3058,12 @@ const Leads = ({ initialListState = null } = {}) => {
   const [services, setServices] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState(focusedLeadSearch);
+  const [searchTerm, setSearchTerm] = useState(restoredLeadsTableState.searchTerm ?? focusedLeadSearch);
   const leadRequestSequenceRef = useRef(0);
   const genericPhoneCountryUserChangedRef = useRef(false);
   const genericPhoneCountryDetectionRunRef = useRef(false);
   const fetchLeadsRef = useRef(null);
   const classifyVisibleLeadsRef = useRef(null);
-  const leadsPaginationStorageKey = `${LEADS_PAGINATION_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
   const storedLeadsListState = readLeadsPaginationState(
     leadsPaginationStorageKey,
   );
@@ -2779,7 +3093,7 @@ const Leads = ({ initialListState = null } = {}) => {
       ? restoredPageSize
       : 10;
   const [leadsPage, setLeadsPage] = useState(initialLeadsPage);
-  const [leadsPageSize, setLeadsPageSize] = useState(10);
+  const [leadsPageSize, setLeadsPageSize] = useState(initialPageSize);
   // Generic CRM uses API pagination; other verticals keep their existing
   // client-side pagination behavior.
   const [genericLeadsPageSize, setGenericLeadsPageSize] = useState(
@@ -2798,6 +3112,26 @@ const Leads = ({ initialListState = null } = {}) => {
   const genericQueryEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState(String(initialLeadsPage + 1));
   const [selectedLeads, setSelectedLeads] = useState([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [selectingAllPresent, setSelectingAllPresent] = useState(false);
+
+  // Keep router pagination authoritative when the list is remounted after a
+  // detail view. This also repairs a transient page-one state if another
+  // mount effect runs before the first page-2 request completes.
+  useEffect(() => {
+    if ((!isGeneric && !isTravel) || location.pathname !== "/leads") return;
+    const queryState = readLeadsPaginationStateFromQuery(location.search);
+    if (!queryState) return;
+    setLeadsPage((current) => (
+      current === queryState.pageIndex ? current : queryState.pageIndex
+    ));
+    const setPageSize = isGeneric
+      ? setGenericLeadsPageSize
+      : setLeadsPageSize;
+    setPageSize((current) => (
+      current === queryState.pageSize ? current : queryState.pageSize
+    ));
+  }, [isGeneric, isTravel, location.pathname, location.search]);
 
   // Keep the current Generic Leads page available even when the detail route
   // is opened without React Router location state (for example from a stale
@@ -2805,37 +3139,45 @@ const Leads = ({ initialListState = null } = {}) => {
   // source on the list route; session storage is the same-tab fallback used by
   // the Leads backdrop rendered inside ContactDetail.
   useEffect(() => {
-    if (!isGeneric) return;
+    if (!isGeneric && !isTravel) return;
     const pageIndex = Math.max(0, leadsPage);
     const pageSize = Math.min(
       MAX_LEADS_PAGE_SIZE,
-      Math.max(1, genericLeadsPageSize),
+      Math.max(1, isGeneric ? genericLeadsPageSize : leadsPageSize),
     );
     try {
+      const stored = JSON.parse(
+        window.sessionStorage.getItem(leadsPaginationStorageKey) || "null",
+      );
+      const storedReturnTo = typeof stored?.returnTo === "string"
+        && stored.returnTo.startsWith("/")
+        && !stored.returnTo.startsWith("//")
+        ? stored.returnTo
+        : null;
+      const returnTo = location.pathname === "/leads"
+        ? buildLeadsListPath(location.search, pageIndex, pageSize)
+        : storedReturnTo;
       window.sessionStorage.setItem(
         leadsPaginationStorageKey,
-        JSON.stringify({ pageIndex, pageSize }),
+        JSON.stringify({
+          pageIndex,
+          pageSize,
+          ...(returnTo ? { returnTo } : {}),
+          ...(stored?.tableState ? { tableState: stored.tableState } : {}),
+        }),
       );
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
-    if (location.pathname !== "/leads") return;
-    setDrillParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.set("page", String(pageIndex + 1));
-        next.set("limit", String(pageSize));
-        return next.toString() === previous.toString() ? previous : next;
-      },
-      { replace: true },
-    );
   }, [
     genericLeadsPageSize,
     isGeneric,
+    isTravel,
     leadsPage,
+    leadsPageSize,
     leadsPaginationStorageKey,
     location.pathname,
-    setDrillParams,
+    location.search,
   ]);
 
   useEffect(() => {
@@ -2878,6 +3220,18 @@ const Leads = ({ initialListState = null } = {}) => {
   const [bulkCampaignId, setBulkCampaignId] = useState("");
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!leadBulkActionsOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      const target = event.target;
+      if (target.closest?.('.lead-bulk-actions-control')) return;
+      if (target.closest?.('input[type="checkbox"]')) return;
+      setLeadBulkActionsOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [leadBulkActionsOpen]);
   // Wellness Callified calling — the AI / Manual chooser used by Appointments
   // and Patients. Distinct from the generic-vertical flow below, which has its
   // own dialog, auto-campaign rules and lead-status sync; the hook returns
@@ -2957,12 +3311,14 @@ const Leads = ({ initialListState = null } = {}) => {
   );
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
-  const [nameStartsWith, setNameStartsWith] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("");
+  const [nameStartsWith, setNameStartsWith] = useState(restoredLeadsTableState.nameStartsWith || "");
+  const [sourceFilter, setSourceFilter] = useState(restoredLeadsTableState.sourceFilter || "");
   const [subBrandFilter, setSubBrandFilter] = useState(
-    isTravel ? activeSubBrand || "" : "",
+    isTravel
+      ? restoredLeadsTableState.subBrandFilter ?? activeSubBrand ?? ""
+      : "",
   );
-  const [stageFilter, setStageFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState(restoredLeadsTableState.stageFilter || "");
 
   useEffect(() => {
     setSavedCreateLeadFieldPrefs(
@@ -2987,11 +3343,11 @@ const Leads = ({ initialListState = null } = {}) => {
   const [viewingPickupStatus, setViewingPickupStatus] = useState(null);
   const [savingPickupLocationId, setSavingPickupLocationId] = useState(null);
   // Generic CRM Callified filters
-  const [campaignFilter, setCampaignFilter] = useState("");
-  const [leadStatusFilter, setLeadStatusFilter] = useState("");
-  const [assigneeFilter, setAssigneeFilter] = useState("");
-  const [scoreMin, setScoreMin] = useState("");
-  const [scoreMax, setScoreMax] = useState("");
+  const [campaignFilter, setCampaignFilter] = useState(restoredLeadsTableState.campaignFilter || "");
+  const [leadStatusFilter, setLeadStatusFilter] = useState(restoredLeadsTableState.leadStatusFilter || "");
+  const [assigneeFilter, setAssigneeFilter] = useState(restoredLeadsTableState.assigneeFilter || "");
+  const [scoreMin, setScoreMin] = useState(restoredLeadsTableState.scoreMin || "");
+  const [scoreMax, setScoreMax] = useState(restoredLeadsTableState.scoreMax || "");
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
   // dynamic field-picker + operator + checkbox-values panel that also
   // surfaces admin-defined Lead custom fields (Settings > Lead Fields),
@@ -3003,7 +3359,8 @@ const Leads = ({ initialListState = null } = {}) => {
     ? String(drillParams.get("webForm") || "").trim()
     : "";
   const [advancedFilters, setAdvancedFilters] = useState(() => {
-    if (!isGeneric || typeof window === "undefined") return [];
+    if (!supportsLeadCustomFields || typeof window === "undefined") return [];
+    if (Array.isArray(restoredLeadsTableState.advancedFilters)) return restoredLeadsTableState.advancedFilters;
     try {
       const saved = JSON.parse(
         window.sessionStorage.getItem(leadFiltersStorageKey) || "[]",
@@ -3036,6 +3393,24 @@ const Leads = ({ initialListState = null } = {}) => {
 
   useEffect(() => {
     if (!isGeneric) return;
+    setAdvancedFilters((current) => {
+      let changed = false;
+      const next = current.map((filter) => {
+        const label = filter?.field === "lifecycleStageKey"
+          ? "Status"
+          : filter?.field === "status"
+            ? "CRM Status"
+            : filter?.label;
+        if (label === filter?.label) return filter;
+        changed = true;
+        return { ...filter, label };
+      });
+      return changed ? next : current;
+    });
+  }, [isGeneric]);
+
+  useEffect(() => {
+    if (!supportsLeadCustomFields) return;
     try {
       if (advancedFilters.length === 0) {
         window.sessionStorage.removeItem(leadFiltersStorageKey);
@@ -3048,7 +3423,7 @@ const Leads = ({ initialListState = null } = {}) => {
     } catch (_err) {
       // Session storage is an enhancement; filters still work on this mount.
     }
-  }, [advancedFilters, isGeneric, leadFiltersStorageKey]);
+  }, [advancedFilters, leadFiltersStorageKey, supportsLeadCustomFields]);
   // Sequential one-by-one call queue
   const [callQueue, setCallQueue] = useState([]);
   const [callQueueActive, setCallQueueActive] = useState(false);
@@ -3084,7 +3459,6 @@ const Leads = ({ initialListState = null } = {}) => {
   const [assignStaffLogic, setAssignStaffLogic] = useState("round_robin");
   const [assignStaffLeadsPerUser, setAssignStaffLeadsPerUser] = useState(1);
   const [assignSettingsLoading, setAssignSettingsLoading] = useState(false);
-  const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
   // TMC instalment paid totals keyed by parent contact email  supplements
@@ -3298,14 +3672,143 @@ const Leads = ({ initialListState = null } = {}) => {
   // (personal per-user preference  see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column" so the table never
   // flashes empty while the preference GET is in flight.
-  const [visibleColumns, setVisibleColumns] = useState(null);
+  const leadsColumnOrderStorageKey = `${LEADS_COLUMN_ORDER_STORAGE_PREFIX}.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`;
+  const [visibleColumns, setVisibleColumns] = useState(() =>
+    readLeadsColumnOrder(leadsColumnOrderStorageKey),
+  );
   const [leadColumnCatalog, setLeadColumnCatalog] = useState([]);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  // Table-header drag-to-reorder is temporarily disabled. Keep the saved
+  // visible-column order because the table still consumes preferences from
+  // Customize table, where column reordering remains available.
+  // const [draggedLeadColumnKey, setDraggedLeadColumnKey] = useState(null);
+  // const [dropLeadColumnKey, setDropLeadColumnKey] = useState(null);
+  const [sortConfig, setSortConfig] = useState(restoredLeadsTableState.sortConfig || { key: null, direction: null });
+  const applyingLeadsUrlStateRef = useRef(false);
+
+  // Query parameters are the canonical list state. Rehydrate these controls
+  // when browser Back/Forward changes the current /leads history entry.
+  useEffect(() => {
+    if (!isTravel || location.pathname !== "/leads") return;
+    const next = readLeadsTableStateFromQuery(location.search);
+    if (!next) return;
+    applyingLeadsUrlStateRef.current = true;
+    setSearchTerm(next.searchTerm);
+    setNameStartsWith(next.nameStartsWith);
+    setSourceFilter(next.sourceFilter);
+    if (isTravel) setSubBrandFilter(next.subBrandFilter);
+    setStageFilter(next.stageFilter);
+    setCampaignFilter(next.campaignFilter);
+    setLeadStatusFilter(next.leadStatusFilter);
+    setAssigneeFilter(next.assigneeFilter);
+    setScoreMin(next.scoreMin);
+    setScoreMax(next.scoreMax);
+    setAdvancedFilters((current) =>
+      JSON.stringify(current) === JSON.stringify(next.advancedFilters)
+        ? current
+        : next.advancedFilters,
+    );
+    setSortConfig((current) =>
+      current.key === next.sortConfig.key &&
+      current.direction === next.sortConfig.direction
+        ? current
+        : next.sortConfig,
+    );
+  }, [isTravel, location.pathname, location.search]);
+
+  // Keep pagination, rows-per-page, search, filters, and sorting together in
+  // one URL update. replace avoids a history entry for every search keystroke;
+  // explicit page navigation below uses push semantics.
+  useEffect(() => {
+    if (!isTravel || location.pathname !== "/leads") return;
+    if (applyingLeadsUrlStateRef.current) {
+      applyingLeadsUrlStateRef.current = false;
+      return;
+    }
+    setDrillParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.set("page", String(Math.max(0, leadsPage) + 1));
+        next.set(
+          "limit",
+          String(isGeneric ? genericLeadsPageSize : leadsPageSize),
+        );
+        setOptionalQueryParam(next, "q", searchTerm);
+        setOptionalQueryParam(next, "nameStartsWith", nameStartsWith);
+        setOptionalQueryParam(next, "source", sourceFilter);
+        setOptionalQueryParam(next, "subBrand", isTravel ? subBrandFilter : "");
+        setOptionalQueryParam(next, "stage", stageFilter);
+        setOptionalQueryParam(next, "campaign", campaignFilter);
+        setOptionalQueryParam(next, "leadStatus", leadStatusFilter);
+        setOptionalQueryParam(next, "assignee", assigneeFilter);
+        setOptionalQueryParam(next, "scoreMin", scoreMin);
+        setOptionalQueryParam(next, "scoreMax", scoreMax);
+        if (advancedFilters.length) {
+          next.set(
+            "filters",
+            JSON.stringify(
+              advancedFilters.map(({ field, operator, values }) => ({
+                field,
+                operator,
+                values,
+              })),
+            ),
+          );
+        } else {
+          next.delete("filters");
+        }
+        setOptionalQueryParam(next, "sortBy", sortConfig.key);
+        setOptionalQueryParam(next, "sortDirection", sortConfig.direction);
+        return next.toString() === previous.toString() ? previous : next;
+      },
+      { replace: true },
+    );
+  }, [
+    advancedFilters,
+    assigneeFilter,
+    campaignFilter,
+    genericLeadsPageSize,
+    isGeneric,
+    isTravel,
+    leadStatusFilter,
+    leadsPage,
+    leadsPageSize,
+    location.pathname,
+    nameStartsWith,
+    scoreMax,
+    scoreMin,
+    searchTerm,
+    setDrillParams,
+    sortConfig.direction,
+    sortConfig.key,
+    sourceFilter,
+    stageFilter,
+    subBrandFilter,
+  ]);
   const [headerMenuState, setHeaderMenuState] = useState(null);
   const [headerMenuSubmenu, setHeaderMenuSubmenu] = useState(null);
   const [headerMenuSearch, setHeaderMenuSearch] = useState("");
   const [headerFilterRequest, setHeaderFilterRequest] = useState(null);
   const [renameFieldState, setRenameFieldState] = useState(null);
+
+  // Keep the last known order available while pagination requests are in
+  // flight and if the Leads route is remounted for a different page. The
+  // server preference remains authoritative; this snapshot only prevents a
+  // transient/default layout from replacing the user's saved order.
+  useEffect(() => {
+    if (!supportsColumnCustomization || !Array.isArray(visibleColumns)) return;
+    try {
+      window.sessionStorage.setItem(
+        leadsColumnOrderStorageKey,
+        JSON.stringify(visibleColumns),
+      );
+    } catch {
+      // Storage can be unavailable in privacy-restricted browser contexts.
+    }
+  }, [
+    leadsColumnOrderStorageKey,
+    supportsColumnCustomization,
+    visibleColumns,
+  ]);
 
   // Drill-down entry from the Lead Reports cluster: a report row links here
   // with the filter it represents, e.g.
@@ -3396,13 +3899,15 @@ const Leads = ({ initialListState = null } = {}) => {
         Math.max(0, text.length - 1) * letterSpacing
       );
     };
-    const longest = { name: "Name", phone: "Phone" };
+    const longest = { name: "Name", phone: "Phone", email: "Email" };
     for (const lead of leads) {
       const name = String(lead?.name || "Unnamed lead");
       const phone = String(lead?.phone || "+ Add Phone");
+      const email = String(lead?.email || "+ Add Email");
       if (textWidth(name, 700) > textWidth(longest.name, 700))
         longest.name = name;
       if (textWidth(phone) > textWidth(longest.phone)) longest.phone = phone;
+      if (textWidth(email) > textWidth(longest.email)) longest.email = email;
     }
     const nameValueWidth =
       textWidth(longest.name, 700) +
@@ -3416,12 +3921,17 @@ const Leads = ({ initialListState = null } = {}) => {
     const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
     const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
+    const emailValueWidth = textWidth(longest.email) + 16 + 8 + 4 + 20;
+    const emailHeaderWidth = textWidth("Email", 500) + 16 + 28 + 8;
     return {
       name: Math.ceil(
         Math.max(LEADS_NAME_COLUMN_MIN_WIDTH, nameValueWidth, nameHeaderWidth),
       ),
       phone: Math.ceil(
         Math.max(LEADS_COLUMN_MIN_WIDTH, phoneValueWidth, phoneHeaderWidth),
+      ),
+      email: Math.ceil(
+        Math.max(LEADS_COLUMN_MIN_WIDTH, emailValueWidth, emailHeaderWidth),
       ),
     };
   }, [isGeneric, leads]);
@@ -3465,6 +3975,14 @@ const Leads = ({ initialListState = null } = {}) => {
         autoFitLeadColumnWidths[key],
         manuallySizedWidth,
         isGeneric ? getColumnDefaultWidth(key) : 0,
+      );
+    }
+    if (key === "email" && isGeneric) {
+      const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
+      return Math.max(
+        autoFitLeadColumnWidths.email,
+        manuallySizedWidth,
+        getColumnDefaultWidth(key),
       );
     }
     if (key === "actions") {
@@ -4670,9 +5188,6 @@ const Leads = ({ initialListState = null } = {}) => {
     });
     loadLeadTagCatalog();
     if (isTravel) {
-      fetchApi("/api/pipeline_stages", { silent: true })
-        .then((data) => setPipelineStages(Array.isArray(data) ? data : []))
-        .catch(() => setPipelineStages([]));
       fetchApi("/api/deals?limit=500", { silent: true })
         .then((data) => {
           const map = {};
@@ -4782,6 +5297,8 @@ const Leads = ({ initialListState = null } = {}) => {
     isGeneric,
     searchTerm,
     sourceFilter,
+    stageFilter,
+    subBrandFilter,
     campaignFilter,
     leadStatusFilter,
     assigneeFilter,
@@ -5813,6 +6330,7 @@ const Leads = ({ initialListState = null } = {}) => {
     if (!ok) return;
 
     setLeadBulkActionsOpen(false);
+    setBulkDeleting(true);
     try {
       const res = await fetchApi("/api/contacts/bulk-delete", {
         method: "DELETE",
@@ -5832,6 +6350,8 @@ const Leads = ({ initialListState = null } = {}) => {
       notify.error(
         err?.body?.error || err?.message || "Failed to delete leads",
       );
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -6246,13 +6766,66 @@ const Leads = ({ initialListState = null } = {}) => {
     });
   };
 
+  const selectLeadIds = (ids) => {
+    setSelectedLeads((previous) => Array.from(new Set([...previous, ...ids])));
+  };
+
+  const selectCurrentPageLeads = () => {
+    selectLeadIds(paginatedLeads.map((lead) => lead.id));
+  };
+
+  const selectAllPresentLeads = async () => {
+    if (!isGeneric) {
+      selectLeadIds(filteredLeads.map((lead) => lead.id));
+      return;
+    }
+    setSelectingAllPresent(true);
+    try {
+      const query = new URLSearchParams({ status: "Lead", page: "1", limit: "500", includeCrmStatuses: "true" });
+      if (searchTerm.trim()) {
+        query.set("q", searchTerm.trim());
+        const matchingCampaignIds = callifiedCampaigns
+          .filter((campaign) => String(campaign?.name || "").toLowerCase().includes(searchTerm.trim().toLowerCase()))
+          .map((campaign) => Number(campaign.id))
+          .filter((campaignId) => Number.isInteger(campaignId) && campaignId > 0)
+          .slice(0, 100);
+        if (matchingCampaignIds.length) query.set("callifiedCampaignIds", matchingCampaignIds.join(","));
+      }
+      if (nameStartsWith) query.set("nameStartsWith", nameStartsWith);
+      if (sourceFilter) query.set("leadSource", sourceFilter);
+      if (campaignFilter) query.set("callifiedCampaignId", campaignFilter);
+      if (leadStatusFilter) query.set("callifiedLeadStatus", leadStatusFilter);
+      if (assigneeFilter === "unassigned") query.set("unassigned", "true");
+      else if (assigneeFilter) query.set("assignedToId", assigneeFilter);
+      if (scoreMin !== "") query.set("scoreMin", scoreMin);
+      if (scoreMax !== "") query.set("scoreMax", scoreMax);
+      if (sortConfig.key && GENERIC_LEAD_SERVER_SORT_KEYS.has(sortConfig.key) && sortConfig.direction) {
+        query.set("sortBy", sortConfig.key);
+        query.set("sortDirection", sortConfig.direction);
+      }
+      if (advancedFilters.length > 0) {
+        query.set("filters", JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
+      }
+
+      const ids = [];
+      const totalPages = Math.max(1, Number(leadPagination.totalPages) || Math.ceil((Number(leadPagination.total) || 0) / 500));
+      for (let page = 1; page <= totalPages; page += 1) {
+        query.set("page", String(page));
+        const data = await fetchApi(`/api/contacts?${query.toString()}`, { silent: true });
+        const rows = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+        ids.push(...rows.map((lead) => lead.id).filter((id) => id !== undefined && id !== null));
+        if (rows.length < 500) break;
+      }
+      selectLeadIds(ids);
+    } finally {
+      setSelectingAllPresent(false);
+    }
+  };
+
   const handleLeadBulkActionsToggle = () => {
     if (leadBulkActionsOpen) {
       setLeadBulkActionsOpen(false);
       return;
-    }
-    if (selectedLeads.length === 0) {
-      setSelectedLeads(filteredLeads.map((lead) => lead.id));
     }
     setLeadBulkActionsOpen(true);
   };
@@ -6300,14 +6873,6 @@ const Leads = ({ initialListState = null } = {}) => {
     );
   };
 
-  const travelSubBrandOptions = SUB_BRAND_IDS.map((id) => ({
-    value: id,
-    label: subBrandShortLabel(id),
-  }));
-  const travelStageOptions = pipelineStages.map((stage) => ({
-    value: String(stage.id ?? stage.name ?? stage.title),
-    label: stage.title || stage.name || `Stage ${stage.id}`,
-  }));
   const leadMatchesStage = (lead) => {
     if (!stageFilter) return true;
     const deals = dealsByContact[lead.id] || [];
@@ -6338,10 +6903,16 @@ const Leads = ({ initialListState = null } = {}) => {
           ...LEADS_DEFAULT_VISIBLE_COLUMNS,
           ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
         ];
+    const travelTaxonomyColumns = isTravel
+      ? customFieldDefs
+          .filter((field) => TRAVEL_TAXONOMY_FIELD_KEYS.has(field.fieldKey))
+          .map((field) => `cf_${field.fieldKey}`)
+      : [];
+    const next = isTravel ? [...new Set([...preferred, ...travelTaxonomyColumns])] : preferred;
     return isGeneric
-      ? preferred.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
-      : preferred;
-  }, [customFieldDefs, isGeneric, visibleColumns]);
+      ? next.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+      : next;
+  }, [customFieldDefs, isGeneric, isTravel, visibleColumns]);
   const leadFilterFieldCatalog = useMemo(() => {
     const wellnessTableColumns = [
       { key: "name", label: "Name" },
@@ -6383,16 +6954,26 @@ const Leads = ({ initialListState = null } = {}) => {
       const columnKey = catalogColumn.key;
       const filterFieldAlias = columnToFilterFieldAlias[columnKey];
       const customField = customFieldByKey.get(columnKey);
-      const filterFieldKey =
+      const rawFilterFieldKey =
         catalogColumn?.filterField ||
         (customField?.id
           ? `custom_${customField.id}`
           : filterFieldAlias || columnKey);
+      const filterFieldKey = isGeneric && rawFilterFieldKey === "lifecycleStageKey"
+        ? "status"
+        : rawFilterFieldKey;
       fieldsByKey.set(filterFieldKey, {
         field: filterFieldKey,
-        label: catalogColumn?.label || customField?.label || null,
+        label:
+          isGeneric && rawFilterFieldKey === "lifecycleStageKey"
+            ? "Status"
+            : isGeneric && filterFieldKey === "status"
+              ? "Status"
+              : catalogColumn?.label || customField?.label || null,
         kind:
-          catalogColumn?.filterKind ||
+          isGeneric && filterFieldKey === "status"
+            ? "enum"
+            : catalogColumn?.filterKind ||
           (customField
             ? customField.fieldType === "date"
               ? "date"
@@ -6404,9 +6985,17 @@ const Leads = ({ initialListState = null } = {}) => {
             : null),
       });
     }
+    if (isTravel) {
+      fieldsByKey.set("subBrand", {
+        field: "subBrand",
+        label: "Sub-brand",
+        kind: "text",
+      });
+    }
     return [...fieldsByKey.values()];
   }, [
     customFieldByKey,
+    isGeneric,
     isTravel,
     isWellness,
     leadColumnCatalog,
@@ -6535,16 +7124,16 @@ const Leads = ({ initialListState = null } = {}) => {
     .map((key) => {
       if (key === "email") return { key, label: "Email" };
       if (key === "company")
-        return { key, label: isTravel ? "Category" : "Company" };
+        return { key, label: isTravel ? "School Name" : "Company" };
       if (key === "phone") return { key, label: "Phone" };
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
-      if (key === "lifecycleStage") return { key, label: "Lifecycle Stage" };
+      if (key === "lifecycleStage") return { key, label: isGeneric ? "Status" : "Lifecycle Stage" };
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
-      if (key === "tags") return { key, label: "Tags" };
+      if (key === "tags") return { key, label: isTravel ? "Travel Tags" : "Tags" };
       if (key === "assignedTo") return { key, label: "Assigned To" };
       if (key === "createdAt") return { key, label: "Created" };
       if (key === "status") return { key, label: "Status" };
@@ -6694,7 +7283,7 @@ const Leads = ({ initialListState = null } = {}) => {
       case "company":
         return {
           fieldKey: "company",
-          label: isTravel ? "Category" : "Company",
+          label: isTravel ? "School Name" : "Company",
           kind: "text",
         };
       case "phone":
@@ -6709,8 +7298,8 @@ const Leads = ({ initialListState = null } = {}) => {
         return { fieldKey: "source", label: "Source", kind: "text" };
       case "lifecycleStage":
         return {
-          fieldKey: "lifecycleStageKey",
-          label: "Lifecycle Stage",
+          fieldKey: isGeneric ? "status" : "lifecycleStageKey",
+          label: isGeneric ? "Status" : "Lifecycle Stage",
           kind: "enum",
         };
       case "medium":
@@ -6732,7 +7321,7 @@ const Leads = ({ initialListState = null } = {}) => {
           kind: "text",
         };
       case "tags":
-        return { fieldKey: "tags", label: "Tags", kind: "text" };
+        return { fieldKey: "tags", label: isTravel ? "Travel Tags" : "Tags", kind: "text" };
       case "aiScore":
         return { fieldKey: "aiScore", label: "Lead Score", kind: "number" };
       case "assignedTo":
@@ -6875,6 +7464,97 @@ const Leads = ({ initialListState = null } = {}) => {
     },
     [supportsColumnCustomization, resolveAllowedVisibleColumns],
   );
+  /* Temporarily disabled: table headers no longer reorder columns by drag.
+  const reorderLeadColumnsFromHeader = useCallback(
+    async (fromKey, toKey) => {
+      if (
+        !supportsColumnCustomization ||
+        !fromKey ||
+        fromKey === "name" ||
+        fromKey === "actions" ||
+        fromKey === toKey
+      ) {
+        return;
+      }
+      const current = Array.isArray(visibleColumns)
+        ? [...visibleColumns]
+        : [
+            ...preferredVisibleColumns,
+            ...(preferredVisibleColumns.includes("actions") ? [] : ["actions"]),
+          ];
+      const fromIndex = current.indexOf(fromKey);
+      if (fromIndex < 0) return;
+
+      const next = [...current];
+      const [moved] = next.splice(fromIndex, 1);
+      if (toKey === "name") {
+        next.splice(Math.min(1, next.length), 0, moved);
+      } else if (toKey === "actions") {
+        const actionsIndex = next.indexOf("actions");
+        next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
+      } else {
+        const targetIndex = next.indexOf(toKey);
+        if (targetIndex < 0) return;
+        next.splice(targetIndex, 0, moved);
+      }
+
+      try {
+        await persistVisibleColumns(next);
+      } catch (err) {
+        notify.error(err?.message || "Failed to update column order");
+      }
+    },
+    [
+      notify,
+      persistVisibleColumns,
+      preferredVisibleColumns,
+      supportsColumnCustomization,
+      visibleColumns,
+    ],
+  );
+  const handleLeadHeaderDragStart = (key) => (event) => {
+    if (
+      !supportsColumnCustomization ||
+      key === "name" ||
+      key === "actions" ||
+      event.target.closest?.("button, input, select, a, [role=separator]")
+    ) {
+      event.preventDefault();
+      return;
+    }
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      try {
+        event.dataTransfer.setData("text/plain", key);
+      } catch (_err) {
+        // React state remains the source of truth for browsers/jsdom that
+        // reject setting a custom drag payload.
+      }
+    }
+    setDraggedLeadColumnKey(key);
+    setDropLeadColumnKey(key);
+  };
+  const handleLeadHeaderDragOver = (key) => (event) => {
+    if (!draggedLeadColumnKey || key === draggedLeadColumnKey) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    setDropLeadColumnKey(key);
+  };
+  const handleLeadHeaderDrop = (key) => async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const fromKey = draggedLeadColumnKey;
+    setDraggedLeadColumnKey(null);
+    setDropLeadColumnKey(null);
+    if (fromKey && fromKey !== key) {
+      await reorderLeadColumnsFromHeader(fromKey, key);
+    }
+  };
+  const handleLeadHeaderDragEnd = () => {
+    setDraggedLeadColumnKey(null);
+    setDropLeadColumnKey(null);
+  };
+  */
   const collapseColumn = (columnKey) => {
     setColumnLayout((prev) => ({
       ...prev,
@@ -7085,16 +7765,29 @@ const Leads = ({ initialListState = null } = {}) => {
       </button>
     );
   };
+  // The picker and table both consume this single ordered definition. Older
+  // code rendered user, workflow, and Callified columns in separate blocks;
+  // that made a valid saved order appear differently in the table.
+  const tableColumnCandidates = [
+    ...leadUserColumnDefs,
+    ...leadFixedExtraColumnDefs,
+  ];
+  const uniqueTableColumnCandidates = [
+    ...new Map(
+      tableColumnCandidates.map((column) => [column.key, column]),
+    ).values(),
+  ];
+  const preferredColumnOrder = new Map(
+    preferredVisibleColumns.map((key, index) => [key, index]),
+  );
+  const legacyLeadCellsEnabled = false;
   const genericWorkflowColumnDefs = leadFixedExtraColumnDefs.filter(
     (column) => !CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
   );
   const genericCallifiedColumnDefs = leadFixedExtraColumnDefs.filter((column) =>
     CALLIFIED_LEAD_COLUMN_KEYS.has(column.key),
   );
-  // Keep this definition order identical to the Generic header/body render
-  // order below. The fixed-layout table applies <col> widths by position, so
-  // using the unsplit leadUserColumnDefs order here makes every column after
-  // Email resize a different column when Callified fields are interleaved.
+  // Generic's definition order must match its header/body render order.
   const tableColumnDefs = isGeneric
     ? [
         { key: "name", label: "Name" },
@@ -7106,16 +7799,25 @@ const Leads = ({ initialListState = null } = {}) => {
       ]
     : [
         { key: "name", label: "Name" },
-        ...leadUserColumnDefs,
-        ...leadFixedExtraColumnDefs,
+    ...uniqueTableColumnCandidates
+      .filter((column) => column.key !== "name" && column.key !== "actions")
+      .sort((left, right) => {
+        const leftIndex = preferredColumnOrder.has(left.key)
+          ? preferredColumnOrder.get(left.key)
+          : Number.MAX_SAFE_INTEGER;
+        const rightIndex = preferredColumnOrder.has(right.key)
+          ? preferredColumnOrder.get(right.key)
+          : Number.MAX_SAFE_INTEGER;
+        return leftIndex - rightIndex;
+      }),
         { key: "actions", label: "Actions", locked: true },
       ];
-  // Generic CRM keeps the complete lead name visible while the remaining
-  // columns move horizontally. Other verticals retain their existing table.
-  const leadsFrozenColumnDefs = isGeneric
+  // Generic and Travel keep the complete lead name visible while the
+  // remaining columns move horizontally.
+  const leadsFrozenColumnDefs = usesGenericLeadTableLayout
     ? tableColumnDefs.filter((column) => column.key === "name")
     : [];
-  const leadsScrollableColumnDefs = isGeneric
+  const leadsScrollableColumnDefs = usesGenericLeadTableLayout
     ? tableColumnDefs.filter((column) => column.key !== "name")
     : tableColumnDefs;
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
@@ -7139,7 +7841,7 @@ const Leads = ({ initialListState = null } = {}) => {
     leadsScrollableTableBaseWidth,
   )}px`;
   const savedGenericNameWidth = Number(columnLayout.widths?.name);
-  const leadsFrozenTableWidthCss = isGeneric
+  const leadsFrozenTableWidthCss = usesGenericLeadTableLayout
     ? columnLayout.genericNameWidthUserSet &&
       Number.isFinite(savedGenericNameWidth) &&
       savedGenericNameWidth > 0
@@ -7147,7 +7849,7 @@ const Leads = ({ initialListState = null } = {}) => {
       : "clamp(320px, 22%, 380px)"
     : `${leadsFrozenTableWidth}px`;
   const leadsTableClassName = isTravel
-    ? "leads-table leads-table--fit"
+    ? "leads-table leads-table--compact leads-table--travel-generic"
     : isGeneric
       ? "leads-table leads-table--compact"
       : "leads-table";
@@ -7155,7 +7857,9 @@ const Leads = ({ initialListState = null } = {}) => {
     (column) => column.key === "phone",
   );
   const phoneColumnIndex =
-    phoneColumnOffset < 0 ? -1 : phoneColumnOffset + (isGeneric ? 0 : 1);
+    phoneColumnOffset < 0
+      ? -1
+      : phoneColumnOffset + (usesGenericLeadTableLayout ? 0 : 1);
   useLayoutEffect(() => {
     const table = leadsScrollableTableRef.current;
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
@@ -7321,12 +8025,13 @@ const Leads = ({ initialListState = null } = {}) => {
 
   const leadDetailPathWithListState = (lead) => {
     const path = leadDetailPath(lead);
-    if (!isGeneric) return path;
-    const params = new URLSearchParams({
-      page: String(Math.max(1, leadsPage + 1)),
-      limit: String(currentLeadsPageSize),
-    });
-    return `${path}?${params.toString()}`;
+    if (!isGeneric && !isTravel) return path;
+    const query = isTravel
+      ? new URLSearchParams(location.search)
+      : new URLSearchParams();
+    query.set("page", String(Math.max(1, leadsPage + 1)));
+    query.set("limit", String(currentLeadsPageSize));
+    return `${path}?${query.toString()}`;
   };
 
   const leadTagOptions = Array.from(
@@ -7692,6 +8397,10 @@ const Leads = ({ initialListState = null } = {}) => {
       ? "custom"
       : String(currentLeadsPageSize);
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
+  useEffect(() => {
+    if (!isTravel || loading || leadsPage === currentLeadsPage) return;
+    setLeadsPage(currentLeadsPage);
+  }, [currentLeadsPage, isTravel, leadsPage, loading]);
   const pageStart =
     sortedLeads.length === 0
       ? 0
@@ -7711,6 +8420,23 @@ const Leads = ({ initialListState = null } = {}) => {
         currentLeadsPage * leadsPageSize,
         currentLeadsPage * leadsPageSize + leadsPageSize,
       );
+  const leadsTableState = {
+    searchTerm,
+    nameStartsWith,
+    sourceFilter,
+    subBrandFilter,
+    stageFilter,
+    campaignFilter,
+    leadStatusFilter,
+    assigneeFilter,
+    scoreMin,
+    scoreMax,
+    advancedFilters,
+    sortConfig,
+    leadTableDensity,
+    pageIndex: isGeneric ? leadsPage : currentLeadsPage,
+    pageSize: currentLeadsPageSize,
+  };
   const leadListNavigationState = {
     ...(location.state && typeof location.state === "object"
       ? location.state
@@ -7727,19 +8453,25 @@ const Leads = ({ initialListState = null } = {}) => {
       pageIndex: isGeneric ? leadsPage : currentLeadsPage,
       pageSize: currentLeadsPageSize,
     },
+    leadsTableState,
   };
   const rememberLeadListState = () => {
-    if (!isGeneric || typeof window === "undefined") return;
+    if ((!isGeneric && !isTravel) || typeof window === "undefined") return;
     try {
       window.sessionStorage.setItem(
         leadsPaginationStorageKey,
-        JSON.stringify(leadListNavigationState.leadsListState),
+        JSON.stringify({
+          ...leadListNavigationState.leadsListState,
+          returnTo: leadListNavigationState.returnTo,
+          tableState: leadsTableState,
+        }),
       );
     } catch {
       // The URL and router state remain the primary handoff when storage is unavailable.
     }
   };
   const openLeadDetail = (lead) => {
+    rememberLeadListState();
     navigate(leadDetailPathWithListState(lead), {
       state: leadListNavigationState,
     });
@@ -7868,15 +8600,34 @@ const Leads = ({ initialListState = null } = {}) => {
     syncGenericHeaderHeight,
   ]);
 
+  const changeLeadsPage = (nextPageIndex) => {
+    const clampedIndex = Math.max(
+      0,
+      Math.min(Number(nextPageIndex) || 0, leadsPageCount - 1),
+    );
+    if (isTravel) {
+      setDrillParams(
+        (previous) => {
+          const next = new URLSearchParams(previous);
+          next.set("page", String(clampedIndex + 1));
+          next.set("limit", String(currentLeadsPageSize));
+          return next;
+        },
+        { replace: false },
+      );
+    }
+    setLeadsPage(clampedIndex);
+  };
+
   const goToLeadsPage = () => {
     const nextPage = Number(pageInput);
     if (!Number.isFinite(nextPage) || nextPage < 1) {
-      setLeadsPage(0);
+      changeLeadsPage(0);
       setPageInput("1");
       return;
     }
     const clampedPage = Math.min(nextPage, leadsPageCount);
-    setLeadsPage(clampedPage - 1);
+    changeLeadsPage(clampedPage - 1);
     setPageInput(String(clampedPage));
   };
 
@@ -8124,10 +8875,13 @@ const Leads = ({ initialListState = null } = {}) => {
   ) => {
     const locked = key === "select" || key === "actions";
     const { key: headerKey, ...restCellProps } = cellProps;
+    // Header drag-to-reorder is disabled here; saved order still comes from
+    // Customize table and resizing/menu interactions remain active.
     return (
       <th
         key={headerKey}
         {...restCellProps}
+        data-column-header={key}
         style={getHeaderCellStyle(key, extra)}
         aria-label={`${label} column`}
       >
@@ -8233,6 +8987,62 @@ const Leads = ({ initialListState = null } = {}) => {
           }
         : {},
       renderHeaderMenuTrigger(column),
+    );
+  };
+  const renderLeadColumnHeaderCell = (column) => {
+    if (!column || (isGeneric && column.key === "name")) return null;
+    if (column.key === "name") {
+      return renderColumnHeaderCell(
+        "name",
+        "Name",
+        { paddingRight: "2rem" },
+        {},
+        renderHeaderMenuTrigger({ key: "name", label: "Name" }),
+        canLeadBulkActions ? (
+          <input
+            type="checkbox"
+            checked={allVisibleLeadsSelected}
+            ref={(input) => {
+              if (input) input.indeterminate = someVisibleLeadsSelected;
+            }}
+            onChange={toggleSelectAll}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Select all leads"
+            style={LEAD_CHECKBOX_STYLE}
+          />
+        ) : null,
+      );
+    }
+    if (column.key === "actions") {
+      return renderColumnHeaderCell("actions", "Actions", {
+        padding: "1rem 0.5rem",
+        whiteSpace: "nowrap",
+      });
+    }
+    if (leadUserColumnDefs.some((item) => item.key === column.key)) {
+      return renderLeadUserHeaderCell(column);
+    }
+    const genericSpacing = {
+      interestedPlotArea: { paddingRight: "1rem" },
+      pickupLocation: { paddingRight: "1.5rem" },
+      plotAssign: { paddingRight: "1rem" },
+      overallPickupStatus: { paddingRight: "1rem", paddingLeft: "1.5rem" },
+    };
+    const isWorkflowColumn = [
+      "interestedPlotArea",
+      "pickupLocation",
+      "plotAssign",
+      "overallPickupStatus",
+    ].includes(column.key);
+    return renderColumnHeaderCell(
+      column.key,
+      column.label,
+      {
+        paddingRight: "2rem",
+        ...(isGeneric ? genericSpacing[column.key] || {} : {}),
+      },
+      { key: column.key },
+      isWorkflowColumn ? null : renderHeaderMenuTrigger(column),
     );
   };
   const renderLeadUserBodyCell = (lead, column) => {
@@ -8342,13 +9152,20 @@ const Leads = ({ initialListState = null } = {}) => {
           label: "Email",
           value: lead.email,
           type: "email",
-          extraStyle: { color: "var(--text-secondary)" },
+          disableTruncation: isGeneric,
+          extraStyle: isGeneric
+            ? {
+                color: "var(--text-secondary)",
+                overflow: "visible",
+                whiteSpace: "nowrap",
+              }
+            : { color: "var(--text-secondary)" },
         });
       case "company":
         return renderBuiltInLeadCell({
           lead,
           field: "company",
-          label: isTravel ? "Category" : "Company",
+          label: isTravel ? "School Name" : "Company",
           value: lead.company,
           extraStyle: { color: "var(--text-secondary)" },
         });
@@ -8487,6 +9304,7 @@ const Leads = ({ initialListState = null } = {}) => {
               onSave={updateLeadInlineValue}
               onDeleteTag={handleDeleteLeadTag}
               canEdit={canLeadUpdate}
+              labelForTag={isTravel ? travelTagLabel : undefined}
             />
           </td>
         );
@@ -8574,15 +9392,14 @@ const Leads = ({ initialListState = null } = {}) => {
         return renderBuiltInLeadCell({
           lead,
           field: "status",
-          label: "Lifecycle Stage",
-          // Generic CRM keeps lifecycle stage independent from CRM Status.
-          // Existing rows without an explicit lifecycle stage stay at the
-          // pipeline's initial Lead stage instead of mirroring lead.status.
-          value:
-            configuredStage?.label ||
-            (isGeneric ? "Lead" : lead.status || "Lead"),
+          label: isGeneric ? "Status" : "Lifecycle Stage",
+          // Generic CRM Status is the backend Contact.status field. It is
+          // intentionally independent from lifecycleStageKey.
+          value: isGeneric
+            ? (GENERIC_STATUS_DISPLAY_MAP[lead.status] || lead.status || "New")
+            : (configuredStage?.label || lead.status || "Lead"),
           type: "select",
-          options: lifecycleOptions.map((option) => option.label),
+          options: isGeneric ? GENERIC_BACKEND_STATUS_OPTIONS : lifecycleOptions.map((option) => option.label),
           renderValue: (displayValue) => (
             <span style={sourceBadgeStyle}>{displayValue || ""}</span>
           ),
@@ -8590,30 +9407,20 @@ const Leads = ({ initialListState = null } = {}) => {
             const option = lifecycleOptions.find(
               (item) => item.label === selectedLabel,
             );
-            if (!option) return;
-            let lifecycleTransitionReason = "";
-            if (isGeneric && option.negative) {
-              const reason = await notify.prompt({
-                title: "Reason required",
-                message: `Tell us why ${option.label} was selected.`,
-                placeholder: "Enter the reason for this negative stage",
-                confirmText: "Confirm stage",
+            if (!isGeneric && !option) return;
+            if (isGeneric) {
+              const updated = await fetchApi(`/api/contacts/${row.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ status: selectedLabel }),
               });
-              lifecycleTransitionReason = String(reason || "").trim();
-              if (!lifecycleTransitionReason) return false;
+              setLeads((current) =>
+                current.map((item) => item.id === row.id ? { ...item, ...updated } : item),
+              );
+              return;
             }
             const updated = await fetchApi(`/api/contacts/${row.id}`, {
               method: "PATCH",
-              body: JSON.stringify(
-                isGeneric && genericLifecycleOptions.length
-                  ? {
-                      lifecycleStageKey: option.id,
-                      ...(lifecycleTransitionReason
-                        ? { lifecycleTransitionReason }
-                        : {}),
-                    }
-                  : { status: option.status },
-              ),
+              body: JSON.stringify({ status: option.status }),
             });
             setLeads((current) =>
               current.map((item) =>
@@ -8870,14 +9677,22 @@ const Leads = ({ initialListState = null } = {}) => {
           column.key === "description"
             ? noteActivity?.description || lead.description
             : lead[column.key];
+        const plainDisplayValue =
+          column.key === "description"
+            ? plainTextLeadNote(displayValue)
+            : displayValue;
         return renderBuiltInLeadCell({
           lead,
           field: column.key,
           label: scalarLabels[column.key] || column.label,
-          value: displayValue,
+          value: plainDisplayValue,
           extraStyle: { color: "var(--text-secondary)" },
           renderValue: (displayValue) =>
-            displayValue ? String(displayValue) : "",
+            column.key === "description"
+              ? plainTextLeadNote(displayValue)
+              : displayValue
+                ? String(displayValue)
+                : "",
         });
       }
       case "birthDate":
@@ -8915,6 +9730,279 @@ const Leads = ({ initialListState = null } = {}) => {
         return null;
     }
   };
+  const renderLeadNameBodyCell = (lead) => (
+    <td
+      style={getBodyCellStyle("name", { fontWeight: "500" })}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          minWidth: 0,
+        }}
+      >
+        {canLeadBulkActions && (
+          <input
+            type="checkbox"
+            checked={selectedLeads.includes(lead.id)}
+            onChange={() => toggleSelect(lead.id)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select ${lead.name || "lead"}`}
+            style={LEAD_CHECKBOX_STYLE}
+          />
+        )}
+        <span className="generic-lead-avatar" aria-hidden="true">
+          {String(lead.name || "?").trim().charAt(0).toUpperCase() || "?"}
+        </span>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <BuiltInInlineCellEditor
+            lead={lead}
+            field="name"
+            label="Name"
+            value={lead.name}
+            onSave={updateLeadInlineValue}
+            required
+            editOnDisplayClick={false}
+            showEditButton={canLeadUpdate}
+            disableTruncation
+            renderValue={(name) =>
+              isTravel ? (
+                <a
+                  href="#lead-preview"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setPreviewLead(lead);
+                  }}
+                  title={`Preview ${lead.name || "lead"}`}
+                  style={{
+                    minWidth: 0,
+                    overflow: "visible",
+                    textOverflow: "clip",
+                    whiteSpace: "nowrap",
+                    color: "var(--accent-color)",
+                    fontWeight: 700,
+                    textDecoration: "none",
+                  }}
+                >
+                  {name || "Unnamed lead"}
+                </a>
+              ) : (
+                <Link
+                  to={leadDetailPathWithListState(lead)}
+                  state={leadListNavigationState}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    rememberLeadListState();
+                  }}
+                  title={`Open profile for ${name || "lead"}`}
+                  style={{
+                    minWidth: 0,
+                    overflow: "visible",
+                    textOverflow: "clip",
+                    whiteSpace: "nowrap",
+                    color: "var(--accent-color)",
+                    fontWeight: 700,
+                    textDecoration: "none",
+                  }}
+                >
+                  {name || "Unnamed lead"}
+                </Link>
+              )
+            }
+          />
+        </div>
+      </div>
+    </td>
+  );
+  const renderLeadWorkflowBodyCell = (lead, key) => {
+    if (!isGeneric) return null;
+    const pickupStatus = pickupPlotStatusByContact.get(Number(lead.id));
+    const overallStatus = pickupStatus
+      ? `${PICKUP_STAGE_LABELS[pickupStatus.currentStage] || "Transport"}: ${formatPickupStatus(pickupStatus.currentStatus || pickupStatus.status)}`
+      : "Not started";
+    const pickupAddress = pickupStatus?.pickupAddress?.trim();
+    const selectedPickupLocation = pickupLocationOptions.find(
+      (location) => String(location.address || "").trim() === pickupAddress,
+    );
+    const currentPickupOption =
+      pickupAddress && !selectedPickupLocation
+        ? { id: `current-${lead.id}`, name: "Current pickup", address: pickupAddress }
+        : null;
+    const plotAssignmentCustomer = getPlotAssignmentCustomer(lead.id);
+    const assignedPlots = getAssignedPlotsForLead(lead, pickupStatus);
+    const transportWorkflowLocked = isTransportWorkflowLocked(pickupStatus);
+    if (key === "interestedPlotArea") {
+      return (
+        <td
+          className="generic-interested-plot-cell"
+          style={getBodyCellStyle(key, { whiteSpace: "normal", overflowWrap: "anywhere" })}
+          title={lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || undefined}
+        >
+          {lead.interestedPlotArea || pickupStatus?.contact?.interestedPlotArea || "Not captured"}
+        </td>
+      );
+    }
+    if (key === "pickupLocation") {
+      return (
+        <td
+          className="generic-pickup-location-cell"
+          style={getBodyCellStyle(key, { whiteSpace: "normal", overflowWrap: "anywhere", paddingRight: "1.5rem" })}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div
+            data-testid="generic-lead-pickup-location-content"
+            style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, margin: ".25rem .5rem .25rem 0", padding: ".35rem .5rem", boxSizing: "border-box" }}
+          >
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+              <PickupLocationSelect
+                compact
+                ariaLabel={`Pickup location for ${lead.name || "lead"}`}
+                value={selectedPickupLocation?.id || currentPickupOption?.id || ""}
+                disabled={pickupLocationOptions.length === 0 || savingPickupLocationId === Number(lead.id) || transportWorkflowLocked}
+                onChange={(locationId) => saveLeadPickupLocation(lead, pickupStatus, locationId)}
+                options={currentPickupOption ? [currentPickupOption, ...pickupLocationOptions] : pickupLocationOptions}
+              />
+            </div>
+            {pickupAddress && (
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pickupAddress)}`}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open pickup location for ${lead.name || "lead"} in Google Maps`}
+                title="Open pickup location in Google Maps"
+                style={{ ...actionIconBtn, display: "grid", placeItems: "center", flex: "0 0 auto", color: "var(--primary-color, var(--accent-color))" }}
+              >
+                <MapPin size={15} aria-hidden="true" style={{ flex: "0 0 auto" }} />
+              </a>
+            )}
+          </div>
+        </td>
+      );
+    }
+    if (key === "plotAssign") {
+      return (
+        <td className="generic-plot-assign-cell" style={getBodyCellStyle(key, { whiteSpace: "normal", overflow: "visible" })} onClick={(event) => event.stopPropagation()}>
+          <div>
+            {isAdmin && assignedPlots.length > 0 && (
+              <button type="button" className="btn-secondary" aria-label={`View plots for ${lead.name || "lead"}`} onClick={() => setViewingLeadPlots({ lead, plots: assignedPlots, customer: plotAssignmentCustomer, pickupStatus, selectedPlot: null })} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, width: "fit-content", padding: ".35rem .55rem", fontSize: ".72rem" }}>
+                <Eye size={13} /> View plot
+              </button>
+            )}
+            {isAdmin && assignedPlots.length === 0 && (
+              <button type="button" className="btn-secondary" aria-label={`Assign plot to ${lead.name || "lead"}`} title={transportWorkflowLocked ? "Plot assignments are locked because transport has started" : "Assign plots"} onClick={() => openLeadPlotAssignment(lead)} disabled={transportWorkflowLocked} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, width: "fit-content", padding: ".35rem .55rem", fontSize: ".72rem" }}>
+                <Plus size={13} /> Assign plot
+              </button>
+            )}
+          </div>
+        </td>
+      );
+    }
+    if (key === "overallPickupStatus") {
+      return (
+        <td className="generic-overall-status-cell" style={getBodyCellStyle(key, { whiteSpace: "normal", overflow: "visible", paddingLeft: "1.5rem" })} onClick={(event) => event.stopPropagation()}>
+          <div className="generic-overall-status-content">
+            <strong>{overallStatus}</strong>
+            {pickupStatus && (
+              <button type="button" className="btn-secondary generic-overall-status-action" aria-label={`View all status for ${lead.name || "lead"}`} onClick={() => setViewingPickupStatus(pickupStatus)} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: ".32rem .5rem", fontSize: ".7rem" }}>
+                <Eye size={13} /> View status
+              </button>
+            )}
+          </div>
+        </td>
+      );
+    }
+    return null;
+  };
+  const renderLeadCallifiedBodyCell = (lead, key) => {
+    if (key === "campaign") {
+      return (
+        <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
+          <ScrollableSelect
+            value={lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : ""}
+            onChange={(campaignId) => handleCampaignChange(lead, campaignId)}
+            disabled={!callifiedConfigured || !canLeadUpdate}
+            width={160}
+            maxVisibleRows={5}
+            ariaLabel={`Assign Callified campaign for ${lead.name || "lead"}`}
+            placeholder="—"
+            options={[{ value: "", label: "—" }, ...callifiedCampaigns.map((c) => ({ value: String(c.id), label: `${c.name || `Campaign ${c.id}`}${c.product_name ? ` — ${c.product_name}` : ""}` }))]}
+          />
+        </td>
+      );
+    }
+    if (key === "callStatus") {
+      const queueItem = callQueue.find((q) => q.lead.id === lead.id);
+      const isConnected = queueItem && (queueItem.status === "calling" || queueItem.status === "waiting_for_completion");
+      const meta = getCallStatusMeta(lead.callifiedLeadStatus);
+      return (
+        <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
+          {isConnected ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Connected</span>
+          ) : classifyingLeads.has(lead.id) ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "var(--surface-hover)", color: "var(--text-secondary)" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Classifying…</span>
+          ) : (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+              <select className="input-field" value={normalizeCallStatus(lead.callifiedLeadStatus)} onChange={(e) => handleLeadStatusChange(lead, e.target.value)} disabled={!callifiedConfigured || !canLeadUpdate} style={{ padding: ".25rem .6rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, border: "none", cursor: "pointer", minWidth: "90px", color: meta.color, backgroundColor: meta.bg }} aria-label={`Call status for ${lead.name || "lead"}`}>
+                {CALL_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              {lead.callifiedLeadStatus && normalizeCallStatus(lead.callifiedLeadStatus) !== CALL_STATUS.YET_TO_CALL && <span title={buildLeadStatusTooltip(lead, { maxRetries: dnpMaxRetries })} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", cursor: "help", marginLeft: ".25rem", flexShrink: 0 }}><Info size={14} /></span>}
+            </span>
+          )}
+        </td>
+      );
+    }
+    if (key === "callifiedAi") {
+      const count = callifiedSummaries[lead.id]?.callCount || 0;
+      return (
+        <td data-callified-ai-lead-id={String(lead.id)} data-callified-ai-highlighted={Number(lead.id) === focusedCallifiedLeadId ? "true" : undefined} aria-label={`Callified AI call for ${lead.name || "lead"}`} style={getBodyCellStyle(key, Number(lead.id) === focusedCallifiedLeadId ? { background: "color-mix(in srgb, var(--primary-color, var(--accent-color)) 18%, transparent)", boxShadow: "inset 0 0 0 2px var(--primary-color, var(--accent-color))" } : {})} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { if (!lead.phone) { notify.error("Phone number is required to make a call."); return; } if (!callifiedConfigured) { notify.info("Configure Callified in Settings → Integrations to make AI calls"); return; } setCallifiedCallLead(lead); }} title={callifiedConfigured ? `Call ${lead.name || "lead"} via AI` : "Configure Callified settings"} style={{ ...actionIconBtn, color: callifiedConfigured ? "var(--success-color)" : "var(--text-secondary)", opacity: callifiedConfigured ? 1 : 0.6, position: "relative" }}><Phone size={15} />{count > 0 && <span style={{ position: "absolute", top: -6, right: -6, minWidth: "18px", height: "18px", padding: "0 4px", borderRadius: "999px", background: "var(--accent-color)", color: "#fff", fontSize: ".65rem", fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "2px solid var(--bg-color)" }}>{count > 99 ? "99+" : count}</span>}</button>
+          <button onClick={() => { if (!callifiedConfigured) { notify.info("Configure Callified settings in Integrations to view call details"); return; } setCallifiedDetailsLead(lead); }} title={callifiedConfigured ? `View Callified call details for ${lead.name || "lead"}` : "Configure Callified settings"} style={{ ...actionIconBtn, marginLeft: 6, color: callifiedConfigured ? "var(--accent-color)" : "var(--text-secondary)", opacity: callifiedConfigured ? 1 : 0.6 }}><FileText size={15} /></button>
+        </td>
+      );
+    }
+    if (key === "callifiedScore") {
+      const score = callifiedSummaries[lead.id]?.lastScore;
+      if (score == null) return <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}><span style={{ color: "var(--text-secondary)", fontSize: ".875rem" }}>—</span></td>;
+      const color = score >= 4 ? "var(--success-color)" : score >= 3 ? "var(--warning-color)" : "#ef4444";
+      const bg = score >= 4 ? "rgba(16, 185, 129, 0.1)" : score >= 3 ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)";
+      return <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}><span style={{ padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: "bold", background: bg, color, display: "inline-flex", alignItems: "center", gap: ".15rem" }}>{Array.from({ length: 5 }).map((_, index) => <span key={index} style={{ opacity: index < score ? 1 : 0.3 }}>★</span>)}<span style={{ marginLeft: 4 }}>{score}/5</span></span></td>;
+    }
+    return null;
+  };
+  const renderLeadTravelBodyCell = (lead, key) => {
+    if (key === "subBrand") {
+      return <td style={getBodyCellStyle(key, { color: "var(--text-secondary)", fontSize: ".875rem" })}>{lead.subBrand ? subBrandShortLabel(lead.subBrand) : <span style={{ color: "var(--border-color)" }}>-</span>}</td>;
+    }
+    if (key !== "amount") return null;
+    const bv = bookingValueByContact[lead.id];
+    const tmcEntry = tmcPaidByEmail[lead.email];
+    const deals = dealsByContact[lead.id] || [];
+    const total = bv?.value > 0 ? Number(bv.value) : tmcEntry?.paidTotal > 0 ? Number(tmcEntry.paidTotal) : deals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0);
+    const currency = bv?.currency || tmcEntry?.currency || deals[0]?.currency || "INR";
+    return <td style={getBodyCellStyle(key, { fontWeight: 500, fontSize: ".875rem" })} title="Amount paid">{total > 0 ? `${currency} ${total.toLocaleString()}` : <span style={{ color: "var(--text-secondary)" }}>-</span>}</td>;
+  };
+  const renderLeadActionsBodyCell = (lead) => (
+    <td style={getBodyCellStyle("actions", { padding: ".75rem .5rem", minWidth: `${getColumnWidth("actions")}px`, overflow: "visible", textOverflow: "clip" })} onClick={(e) => e.stopPropagation()}>
+      {wellnessCall.enabled && <WellnessLeadCallButton lead={lead} onCall={() => wellnessCall.open(lead)} />}
+      <button onClick={() => setPreviewLead(lead)} title="Preview lead" aria-label={`Preview ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
+      {canLeadUpdate && <>
+        <button onClick={() => openEdit(lead)} title="Edit lead" style={{ ...actionIconBtn, marginLeft: 6 }}><Pencil size={15} /></button>
+        {!isGeneric && <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>}
+      </>}
+      {canLeadDelete && <button onClick={() => handleDelete(lead)} title="Delete lead" style={{ ...actionIconBtn, color: "var(--danger-color, #f43f5e)", marginLeft: 6 }}><Trash2 size={15} /></button>}
+    </td>
+  );
+  const renderLeadColumnBodyCell = (lead, column) => {
+    if (column.key === "name") return renderLeadNameBodyCell(lead);
+    if (column.key === "actions") return renderLeadActionsBodyCell(lead);
+    if (CALLIFIED_LEAD_COLUMN_KEYS.has(column.key)) return renderLeadCallifiedBodyCell(lead, column.key);
+    if (["interestedPlotArea", "pickupLocation", "plotAssign", "overallPickupStatus"].includes(column.key)) return renderLeadWorkflowBodyCell(lead, column.key);
+    if (["subBrand", "amount"].includes(column.key)) return renderLeadTravelBodyCell(lead, column.key);
+    return renderLeadUserBodyCell(lead, column);
+  };
   const previewLeadCurrent = previewLead
     ? leads.find((lead) => lead.id === previewLead.id) || previewLead
     : null;
@@ -8927,6 +10015,14 @@ const Leads = ({ initialListState = null } = {}) => {
     ? getCallStatusMeta(previewLeadCurrent.callifiedLeadStatus)
     : null;
   const headerMenuRect = headerMenuState?.rect || null;
+  const headerMenuWidth = Math.min(
+    LEADS_HEADER_MENU_WIDTH,
+    Math.max(0, window.innerWidth - 24),
+  );
+  const headerSubmenuWidth = Math.min(
+    LEADS_HEADER_MENU_SUBMENU_WIDTH,
+    Math.max(0, window.innerWidth - 24),
+  );
   const headerMenuOpenUp = Boolean(
     headerMenuRect &&
     window.innerHeight - headerMenuRect.bottom - 12 < 260 &&
@@ -8945,7 +10041,7 @@ const Leads = ({ initialListState = null } = {}) => {
     ? Math.max(
         12,
         Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
+          window.innerWidth - headerMenuWidth - 12,
           headerMenuRect.left,
         ),
       )
@@ -8965,23 +10061,23 @@ const Leads = ({ initialListState = null } = {}) => {
     ? Math.max(
         12,
         Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
-          headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
+          window.innerWidth - headerSubmenuWidth - 12,
+          headerMenuLeft + headerMenuWidth + LEADS_HEADER_MENU_GAP,
         ),
       )
     : 0;
   const headerSubmenuOpenLeft =
     headerMenuRect &&
     headerMenuLeft +
-      LEADS_HEADER_MENU_WIDTH +
-      LEADS_HEADER_MENU_SUBMENU_WIDTH +
+      headerMenuWidth +
+      headerSubmenuWidth +
       LEADS_HEADER_MENU_GAP * 2 >
       window.innerWidth;
   const headerSubmenuFallbackLeft = headerMenuRect
     ? Math.max(
         12,
         headerMenuLeft -
-          LEADS_HEADER_MENU_SUBMENU_WIDTH -
+          headerSubmenuWidth -
           LEADS_HEADER_MENU_GAP,
       )
     : 0;
@@ -9034,11 +10130,11 @@ const Leads = ({ initialListState = null } = {}) => {
 
   return (
     <div
-      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}`}
+      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}${isTravel ? " leads-page-root--travel" : ""}`}
       style={{
         padding: "2rem",
         animation: "fadeIn 0.3s ease",
-        ...(isGeneric
+        ...(isGeneric || isTravel
           ? {
               width: "100%",
               maxWidth: "100%",
@@ -9157,7 +10253,10 @@ const Leads = ({ initialListState = null } = {}) => {
           </div>
         )}
       </header>
-      <PortalWhenReady enabled={isGeneric} target={genericActionsToolbarHost}>
+      <PortalWhenReady
+        enabled={isGeneric || isTravel}
+        target={isGeneric ? genericActionsToolbarHost : travelActionsToolbarHost}
+      >
         <div
           id={isGeneric ? "leads-secondary-actions" : undefined}
           className={
@@ -9169,7 +10268,11 @@ const Leads = ({ initialListState = null } = {}) => {
           }
           style={{
             ...compactToolbarSurfaceStyle,
-            marginBottom: isGeneric && genericActionsToolbarHost ? 0 : "1rem",
+            marginBottom:
+              (isGeneric && genericActionsToolbarHost) ||
+              (isTravel && travelActionsToolbarHost)
+                ? 0
+                : "1rem",
             justifyContent: "flex-start",
             ...(isGeneric
               ? genericActionsToolbarHost
@@ -9188,7 +10291,17 @@ const Leads = ({ initialListState = null } = {}) => {
                     flex: "0 0 auto",
                     boxSizing: "border-box",
                   }
-              : {}),
+              : isTravel && travelActionsToolbarHost
+                ? {
+                    flex: "0 1 auto",
+                    width: "auto",
+                    padding: 0,
+                    border: 0,
+                    borderRadius: 0,
+                    background: "transparent",
+                    boxShadow: "none",
+                  }
+                : {}),
           }}
         >
           <button
@@ -9220,6 +10333,7 @@ const Leads = ({ initialListState = null } = {}) => {
               label="Leads"
               formats={["csv", "xlsx"]}
               genericLeadWizard={isGeneric && canLeadRead}
+              genericCrm={isGeneric}
               showExport={!isGeneric || canLeadExport}
               allowImport={!isGeneric || canLeadWrite}
               onImported={isGeneric ? refreshAll : undefined}
@@ -9230,6 +10344,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       // not a tenant custom field. Keep it in the mapping
                       // catalog so imports never propose a duplicate field.
                       { key: "id", label: "Id", fieldType: "text" },
+                      ...GENERIC_LEAD_IMPORT_DEFAULT_FIELDS,
                       ...leadColumnCatalog,
                     ]
                       .map((catalogField) => {
@@ -9269,7 +10384,10 @@ const Leads = ({ initialListState = null } = {}) => {
             <>
               {/* Auto-assign campaign rules: dropdown shows a grid where each
                   rule maps a lead column + value to a Callified campaign. */}
-              <div style={{ position: "relative" }}>
+              <div
+                className="leads-auto-campaign-control"
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   className="input-field"
@@ -9333,7 +10451,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       onClick={() => setAutoCampaignRulesOpen(false)}
                     />
                     <div
-                      className="card"
+                      className="card leads-auto-campaign-menu"
                       onClick={(e) => e.stopPropagation()}
                       style={{
                         position: "absolute",
@@ -9436,6 +10554,7 @@ const Leads = ({ initialListState = null } = {}) => {
                           }}
                         >
                           <div
+                            className="auto-campaign-rule-heading-row"
                             style={{
                               display: "grid",
                               gridTemplateColumns: "34px 1fr 1fr 1fr 80px 32px",
@@ -9448,7 +10567,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               padding: "0 0.25rem",
                             }}
                           >
-                            <span className="auto-campaign-rule-on-heading">
+                            <span className="auto-campaign-rule-on-heading auto-campaign-rule-heading">
                               On
                             </span>
                             <span>Lead column</span>
@@ -9499,6 +10618,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             return (
                               <div
                                 key={rule.id}
+                                className="auto-campaign-rule-grid"
                                 style={{
                                   display: "grid",
                                   gridTemplateColumns:
@@ -9529,34 +10649,20 @@ const Leads = ({ initialListState = null } = {}) => {
                                       : "not-allowed",
                                   }}
                                 />
-                                <select
-                                  className="input-field"
+                                <AutoLeadColumnSelect
                                   value={rule.column || ""}
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  onChange={(e) => {
+                                  options={columnOptions}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
+                                  onChange={(nextColumn) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
-                                        ? { ...r, column: e.target.value }
+                                        ? { ...r, column: nextColumn }
                                         : r,
                                     );
                                     setAutoCampaignRules(next);
                                     removeSavedStatus();
                                   }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <option value="">Select column</option>
-                                  {columnOptions.map((col) => (
-                                    <option key={col.key} value={col.key}>
-                                      {col.label}
-                                    </option>
-                                  ))}
-                                </select>
+                                />
                                 <input
                                   type="text"
                                   value={rule.value || ""}
@@ -9583,34 +10689,20 @@ const Leads = ({ initialListState = null } = {}) => {
                                     minWidth: 0,
                                   }}
                                 />
-                                <select
-                                  className="input-field"
+                                <AutoCampaignSelect
                                   value={rule.campaignId || ""}
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  onChange={(e) => {
+                                  options={callifiedCampaigns}
+                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
+                                  onChange={(nextCampaignId) => {
                                     const next = autoCampaignRules.map((r) =>
                                       r.id === rule.id
-                                        ? { ...r, campaignId: e.target.value }
+                                        ? { ...r, campaignId: nextCampaignId }
                                         : r,
                                     );
                                     setAutoCampaignRules(next);
                                     removeSavedStatus();
                                   }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <option value="">Select campaign</option>
-                                  {callifiedCampaigns.map((c) => (
-                                    <option key={c.id} value={String(c.id)}>
-                                      {c.name || `Campaign ${c.id}`}
-                                    </option>
-                                  ))}
-                                </select>
+                                />
                                 <div
                                   style={{
                                     display: "flex",
@@ -9774,7 +10866,10 @@ const Leads = ({ initialListState = null } = {}) => {
               </div>
 
               {/* Multi-select campaign dropdown for bulk dial. */}
-              <div style={{ position: "relative" }}>
+              <div
+                className="leads-campaign-dropdown-control"
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   className="input-field"
@@ -9806,7 +10901,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       onClick={() => setCampaignDropdownOpen(false)}
                     />
                     <div
-                      className="card"
+                      className="card leads-campaign-dropdown-menu"
                       style={{
                         position: "absolute",
                         top: "calc(100% + 4px)",
@@ -9925,9 +11020,12 @@ const Leads = ({ initialListState = null } = {}) => {
             </>
           )}
 
-          <span aria-hidden="true" style={compactToolbarDividerStyle} />
+          {!isGeneric && (
+            <span aria-hidden="true" style={compactToolbarDividerStyle} />
+          )}
 
-          {canLeadBulkActions && (
+          <PortalWhenReady enabled={isGeneric} target={genericBulkActionsHost}>
+            {canLeadBulkActions && (
             <div
               className="lead-bulk-actions-control"
               style={{ position: "relative" }}
@@ -9973,25 +11071,19 @@ const Leads = ({ initialListState = null } = {}) => {
               {leadBulkActionsOpen && (
                 <>
                   <div
-                    style={{
-                      position: "fixed",
-                      inset: 0,
-                      zIndex: 1088,
-                      background: "transparent",
-                    }}
-                    onClick={() => setLeadBulkActionsOpen(false)}
-                  />
-                  <div
                     role="menu"
                     aria-label="Bulk actions"
+                    className="lead-bulk-actions-menu"
                     onMouseDown={(e) => e.stopPropagation()}
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      left: 0,
-                      right: "auto",
+                      right: 0,
+                      left: "auto",
                       zIndex: 1089,
                       width: "min(420px, 92vw)",
+                      maxWidth: "calc(100vw - 1rem)",
+                      boxSizing: "border-box",
                       padding: "0.85rem",
                       background: "var(--bg-color)",
                       border: "1px solid var(--border-color)",
@@ -10026,7 +11118,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         {selectedLeads.length} selected
                       </span>
                     </div>
-                    {selectedLeads.length === 0 ? (
+                    {selectedLeads.length === 0 && (
                       <div
                         style={{
                           fontSize: "0.85rem",
@@ -10036,13 +11128,17 @@ const Leads = ({ initialListState = null } = {}) => {
                       >
                         Select one or more leads to use bulk actions.
                       </div>
-                    ) : (
-                      <div
+                    )}
+                    <div
                         style={{
                           display: "grid",
                           gap: "0.65rem",
                         }}
                       >
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                          <button type="button" className="btn-secondary" onClick={selectCurrentPageLeads} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>Select current page</button>
+                          <button type="button" className="btn-secondary" onClick={selectAllPresentLeads} disabled={selectingAllPresent} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>{selectingAllPresent ? "Selecting…" : "Select all present"}</button>
+                        </div>
                         {isGeneric && canLeadUpdate && (
                           <button
                             type="button"
@@ -10051,7 +11147,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               setLeadBulkActionsOpen(false);
                               handleDialSelectedLeads();
                             }}
-                            disabled={callQueueActive}
+                            disabled={callQueueActive || selectedLeads.length === 0}
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
@@ -10097,6 +11193,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                 setLeadBulkActionsOpen(false);
                                 handleBulkAssign();
                               }}
+                              disabled={selectedLeads.length === 0}
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
@@ -10124,7 +11221,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               onChange={(e) =>
                                 setBulkCampaignId(e.target.value)
                               }
-                              disabled={bulkCampaignSaving}
+                              disabled={bulkCampaignSaving || selectedLeads.length === 0}
                               style={{
                                 flex: 1,
                                 minWidth: 180,
@@ -10168,6 +11265,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             onClick={() => {
                               handleBulkDelete();
                             }}
+                            disabled={selectedLeads.length === 0}
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
@@ -10188,6 +11286,7 @@ const Leads = ({ initialListState = null } = {}) => {
                             setBulkCampaignId("");
                             setLeadBulkActionsOpen(false);
                           }}
+                          disabled={selectedLeads.length === 0}
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
@@ -10199,12 +11298,12 @@ const Leads = ({ initialListState = null } = {}) => {
                           Clear selection
                         </button>
                       </div>
-                    )}
                   </div>
                 </>
               )}
             </div>
           )}
+          </PortalWhenReady>
 
           {isGeneric && canLeadUpdate && selectedLeads.length > 0 && (
             <button
@@ -10254,74 +11353,9 @@ const Leads = ({ initialListState = null } = {}) => {
               <Plus size={16} /> Create Lead
             </button>
           )}
+
         </div>
       </PortalWhenReady>
-
-      {isTravel && (
-        <div
-          className="card travel-leads-filters"
-          style={{
-            padding: "0.75rem 1rem",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.75rem",
-            flexWrap: "wrap",
-            marginBottom: "0.75rem",
-          }}
-        >
-          <div
-            className="travel-leads-filter-controls"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.6rem",
-              flexWrap: "wrap",
-            }}
-          >
-            <Filter size={15} style={{ color: "var(--text-secondary)" }} />
-            <select
-              className="input-field"
-              value={subBrandFilter}
-              onChange={(e) => {
-                setSubBrandFilter(e.target.value);
-                setLeadsPage(0);
-              }}
-              aria-label="Filter by sub-brand"
-              style={{ width: "auto", minWidth: 140 }}
-            >
-              <option value="">All sub-brands</option>
-              {travelSubBrandOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input-field"
-              value={stageFilter}
-              onChange={(e) => {
-                setStageFilter(e.target.value);
-                setLeadsPage(0);
-              }}
-              aria-label="Filter by stage"
-              style={{ width: "auto", minWidth: 160 }}
-            >
-              <option value="">All stages</option>
-              {travelStageOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <span
-            style={{ color: "var(--text-secondary)", fontSize: "0.8125rem" }}
-          >
-            {filteredLeads.length} leads
-          </span>
-        </div>
-      )}
 
       {callQueueActive && (
         <div
@@ -10419,7 +11453,13 @@ const Leads = ({ initialListState = null } = {}) => {
       )}
 
       <div
-        className={isGeneric ? "leads-content-shell" : "card"}
+        className={
+          isGeneric
+            ? "leads-content-shell"
+            : isTravel
+              ? "card travel-leads-table-card"
+              : "card"
+        }
         style={
           isGeneric
             ? { display: "flex", flexDirection: "column", gap: "1rem" }
@@ -10488,6 +11528,7 @@ const Leads = ({ initialListState = null } = {}) => {
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
+                  if (isTravel) setLeadsPage(0);
                 }}
                 style={{
                   backgroundColor: "var(--surface-hover)",
@@ -10503,7 +11544,10 @@ const Leads = ({ initialListState = null } = {}) => {
                 `/api/contacts/filter-values/${field}?status=Lead`
               }
               filters={advancedFilters}
-              onChange={setAdvancedFilters}
+              onChange={(filters) => {
+                setAdvancedFilters(filters);
+                if (isTravel) setLeadsPage(0);
+              }}
               triggerLabel="Filter by"
               triggerIcon={
                 <span
@@ -10522,6 +11566,7 @@ const Leads = ({ initialListState = null } = {}) => {
               buttonTitle="Filter leads"
               buttonAriaLabel="Filter by"
               layoutVariant="freshsales"
+              panelClassName={isGeneric ? "filter-panel-generic" : ""}
               clearSectionsOnReset={isGeneric}
               promoteAddedSections={isGeneric}
               pinSelectedValues={isGeneric}
@@ -10529,6 +11574,13 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
+              allowedValueOptions={isGeneric ? {
+                status: GENERIC_STATUS_FILTER_OPTIONS,
+                lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS,
+              } : undefined}
+              additionalDefaultFieldKeys={
+                isTravel ? TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS : undefined
+              }
               buttonStyle={{
                 ...compactToolbarButtonStyle,
                 height: 38,
@@ -10536,8 +11588,18 @@ const Leads = ({ initialListState = null } = {}) => {
                 fontSize: "0.85rem",
               }}
             />
+            {isTravel && (
+              <div
+                ref={setTravelActionsToolbarHost}
+                className="travel-leads-actions-host"
+                style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}
+              />
+            )}
             {isGeneric && (
-              <div style={{ position: "relative" }}>
+              <div
+                className="leads-density-control"
+                style={{ position: "relative" }}
+              >
                 <button
                   type="button"
                   className="btn-secondary leads-density-trigger"
@@ -10570,6 +11632,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     />
                     <div
                       role="menu"
+                      className="leads-density-menu"
                       aria-label="Table density"
                       style={{
                         position: "absolute",
@@ -10631,6 +11694,13 @@ const Leads = ({ initialListState = null } = {}) => {
                   </>
                 )}
               </div>
+            )}
+            {isGeneric && (
+              <div
+                ref={setGenericBulkActionsHost}
+                className="leads-generic-bulk-actions-host"
+                style={{ display: "inline-flex", alignItems: "center" }}
+              />
             )}
           </div>
 
@@ -11422,6 +12492,7 @@ const Leads = ({ initialListState = null } = {}) => {
             {supportsColumnCustomization && (
               <ColumnPicker
                 tableKey="leads"
+                hiddenColumnKeys={isGeneric ? GENERIC_HIDDEN_COLUMN_PICKER_KEYS : undefined}
                 onColumnsChange={(columns) =>
                   setVisibleColumns(
                     isGeneric
@@ -11440,6 +12511,14 @@ const Leads = ({ initialListState = null } = {}) => {
                         ).filter(
                           (column) =>
                             !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),
+                        ).map((column) =>
+                          column.key === "lifecycleStage"
+                            ? { ...column, label: "Status" }
+                            : column,
+                        ).map((column) =>
+                          column.key === "status"
+                            ? { ...column, label: "Status" }
+                            : column,
                         )
                       : columns,
                   )
@@ -11541,9 +12620,9 @@ const Leads = ({ initialListState = null } = {}) => {
           )}
         </div>
         <div
-          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : isTravel ? " leads-split-table--no-topbar leads-split-table--density-compact leads-split-table--travel-generic" : ""}`}
           onWheel={
-            isGeneric
+            isGeneric || isTravel
               ? (event) => {
                   const grid = event.currentTarget;
                   const scrollbar = grid.querySelector(
@@ -11575,7 +12654,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchStart={
-            isGeneric
+            isGeneric || isTravel
               ? (event) => {
                   const touch = event.touches[0];
                   const scrollbar = event.currentTarget.querySelector(
@@ -11592,7 +12671,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchMove={
-            isGeneric
+            isGeneric || isTravel
               ? (event) => {
                   const gesture = leadsHorizontalTouchRef.current;
                   const touch = event.touches[0];
@@ -11610,7 +12689,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchEnd={
-            isGeneric
+            isGeneric || isTravel
               ? () => {
                   leadsHorizontalTouchRef.current = null;
                 }
@@ -11635,7 +12714,7 @@ const Leads = ({ initialListState = null } = {}) => {
             <div
               className="leads-table-frozen-pane"
               style={
-                isGeneric
+                usesGenericLeadTableLayout
                   ? { "--leads-name-pane-width": leadsFrozenTableWidthCss }
                   : { width: leadsFrozenTableWidthCss }
               }
@@ -11713,7 +12792,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         style={{
                           cursor: isTravel ? "default" : "pointer",
                         }}
-                        className="table-row-hover"
+                        className={isTravel ? undefined : "table-row-hover"}
                         onClick={() => {
                           if (!isTravel) openLeadDetail(lead);
                         }}
@@ -11764,65 +12843,34 @@ const Leads = ({ initialListState = null } = {}) => {
                                 showEditButton={canLeadUpdate}
                                 disableTruncation
                                 renderValue={(name) => (
-                                  isTravel ? (
-                                    <a
-                                      href="#lead-preview"
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        setPreviewLead(lead);
-                                      }}
-                                      title={`Preview ${lead.name || "lead"}`}
-                                      style={{
-                                        minWidth: 0,
-                                        overflow: "visible",
-                                        textOverflow: "clip",
-                                        whiteSpace: "nowrap",
-                                        color: "var(--accent-color)",
-                                        fontWeight: 700,
-                                        textDecoration: "none",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "underline";
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "none";
-                                      }}
-                                    >
-                                      {name || "Unnamed lead"}
-                                    </a>
-                                  ) : (
-                                    <Link
-                                      to={leadDetailPathWithListState(lead)}
-                                      state={leadListNavigationState}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        rememberLeadListState();
-                                      }}
-                                      title={`Open profile for ${name || "lead"}`}
-                                      style={{
-                                        minWidth: 0,
-                                        overflow: "visible",
-                                        textOverflow: "clip",
-                                        whiteSpace: "nowrap",
-                                        color: "var(--accent-color)",
-                                        fontWeight: 700,
-                                        textDecoration: "none",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "underline";
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.textDecoration =
-                                          "none";
-                                      }}
-                                    >
-                                      {name || "Unnamed lead"}
-                                    </Link>
-                                  )
+                                  <Link
+                                    to={leadDetailPathWithListState(lead)}
+                                    state={leadListNavigationState}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      rememberLeadListState();
+                                    }}
+                                    title={`Open profile for ${name || "lead"}`}
+                                    style={{
+                                      minWidth: 0,
+                                      overflow: "visible",
+                                      textOverflow: "clip",
+                                      whiteSpace: "nowrap",
+                                      color: "var(--accent-color)",
+                                      fontWeight: 700,
+                                      textDecoration: "none",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.textDecoration =
+                                        "underline";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.textDecoration =
+                                        "none";
+                                    }}
+                                  >
+                                    {name || "Unnamed lead"}
+                                  </Link>
                                 )}
                               />
                             </div>
@@ -11842,12 +12890,15 @@ const Leads = ({ initialListState = null } = {}) => {
               topBarLeadingWidth={leadsFrozenTableWidth}
               stickyTop
               stickyTopOffset={0}
-              hideTopBar={isGeneric}
-              stickyBottom={isGeneric}
-              // Generic CRM retains its bottom scrollbar; other verticals
-              // retain their existing native table scroll.
-              hideBottomScrollbar={isGeneric}
+              hideTopBar={usesGenericLeadTableLayout}
+              stickyBottom={usesGenericLeadTableLayout}
+              // Generic and Travel use one synchronized bottom scrollbar so
+              // the frozen and scrollable panes share the outer vertical flow.
+              hideBottomScrollbar={usesGenericLeadTableLayout}
               verticalOverflow="visible"
+              contentRole={isTravel ? "region" : undefined}
+              contentAriaLabel={isTravel ? "Scrollable lead columns" : undefined}
+              contentTabIndex={isTravel ? 0 : undefined}
             >
               <table
                 ref={leadsScrollableTableRef}
@@ -11876,132 +12927,11 @@ const Leads = ({ initialListState = null } = {}) => {
                       backgroundColor: "var(--table-header-bg)",
                     }}
                   >
-                    {!isGeneric &&
-                      renderColumnHeaderCell(
-                        "name",
-                        "Name",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({ key: "name", label: "Name" }),
-                        canLeadBulkActions ? (
-                          <input
-                            type="checkbox"
-                            checked={allVisibleLeadsSelected}
-                            ref={(input) => {
-                              if (input)
-                                input.indeterminate = someVisibleLeadsSelected;
-                            }}
-                            onChange={toggleSelectAll}
-                            onClick={(e) => e.stopPropagation()}
-                            aria-label="Select all leads"
-                            style={LEAD_CHECKBOX_STYLE}
-                          />
-                        ) : null,
-                      )}
-                    {leadUserColumnsBeforeCallified.map((column) => (
+                    {leadsScrollableColumnDefs.map((column) => (
                       <Fragment key={column.key}>
-                        {renderLeadUserHeaderCell(column)}
+                        {renderLeadColumnHeaderCell(column)}
                       </Fragment>
                     ))}
-                    {isGeneric &&
-                      [
-                        ["interestedPlotArea", "Interested plot area"],
-                        [
-                          "pickupLocation",
-                          "Pickup location",
-                          { paddingRight: "1.5rem" },
-                        ],
-                        ["plotAssign", "Plot Assign"],
-                        [
-                          "overallPickupStatus",
-                          "Overall status",
-                          { paddingLeft: "1.5rem" },
-                        ],
-                      ]
-                        .filter(([key]) => isLeadFixedColumnVisible(key))
-                        .map(([key, label, spacing = {}]) =>
-                          renderColumnHeaderCell(
-                            key,
-                            label,
-                            { paddingRight: "1rem", ...spacing },
-                            { key },
-                          ),
-                        )}
-                    {isLeadFixedColumnVisible("campaign") &&
-                      renderColumnHeaderCell(
-                        "campaign",
-                        "Callified Campaign",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "campaign",
-                          label: "Callified Campaign",
-                        }),
-                      )}
-                    {isLeadFixedColumnVisible("callStatus") &&
-                      renderColumnHeaderCell(
-                        "callStatus",
-                        "Call Status",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "callStatus",
-                          label: "Call Status",
-                        }),
-                      )}
-                    {isLeadFixedColumnVisible("callifiedAi") &&
-                      renderColumnHeaderCell(
-                        "callifiedAi",
-                        "Callified AI call",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "callifiedAi",
-                          label: "Callified AI call",
-                        }),
-                      )}
-                    {isLeadFixedColumnVisible("callifiedScore") &&
-                      renderColumnHeaderCell(
-                        "callifiedScore",
-                        "Callified Score",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "callifiedScore",
-                          label: "Callified Score",
-                        }),
-                      )}
-                    {leadUserColumnsAfterCallified.map((column) => (
-                      <Fragment key={column.key}>
-                        {renderLeadUserHeaderCell(column)}
-                      </Fragment>
-                    ))}
-                    {isTravel &&
-                      renderColumnHeaderCell(
-                        "subBrand",
-                        "Sub-brand",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "subBrand",
-                          label: "Sub-brand",
-                        }),
-                      )}
-                    {isTravel &&
-                      renderColumnHeaderCell(
-                        "amount",
-                        "Amount",
-                        { paddingRight: "2rem" },
-                        {},
-                        renderHeaderMenuTrigger({
-                          key: "amount",
-                          label: "Amount",
-                        }),
-                      )}
-                    {renderColumnHeaderCell("actions", "Actions", {
-                      padding: "1rem 0.5rem",
-                      whiteSpace: "nowrap",
-                    })}
                   </tr>
                 </thead>
                 <tbody>
@@ -12039,13 +12969,20 @@ const Leads = ({ initialListState = null } = {}) => {
                         style={{
                           cursor: isTravel ? "default" : "pointer",
                         }}
-                        className="table-row-hover"
+                        className={isTravel ? undefined : "table-row-hover"}
                         onClick={() => {
                           if (!isTravel) openLeadDetail(lead);
                         }}
                         title={isTravel ? undefined : "Open lead detail"}
                       >
-                        {!isGeneric && (
+                        {leadsScrollableColumnDefs.map((column) => (
+                          <Fragment key={column.key}>
+                            {renderLeadColumnBodyCell(lead, column)}
+                          </Fragment>
+                        ))}
+                        {legacyLeadCellsEnabled && (
+                          <>
+                            {!isGeneric && (
                           <td
                             style={getBodyCellStyle("name", {
                               fontWeight: "500",
@@ -12082,49 +13019,26 @@ const Leads = ({ initialListState = null } = {}) => {
                                   showEditButton={canLeadUpdate}
                                   disableTruncation
                                   renderValue={(name) => (
-                                    isTravel ? (
-                                      <a
-                                        href="#lead-preview"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setPreviewLead(lead);
-                                        }}
-                                        title={`Preview ${lead.name || "lead"}`}
-                                        style={{
-                                          minWidth: 0,
-                                          overflow: "visible",
-                                          textOverflow: "clip",
-                                          whiteSpace: "nowrap",
-                                          color: "var(--accent-color)",
-                                          fontWeight: 700,
-                                          textDecoration: "none",
-                                        }}
-                                      >
-                                        {name || "Unnamed lead"}
-                                      </a>
-                                    ) : (
-                                      <Link
-                                        to={leadDetailPathWithListState(lead)}
-                                        state={leadListNavigationState}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          rememberLeadListState();
-                                        }}
-                                        title={`Open profile for ${name || "lead"}`}
-                                        style={{
-                                          minWidth: 0,
-                                          overflow: "visible",
-                                          textOverflow: "clip",
-                                          whiteSpace: "nowrap",
-                                          color: "var(--accent-color)",
-                                          fontWeight: 700,
-                                          textDecoration: "none",
-                                        }}
-                                      >
-                                        {name || "Unnamed lead"}
-                                      </Link>
-                                    )
+                                    <Link
+                                      to={leadDetailPathWithListState(lead)}
+                                      state={leadListNavigationState}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        rememberLeadListState();
+                                      }}
+                                      title={`Open profile for ${name || "lead"}`}
+                                      style={{
+                                        minWidth: 0,
+                                        overflow: "visible",
+                                        textOverflow: "clip",
+                                        whiteSpace: "nowrap",
+                                        color: "var(--accent-color)",
+                                        fontWeight: 700,
+                                        textDecoration: "none",
+                                      }}
+                                    >
+                                      {name || "Unnamed lead"}
+                                    </Link>
                                   )}
                                 />
                               </div>
@@ -12840,7 +13754,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               >
                                 <Pencil size={15} />
                               </button>
-                              <button
+                              {!isGeneric && <button
                                 onClick={() => handleConvert(lead.id)}
                                 title="Convert to Prospect"
                                 aria-label={`Convert ${lead.name || "lead"} to Prospect`}
@@ -12851,7 +13765,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                 }}
                               >
                                 <ArrowRightCircle size={15} />
-                              </button>
+                              </button>}
                             </>
                           )}
                           {canLeadDelete && (
@@ -12868,6 +13782,8 @@ const Leads = ({ initialListState = null } = {}) => {
                             </button>
                           )}
                         </td>
+                          </>
+                        )}
                       </tr>
                     ))
                   )}
@@ -13549,7 +14465,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   left: headerMenuLeft,
                   top: headerMenuOpenUp ? undefined : headerMenuTop,
                   bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
-                  width: LEADS_HEADER_MENU_WIDTH,
+                  width: headerMenuWidth,
                   maxHeight: headerMenuMaxHeight,
                   overflowY: "auto",
                   zIndex: 1095,
@@ -13891,7 +14807,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         left: headerSubmenuActualLeft,
                         top: headerMenuOpenUp ? undefined : headerMenuTop,
                         bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
-                        width: LEADS_HEADER_MENU_SUBMENU_WIDTH,
+                        width: headerSubmenuWidth,
                         maxHeight: headerSubmenuMaxHeight,
                         overflowY: "auto",
                         zIndex: 1096,
@@ -14084,7 +15000,10 @@ const Leads = ({ initialListState = null } = {}) => {
               `/api/contacts/filter-values/${field}?status=Lead`
             }
             filters={advancedFilters}
-            onChange={setAdvancedFilters}
+            onChange={(filters) => {
+              setAdvancedFilters(filters);
+              if (isTravel) setLeadsPage(0);
+            }}
             fieldKey={headerFilterRequest.fieldKey}
             fieldLabel={headerFilterRequest.label}
             fieldKind={headerFilterRequest.kind}
@@ -14093,6 +15012,7 @@ const Leads = ({ initialListState = null } = {}) => {
             showSelectedFilters={false}
             showCountBadge={false}
             onClose={() => setHeaderFilterRequest(null)}
+            allowedValueOptions={isGeneric ? { status: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
           />
         )}
         {renameFieldState && (
@@ -14395,7 +15315,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   type="button"
                   title="Previous page"
                   aria-label="Previous page"
-                  onClick={() => setLeadsPage(currentLeadsPage - 1)}
+                  onClick={() => changeLeadsPage(currentLeadsPage - 1)}
                   disabled={currentLeadsPage === 0}
                   style={{
                     ...actionIconBtn,
@@ -14433,7 +15353,10 @@ const Leads = ({ initialListState = null } = {}) => {
                     onChange={(e) => setPageInput(e.target.value)}
                     onBlur={goToLeadsPage}
                     style={{
-                      width: "3.5rem",
+                      width: "4.5rem",
+                      minWidth: "4.5rem",
+                      flexShrink: 0,
+                      boxSizing: "border-box",
                       padding: "0.35rem 0.4rem",
                       textAlign: "center",
                       border: "1px solid var(--border-color)",
@@ -14456,7 +15379,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   type="button"
                   title="Next page"
                   aria-label="Next page"
-                  onClick={() => setLeadsPage(currentLeadsPage + 1)}
+                  onClick={() => changeLeadsPage(currentLeadsPage + 1)}
                   disabled={currentLeadsPage >= leadsPageCount - 1}
                   style={{
                     ...actionIconBtn,
@@ -14679,13 +15602,13 @@ const Leads = ({ initialListState = null } = {}) => {
                   >
                     {isTravel ? "Edit contact" : "Edit lead"}
                   </button>
-                  <button
+                  {!isGeneric && <button
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleConvert(previewLeadCurrent.id)}
                   >
                     Convert to Prospect
-                  </button>
+                  </button>}
                 </>
               )}
             </div>
@@ -14697,7 +15620,7 @@ const Leads = ({ initialListState = null } = {}) => {
               {[
                 ["Email", previewLeadCurrent.email],
                 ["Phone", previewLeadCurrent.phone],
-                [isTravel ? "Category" : "Company", previewLeadCurrent.company],
+                [isTravel ? "School Name" : "Company", previewLeadCurrent.company],
                 ["Title", previewLeadCurrent.title],
                 ["Created", formatDate(previewLeadCurrent.createdAt)],
               ].map(([label, value]) => (
@@ -14975,7 +15898,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     htmlFor="create-lead-company"
                     style={createLeadFieldLabelStyle}
                   >
-                    {isTravel ? "Category" : "Company"}
+                    {isTravel ? "School Name" : "Company"}
                     {isGeneric && createLeadRequiredFieldSet.has("company") && (
                       <span
                         aria-hidden="true"
@@ -14991,7 +15914,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     type="text"
                     placeholder={
                       isTravel
-                        ? "Category (e.g. School Trip, Umrah, Family Holiday)"
+                        ? "School Name"
                         : "Company"
                     }
                     maxLength={191}
@@ -15618,6 +16541,46 @@ const Leads = ({ initialListState = null } = {}) => {
         />
       )}
 
+      {bulkDeleting && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="Deleting selected leads"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(15, 23, 42, 0.42)",
+            backdropFilter: "blur(2px)",
+          }}
+        >
+          <div
+            style={{
+              minWidth: "min(320px, calc(100vw - 2rem))",
+              padding: "1.5rem 1.75rem",
+              borderRadius: 14,
+              background: "var(--surface-color, #fff)",
+              boxShadow: "0 18px 48px rgba(0, 0, 0, 0.28)",
+              textAlign: "center",
+            }}
+          >
+            <RefreshCw
+              size={32}
+              aria-hidden="true"
+              style={{ color: "var(--accent-color)", animation: "spin 0.9s linear infinite", marginBottom: 12 }}
+            />
+            <strong style={{ display: "block", fontSize: "1rem", color: "var(--text-primary)" }}>
+              Deleting selected leads…
+            </strong>
+            <span style={{ display: "block", marginTop: 6, fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              Removing {selectedLeads.length} lead{selectedLeads.length === 1 ? "" : "s"} and related data. Please wait.
+            </span>
+          </div>
+        </div>
+      )}
+
       <GenericLeadsAssistant
         isGeneric={isGeneric}
         selectedLeadId={selectedLeads.length === 1 ? selectedLeads[0] : null}
@@ -15637,7 +16600,6 @@ const Leads = ({ initialListState = null } = {}) => {
         positionStorageKey={`generic-leads-assistant-position.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
         sessionStorageKey={`generic-leads-assistant-session.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`}
       />
-      <Outlet />
     </div>
   );
 };

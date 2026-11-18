@@ -333,9 +333,19 @@ function normalizeContactTagsInput(raw) {
 }
 
 // #160 #166 #168: shared validator for create + update payloads on Contact.
+const LEGACY_CONTACT_STATUSES = ["Lead", "Prospect", "Customer", "Churned", "Junk"];
+const GENERIC_CONTACT_STATUSES = [
+  "New", "Contacted", "Won", "Churned", "Junk",
+  "Interested", "Unqualified", "Qualified", "Lost",
+];
+const GENERIC_ACCEPTED_CONTACT_STATUSES = [
+  ...GENERIC_CONTACT_STATUSES,
+  ...LEGACY_CONTACT_STATUSES,
+];
+
 function validateContactInput(
   body,
-  { isUpdate = false, requireEmail = !isUpdate } = {},
+  { isUpdate = false, requireEmail = !isUpdate, allowedStatuses = LEGACY_CONTACT_STATUSES } = {},
 ) {
   // Email — required on create, optional on update; if present, must parse.
   const emailErr = ensureEmail(body.email, { required: requireEmail });
@@ -365,7 +375,7 @@ function validateContactInput(
   if (body.status !== undefined && body.status !== null && body.status !== "") {
     const stErr = ensureEnum(
       body.status,
-      ["Lead", "Prospect", "Customer", "Churned", "Junk"],
+      allowedStatuses,
       { field: "status" },
     );
     if (stErr) return stErr;
@@ -708,6 +718,7 @@ const FILTER_OPERATORS = [
   "is_not_empty",
   "between",
 ];
+const UNASSIGNED_FILTER_VALUE = "unassigned";
 
 // NOTE: there is deliberately NO "has-data" gate on the field list.
 //
@@ -853,13 +864,31 @@ function buildFilterClause(fieldDef, operator, values) {
   );
   if (list.length === 0) return null;
   if (kind === "id" || kind === "external") {
+    const includesUnassigned = list.some(
+      (value) => String(value) === UNASSIGNED_FILTER_VALUE,
+    );
     const ids = list
+      .filter((value) => String(value) !== UNASSIGNED_FILTER_VALUE)
       .map((v) => parseInt(v, 10))
       .filter((n) => !Number.isNaN(n));
+    if (operator === "not_contains") {
+      if (!includesUnassigned) {
+        return ids.length > 0 ? { [column]: { notIn: ids } } : null;
+      }
+      if (ids.length === 0) return { [column]: { not: null } };
+      return {
+        AND: [
+          { [column]: { notIn: ids } },
+          { [column]: { not: null } },
+        ],
+      };
+    }
+    if (includesUnassigned && ids.length > 0) {
+      return { OR: [{ [column]: { in: ids } }, { [column]: null }] };
+    }
+    if (includesUnassigned) return { [column]: null };
     if (ids.length === 0) return null;
-    return operator === "not_contains"
-      ? { [column]: { notIn: ids } }
-      : { [column]: { in: ids } };
+    return { [column]: { in: ids } };
   }
   if (kind === "number") {
     const nums = list.map((v) => Number(v)).filter((n) => Number.isFinite(n));
@@ -2234,10 +2263,13 @@ router.get("/filter-values/:field", async (req, res) => {
         orderBy: { name: "asc" },
       });
       return res.json({
-        values: users.map((u) => ({
-          value: String(u.id),
-          label: u.name || u.email,
-        })),
+        values: [
+          { value: UNASSIGNED_FILTER_VALUE, label: "Unassigned" },
+          ...users.map((u) => ({
+            value: String(u.id),
+            label: u.name || u.email,
+          })),
+        ],
       });
     }
     if (req.params.field === "callifiedCampaignId") {
@@ -2798,6 +2830,7 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
     const inputErr = validateContactInput(req.body, {
       isUpdate: false,
       requireEmail,
+      allowedStatuses: isGenericCrmRequest(req) ? GENERIC_ACCEPTED_CONTACT_STATUSES : LEGACY_CONTACT_STATUSES,
     });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // #337: persist the trimmed name so we don't leak the user's accidental
@@ -2837,12 +2870,12 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
     // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
     const isGenericLeadAwaitingCall =
       (req.user.vertical || "generic") === "generic" &&
-      normalised.status === "Lead" &&
+      normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead") &&
       (!normalised.callifiedLeadStatus ||
         normalised.callifiedLeadStatus === "yet_to_call");
     const shouldSkipInitialAssignee =
       isGenericLeadAwaitingCall ||
-      (skipInitialAssignee && normalised.status === "Lead");
+      (skipInitialAssignee && normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead"));
     if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
       normalised.assignedToId = req.user.userId;
     }
@@ -3125,7 +3158,9 @@ router.put(
             category: "lead",
             entityType: "lead",
             entityId: row.id,
-            link: "/contacts/" + row.id,
+            link:
+              (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
+              row.id,
             io: req.io,
           });
         } catch (notifyErr) {
@@ -3294,6 +3329,9 @@ router.get("/:id/activities", async (req, res) => {
     const [activityRows, activityTotal, callLogs, callLogTotal, taskRows, taskTotal] = await Promise.all([
       prisma.activity.findMany({
         where,
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+        },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: isGeneric ? mergeWindow : limit,
         skip: isGeneric ? 0 : offset,
@@ -3587,7 +3625,10 @@ const updateContactById = async (req, res) => {
       if (req.body[key] === "") req.body[key] = null;
     }
     // #168: same input checks as create so PUT can't bypass POST validation.
-    const inputErr = validateContactInput(req.body, { isUpdate: true });
+    const inputErr = validateContactInput(req.body, {
+      isUpdate: true,
+      allowedStatuses: isGenericCrmRequest(req) ? GENERIC_ACCEPTED_CONTACT_STATUSES : LEGACY_CONTACT_STATUSES,
+    });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
@@ -3669,19 +3710,32 @@ const updateContactById = async (req, res) => {
     const statusWillChange =
       Object.prototype.hasOwnProperty.call(updateData, "status") &&
       existing.status !== updateData.status;
+    const terminalStatus = ["churned", "junk"].includes(
+      String(updateData.status || "").toLowerCase(),
+    );
+    if (statusWillChange && terminalStatus && !lifecycleTransitionReason) {
+      return res.status(400).json({
+        error: `A reason is required when changing a lead to ${updateData.status}`,
+        code: "TERMINAL_STATUS_REASON_REQUIRED",
+      });
+    }
+    let lifecycleActivity = null;
     const contact = statusWillChange
       ? await prisma.$transaction(async (tx) => {
           const updated = await tx.contact.update({
             where: { id: existing.id },
             data: updateData,
           });
-          await tx.activity.create({
+          lifecycleActivity = await tx.activity.create({
             data: {
               type: "Lead Status updated",
-              description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}`,
+              description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}${lifecycleTransitionReason ? `. Reason: ${lifecycleTransitionReason}` : ""}`,
               contactId: updated.id,
               userId: req.user.userId,
               tenantId: req.user.tenantId,
+            },
+            include: {
+              user: { select: { id: true, name: true, email: true } },
             },
           });
           return updated;
@@ -3888,7 +3942,10 @@ const updateContactById = async (req, res) => {
       );
     }
 
-    res.json(serializeContactTags(contact, isGenericCrmRequest(req)));
+    res.json({
+      ...serializeContactTags(contact, isGenericCrmRequest(req)),
+      ...(lifecycleActivity ? { lifecycleActivity } : {}),
+    });
   } catch (err) {
     // #168 #165: PUT used to leak 500s on bad email / out-of-range values
     // because the Prisma validation error fell through unhandled. Map the
@@ -3911,13 +3968,7 @@ router.patch("/:id", requireContactOrLeadUpdate, updateContactById);
 //   - sanitize CSV-injection prefixes (=, +, -, @) on name/company so the row
 //     can't execute as a formula if the data is later re-exported and opened in Excel
 //   - cap max rows at 5000 to prevent DoS via huge uploads
-const ALLOWED_STATUSES = new Set([
-  "Lead",
-  "Prospect",
-  "Customer",
-  "Churned",
-  "Junk",
-]);
+const ALLOWED_STATUSES = new Set(LEGACY_CONTACT_STATUSES);
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
 const MAX_IMPORT_ROWS = 5000;
@@ -3978,9 +4029,12 @@ router.post("/import-csv", requireContactOrLeadWrite, async (req, res) => {
           continue;
         }
         const status = String(row.status || "Lead").trim();
-        if (!ALLOWED_STATUSES.has(status)) {
+        const allowedStatuses = isGenericCrmRequest(req)
+          ? new Set(GENERIC_ACCEPTED_CONTACT_STATUSES)
+          : ALLOWED_STATUSES;
+        if (!allowedStatuses.has(status)) {
           errors.push(
-            `Row ${rowNum}: invalid status "${status}" (allowed: ${[...ALLOWED_STATUSES].join(", ")})`,
+            `Row ${rowNum}: invalid status "${status}" (allowed: ${[...allowedStatuses].join(", ")})`,
           );
           continue;
         }
@@ -4148,7 +4202,9 @@ router.put("/:id/assign", requireContactOrLeadUpdate, async (req, res) => {
           category: "lead",
           entityType: "lead",
           entityId: contact.id,
-          link: "/contacts/" + contact.id,
+          link:
+            (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
+            contact.id,
           io: req.io,
         });
       } catch (notifyErr) {

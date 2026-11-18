@@ -687,6 +687,7 @@ export default function Staff() {
   // POSTs to /api/staff which creates a user inside the current tenant.
   // The created user lands on the role-aware Dashboard variant on first login.
   const [creating, setCreating] = useState(null);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
   const [savingCreate, setSavingCreate] = useState(false);
   // PRD Gap §1.5 — commission profiles are listed in the edit modal as a
   // dropdown so admins can assign payroll rules per staff member.
@@ -1040,6 +1041,7 @@ export default function Staff() {
   // there's a single rbacRoleId field — saveCreate derives the legacy access
   // tier (ADMIN/MANAGER/USER) and wellnessRole from the picked role's key.
   const openCreate = () => {
+    setShowCreatePassword(false);
     const defaultTravelSubBrand = isTravel
       ? defaultSubBrandFor(user, activeSubBrand)
       : null;
@@ -2772,24 +2774,56 @@ export default function Staff() {
                 >
                   (min 6 characters)
                 </span>
-                <input
-                  type="text"
-                  className="input-field"
-                  value={creating.password}
-                  onChange={(e) =>
-                    setCreating({ ...creating, password: e.target.value })
-                  }
-                  placeholder="Share securely with the new staff member"
-                  data-testid="staff-create-password"
-                  autoComplete="off"
-                  name="staff-manual-reset-password-no-autofill"
-                  inputMode="text"
-                  spellCheck={false}
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  data-form-type="other"
-                  style={{ width: "100%", marginTop: "0.25rem" }}
-                />
+                <div style={{ position: "relative", marginTop: "0.25rem" }}>
+                  <input
+                    type={showCreatePassword ? "text" : "password"}
+                    className="input-field"
+                    value={creating.password}
+                    onChange={(e) =>
+                      setCreating({ ...creating, password: e.target.value })
+                    }
+                    placeholder="Share securely with the new staff member"
+                    data-testid="staff-create-password"
+                    autoComplete="new-password"
+                    name="staff-temporary-password"
+                    inputMode="text"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-form-type="other"
+                    style={{ width: "100%", paddingRight: "2.5rem" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCreatePassword((value) => !value)}
+                    aria-label={
+                      showCreatePassword
+                        ? "Hide temporary password"
+                        : "Show temporary password"
+                    }
+                    title={
+                      showCreatePassword ? "Hide password" : "Show password"
+                    }
+                    style={{
+                      position: "absolute",
+                      right: "0.65rem",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: 28,
+                      height: 28,
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    {showCreatePassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </label>
               {!isTravel && !isWellness && (<> <label>Job title<input className="input-field" value={creating.jobTitle} onChange={(e) => setCreating({ ...creating, jobTitle: e.target.value })} placeholder="e.g. SDR" /></label><label>Work number<input className="input-field" value={creating.workNumber} onChange={(e) => setCreating({ ...creating, workNumber: e.target.value })} placeholder="Staff official contact number" /></label><label>Mobile number<input className="input-field" value={creating.mobileNumber} onChange={(e) => setCreating({ ...creating, mobileNumber: e.target.value })} placeholder="Staff personal mobile number" /></label><label>Reporting to<select className="input-field" value={creating.reportingTo} onChange={(e) => setCreating({ ...creating, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label>Teams<select className="input-field" value={creating.teams} onChange={(e) => setCreating({ ...creating, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label><label>Pipeline<select className="input-field" value={creating.pipeline} onChange={(e) => setCreating({ ...creating, pipeline: e.target.value })}><option value="Default Pipeline">Default Pipeline</option></select></label></>)}
               {/* Single Role dropdown — replaces the prior 3-way split

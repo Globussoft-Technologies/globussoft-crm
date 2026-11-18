@@ -4,7 +4,7 @@ import {
   Mail, Phone, MessageSquare, StickyNote, CheckSquare,
   Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap, Image as ImageIcon,
-  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight,
+  Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight, Maximize2,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -15,7 +15,7 @@ import { AuthContext } from '../appContexts';
 import { usePermissions } from '../hooks/usePermissions';
 import { PROFILE_TABS, SOCIAL_NETWORKS, buildOverviewSections, normalizeSocialUrl } from '../components/contact/contactProfileConfig';
 import CustomizeFieldsDrawer, { ALL_OVERVIEW_FIELDS, DEFAULT_VISIBLE_FIELD_KEYS, normalizeVisibleKeys } from '../components/contact/CustomizeFieldsDrawer';
-import { assignOwner, fetchActivities, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
+import { assignOwner, fetchActivities, fetchScore, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
 import { InlineField, Stars, Modal } from '../components/contact/ProfileWidgets';
 import {
   ActivityModal, CallModal, DealModal, EmailModal, MeetingModal, SmsModal, TaskModal, WhatsappModal,
@@ -74,6 +74,38 @@ const PIPELINE_SEGS = [
     ],
   },
 ];
+
+const GENERIC_STATUS_GROUPS = [
+  { id: 'new', title: 'New', options: [{ id: 'New', label: 'New', negative: false }] },
+  { id: 'contacted', title: 'Contacted', options: [{ id: 'Contacted', label: 'Contacted', negative: false }] },
+  { id: 'interested', title: 'Interested', options: [{ id: 'Interested', label: 'Interested', negative: false }] },
+  {
+    id: 'qualified-lost',
+    title: 'Qualified / Lost',
+    options: [
+      { id: 'Qualified', label: 'Qualified', negative: false },
+      { id: 'Lost', label: 'Lost', negative: true },
+    ],
+  },
+  {
+    id: 'junk-unqualified',
+    title: 'Junk / Unqualified',
+    options: [
+      { id: 'Junk', label: 'Junk', negative: false },
+      { id: 'Unqualified', label: 'Unqualified', negative: true },
+    ],
+  },
+  {
+    id: 'won-churned',
+    title: 'Won / Churned',
+    options: [
+      { id: 'Won', label: 'Won', negative: false },
+      { id: 'Churned', label: 'Churned', negative: true },
+    ],
+  },
+];
+const GENERIC_STATUS_OPTIONS = GENERIC_STATUS_GROUPS.flatMap((group) => group.options);
+const GENERIC_STATUS_LABELS = { Lead: 'New', Prospect: 'Contacted', Customer: 'Won' };
 
 const GENERIC_LIFECYCLE_SETTING_KEY = 'generic.contactLifecycleStages';
 const GENERIC_LIFECYCLE_DRAFT_PREFIX = 'crm:generic-lifecycle-draft:v1';
@@ -320,6 +352,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const isGeneric = !isWellness && !isTravel;
   const isGenericLeadsDetail = isGeneric && location.pathname.startsWith('/leads/');
+  const renderStandaloneLeadPage = isGenericLeadsDetail
+    && !renderBackdrop
+    && (!location.state?.leadsListState || location.state?.openFullPage);
   const showGenericLeadsBackdrop = renderBackdrop && isGenericLeadsDetail;
   const lifecycleDraftStorageKey = `${GENERIC_LIFECYCLE_DRAFT_PREFIX}:${tenant?.id || user?.tenantId || 'generic'}:${user?.id || user?.userId || 'current'}`;
   const [genericLifecycleSegments, setGenericLifecycleSegments] = useState(() => cloneLifecycleSegments(PIPELINE_SEGS));
@@ -345,14 +380,19 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       if (!Number.isInteger(pageIndex) || pageIndex < 0 || !Number.isInteger(pageSize) || pageSize < 1) {
         return null;
       }
-      return { pageIndex, pageSize };
+      const returnTo = typeof stored?.returnTo === 'string'
+        && stored.returnTo.startsWith('/')
+        && !stored.returnTo.startsWith('//')
+        ? stored.returnTo
+        : null;
+      return { pageIndex, pageSize, returnTo };
     } catch {
       return null;
     }
   }, [isGenericLeadsDetail, leadPaginationStorageKey]);
-  // The detail URL is authoritative when it carries page information. State
-  // remains a compatibility fallback for profiles opened before the URL-based
-  // pagination handoff was added.
+  // The detail URL carries the page from which this lead was opened. Prefer
+  // that value over router/session snapshots, which may lag behind a recent
+  // pagination change while the list is rendering.
   const detailPage = Number.isInteger(queryDetailPage) && queryDetailPage >= 1
     ? queryDetailPage
     : Number.isInteger(stateListPageIndex) && stateListPageIndex >= 0
@@ -365,43 +405,109 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     : Number.isInteger(stateListPageSize) && stateListPageSize >= 1
       ? stateListPageSize
       : storedLeadsListState?.pageSize || 10;
-  const withLeadPage = (returnTo) => {
+  const withLeadPage = (returnTo, pageOverride = detailPage, pageSizeOverride = detailPageSize) => {
     if (typeof returnTo !== 'string' || !returnTo.startsWith('/') || returnTo.startsWith('//')) {
       return null;
     }
-    if (!detailPage) return returnTo;
+    if (!pageOverride) return returnTo;
     const hashIndex = returnTo.indexOf('#');
     const hash = hashIndex >= 0 ? returnTo.slice(hashIndex) : '';
     const withoutHash = hashIndex >= 0 ? returnTo.slice(0, hashIndex) : returnTo;
     const queryIndex = withoutHash.indexOf('?');
     const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
     const params = new URLSearchParams(queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : '');
-    params.set('page', String(detailPage));
-    params.set('limit', String(detailPageSize));
+    params.set('page', String(pageOverride));
+    params.set('limit', String(pageSizeOverride));
     return `${pathname}?${params.toString()}${hash}`;
   };
+  const storedLeadReturnTo = storedLeadsListState?.returnTo
+    ? withLeadPage(storedLeadsListState.returnTo, detailPage, detailPageSize)
+    : null;
   const detailLeadsReturnTo = isGenericLeadsDetail && detailPage
     ? `/leads?page=${detailPage}&limit=${detailPageSize}`
     : null;
   const requestedBackTo = isGenericLeadsDetail
-    ? withLeadPage(location.state?.returnTo || location.state?.backTo) || detailLeadsReturnTo
+    ? withLeadPage(location.state?.returnTo || location.state?.backTo)
+      || storedLeadReturnTo
+      || detailLeadsReturnTo
     : location.state?.returnTo || location.state?.backTo || detailLeadsReturnTo;
+  const returnListPage = renderStandaloneLeadPage
+    && Number.isInteger(stateListPageIndex)
+    && stateListPageIndex >= 0
+    ? stateListPageIndex + 1
+    : detailPage;
+  const returnListPageSize = renderStandaloneLeadPage
+    && Number.isInteger(stateListPageSize)
+    && stateListPageSize >= 1
+    ? stateListPageSize
+    : detailPageSize;
+  // Derive the Leads return URL from the originating list snapshot for a
+  // standalone profile, and from the detail URL for direct/drawer profiles.
+  // Either way, the back target is rebuilt with an explicit page and limit.
+  const canonicalLeadClosePath = isGenericLeadsDetail && detailPage
+    ? withLeadPage(requestedBackTo || '/leads', returnListPage, returnListPageSize)
+    : null;
   const leadsBackdropListState = showGenericLeadsBackdrop && detailPage
     ? { pageIndex: detailPage - 1, pageSize: detailPageSize }
     : null;
-  const closePath = typeof requestedBackTo === 'string'
+  const closePath = canonicalLeadClosePath || (typeof requestedBackTo === 'string'
     && requestedBackTo.startsWith('/')
     && !requestedBackTo.startsWith('//')
     ? requestedBackTo
-    : defaultListPath;
+    : defaultListPath);
+  const requestedBackPath = typeof requestedBackTo === 'string'
+    ? requestedBackTo.split(/[?#]/, 1)[0]
+    : null;
+  const shouldRenderListBackdrop = renderBackdrop
+    && (!requestedBackPath || requestedBackPath === '/contacts' || requestedBackPath === '/leads');
   const closeLabel = typeof (location.state?.returnLabel || location.state?.backLabel) === 'string'
     ? (location.state.returnLabel || location.state.backLabel)
     : `Back to ${defaultListPath === '/leads' ? 'Leads' : 'Contacts'}`;
+  const closeNavigationState = useMemo(() => {
+    const { openFullPage: _openFullPage, ...rest } = location.state && typeof location.state === 'object'
+      ? location.state
+      : {};
+    if (!isGenericLeadsDetail || !returnListPage) {
+      return Object.keys(rest).length ? rest : undefined;
+    }
+
+    // The detail URL is the authoritative source for the originating Leads
+    // page. Keep the router snapshot in sync as well, so returning from a
+    // standalone profile cannot restore an older page index from stale state.
+    const pageIndex = returnListPage - 1;
+    const pageSize = returnListPageSize;
+    const leadsListState = {
+      ...(rest.leadsListState && typeof rest.leadsListState === 'object'
+        ? rest.leadsListState
+        : {}),
+      pageIndex,
+      pageSize,
+    };
+    const leadsTableState = rest.leadsTableState && typeof rest.leadsTableState === 'object'
+      ? { ...rest.leadsTableState, pageIndex, pageSize }
+      : rest.leadsTableState;
+
+    return {
+      ...rest,
+      returnTo: closePath,
+      leadsListState,
+      ...(leadsTableState ? { leadsTableState } : {}),
+    };
+  }, [closePath, isGenericLeadsDetail, location.state, returnListPage, returnListPageSize]);
   const closeProfile = useCallback(() => navigate(closePath, {
     replace: Boolean(requestedBackTo),
-    state: location.state,
-  }), [closePath, location.state, navigate, requestedBackTo]);
+    state: closeNavigationState,
+  }), [closeNavigationState, closePath, navigate, requestedBackTo]);
+  const openStandaloneProfile = useCallback(() => {
+    navigate(`${location.pathname}${location.search}`, {
+      state: {
+        ...(location.state && typeof location.state === 'object' ? location.state : {}),
+        openFullPage: true,
+      },
+    });
+  }, [location.pathname, location.search, location.state, navigate]);
   const [contact, setContact] = useState(null);
+  const [liveScore, setLiveScore] = useState(null);
   const [overviewActivities, setOverviewActivities] = useState([]);
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
   const [overviewActivityTotal, setOverviewActivityTotal] = useState(0);
@@ -453,6 +559,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const [lifecycleHistoryLoading, setLifecycleHistoryLoading] = useState(false);
   const [lifecycleHistory, setLifecycleHistory] = useState([]);
   const [lifecycleStageSelections, setLifecycleStageSelections] = useState({});
+  const [statusPipelineOverflow, setStatusPipelineOverflow] = useState(false);
+  const [statusPipelineCanScrollLeft, setStatusPipelineCanScrollLeft] = useState(false);
+  const [statusPipelineCanScrollRight, setStatusPipelineCanScrollRight] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [seqPicker, setSeqPicker] = useState(false);
   const [sequences, setSequences] = useState([]);
@@ -463,7 +572,32 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const notesRef = useRef(null);
   const noteInputRef = useRef(null);
   const moreRef = useRef(null);
+  const statusPipelineRef = useRef(null);
   const contactTagManagerEnabled = isGeneric;
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    const pipeline = statusPipelineRef.current;
+    if (!pipeline) return undefined;
+    const updateScrollState = () => {
+      const hasOverflow = pipeline.scrollWidth > pipeline.clientWidth + 1;
+      setStatusPipelineOverflow(hasOverflow);
+      setStatusPipelineCanScrollLeft(pipeline.scrollLeft > 1);
+      setStatusPipelineCanScrollRight(pipeline.scrollLeft + pipeline.clientWidth < pipeline.scrollWidth - 1);
+    };
+    updateScrollState();
+    pipeline.addEventListener('scroll', updateScrollState, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateScrollState);
+    observer?.observe(pipeline);
+    return () => {
+      pipeline.removeEventListener('scroll', updateScrollState);
+      observer?.disconnect();
+    };
+  }, [isGeneric, genericLifecycleSegments]);
+
+  const moveStatusPipeline = useCallback((direction) => {
+    statusPipelineRef.current?.scrollBy({ left: direction * 180, behavior: 'smooth' });
+  }, []);
 
   useEffect(() => {
     if (!isGeneric) return undefined;
@@ -572,12 +706,19 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const loadContact = useCallback(() => {
     setLoading(true);
     fetchApi(`/api/contacts/${id}`)
-      .then((data) => { setContact(data); setLoading(false); })
+      .then((data) => {
+        setContact(data);
+        setLoading(false);
+        return fetchScore(id)
+          .then((score) => setLiveScore(score?.liveComputedScore ?? data.aiScore ?? null))
+          .catch(() => setLiveScore(data.aiScore ?? null));
+      })
       .catch(() => setLoading(false));
   }, [id]);
 
   useEffect(() => {
     setContact(null);
+    setLiveScore(null);
     setOverviewActivityPage(1);
     setActiveTab(new URLSearchParams(location.search).get('tab') === 'deals' ? 'deals' : 'overview');
     setSummaryOpen(true);
@@ -683,6 +824,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     try {
       const updated = await patchContact(id, data);
       setContact(updated);
+      fetchScore(id)
+        .then((score) => setLiveScore(score?.liveComputedScore ?? updated.aiScore ?? null))
+        .catch(() => setLiveScore(updated.aiScore ?? null));
       // The update response is a flat Contact row. Reload after a status
       // change so the newly-created lifecycle activity is available to the
       // separate Activities tab immediately.
@@ -698,31 +842,21 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   }, [contact, id, loadContact, notify]);
 
   const changeStatus = async (status, lifecycleStageKey, lifecycleTransitionReason = '') => {
-    if (!contact || (isGeneric ? contact.lifecycleStageKey === lifecycleStageKey : contact.status === status)) return;
+    if (!contact || (isGeneric ? contact.status === status : contact.status === status)) return;
     const prev = contact;
     const prevLifecycleStageSelections = lifecycleStageSelections;
-    const selectedSegment = isGeneric
-      ? lifecycleSegments.find((segment) => segment.options.some((option) => option.id === lifecycleStageKey))
-      : null;
     const payload = {
-      ...(!isGeneric ? { status } : {}),
-      ...(isGeneric && lifecycleStageKey ? { lifecycleStageKey } : {}),
+      status,
       ...(isGeneric && lifecycleTransitionReason ? { lifecycleTransitionReason } : {}),
     };
     setContact({ ...contact, ...payload });
-    if (selectedSegment) {
-      setLifecycleStageSelections((current) => ({ ...current, [selectedSegment.id]: lifecycleStageKey }));
-    }
     try {
       const updated = await patchContact(id, payload);
       setContact(updated);
-      await loadContact();
-      notify.success(isGeneric
-        ? `Lifecycle stage changed to ${selectedSegment?.options.find((option) => option.id === lifecycleStageKey)?.label || lifecycleStageKey}.`
-        : `Status changed to ${status}.`);
+      notify.success(`Status changed to ${status}.`);
     } catch {
       setContact(prev);
-      setLifecycleStageSelections(prevLifecycleStageSelections);
+      if (!isGeneric) setLifecycleStageSelections(prevLifecycleStageSelections);
       notify.error('Could not update status.');
     }
   };
@@ -744,12 +878,29 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
 
   const pickStage = (stageIdOrLabel) => {
     setOpenSeg(null);
+    if (isGeneric) {
+      const statusOption = GENERIC_STATUS_OPTIONS.find((option) => option.id === stageIdOrLabel || option.label === stageIdOrLabel);
+      if (!statusOption) return;
+      if (statusOption.negative) {
+        setPendingStageTransition({ option: statusOption, isBackward: false, reason: '' });
+        return;
+      }
+      changeStatus(statusOption.id);
+      return;
+    }
     const opt = segOptionById(stageIdOrLabel, lifecycleSegments) || segOption(stageIdOrLabel, lifecycleSegments);
     if (!opt) return;
     const nextStageIndex = lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === opt.id));
-    const currentStageIndex = contact?.lifecycleStageKey
-      ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
-      : segIndexOf(defaultStageFor(contact?.status, isWellness, isTravel), lifecycleSegments);
+    const currentStatusOption = isGeneric
+      ? lifecycleSegments.flatMap((segment) => segment.options).find((option) => (
+        String(option.label || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+      ))
+      : null;
+    const currentStageIndex = currentStatusOption
+      ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === currentStatusOption.id))
+      : contact?.lifecycleStageKey
+        ? lifecycleSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
+        : segIndexOf(defaultStageFor(contact?.status, isWellness, isTravel), lifecycleSegments);
     const isBackward = isGeneric && currentStageIndex >= 0 && nextStageIndex >= 0 && nextStageIndex < currentStageIndex;
     if (isGeneric && (opt.negative || isBackward)) {
       setPendingStageTransition({ option: opt, isBackward, reason: '' });
@@ -768,8 +919,12 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       return;
     }
     setPendingStageTransition(null);
-    setStageSel(pending.option.id || pending.option.label);
-    await changeStatus(pending.option.backend, pending.option.id, reason);
+    if (isGeneric) {
+      await changeStatus(pending.option.id, undefined, reason);
+    } else {
+      setStageSel(pending.option.id || pending.option.label);
+      await changeStatus(pending.option.backend, pending.option.id, reason);
+    }
   };
 
   const persistPrefs = (next) => {
@@ -1316,28 +1471,48 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     }
   };
 
-  const shell = (content) => (
-    <div className="cp-slide-root">
-      {renderBackdrop && (
-        <div className="cp-slide-bg">
-          {showGenericLeadsBackdrop
-            ? <Leads initialListState={leadsBackdropListState} />
-            : <Contacts />}
-        </div>
-      )}
-      <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
-      <aside className="cp-slide-panel" aria-label="Contact profile">
-        <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
-          <X size={15} />
-        </button>
-        <div className="cp-slide-scroll">
-          <div className="cp-wrap">
-            {content}
+  const shell = (content) => {
+    if (renderStandaloneLeadPage) {
+      return (
+        <section className="cp-full-page" aria-label="Contact profile">
+          <div className="cp-full-page-toolbar">
+            <button type="button" className="cp-back" onClick={closeProfile} aria-label={closeLabel}>
+              <ChevronLeft size={16} />
+              {closeLabel}
+            </button>
           </div>
-        </div>
-      </aside>
-    </div>
-  );
+          <div className="cp-full-page-scroll">
+            <div className="cp-wrap">
+              {content}
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <div className="cp-slide-root">
+        {shouldRenderListBackdrop && (
+          <div className="cp-slide-bg">
+            {showGenericLeadsBackdrop
+              ? <Leads initialListState={leadsBackdropListState} />
+              : <Contacts />}
+          </div>
+        )}
+        <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
+        <aside className="cp-slide-panel" aria-label="Contact profile">
+          <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
+            <X size={15} />
+          </button>
+          <div className="cp-slide-scroll">
+            <div className="cp-wrap">
+              {content}
+            </div>
+          </div>
+        </aside>
+      </div>
+    );
+  };
 
   if (loading) return shell(<p style={{ color: 'var(--text-secondary)' }}>Loading contact…</p>);
   if (!contact) {
@@ -1346,7 +1521,8 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     );
   }
 
-  const fitStars = Math.max(0, Math.min(5, Math.round((Number(contact.aiScore) || 0) / 20)));
+  const displayedScore = liveScore ?? contact.aiScore ?? 0;
+  const fitStars = Math.max(0, Math.min(5, Math.round((Number(displayedScore) || 0) / 20)));
   const ownerName = contact.assignedTo?.name || contact.assignedTo?.email || null;
 
   const saveSocLink = async (e, network) => {
@@ -1364,12 +1540,36 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   };
   const selectedStageOption = (stageSel && (segOptionById(stageSel, lifecycleSegments) || segOption(stageSel, lifecycleSegments)))
     || (isGeneric && contact.lifecycleStageKey ? segOptionById(contact.lifecycleStageKey, lifecycleSegments) : null);
+  const statusStageOption = isGeneric
+    ? lifecycleSegments.flatMap((segment) => segment.options).find((option) => (
+      [option.backend, option.status, option.label].some((value) => (
+        String(value || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase()
+      ))
+    ))
+    : null;
   const fallbackStageOption = lifecycleSegments.flatMap((segment) => segment.options).find((option) => option.backend === contact.status);
-  const activeStage = selectedStageOption && (isGeneric || isTravel || selectedStageOption.backend === contact.status)
-    ? selectedStageOption.label
-    : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
-  const activeSeg = segIndexOf(activeStage, lifecycleSegments);
-  const activeNegative = Boolean(segOption(activeStage, lifecycleSegments)?.negative);
+  const selectedStageMatchesStatus = selectedStageOption && [
+    selectedStageOption.backend,
+    selectedStageOption.status,
+    selectedStageOption.label,
+  ].some((value) => String(value || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase());
+  const historyStageOption = isGeneric
+    ? lifecycleHistory
+      .map((entry) => entry?.to)
+      .find((entry) => String(entry?.status || '').trim().toLowerCase() === String(contact?.status || '').trim().toLowerCase())
+    : null;
+  const historyStage = historyStageOption ? segOptionById(historyStageOption.stageKey, lifecycleSegments) : null;
+  const activeStage = isGeneric
+    ? (GENERIC_STATUS_LABELS[contact?.status] || contact?.status || 'New')
+    : selectedStageOption && (isTravel || selectedStageOption.backend === contact.status)
+      ? selectedStageOption.label
+      : (fallbackStageOption?.label || defaultStageFor(contact.status, isWellness, isTravel));
+  const activeSeg = isGeneric
+    ? GENERIC_STATUS_GROUPS.findIndex((group) => group.options.some((option) => option.id.toLowerCase() === String(activeStage).toLowerCase()))
+    : segIndexOf(activeStage, lifecycleSegments);
+  const activeNegative = isGeneric
+    ? Boolean(GENERIC_STATUS_GROUPS[activeSeg]?.options.find((option) => option.id.toLowerCase() === String(activeStage).toLowerCase())?.negative)
+    : Boolean(segOption(activeStage, lifecycleSegments)?.negative);
   const openOverviewEditor = () => {
     if (isGeneric) {
       setOverviewEditOpen(true);
@@ -1734,7 +1934,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
         <div className="cp-header-mid">
           <div className="cp-score-block">
             <div className="cp-label">Score</div>
-            <div className="cp-score-val">{Number(contact.aiScore) || 0}</div>
+            <div className="cp-score-val">{Number(displayedScore) || 0}</div>
           </div>
           <div className="cp-score-block">
             <div className="cp-label">Customer fit</div>
@@ -1743,6 +1943,11 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
           </div>
         </div>
         <div className="cp-header-right">
+          {isGenericLeadsDetail && !renderStandaloneLeadPage && (
+            <button type="button" className="cp-action-btn" onClick={openStandaloneProfile}>
+              <Maximize2 size={13} /> Open full page
+            </button>
+          )}
           <button type="button" className="cp-action-btn" onClick={() => setActiveTab('details')}><FileText size={13} /> See all details</button>
           <div className="cp-nav-btns">
             <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
@@ -1774,12 +1979,13 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
             <button type="button" className="cp-action-btn cp-action-primary" onClick={openContactDeal}><Plus size={13} /> {isWellness ? 'Add appointment' : 'Add deal'}</button>
           </>
         )}
-        <div className="cp-more-wrap" ref={moreRef}>
+        <div className={`cp-more-wrap${isGeneric ? ' cp-more-wrap--generic' : ''}`} ref={moreRef}>
           <button type="button" className="cp-action-btn" onClick={() => setMoreOpen((o) => !o)} title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen}><MoreHorizontal size={13} /></button>
           {moreOpen && (
             <div className="cp-more-menu" role="menu">
               {!isGeneric && <button type="button" role="menuitem" onClick={() => { closeMore(); setActiveTab('details'); }}><Pencil size={13} /> Edit</button>}
               {!isGeneric && <button type="button" role="menuitem" onClick={handleClone}><Copy size={13} /> Clone</button>}
+              {isGeneric && <button type="button" role="menuitem" onClick={() => { closeMore(); openLifecycleHistory(); }}><History size={13} /> View status history</button>}
               <button type="button" role="menuitem" className="neg" onClick={askDelete}><Trash2 size={13} /> Delete</button>
               {!isGeneric && !isTravel && <button type="button" role="menuitem" onClick={openSeqPicker}><ListPlus size={13} /> Add to sequence</button>}
               <button type="button" role="menuitem" onClick={handleExport}><Download size={13} /> Export</button>
@@ -1983,24 +2189,75 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                 <div className="cp-lifecycle-left">
                   <div className="cp-lifecycle-label">
                     <div className="cp-lifecycle-label-main">
-                      <div className="cp-label">Lifecycle stage</div>
+                      <div className="cp-label">{isGeneric ? 'Status' : 'Lifecycle stage'}</div>
                       <button type="button" className="cp-action-btn cp-lifecycle-edit" onClick={openOverviewEditor} aria-label="Edit lifecycle stage and status" title="Edit lifecycle stage and status"><Pencil size={13} /></button>
                     </div>
-                    {isGeneric && (
-                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
-                    )}
                   </div>
                   <div className="cp-lifecycle-current">{activeStage}</div>
                 </div>
-                <div className="cp-lifecycle-right">
+                <div
+                  className="cp-lifecycle-right"
+                >
                   <div className="cp-lifecycle-status-head">
                     <div className="cp-label">Status</div>
+                    {!isGeneric && (
+                      <button type="button" className="cp-icon-btn cp-lifecycle-history-btn" onClick={openLifecycleHistory} aria-label="View lifecycle history" title="View lifecycle history"><History size={15} /></button>
+                    )}
                   </div>
-                  <div className="cp-pipeline" role="group" aria-label="Lifecycle stage">
-                    {lifecycleSegments.map((seg) => {
+                  <div className={`cp-lifecycle-stage-scroller${statusPipelineOverflow ? ' cp-lifecycle-stage-scroller--overflow' : ' cp-lifecycle-stage-scroller--fit'}`}>
+                    {isGeneric && statusPipelineOverflow && (
+                      <button type="button" className="cp-lifecycle-stage-nav" onClick={() => moveStatusPipeline(-1)} disabled={!statusPipelineCanScrollLeft} aria-label="Show previous stages" title="Show previous stages"><ChevronLeft size={16} /></button>
+                    )}
+                    <div ref={isGeneric ? statusPipelineRef : undefined} className={`cp-pipeline${openSeg ? ' cp-pipeline--menu-open' : ''}`} role="group" aria-label={isGeneric ? 'Lead status stages' : 'Lifecycle stage'}>
+                    {isGeneric ? GENERIC_STATUS_GROUPS.map((group, i) => {
+                      const selectedOption = group.options.find((option) => option.id.toLowerCase() === String(activeStage).toLowerCase());
+                      const displayTitle = selectedOption?.label || group.title;
+                      const stageClass = `cp-generic-status-${group.id}`;
+                      return (
+                        <div className="cp-chev-wrap" key={group.id}>
+                          {group.options.length === 1 ? (
+                            <button
+                              type="button"
+                              title={`Change status to ${displayTitle}`}
+                              onClick={() => pickStage(group.options[0].id)}
+                              className={`cp-chev ${stageClass}${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedOption?.negative ? ' lost' : ''}`}
+                            >
+                              <span className="cp-chev-label">{displayTitle}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                title={`Change status to ${displayTitle}`}
+                                onClick={() => setOpenSeg(openSeg === group.id ? null : group.id)}
+                                className={`cp-chev ${stageClass}${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedOption?.negative ? ' lost' : ''}`}
+                              >
+                                <span className="cp-chev-label">{displayTitle}</span> <ChevronDown size={12} />
+                              </button>
+                              {openSeg === group.id && (
+                                <div className="cp-chev-menu">
+                                  {group.options.map((option) => (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      className={option.negative ? 'neg' : ''}
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        pickStage(option.id);
+                                      }}
+                                    >{option.label}</button>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    }) : lifecycleSegments.map((seg) => {
                       const i = lifecycleSegments.indexOf(seg);
                       const selectedSegmentOption = isGeneric
-                        ? seg.options.find((option) => option.id === lifecycleStageSelections[seg.id])
+                        ? seg.options.find((option) => option.id === (lifecycleStageSelections[seg.id] || contact.lifecycleStageKey))
                         : null;
                       const displayTitle = selectedSegmentOption?.label || segmentDisplayTitle(seg);
                       const selectedSegmentIsNegative = Boolean(selectedSegmentOption?.negative);
@@ -2042,6 +2299,10 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                       </div>
                       );
                     })}
+                    </div>
+                    {isGeneric && statusPipelineOverflow && (
+                      <button type="button" className="cp-lifecycle-stage-nav" onClick={() => moveStatusPipeline(1)} disabled={!statusPipelineCanScrollRight} aria-label="Show next stages" title="Show next stages"><ChevronRight size={16} /></button>
+                    )}
                   </div>
                 </div>
               </div>

@@ -39,22 +39,39 @@ vi.hoisted(() => {
 prisma.tenant = { ...(prisma.tenant || {}), findUnique: vi.fn() };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn(), findMany: vi.fn() };
 prisma.tmcTrip = { ...(prisma.tmcTrip || {}), findMany: vi.fn(), findFirst: vi.fn() };
-prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn() };
+prisma.tripParticipant = { ...(prisma.tripParticipant || {}), findMany: vi.fn(), count: vi.fn() };
+prisma.tripPaymentPlan = { ...(prisma.tripPaymentPlan || {}), findUnique: vi.fn() };
+prisma.tripInstalmentPayment = { ...(prisma.tripInstalmentPayment || {}), findMany: vi.fn() };
+prisma.roomingAssignment = { ...(prisma.roomingAssignment || {}), findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), createMany: vi.fn() };
 prisma.pendingTripRegistration = { ...(prisma.pendingTripRegistration || {}), findMany: vi.fn() };
 prisma.tmcParentTrip = { ...(prisma.tmcParentTrip || {}), findMany: vi.fn() };
 prisma.visaApplication = { ...(prisma.visaApplication || {}), findMany: vi.fn() };
 prisma.visaLetterDocument = { ...(prisma.visaLetterDocument || {}), findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn() };
 prisma.visaLetterGeneration = { ...(prisma.visaLetterGeneration || {}), update: vi.fn() };
 prisma.user = { ...(prisma.user || {}), findMany: vi.fn() };
+prisma.tenantSetting = { ...(prisma.tenantSetting || {}), findUnique: vi.fn() };
+prisma.travelKnowledgeBaseFile = { ...(prisma.travelKnowledgeBaseFile || {}), findMany: vi.fn() };
+prisma.itinerary = { ...(prisma.itinerary || {}), findMany: vi.fn() };
+prisma.tmcTeacherCatalogueResponse = {
+  ...(prisma.tmcTeacherCatalogueResponse || {}),
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
 
 const { JWT_SECRET } = requireCJS('../../config/secrets');
 const visaLetterStore = requireCJS('../../lib/visaLetterStore');
 const audit = requireCJS('../../lib/audit');
 const notificationService = requireCJS('../../lib/notificationService');
+const travelKnowledgeBaseSync = requireCJS('../../lib/travelKnowledgeBaseSync');
+const driveOAuth = requireCJS('../../lib/googleDriveOAuth');
 const originalVisaLetterStore = {
   readLetterBuffer: visaLetterStore.readLetterBuffer,
   storeLetterPdf: visaLetterStore.storeLetterPdf,
   removeLetter: visaLetterStore.removeLetter,
+};
+const originalTmcCatalogueDeps = {
+  listFolderChildren: travelKnowledgeBaseSync.listFolderChildren,
+  getDriveClient: driveOAuth.getDriveClient,
 };
 audit.writeAudit = vi.fn().mockResolvedValue(undefined);
 notificationService.notifyMany = vi.fn().mockResolvedValue(undefined);
@@ -99,6 +116,15 @@ beforeEach(() => {
   prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcTrip.findFirst.mockReset();
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripParticipant.count.mockReset().mockResolvedValue(0);
+  prisma.tripPaymentPlan.findUnique.mockReset();
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.roomingAssignment.findMany.mockReset().mockResolvedValue([]);
+  prisma.roomingAssignment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.roomingAssignment.create.mockReset();
+  prisma.roomingAssignment.update.mockReset();
+  prisma.roomingAssignment.delete.mockReset();
+  prisma.roomingAssignment.createMany.mockReset();
   prisma.pendingTripRegistration.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcParentTrip.findMany.mockReset().mockResolvedValue([]);
   prisma.visaApplication.findMany.mockReset().mockResolvedValue([]);
@@ -120,6 +146,8 @@ afterEach(() => {
   visaLetterStore.readLetterBuffer = originalVisaLetterStore.readLetterBuffer;
   visaLetterStore.storeLetterPdf = originalVisaLetterStore.storeLetterPdf;
   visaLetterStore.removeLetter = originalVisaLetterStore.removeLetter;
+  travelKnowledgeBaseSync.listFolderChildren = originalTmcCatalogueDeps.listFolderChildren;
+  driveOAuth.getDriveClient = originalTmcCatalogueDeps.getDriveClient;
 });
 
 describe('TMC portal authentication and tenant isolation', () => {
@@ -153,6 +181,217 @@ describe('TMC portal authentication and tenant isolation', () => {
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 7, teacherContactId: 41 },
     }));
+  });
+});
+
+describe('TMC teacher catalogue selection', () => {
+  const brochure = {
+    id: 'tmc-pdf-1',
+    name: 'Nepal School Trip.pdf',
+    mimeType: 'application/pdf',
+    webViewLink: 'https://drive.google.com/file/d/tmc-pdf-1/view',
+    thumbnailLink: 'https://drive.google.com/thumbnail/tmc-pdf-1',
+  };
+  const drive = { files: { get: vi.fn() } };
+
+  beforeEach(() => {
+    prisma.contact.findFirst.mockResolvedValue(contact('TEACHER'));
+    prisma.tenantSetting.findUnique.mockReset().mockResolvedValue({ value: 'root-folder' });
+    prisma.travelKnowledgeBaseFile.findMany.mockReset().mockResolvedValue([{
+      driveFileId: 'tmc-pdf-1',
+      fileName: 'Nepal School Trip.pdf',
+      folderPath: 'TMC/CRM Itineraries',
+      driveViewLink: brochure.webViewLink,
+    }]);
+    prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
+    prisma.tmcTeacherCatalogueResponse.findUnique.mockReset().mockResolvedValue(null);
+    prisma.tmcTeacherCatalogueResponse.upsert.mockReset().mockImplementation(async ({ create, update }) => ({
+      selectedFilesJson: create?.selectedFilesJson || update.selectedFilesJson,
+      submittedAt: create?.submittedAt || update.submittedAt,
+    }));
+    travelKnowledgeBaseSync.listFolderChildren = vi.fn(async (_drive, folderId) => (
+      folderId === 'root-folder'
+        ? [{ id: 'tmc-folder', name: 'TMC', mimeType: 'application/vnd.google-apps.folder' }]
+        : [brochure]
+    ));
+    driveOAuth.getDriveClient = vi.fn().mockResolvedValue(drive);
+    drive.files.get.mockReset();
+  });
+
+  test('lists tenant TMC brochures and the teacher saved selection', async () => {
+    prisma.tmcTeacherCatalogueResponse.findUnique.mockResolvedValue({
+      selectedFilesJson: JSON.stringify([{ driveFileId: 'tmc-pdf-1', fileName: 'Nepal School Trip.pdf' }]),
+      submittedAt: new Date('2026-11-10T10:00:00.000Z'),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/teacher/catalogues')
+      .set(bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      connected: true,
+      catalogues: [expect.objectContaining({
+        driveFileId: 'tmc-pdf-1',
+        fileName: 'Nepal School Trip.pdf',
+        folderPath: 'TMC',
+        indexed: true,
+      })],
+      response: { selectedCatalogues: [{ driveFileId: 'tmc-pdf-1', fileName: 'Nepal School Trip.pdf' }] },
+    });
+    expect(prisma.travelKnowledgeBaseFile.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, subBrand: 'tmc' },
+    }));
+    expect(prisma.tmcTeacherCatalogueResponse.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_teacherContactId: { tenantId: 7, teacherContactId: 41 } },
+    }));
+  });
+
+  test('keeps the brochure library available when the response table is not synced yet', async () => {
+    prisma.tmcTeacherCatalogueResponse.findUnique.mockRejectedValue(Object.assign(
+      new Error('The table `TmcTeacherCatalogueResponse` does not exist'),
+      { code: 'P2021' },
+    ));
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/teacher/catalogues')
+      .set(bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      connected: true,
+      responseStorageAvailable: false,
+      catalogues: [expect.objectContaining({ driveFileId: 'tmc-pdf-1' })],
+      response: null,
+    });
+  });
+
+  test('rejects an empty catalogue selection without writing a response', async () => {
+    const res = await request(makeApp())
+      .post('/api/portal/tmc/teacher/catalogues/response')
+      .set(bearer())
+      .send({ selectedFileIds: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CATALOGUE_SELECTION');
+    expect(prisma.tmcTeacherCatalogueResponse.upsert).not.toHaveBeenCalled();
+  });
+
+  test('submits canonical selected brochure snapshots for the authenticated teacher', async () => {
+    const res = await request(makeApp())
+      .post('/api/portal/tmc/teacher/catalogues/response')
+      .set(bearer())
+      .send({ selectedFileIds: ['tmc-pdf-1'] });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ ok: true, response: { selectedCatalogues: [expect.objectContaining({ driveFileId: 'tmc-pdf-1' })] } });
+    const [write] = prisma.tmcTeacherCatalogueResponse.upsert.mock.calls[0];
+    expect(write.where).toEqual({ tenantId_teacherContactId: { tenantId: 7, teacherContactId: 41 } });
+    expect(JSON.parse(write.create.selectedFilesJson)).toEqual([expect.objectContaining({
+      driveFileId: 'tmc-pdf-1',
+      fileName: 'Nepal School Trip.pdf',
+      folderPath: 'TMC',
+    })]);
+  });
+
+  test('reports a database sync requirement when saving catalogue responses is unavailable', async () => {
+    prisma.tmcTeacherCatalogueResponse.upsert.mockRejectedValue(Object.assign(
+      new Error('The table `TmcTeacherCatalogueResponse` does not exist'),
+      { code: 'P2021' },
+    ));
+
+    const res = await request(makeApp())
+      .post('/api/portal/tmc/teacher/catalogues/response')
+      .set(bearer())
+      .send({ selectedFileIds: ['tmc-pdf-1'] });
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('TMC_CATALOGUE_RESPONSE_STORAGE_NOT_READY');
+  });
+
+  test('streams previews only for PDFs inside the configured TMC Drive folder', async () => {
+    drive.files.get
+      .mockResolvedValueOnce({ data: { id: 'tmc-pdf-1', name: 'Nepal School Trip.pdf', mimeType: 'application/pdf', parents: ['tmc-folder'] } })
+      .mockResolvedValueOnce({ data: { id: 'tmc-folder', name: 'TMC', mimeType: 'application/vnd.google-apps.folder', parents: ['root-folder'] } })
+      .mockResolvedValueOnce({ data: Buffer.from('%PDF-test') });
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/teacher/catalogues/tmc-pdf-1/file')
+      .set(bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/pdf');
+    expect(drive.files.get).toHaveBeenLastCalledWith({ fileId: 'tmc-pdf-1', alt: 'media' }, { responseType: 'arraybuffer' });
+  });
+});
+
+describe('TMC teacher trip management', () => {
+  beforeEach(() => {
+    prisma.contact.findFirst.mockResolvedValue(contact('TEACHER'));
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'TMC-100',
+      destination: 'Singapore',
+      tripType: 'international',
+      departDate: new Date('2026-12-01T00:00:00Z'),
+      returnDate: new Date('2026-12-08T00:00:00Z'),
+      status: 'confirmed',
+      teacherContactId: 41,
+      _count: { participants: 2, pendingRegistrations: 0 },
+    });
+  });
+
+  test('teacher can read the assigned trip payment and rooming ledgers', async () => {
+    prisma.tripPaymentPlan.findUnique.mockResolvedValue({
+      id: 1,
+      tripId: 100,
+      instalmentsJson: '[{"dueDate":"2026-11-20","amount":100000}]',
+      graceDays: 0,
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { id: 9, tripId: 100, participantId: 501, instalmentIndex: 0, amount: 100000, paidAmount: 100000, status: 'paid' },
+    ]);
+    prisma.roomingAssignment.findMany.mockResolvedValue([
+      { id: 12, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[501,502]' },
+    ]);
+
+    const [paymentPlan, instalments, rooming] = await Promise.all([
+      request(makeApp()).get('/api/portal/tmc/teacher/trips/100/payment-plan').set(bearer()),
+      request(makeApp()).get('/api/portal/tmc/teacher/trips/100/instalments').set(bearer()),
+      request(makeApp()).get('/api/portal/tmc/teacher/trips/100/rooming').set(bearer()),
+    ]);
+
+    expect(paymentPlan.status).toBe(200);
+    expect(paymentPlan.body.tripId).toBe(100);
+    expect(instalments.status).toBe(200);
+    expect(instalments.body.instalments).toHaveLength(1);
+    expect(rooming.status).toBe(200);
+    expect(rooming.body.rooming[0].roomNumber).toBe('101');
+  });
+
+  test('teacher can create rooming only for participants on the assigned trip', async () => {
+    prisma.tripParticipant.count.mockResolvedValue(2);
+    prisma.roomingAssignment.findMany.mockResolvedValue([]);
+    prisma.roomingAssignment.create.mockResolvedValue({
+      id: 22,
+      tripId: 100,
+      roomNumber: '201',
+      roomType: 'twin',
+      participantIds: '[501,502]',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/portal/tmc/teacher/trips/100/rooming')
+      .set(bearer())
+      .send({ roomNumber: '201', roomType: 'twin', participantIds: [501, 502] });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tripParticipant.count).toHaveBeenCalledWith({
+      where: { id: { in: [501, 502] }, tripId: 100 },
+    });
+    expect(prisma.roomingAssignment.create).toHaveBeenCalledWith({
+      data: { tripId: 100, roomNumber: '201', roomType: 'twin', participantIds: '[501,502]' },
+    });
   });
 });
 

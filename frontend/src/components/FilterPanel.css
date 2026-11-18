@@ -8,6 +8,13 @@
   box-shadow: -8px 10px 24px rgba(15, 23, 42, 0.16) !important;
 }
 
+.filter-panel-drawer--freshsales.filter-panel-generic {
+  width: 360px !important;
+  top: 78px !important;
+  bottom: 48px !important;
+  border-radius: 12px 0 0 12px !important;
+}
+
 .filter-panel-backdrop--freshsales {
   top: 78px !important;
   background: transparent !important;

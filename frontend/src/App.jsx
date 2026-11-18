@@ -151,6 +151,12 @@ const SuperAdminApiKeyManagement = lazy(
 const SuperAdminTenantManagement = lazy(
   () => import("./pages/superadmin/SuperAdminTenantManagement"),
 );
+const SuperAdminOrganizationDeletion = lazy(
+  () => import("./pages/superadmin/SuperAdminOrganizationDeletion"),
+);
+const SuperAdminOrganizationAuditLog = lazy(
+  () => import("./pages/superadmin/SuperAdminOrganizationAuditLog"),
+);
 const SuperAdminRoleManagement = lazy(
   () => import("./pages/superadmin/SuperAdminRoleManagement"),
 );
@@ -1076,12 +1082,26 @@ function CalendarRedirect() {
 }
 
 function LeadsRouteLayout() {
+  const location = useLocation();
+  const isLeadDetailRoute = location.pathname.startsWith("/leads/");
+  // Keep one Leads instance mounted across drawer/full-page profile
+  // transitions. Recreating the list on the way back makes its initial page
+  // (page one) win over the page that opened the profile. The list is hidden
+  // while a standalone profile is active, but its pagination, filters, and
+  // loaded rows remain alive and are revealed when the profile closes.
+  const hideListBehindProfile = isLeadDetailRoute && (
+    Boolean(location.state?.openFullPage)
+    || !location.state?.leadsListState
+  );
+
   return (
     <RoleGuard
       requiredPermission={{ module: "leads", action: "read" }}
       feature="Leads"
     >
-      <Leads />
+      <div hidden={hideListBehindProfile}>
+        <Leads />
+      </div>
       <Outlet />
     </RoleGuard>
   );
@@ -1687,6 +1707,8 @@ export default function App() {
                     <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
                     <Route path="tenant-management/:tenantId" element={<SuperAdminTenantManagement />} />
+                    <Route path="organization-deletion" element={<SuperAdminOrganizationDeletion />} />
+                    <Route path="organization-audit-log" element={<SuperAdminOrganizationAuditLog />} />
                     <Route path="role-management" element={<SuperAdminRoleManagement />} />
                     <Route path="page-visibility" element={<SuperAdminPageVisibility />} />
                     <Route path="landing-form" element={<SuperAdminLandingForm />} />

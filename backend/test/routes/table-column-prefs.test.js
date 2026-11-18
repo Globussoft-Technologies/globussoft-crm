@@ -72,6 +72,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     });
     // Sensible default adjacency: form attribution sits next to Source.
     expect(keys.indexOf('webForm')).toBe(keys.indexOf('source') + 1);
+    expect(keys.at(-1)).toBe('actions');
   });
 
   test('first-ever generic Leads load uses the compact calling-focused default', async () => {
@@ -115,6 +116,17 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.status).toBe(200);
     expect(res.body.visible).toEqual(['name', 'email', 'actions']);
     expect(res.body.visible).not.toContain('tags');
+  });
+
+  test('normalizes legacy preferences so Actions remains the last column', async () => {
+    prisma.tableColumnPreference.findUnique.mockResolvedValueOnce({
+      visibleJson: JSON.stringify(['name', 'actions', 'utm_source', 'email']),
+    });
+
+    const res = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(res.status).toBe(200);
+    expect(res.body.visible).toEqual(['name', 'utm_source', 'email', 'actions']);
   });
 
   test('leads catalog exposes Medium right after Web Form, separate from Source', async () => {

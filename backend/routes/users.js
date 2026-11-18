@@ -22,7 +22,7 @@ const router = express.Router();
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const { resolvePrimaryRole } = require('../lib/roleResolution');
-const { getSubBrandAccessSet } = require('../middleware/travelGuards');
+const { resolveTenantVertical } = require('../lib/tenantVertical');
 const {
   requirePermission,
   getUserPermissions,
@@ -40,28 +40,36 @@ router.get(
         return res.status(400).json({ error: 'Invalid userId' });
       }
 
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          wellnessRole: true,
-          userType: true,
-          tenantId: true,
-          createdAt: true,
-          deactivatedAt: true,
-        },
-      });
+      const userSelect = {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        wellnessRole: true,
+        userType: true,
+        tenantId: true,
+        createdAt: true,
+        deactivatedAt: true,
+      };
+      // Tenant callers should only fetch a user row from their own tenant.
+      // OWNER retains the explicit platform-wide support view.
+      const user = req.user.isOwner
+        ? await prisma.user.findUnique({
+          where: { id: userId },
+          select: userSelect,
+        })
+        : await prisma.user.findFirst({
+          where: { id: userId, tenantId: req.user.tenantId },
+          select: userSelect,
+        });
 
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      // Same-tenant guard — OWNER bypasses because they're not tenant-scoped.
-      // An ADMIN in tenant A cannot look up a user in tenant B; that would be
-      // a cross-tenant info leak about who works at the other org.
+      // Defense in depth for callers that aren't platform OWNERs. The
+      // non-owner query above is tenant-scoped already, but retain this check
+      // in case the lookup changes later.
       if (!req.user.isOwner && user.tenantId !== req.user.tenantId) {
         return res.status(403).json({
           error: 'Cross-tenant access denied',
@@ -79,7 +87,7 @@ router.get(
           userType: 'OWNER',
           roles: ['OWNER'],
           permissions: [],
-          user,
+          user: publicUser(user),
         });
       }
 
@@ -88,10 +96,16 @@ router.get(
       // in lock-step — if the merge logic changes, both endpoints change.
       const permissions = await getUserPermissions(user.tenantId, user.id);
       const permissionArray = Array.from(permissions).sort((a, b) => a.localeCompare(b));
+      const vertical = await resolveTenantVertical(user.tenantId);
 
       // Role names for the "Assigned roles" pill row in the UI.
       const userRoles = await prisma.userRole.findMany({
-        where: { userId: user.id },
+        where: {
+          userId: user.id,
+          role: {
+            OR: [{ tenantId: user.tenantId }, { tenantId: null }],
+          },
+        },
         include: { role: { select: { key: true } } },
       });
       const roleNames = userRoles.map((ur) => ur.role?.key).filter(Boolean);
@@ -99,8 +113,8 @@ router.get(
         id: user.id,
         role: user.role,
         tenantId: user.tenantId,
+        vertical,
       });
-      const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
 
       return res.json({
         isOwner: false,
@@ -109,8 +123,8 @@ router.get(
         permissions: permissionArray,
         primaryRole,
         landingPath: primaryRole?.landingPath || null,
-        subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
-        user,
+        vertical,
+        user: publicUser(user),
       });
     } catch (err) {
       console.error('[users/:userId/permissions] error:', err);
@@ -118,6 +132,11 @@ router.get(
     }
   },
 );
+
+function publicUser(user) {
+  const { tenantId: _tenantId, ...safeUser } = user;
+  return safeUser;
+}
 
 // SPEC §C3 — POST /api/users/:id/roles. Canonical URL alias of
 // `POST /api/roles/users/:userId/roles` (defined in routes/roles.js).

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useContext, useRef } from "react";
+import React, { useState, useEffect, useContext, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   UserPlus,
@@ -31,7 +32,6 @@ import {
   Globe2,
   Server,
   Copy,
-  Search,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -49,7 +49,10 @@ import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEf
 import ProductTourSettings from "../components/ProductTourSettings";
 import GoogleMapsSettingsCard from "../components/GoogleMapsSettingsCard";
 import TwilioSettingsCard from "../components/TwilioSettingsCard";
-import { buildGenericTrackingCookieSetupCode } from "../utils/webForms";
+import { buildGenericTrackingCookieSetupCode, normalizeTrackingCookieDomain } from "../utils/webForms";
+import SettingsWorkspace, { SettingsSection } from "../components/settings/SettingsWorkspace";
+import SettingsHelp from "../components/settings/SettingsHelp";
+import TravelIntegrationTiles from "../components/settings/TravelIntegrationTiles";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -111,24 +114,11 @@ export default function Settings() {
   // mounted. This also prevents generic-only controls (including Callified)
   // from disappearing during the initial render.
   const isGenericVertical = !ctxTenant || !ctxTenant.vertical || ctxTenant.vertical === "generic";
+  const hasSettingsWorkspace = ["generic", "travel", "wellness"].includes(ctxTenant?.vertical);
   // Settings tests and legacy callers can render before tenant context is
   // available. Restore the generic CRM pipeline-stage settings surface while
   // keeping wellness/travel behavior unchanged.
   const showLegacyPipelineStageEditor = !ctxTenant || isGenericVertical;
-  const [settingsSearch, setSettingsSearch] = useState("");
-  const settingsGridRef = useRef(null);
-
-  // Generic CRM gets a local settings search without changing the shared
-  // Wellness/Travel settings surface or the global application search.
-  useEffect(() => {
-    const grid = settingsGridRef.current;
-    if (!grid) return;
-    const query = isGenericVertical ? settingsSearch.trim().toLowerCase() : "";
-    Array.from(grid.children).forEach((card) => {
-      const text = card.textContent?.toLowerCase() || "";
-      card.style.display = !query || text.includes(query) ? "" : "none";
-    });
-  }, [isGenericVertical, settingsSearch]);
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
@@ -221,7 +211,7 @@ export default function Settings() {
   const [promotionalWebsiteTesting, setPromotionalWebsiteTesting] = useState(false);
   const [promotionalWebsiteStatus, setPromotionalWebsiteStatus] = useState(null);
   const [travelEmail, setTravelEmail] = useState({ apiKey: "", fromEmail: "", fromName: "" });
-  const [travelEmailStatus, setTravelEmailStatus] = useState(null);
+  const [travelEmailStatus, setTravelEmailStatus] = useState(undefined);
   const [travelEmailLoading, setTravelEmailLoading] = useState(false);
   const [travelEmailSaving, setTravelEmailSaving] = useState(false);
   const [travelEmailRemoving, setTravelEmailRemoving] = useState(false);
@@ -263,6 +253,15 @@ export default function Settings() {
   const [addBrandError, setAddBrandError] = useState("");
   // AdsGPT configuration
   const [adsgptLogin, setAdsgptLogin] = useState("");
+  const [adsgptConnection, setAdsgptConnection] = useState({ ready: null, loading: true });
+  const [cardConnections, setCardConnections] = useState({
+    maps: { ready: null, loading: true },
+    twilio: { ready: null, loading: true },
+    whatsapp: { ready: null, loading: true },
+  });
+  const reportMapsConnection = useCallback((status) => setCardConnections((current) => ({ ...current, maps: status })), []);
+  const reportTwilioConnection = useCallback((status) => setCardConnections((current) => ({ ...current, twilio: status })), []);
+  const reportWhatsAppConnection = useCallback((status) => setCardConnections((current) => ({ ...current, whatsapp: status })), []);
   const [adsgptSaving, setAdsgptSaving] = useState(false);
   const [adsgptMsg, setAdsgptMsg] = useState("");
   // Callified integration
@@ -277,6 +276,7 @@ export default function Settings() {
   const [callifiedLoading, setCallifiedLoading] = useState(true);
   const [callifiedSaving, setCallifiedSaving] = useState(false);
   const [callifiedConnected, setCallifiedConnected] = useState(false);
+  const [callifiedStatusKnown, setCallifiedStatusKnown] = useState(false);
   const [callifiedMsg, setCallifiedMsg] = useState("");
   const [callifiedUpdatedAt, setCallifiedUpdatedAt] = useState(null);
   const [callifiedDirty, setCallifiedDirty] = useState(false);
@@ -313,8 +313,12 @@ export default function Settings() {
       });
     // Fetch AdsGPT login configuration
     fetchApi("/api/integrations/adsgpt/config")
-      .then((res) => setAdsgptLogin(res.adsgptLogin || ""))
+      .then((res) => {
+        setAdsgptLogin(res.adsgptLogin || "");
+        setAdsgptConnection({ ready: typeof res.configured === "boolean" ? res.configured : Boolean(res.adsgptLogin?.trim()), loading: false });
+      })
       .catch(() => {
+        setAdsgptConnection({ ready: null, loading: false });
         /* adsgpt config may not be available */
       });
     // Fetch Callified integration status for all verticals; only base URL is
@@ -323,6 +327,7 @@ export default function Settings() {
     // toggle; the API key field shows a masked sentinel when a key is saved.
     fetchApi("/api/integrations/callified/config")
       .then((config) => {
+        setCallifiedStatusKnown(typeof config?.isActive === "boolean");
         if (config) {
           setCallifiedConnected(!!config.isActive);
           setCallifiedUpdatedAt(config.updatedAt || null);
@@ -897,6 +902,7 @@ export default function Settings() {
         method: "PUT",
         body: JSON.stringify({ adsgptLogin: adsgptLogin.trim() }),
       });
+      setAdsgptConnection({ ready: true, loading: false });
       notify.success("AdsGPT login updated");
       setAdsgptMsg("✓ Saved");
       // Notify other components to refetch the config
@@ -944,6 +950,7 @@ export default function Settings() {
       });
       notify.success("Callified configuration saved successfully");
       setCallifiedConnected(true);
+      setCallifiedStatusKnown(true);
       setCallifiedUpdatedAt(new Date().toISOString());
       if (hasNewApiKey) setCallifiedApiKey(MASKED_CALLIFIED_KEY);
       if (callifiedPassword) setCallifiedPassword(MASKED_CALLIFIED_KEY);
@@ -975,6 +982,7 @@ export default function Settings() {
       });
       notify.success("Callified integration disconnected");
       setCallifiedConnected(false);
+      setCallifiedStatusKnown(true);
       setCallifiedApiKey("");
       setCallifiedEmail("");
       setCallifiedPassword("");
@@ -1113,6 +1121,8 @@ export default function Settings() {
   // 425px viewport before any content gets to render).
   return (
     <div
+      className={hasSettingsWorkspace ? "gs-page" : undefined}
+      data-settings-vertical={ctxTenant?.vertical}
       style={{
         padding: "clamp(1rem, 4vw, 2rem)",
         height: "100%",
@@ -1175,67 +1185,25 @@ export default function Settings() {
           </Link>
         )} */}
       </header>
-      {isGenericVertical && (
-        <div
-          role="search"
-          aria-label="Search Generic CRM settings"
-          className="generic-settings-search"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            maxWidth: 520,
-            marginBottom: "1.25rem",
-            padding: "0 0.75rem",
-            border: "1px solid var(--border-color)",
-            borderRadius: 8,
-            background: "var(--surface-color)",
-          }}
-        >
-          <Search
-            size={17}
-            aria-hidden="true"
-            style={{
-              flex: "0 0 auto",
-              color: "var(--text-secondary)",
-              pointerEvents: "none",
-            }}
-          />
-          <input
-            type="search"
-            value={settingsSearch}
-            onChange={(event) => setSettingsSearch(event.target.value)}
-            placeholder="Search settings..."
-            aria-label="Search settings"
-            style={{
-              flex: "1 1 auto",
-              minWidth: 0,
-              width: "100%",
-              boxSizing: "border-box",
-              padding: "0.7rem 0.15rem",
-              border: 0,
-              outline: "none",
-              background: "transparent",
-              color: "var(--text-primary)",
-              fontSize: "0.9rem",
-              appearance: "none",
-              WebkitAppearance: "none",
-            }}
-          />
-        </div>
-      )}
-      {/* Cards flow through a CSS multi-column container so heights balance
-          automatically across the two columns instead of pooling into two
-          fixed lists (which left a tall empty gutter on the right whenever
-          the wellness-only cards on the left pushed that column past the
-          right one). Each card carries `break-inside: avoid` + its own
-          bottom margin via the `.settings-grid > .card` rule in index.css.
-          Below ~720px the columns collapse to a single column. */}
-      <div className="settings-grid" ref={settingsGridRef}>
-          {isGenericVertical && <ProductTourSettings />}
-          {isGenericVertical && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && <GoogleMapsSettingsCard />}
+      {/* Group only the cards already available to the current vertical.
+          Keep sections mounted so navigation preserves form drafts and
+          existing request lifecycles. Loading/legacy contexts retain the grid. */}
+      <SettingsWorkspace enabled={hasSettingsWorkspace} vertical={ctxTenant?.vertical}
+        integrationStatuses={{
+          adsgpt: adsgptConnection,
+          callified: { ready: callifiedStatusKnown ? callifiedConnected : null, loading: callifiedLoading },
+          ...cardConnections,
+          sendgrid: {
+            ready: travelEmailStatus ? Boolean(travelEmailStatus.configured || travelEmailStatus.fallback?.configured) : null,
+            loading: travelEmailLoading || travelEmailStatus === undefined,
+            detail: travelEmailStatus?.configured ? "Using your organization's SendGrid account" : travelEmailStatus?.fallback?.configured ? "Using the backend default SendGrid account" : undefined,
+          },
+        }}
+        integrationExtras={ctxTenant?.vertical === "travel" ? <TravelIntegrationTiles /> : null}>
+          {isGenericVertical && <SettingsSection section="appearance"><ProductTourSettings /></SettingsSection>}
+          {isGenericVertical && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && <SettingsSection section="integrations" integration="maps"><GoogleMapsSettingsCard onConnectionStatusChange={reportMapsConnection} /></SettingsSection>}
           {/* Organization Card */}
-          <div
+          <SettingsSection section="general"><div
             className="card"
             data-tour="settings-organization"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
@@ -1482,10 +1450,10 @@ export default function Settings() {
                 Loading organization details…
               </p>
             )}
-          </div>
+          </div></SettingsSection>
 
           {ctxTenant?.vertical === "travel" && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
-            <div className="card" data-testid="travel-email-provider-card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+            <SettingsSection section="integrations" integration="sendgrid"><div className="card" data-testid="travel-email-provider-card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
               <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <Mail size={20} color="var(--accent-color)" /> Travel Email Delivery (SendGrid BYOK)
               </h3>
@@ -1527,11 +1495,11 @@ export default function Settings() {
                   </div>
                 </form>
               )}
-            </div>
+            </div></SettingsSection>
           )}
 
           {ctxTenant?.vertical === "travel" && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
-            <div
+            <SettingsSection section="hosting"><div
               className="card"
               data-testid="travel-promotional-website-card"
               style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
@@ -1660,11 +1628,11 @@ export default function Settings() {
                   </div>
                 </form>
               )}
-            </div>
+            </div></SettingsSection>
           )}
 
           {/* Appearance Card */}
-          <div
+          <SettingsSection section="appearance"><div
             className="card"
             data-tour="settings-appearance"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
@@ -1783,11 +1751,11 @@ export default function Settings() {
                 ))}
               </div>
             </div>
-          </div>
+          </div></SettingsSection>
 
           {/* Email Messages Card — #611 retention toggle */}
           {tenant && (
-            <div
+            <SettingsSection section="general"><div
               className="card"
               style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
               data-testid="email-retention-card"
@@ -1865,21 +1833,21 @@ export default function Settings() {
                   will not link replies to their parent.
                 </p>
               )}
-            </div>
+            </div></SettingsSection>
           )}
 
           {/* Consent Templates — wellness only (#612) */}
           {tenant && tenant.vertical === "wellness" && (
-            <ConsentTemplatesCard notify={notify} />
+            <SettingsSection section="consent"><ConsentTemplatesCard notify={notify} /></SettingsSection>
           )}
 
           {/* Wellness Role Types — wellness only (Option B) */}
           {tenant && tenant.vertical === "wellness" && (
-            <WellnessRoleTypesCard notify={notify} />
+            <SettingsSection section="clinicroles"><WellnessRoleTypesCard notify={notify} /></SettingsSection>
           )}
 
           {/* Generic CRM pipeline stages are managed here as before. */}
-          {showLegacyPipelineStageEditor && <div
+          {showLegacyPipelineStageEditor && <SettingsSection section="general"><div
             className="card settings-pipeline-stages-card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
@@ -2074,10 +2042,10 @@ export default function Settings() {
                 <Plus size={16} /> Add Stage
               </button>
             </form>
-          </div>}
+          </div></SettingsSection>}
 
           {/* Invite User Card */}
-          <div
+          <SettingsSection section="members"><div
             className="card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
@@ -2096,7 +2064,7 @@ export default function Settings() {
             </h3>
             {/* #484: Invite form uses auto-fit + minmax so fields stack on
               narrow viewports rather than truncating placeholders/values. */}
-            <form
+            <form className={hasSettingsWorkspace ? "gs-invite" : undefined}
               onSubmit={handleCreateUser}
               style={{
                 display: "grid",
@@ -2127,7 +2095,7 @@ export default function Settings() {
                   setNewUser({ ...newUser, email: e.target.value })
                 }
               />
-              <PasswordInput
+              <PasswordInput className={hasSettingsWorkspace ? "input-field gs-pass" : "input-field"} wrapperStyle={hasSettingsWorkspace ? { minWidth: 0 } : undefined}
                 placeholder="Temporary Password"
                 required
                 style={{ minWidth: 0 }}
@@ -2157,10 +2125,10 @@ export default function Settings() {
                 Send Invitation & Create Account
               </button>
             </form>
-          </div>
+          </div></SettingsSection>
 
           {/* AdsGPT Configuration Card */}
-          <div
+          <SettingsSection section="integrations" integration="adsgpt"><div
             className="card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
@@ -2220,10 +2188,10 @@ export default function Settings() {
                 {adsgptMsg}
               </p>
             )}
-          </div>
+          </div></SettingsSection>
 
           {isGenericVertical && (
-            <>
+            <SettingsSection section="integrations" integration="callified"><>
               {/* Callified Integration Card */}
               <div
                 className="card"
@@ -2555,13 +2523,13 @@ export default function Settings() {
               </p>
             )}
           </div>
-          </>
+          </></SettingsSection>
           )}
 
-          {/* Simple Callified connect card — travel/wellness/legacy verticals keep
+          {/* Simple Callified connect card — wellness/legacy verticals keep
               the original single-API-key "Connect" experience. */}
-          {!isGenericVertical && (
-            <div
+          {!isGenericVertical && ctxTenant?.vertical !== "travel" && (
+            <SettingsSection section="integrations" integration="callified" className="gs-legacy-callified"><div
               className="card"
               style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
             >
@@ -2734,14 +2702,14 @@ export default function Settings() {
                   {callifiedMsg}
                 </p>
               )}
-            </div>
+            </div></SettingsSection>
           )}
 
           {/* Organization-wide AI settings. The card writes to the shared
               AI provider resolver state so every tenant can either configure
               BYOK or request CRM-managed AI access from one place. */}
-          {hasPermission("settings", "manage") && <OrganizationAiSettingsCard />}
-          {hasPermission("settings", "manage") && isGenericVertical && <LandingSitesSettingsCard />}
+          {hasPermission("settings", "manage") && <SettingsSection section="ai"><OrganizationAiSettingsCard /></SettingsSection>}
+          {hasPermission("settings", "manage") && isGenericVertical && <SettingsSection section="ai"><LandingSitesSettingsCard /></SettingsSection>}
 
           {/* WhatsApp / Meta Configuration — per-tenant Meta Cloud API
               credentials. Every organization connects its OWN WhatsApp
@@ -2751,40 +2719,40 @@ export default function Settings() {
               guard. Vertical-agnostic: the travel (Wati) and WhatsApp-Web (QR)
               transports have their own separate surfaces. */}
           {hasPermission("settings", "manage") && isGenericVertical && (
-            <WhatsAppMetaConfigCard />
+            <SettingsSection section="integrations" integration="whatsapp" className="gs-wa"><WhatsAppMetaConfigCard compactHints onConnectionStatusChange={reportWhatsAppConnection} /></SettingsSection>
           )}
 
           {/* Twilio remains available under Communication Channels; this is
               the same per-tenant configuration surfaced in Generic CRM
               Settings for administrators who manage integrations here. */}
           {hasPermission("settings", "manage") && isGenericVertical && (
-            <TwilioSettingsCard />
+            <SettingsSection section="integrations" integration="twilio"><TwilioSettingsCard portalDialogs={hasSettingsWorkspace} onConnectionStatusChange={reportTwilioConnection} /></SettingsSection>
           )}
 
           {hasPermission("settings", "manage") && (isGenericVertical || ctxTenant?.vertical === "travel") && (
-            <GenericRecaptchaSettingsCard notify={notify} isTravel={ctxTenant?.vertical === "travel"} />
+            <SettingsSection section="leadcapture"><GenericRecaptchaSettingsCard notify={notify} isTravel={ctxTenant?.vertical === "travel"} /></SettingsSection>
           )}
 
           {hasPermission("settings", "manage") && isGenericVertical && (
-            <GenericWebFormAutomaticTrackingCard />
+            <SettingsSection section="leadcapture"><GenericWebFormAutomaticTrackingCard /></SettingsSection>
           )}
 
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;
               ADMIN-only + subscription-gated server-side. */}
-          <WebhookSigningCredential />
+          <SettingsSection section="developer"><WebhookSigningCredential portalDialogs={hasSettingsWorkspace} /></SettingsSection>
 
           {/* External Lead Domains — partner origins allowed to embed lead
               capture surfaces. Shared across travel, wellness, and generic. */}
           {hasPermission("settings", "manage") && (
-            <LeadSourceAllowlistCard tenantId={leadSourceTenantId} />
+            <SettingsSection section="leadcapture"><LeadSourceAllowlistCard tenantId={leadSourceTenantId} /></SettingsSection>
           )}
 
           {/* Notification Preferences Card */}
-          <NotificationPreferencesCard notify={notify} />
+          <SettingsSection section="notifications"><NotificationPreferencesCard notify={notify} /></SettingsSection>
 
           {/* Branding Card */}
-          <div
+          <SettingsSection section="branding"><div
             className="card"
             style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
           >
@@ -2799,7 +2767,7 @@ export default function Settings() {
               }}
             >
               <Palette size={20} color="var(--accent-color)" />
-              {brandingSubBrand ? `Branding — ${subBrandShortLabel(brandingSubBrand)}` : "Branding"}
+              {brandingSubBrand ? `Branding — ${subBrandShortLabel(brandingSubBrand)}` : ctxTenant?.vertical === "generic" ? "Brand assets" : "Branding"}
             </h3>
             <p
               style={{
@@ -2810,14 +2778,16 @@ export default function Settings() {
             >
               {brandingSubBrand
                 ? `Editing the logo and color for ${subBrandShortLabel(brandingSubBrand)}. Switch the Sub Brand dropdown in the sidebar to edit a different brand.`
-                : "Upload your default logo and pick a brand color. These are the company-wide fallback shown in the sidebar and on branded PDFs whenever a sub-brand has no branding of its own."}
+                : ctxTenant?.vertical === "travel"
+                  ? "Upload your default logo and pick a brand color. These are the company-wide fallback shown in the sidebar and on branded PDFs whenever a sub-brand has no branding of its own."
+                  : "Set your organization logo and colors for a consistent look across the CRM and branded documents."}
             </p>
 
             {/* #479: Branding two-column (Logo | Brand color) collapses to
               single-column under ~360px-each via auto-fit + minmax, fixing
               the "B colo..." label clip + "Save c..." button-text clip on
               ~425px viewports. */}
-            <div
+            <div className={hasSettingsWorkspace ? "gs-br-grid" : undefined}
               style={{
                 display: "grid",
                 gridTemplateColumns:
@@ -2827,8 +2797,8 @@ export default function Settings() {
               }}
             >
               {/* Logo */}
-              <div style={{ minWidth: 0 }}>
-                <label
+              <div className={hasSettingsWorkspace ? "gs-br-logo" : undefined} style={{ minWidth: 0 }}>
+                <div className={hasSettingsWorkspace ? "gs-field-label" : undefined} style={{ display: hasSettingsWorkspace ? "flex" : "contents" }}><label
                   style={{
                     display: "block",
                     marginBottom: "0.5rem",
@@ -2842,7 +2812,9 @@ export default function Settings() {
                     style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
                   />{" "}
                   Logo
-                </label>
+                </label>{hasSettingsWorkspace && <SettingsHelp label="Logo">
+                  PNG, JPG, GIF, WEBP or SVG. Max 20 MB. Square works best.
+                </SettingsHelp>}</div>
                 <div
                   style={{
                     display: "flex",
@@ -3013,19 +2985,19 @@ export default function Settings() {
                     )}
                   </div>
                 </div>
-                <p
+                {!hasSettingsWorkspace && <p
                   style={{
                     color: "var(--text-secondary)",
                     fontSize: "0.75rem",
                   }}
                 >
                   PNG, JPG, GIF, WEBP or SVG. Max 20 MB. Square works best.
-                </p>
+                </p>}
               </div>
 
               {/* Brand color — original; sidebar section labels + PDFs */}
-              <div style={{ minWidth: 0 }}>
-                <label
+              <div className={hasSettingsWorkspace ? "gs-br-color" : undefined} style={{ minWidth: 0 }}>
+                <div className={hasSettingsWorkspace ? "gs-field-label" : undefined} style={{ display: hasSettingsWorkspace ? "flex" : "contents" }}><label
                   style={{
                     display: "block",
                     marginBottom: "0.5rem",
@@ -3039,12 +3011,15 @@ export default function Settings() {
                     style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
                   />{" "}
                   Brand color
-                </label>
+                </label>{hasSettingsWorkspace && <SettingsHelp label="Brand color">
+                  6-digit hex. Leave blank to fall back to the default theme
+                  accent.
+                </SettingsHelp>}</div>
                 {/* #479: flexWrap + whiteSpace:nowrap on the Save button so the
                   button stays as one piece ("Save c..." → "Save color") even
                   when wrapped to its own line. min-width:0 on the hex input
                   lets it shrink instead of pushing the button off-screen. */}
-                <div
+                <div className={hasSettingsWorkspace ? "gs-br-inputs" : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -3053,7 +3028,7 @@ export default function Settings() {
                     flexWrap: "wrap",
                   }}
                 >
-                  <input
+                  <input aria-label={hasSettingsWorkspace ? "Brand color picker" : undefined}
                     type="color"
                     value={
                       /^#[0-9a-fA-F]{6}$/.test(branding.brandColor || "")
@@ -3073,7 +3048,7 @@ export default function Settings() {
                       background: "var(--input-bg)",
                     }}
                   />
-                  <input
+                  <input aria-label={hasSettingsWorkspace ? "Brand color hex" : undefined}
                     type="text"
                     className="input-field"
                     placeholder={DEFAULT_BRAND_COLOR}
@@ -3083,7 +3058,7 @@ export default function Settings() {
                     }
                     style={{ flex: "1 1 120px", minWidth: 0 }}
                   />
-                  <button
+                  <div className={hasSettingsWorkspace ? "gs-br-actions" : undefined} style={{ display: hasSettingsWorkspace ? "flex" : "contents" }}><button
                     type="button"
                     className="btn-primary"
                     disabled={brandingSaving}
@@ -3091,9 +3066,9 @@ export default function Settings() {
                     style={{ whiteSpace: "nowrap" }}
                   >
                     {brandingSaving ? "Saving..." : "Save color"}
-                  </button>
+                  </button></div>
                 </div>
-                <p
+                {!hasSettingsWorkspace && <p
                   style={{
                     color: "var(--text-secondary)",
                     fontSize: "0.75rem",
@@ -3101,12 +3076,12 @@ export default function Settings() {
                 >
                   6-digit hex. Leave blank to fall back to the default theme
                   accent.
-                </p>
+                </p>}
               </div>
 
               {/* Theme color — controls the full UI: sidebar bg, buttons, tabs, focus rings */}
-              <div style={{ minWidth: 0 }}>
-                <label
+              <div className={hasSettingsWorkspace ? "gs-br-color" : undefined} style={{ minWidth: 0 }}>
+                <div className={hasSettingsWorkspace ? "gs-field-label" : undefined} style={{ display: hasSettingsWorkspace ? "flex" : "contents" }}><label
                   style={{
                     display: "block",
                     marginBottom: "0.5rem",
@@ -3120,8 +3095,11 @@ export default function Settings() {
                     style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
                   />{" "}
                   Theme color
-                </label>
-                <div
+                </label>{hasSettingsWorkspace && <SettingsHelp label="Theme color">
+                  Changes buttons, tabs, highlights, and focus rings. Enter a 6-digit hex color,
+                  or reset to your {ctxTenant?.vertical === "travel" ? "Travel CRM" : ctxTenant?.vertical === "wellness" ? "Wellness CRM" : "default"} theme.
+                </SettingsHelp>}</div>
+                <div className={hasSettingsWorkspace ? "gs-br-inputs" : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -3130,7 +3108,7 @@ export default function Settings() {
                     flexWrap: "wrap",
                   }}
                 >
-                  <input
+                  <input aria-label={hasSettingsWorkspace ? "Theme color picker" : undefined}
                     type="color"
                     value={
                       /^#[0-9a-fA-F]{6}$/.test(branding.themeColor || "")
@@ -3150,7 +3128,7 @@ export default function Settings() {
                       background: "var(--input-bg)",
                     }}
                   />
-                  <input
+                  <input aria-label={hasSettingsWorkspace ? "Theme color hex" : undefined}
                     type="text"
                     className="input-field"
                     placeholder={DEFAULT_BRAND_COLOR}
@@ -3160,7 +3138,7 @@ export default function Settings() {
                     }
                     style={{ flex: "1 1 120px", minWidth: 0 }}
                   />
-                  <button
+                  <div className={hasSettingsWorkspace ? "gs-br-actions" : undefined} style={{ display: hasSettingsWorkspace ? "flex" : "contents" }}><button
                     type="button"
                     className="btn-primary"
                     disabled={themeColorSaving}
@@ -3204,18 +3182,18 @@ export default function Settings() {
                     >
                       Reset to default
                     </button>
-                  )}
+                  )}</div>
                 </div>
-                <p
+                {!hasSettingsWorkspace && <p
                   style={{
                     color: "var(--text-secondary)",
                     fontSize: "0.75rem",
                   }}
                 >
-                  6-digit hex. Changes buttons, tabs, active highlights, and
-                  focus rings. Leave blank (or reset) to restore the Dr. Enhance
-                  gold palette.
-                </p>
+                  {ctxTenant?.vertical === "generic"
+                    ? "Changes buttons, tabs, highlights, and focus rings. Enter a 6-digit hex color, or reset to the default theme."
+                    : "6-digit hex. Changes buttons, tabs, active highlights, and focus rings. Leave blank (or reset) to restore the Dr. Enhance gold palette."}
+                </p>}
               </div>
             </div>
 
@@ -3230,7 +3208,7 @@ export default function Settings() {
                 {brandingMsg}
               </p>
             )}
-          </div>
+          </div></SettingsSection>
 
           {/* Your Brands — multi-brand (BrandKit) management. Travel-vertical
               only: sub-brands (TMC / RFU / Travel Stall / Visa Sure) are a
@@ -3242,7 +3220,7 @@ export default function Settings() {
               brand with a logo + color" path; version history / advanced
               fields (fonts, PDF headers, etc.) stay on the dedicated page. */}
           {ctxTenant?.vertical === "travel" && (
-            <div className="card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+            <SettingsSection section="branding" className="gs-brands"><div className="card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
               <div
                 style={{
                   display: "flex",
@@ -3298,6 +3276,7 @@ export default function Settings() {
                     return (
                       <div
                         key={id}
+                        className="gs-brand-row"
                         style={{
                           display: "flex",
                           alignItems: "center",
@@ -3384,14 +3363,14 @@ export default function Settings() {
                   })}
                 </div>
               )}
-            </div>
+            </div></SettingsSection>
           )}
 
           {/* Add Another Brand — compact modal. Uploads a logo (optional) via
               /api/brand-kits/upload, then creates the active BrandKit row.
               Advanced fields stay on /admin/brand-kits. */}
-          {showAddBrand && (
-            <div
+          {ctxTenant?.vertical === "travel" && showAddBrand && (
+            createPortal(<div className="gs-dialog gs-brand-dialog" role="dialog" aria-modal="true" aria-label={editingKit ? "Edit brand" : "Add another brand"}
               onClick={() => !addBrandSaving && setShowAddBrand(false)}
               style={{
                 position: "fixed",
@@ -3417,6 +3396,7 @@ export default function Settings() {
                     type="button"
                     onClick={() => setShowAddBrand(false)}
                     disabled={addBrandSaving}
+                    aria-label="Close brand dialog"
                     style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}
                   >
                     <X size={18} />
@@ -3521,7 +3501,7 @@ export default function Settings() {
                   </button>
                 </div>
               </form>
-            </div>
+            </div>, document.body)
           )}
 
           {/* Role Recovery — secondary entry point for the version-history /
@@ -3532,7 +3512,7 @@ export default function Settings() {
               same OR-gate the backend endpoints enforce, so a render here
               and a successful API call always agree. */}
           {canSeeRecoverySection && (
-            <div
+            <SettingsSection section="roles"><div
               className="card"
               data-testid="settings-role-recovery-card"
               style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
@@ -3716,9 +3696,9 @@ export default function Settings() {
                   loadRecoveryRoles();
                 }}
               />
-            </div>
+            </div></SettingsSection>
           )}
-      </div>
+      </SettingsWorkspace>
     </div>
   );
 }
@@ -3810,7 +3790,7 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
         </a>
       </p>
       <form onSubmit={save}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))", gap: "1rem" }}>
           <label>
             <span style={{ display: "block", marginBottom: "0.35rem", fontWeight: "600" }}>Site Key</span>
             <input
@@ -3848,9 +3828,14 @@ function GenericRecaptchaSettingsCard({ notify, isTravel = false }) {
 
 function GenericWebFormAutomaticTrackingCard() {
   const [showSetupModal, setShowSetupModal] = useState(false);
+  const [domainInput, setDomainInput] = useState("");
+  const [cookieDomain, setCookieDomain] = useState("");
+  const [domainError, setDomainError] = useState("");
+  const [savedDomains, setSavedDomains] = useState({});
+  const [savingDomain, setSavingDomain] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  const setupCode = buildGenericTrackingCookieSetupCode();
+  const setupCode = buildGenericTrackingCookieSetupCode(cookieDomain);
   const cookieKeys = [
     ["UTM Source", "utm_source"],
     ["UTM Medium", "utm_medium"],
@@ -3876,6 +3861,23 @@ function GenericWebFormAutomaticTrackingCard() {
     ["Referrer", "referrer"],
   ];
   useEffect(() => {
+    let active = true;
+    fetchApi("/api/tenant-settings")
+      .then((payload) => {
+        if (!active) return;
+        const row = (Array.isArray(payload?.settings) ? payload.settings : [])
+          .find((entry) => entry.key === "generic.webForm.trackingCookieDomains");
+        try {
+          const parsed = JSON.parse(String(row?.value || "{}"));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) setSavedDomains(parsed);
+        } catch {
+          setSavedDomains({});
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
     if (!showSetupModal) return undefined;
     const closeOnEscape = (event) => {
       if (event.key === "Escape") setShowSetupModal(false);
@@ -3887,6 +3889,36 @@ function GenericWebFormAutomaticTrackingCard() {
     setShowSetupModal(false);
     setCopied(false);
     setCopyError(false);
+    setDomainError("");
+  };
+  const openSetupModal = () => {
+    setDomainInput("");
+    setCookieDomain("");
+    setDomainError("");
+    setShowSetupModal(true);
+  };
+  const generateSetupCode = async () => {
+    const normalized = normalizeTrackingCookieDomain(domainInput);
+    if (!normalized) {
+      setDomainError("Enter a valid website domain or full website URL.");
+      return;
+    }
+    setSavingDomain(true);
+    try {
+      const nextDomains = { ...savedDomains, selectedDomain: normalized, [normalized]: { domain: normalized, updatedAt: new Date().toISOString() } };
+      await fetchApi("/api/tenant-settings/generic.webForm.trackingCookieDomains", {
+        method: "PUT",
+        body: JSON.stringify({ value: JSON.stringify(nextDomains), category: "general" }),
+      });
+      setSavedDomains(nextDomains);
+      setCookieDomain(normalized);
+      setDomainInput(normalized);
+      setDomainError("");
+    } catch (error) {
+      setDomainError(error?.message || "Could not save the website domain.");
+    } finally {
+      setSavingDomain(false);
+    }
   };
   const copySetupCode = async () => {
     try {
@@ -3915,7 +3947,7 @@ function GenericWebFormAutomaticTrackingCard() {
         <button
           type="button"
           className="btn-primary"
-          onClick={() => setShowSetupModal(true)}
+          onClick={openSetupModal}
           style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}
         >
           <Copy size={16} />
@@ -3943,8 +3975,9 @@ function GenericWebFormAutomaticTrackingCard() {
         Page URL, page source, current domain, form name, submission time, browser, operating system, device type,
         and permitted location are fetched automatically. Landing page and referrer are also detected automatically when their keys are absent.
       </p>
-      {showSetupModal && (
+      {showSetupModal && createPortal(
         <div
+          className="gs-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby="cookie-setup-modal-title"
@@ -3979,7 +4012,7 @@ function GenericWebFormAutomaticTrackingCard() {
                   Cookie setup function
                 </h3>
                 <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>
-                  Add this function once to your website header or footer. It keeps the first tracking value for 90 days.
+                  Choose the website domain first. The generated function replaces a campaign when a new tagged visit arrives and keeps it when the next page has no campaign parameters.
                 </p>
               </div>
               <button type="button" className="btn-secondary" onClick={closeSetupModal} aria-label="Close cookie setup modal" style={{ minWidth: "42px", minHeight: "42px", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -3987,25 +4020,35 @@ function GenericWebFormAutomaticTrackingCard() {
               </button>
             </div>
             <div style={{ display: "grid", gap: "16px", padding: "20px 22px 22px" }}>
-              <label style={{ display: "grid", gap: "8px" }}>
-                <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website cookie function</span>
-                <textarea
-                  className="input-field"
-                  readOnly
-                  aria-label="Cookie setup function"
-                  value={setupCode}
-                  onFocus={(event) => event.target.select()}
-                  rows={12}
-                  style={{ width: "100%", minHeight: "260px", resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "0.82rem", lineHeight: 1.45 }}
-                />
-              </label>
+              {!cookieDomain ? (
+                <div style={{ display: "grid", gap: "10px" }}>
+                  <label style={{ display: "grid", gap: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website/cookie domain</span>
+                    <input className="input-field" aria-label="Website cookie domain" value={domainInput} onChange={(event) => setDomainInput(event.target.value)} placeholder="poweradspy.com or https://poweradspy.com/" autoFocus />
+                  </label>
+                  <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.45, margin: 0 }}>The hostname will be normalized and used exactly as entered. Cookies will be available on that hostname and its subdomains.</p>
+                  {domainError && <p role="alert" style={{ color: "var(--danger-color)", fontSize: "0.8rem", margin: 0 }}>{domainError}</p>}
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}><button type="button" className="btn-primary" onClick={generateSetupCode} disabled={savingDomain}>{savingDomain ? "Saving..." : "Validate and generate"}</button></div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gap: "4px", padding: "10px 12px", borderRadius: "8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.78rem" }}>Selected cookie domain</span>
+                    <code>{cookieDomain}</code>
+                  </div>
+                  <label style={{ display: "grid", gap: "8px" }}>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem", fontWeight: 700 }}>Website cookie function</span>
+                    <textarea className="input-field" readOnly aria-label="Cookie setup function" value={setupCode} onFocus={(event) => event.target.select()} rows={12} style={{ width: "100%", minHeight: "260px", resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "0.82rem", lineHeight: 1.45 }} />
+                  </label>
+                </>
+              )}
               {copyError && (
                 <p role="alert" style={{ color: "var(--danger-color)", fontSize: "0.8rem", margin: 0 }}>
                   Clipboard access is unavailable. Select the code above and copy it manually.
                 </p>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
-                <button type="button" className="btn-secondary" onClick={copySetupCode} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                <button type="button" className="btn-secondary" onClick={copySetupCode} disabled={!cookieDomain} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
                   {copied ? <Check size={16} /> : <Copy size={16} />}
                   {copied ? "Copied" : "Copy function"}
                 </button>
@@ -4013,7 +4056,8 @@ function GenericWebFormAutomaticTrackingCard() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

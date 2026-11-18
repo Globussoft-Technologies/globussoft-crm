@@ -10,7 +10,7 @@ const { JWT_SECRET } = require("../config/secrets");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireAnyPermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
-const { sanitizeText } = require("../lib/sanitizeJson");
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const { validateIdentitySubmission } = require("../lib/diagnosticIdentityFields");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { notifyMany } = require("../lib/notificationService");
@@ -37,6 +37,7 @@ const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 const {
   buildTmcParentRegistrationUrl,
   verifyTmcRegistrationToken,
+  getTmcRegistrationContext,
   setTmcRegistrationContext,
 } = require("../lib/tmcRegistrationContext");
 const {
@@ -52,6 +53,11 @@ const {
 } = require("../lib/tmcDigitalConsent");
 const { loadBundledTmcConsentTerms } = require("../lib/tmcConsentTerms");
 const { ensureTmcTripTypeBank } = require("../lib/tmcTripTypePreference");
+const travelKnowledgeBaseSync = require("../lib/travelKnowledgeBaseSync");
+const driveOAuth = require("../lib/googleDriveOAuth");
+
+const TMC_KNOWLEDGE_ROOT_KEY = "travel.knowledgeBase.rootFolderId";
+const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 
 const TMC_CONSENT_TEMPLATE_ASSETS = Object.freeze({
   day_trip: { filename: "day-tour-terms.pdf", sourceFile: "day-tour-terms.pdf" },
@@ -150,6 +156,133 @@ function requireTeacher(req, res, next) {
 
 function requireParent(req, res, next) {
   return requirePortalPersona("PARENT", req, res, next);
+}
+
+async function loadTmcCatalogueFiles(tenantId) {
+  const [rootSetting, indexedRows, generatedItineraries] = await Promise.all([
+    prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId, key: TMC_KNOWLEDGE_ROOT_KEY } },
+      select: { value: true },
+    }),
+    prisma.travelKnowledgeBaseFile.findMany({
+      where: { tenantId, subBrand: "tmc" },
+      select: { driveFileId: true, fileName: true, folderPath: true, driveViewLink: true },
+    }),
+    prisma.itinerary.findMany({
+      where: { tenantId, subBrand: "tmc", catalogueDriveFileId: { not: null } },
+      select: { destination: true, catalogueDriveFileId: true, catalogueDriveViewLink: true },
+    }),
+  ]);
+
+  const indexedById = new Map(indexedRows.map((row) => [String(row.driveFileId), row]));
+  const filesById = new Map();
+  const rootFolderId = String(rootSetting?.value || "").trim();
+
+  if (rootFolderId) {
+    const drive = await driveOAuth.getDriveClient(tenantId);
+    const rootItems = await travelKnowledgeBaseSync.listFolderChildren(drive, rootFolderId);
+    const tmcFolder = rootItems.find((item) => (
+      item.mimeType === GOOGLE_DRIVE_FOLDER_MIME
+      && String(item.name || "").replace(/[^a-z0-9]/gi, "").toLowerCase() === "tmc"
+    ));
+    if (tmcFolder) {
+      const visitedFolders = new Set();
+      const walk = async (folderId, folderPath) => {
+        if (visitedFolders.has(String(folderId))) return;
+        visitedFolders.add(String(folderId));
+        const items = await travelKnowledgeBaseSync.listFolderChildren(drive, folderId);
+        for (const item of items) {
+          const itemPath = folderPath ? `${folderPath}/${item.name}` : item.name;
+          if (item.mimeType === GOOGLE_DRIVE_FOLDER_MIME) {
+            await walk(item.id, itemPath);
+          } else if (item.mimeType === "application/pdf" || String(item.name || "").toLowerCase().endsWith(".pdf")) {
+            const indexed = indexedById.get(String(item.id));
+            filesById.set(String(item.id), {
+              driveFileId: String(item.id),
+              fileName: item.name || indexed?.fileName || "TMC brochure.pdf",
+              folderPath: folderPath ? `${folderPath}` : "TMC",
+              indexed: Boolean(indexed),
+              driveViewLink: item.webViewLink || indexed?.driveViewLink || `https://drive.google.com/file/d/${encodeURIComponent(item.id)}/view`,
+              thumbnailLink: item.thumbnailLink || null,
+            });
+          }
+        }
+      };
+      await walk(tmcFolder.id, tmcFolder.name || "TMC");
+    }
+  }
+
+  for (const itinerary of generatedItineraries) {
+    const driveFileId = String(itinerary.catalogueDriveFileId || "");
+    if (!driveFileId || filesById.has(driveFileId) || indexedById.has(driveFileId)) continue;
+    const indexed = indexedById.get(driveFileId);
+    filesById.set(driveFileId, {
+      driveFileId,
+      fileName: indexed?.fileName || `${itinerary.destination || "Itinerary"} PDF`,
+      folderPath: indexed?.folderPath || "TMC/CRM Itineraries",
+      indexed: Boolean(indexed),
+      driveViewLink: itinerary.catalogueDriveViewLink || indexed?.driveViewLink || `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/view`,
+      thumbnailLink: null,
+    });
+  }
+
+  return {
+    connected: Boolean(rootFolderId),
+    catalogues: [...filesById.values()],
+  };
+}
+
+function parseSelectedCatalogueFiles(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
+function isCatalogueResponseSchemaUnavailable(err) {
+  return err?.code === "P2021"
+    || err?.code === "P2022"
+    || (err instanceof TypeError && /reading ['"](?:findUnique|upsert)['"]/.test(err.message || ""));
+}
+
+async function getAllowedTmcDriveFile(tenantId, driveFileId) {
+  const rootSetting = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key: TMC_KNOWLEDGE_ROOT_KEY } },
+    select: { value: true },
+  });
+  const rootFolderId = String(rootSetting?.value || "").trim();
+  if (!rootFolderId) return null;
+
+  const drive = await driveOAuth.getDriveClient(tenantId);
+  const result = await drive.files.get({
+    fileId: String(driveFileId),
+    fields: "id,name,mimeType,parents,thumbnailLink,webViewLink",
+  });
+  const file = result?.data;
+  if (!file || (file.mimeType !== "application/pdf" && !String(file.name || "").toLowerCase().endsWith(".pdf"))) return null;
+
+  let parentIds = Array.isArray(file.parents) ? file.parents : [];
+  let foundTmcFolder = false;
+  let reachedRoot = false;
+  for (let depth = 0; depth < 12 && parentIds.length > 0; depth += 1) {
+    const parentId = String(parentIds[0]);
+    if (parentId === rootFolderId) {
+      reachedRoot = true;
+      break;
+    }
+    const parent = await drive.files.get({
+      fileId: parentId,
+      fields: "id,name,parents,mimeType",
+    });
+    if (parent.data?.mimeType === GOOGLE_DRIVE_FOLDER_MIME
+      && String(parent.data.name || "").replace(/[^a-z0-9]/gi, "").toLowerCase() === "tmc") {
+      foundTmcFolder = true;
+    }
+    parentIds = Array.isArray(parent.data?.parents) ? parent.data.parents : [];
+  }
+  return reachedRoot && foundTmcFolder ? { drive, file } : null;
 }
 
 const TMC_PARENT_DOCUMENT_MIME_TYPES = new Set(
@@ -1607,7 +1740,7 @@ async function loadTeacherTrip(req, res) {
 // signed token in an HttpOnly cookie, then the shared registration form can
 // submit normally without adding TMC-specific fields.
 router.get("/registration-context", async (req, res) => {
-  let context = verifyTmcRegistrationToken(req.query?.token);
+  let context = verifyTmcRegistrationToken(req.query?.token) || getTmcRegistrationContext(req);
   if (
     !context &&
     req.query?.registrationType === "TEACHER" &&
@@ -1675,11 +1808,35 @@ router.get("/registration-context", async (req, res) => {
         code: "REGISTRATION_LINK_REVOKED",
       });
   }
-  setTmcRegistrationContext(res, String(req.query.token));
+  if (req.query?.token) setTmcRegistrationContext(res, String(req.query.token));
+  let prefill = null;
+  const draftToken = String(req.query?.draftToken || "").trim();
+  if (draftToken && context.registrationType === "PARENT") {
+    const draft = await prisma.pendingTripRegistration.findUnique({
+      where: { draftToken },
+      select: {
+        tenantId: true,
+        tripId: true,
+        parentName: true,
+        parentEmail: true,
+      },
+    });
+    if (!draft || Number(draft.tenantId) !== Number(context.tenantId) || Number(draft.tripId) !== Number(context.tripId)) {
+      return res.status(400).json({
+        error: "This registration draft is not valid for this parent link",
+        code: "INVALID_REGISTRATION_DRAFT",
+      });
+    }
+    prefill = {
+      name: draft.parentName || "",
+      email: draft.parentEmail || "",
+    };
+  }
   res.json({
     ok: true,
     registrationType: context.registrationType,
     tenantSlug: tenant?.slug || null,
+    ...(prefill ? { prefill } : {}),
     next:
       context.registrationType === "TEACHER"
         ? "/tmc/teacher-portal"
@@ -1699,6 +1856,180 @@ router.get(
       portalRole: "TEACHER",
       subBrand: "tmc",
     });
+  },
+);
+
+// Teacher catalogue browsing uses the same TMC Drive folder and indexed-file
+// metadata as the admin library. Only brochure metadata is returned here;
+// portal-authenticated file and thumbnail routes below proxy the Drive bytes.
+router.get(
+  "/teacher/catalogues",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const tenantId = Number(req.portal.tenantId);
+        let responseStorageAvailable = true;
+        const savedResponsePromise = Promise.resolve()
+          .then(() => prisma.tmcTeacherCatalogueResponse.findUnique({
+            where: {
+              tenantId_teacherContactId: {
+                tenantId,
+                teacherContactId: Number(req.tmcContact.id),
+              },
+            },
+            select: { selectedFilesJson: true, submittedAt: true },
+          }))
+          .catch((err) => {
+            if (!isCatalogueResponseSchemaUnavailable(err)) throw err;
+            responseStorageAvailable = false;
+            console.error("[tmc-portal][teacher/catalogues] response storage schema is unavailable:", err.message);
+            return null;
+          });
+        const [library, savedResponse] = await Promise.all([
+          loadTmcCatalogueFiles(tenantId),
+          savedResponsePromise,
+        ]);
+        res.json({
+          connected: library.connected,
+          catalogues: library.catalogues,
+          responseStorageAvailable,
+          response: savedResponse ? {
+            selectedCatalogues: parseSelectedCatalogueFiles(savedResponse.selectedFilesJson),
+            submittedAt: savedResponse.submittedAt,
+          } : null,
+        });
+    } catch (err) {
+      if (err.code === "DRIVE_NOT_CONNECTED" || err.code === "OAUTH_NOT_CONFIGURED") {
+        return res.status(503).json({ error: "The TMC brochure library is temporarily unavailable", code: "DRIVE_NOT_CONNECTED" });
+      }
+      console.error("[tmc-portal][teacher/catalogues]", err);
+      return res.status(500).json({ error: "Failed to load TMC catalogues", code: "TMC_CATALOGUES_LOAD_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/teacher/catalogues/response",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const rawIds = req.body?.selectedFileIds;
+      if (!Array.isArray(rawIds) || rawIds.length < 1 || rawIds.length > 500) {
+        return res.status(400).json({
+          error: "Select between 1 and 500 catalogues before submitting",
+          code: "INVALID_CATALOGUE_SELECTION",
+        });
+      }
+      const selectedIds = [...new Set(rawIds
+        .filter((value) => typeof value === "string" || typeof value === "number")
+        .map((value) => String(value).trim())
+        .filter((value) => value.length > 0 && value.length <= 255))];
+      if (selectedIds.length !== rawIds.length) {
+        return res.status(400).json({ error: "Catalogue selection contains invalid file ids", code: "INVALID_CATALOGUE_SELECTION" });
+      }
+
+      const tenantId = Number(req.portal.tenantId);
+      const library = await loadTmcCatalogueFiles(tenantId);
+      const filesById = new Map(library.catalogues.map((file) => [String(file.driveFileId), file]));
+      const selectedCatalogues = selectedIds.map((id) => filesById.get(id)).filter(Boolean);
+      if (selectedCatalogues.length !== selectedIds.length) {
+        return res.status(400).json({ error: "Some selected catalogues are no longer available", code: "CATALOGUE_NOT_AVAILABLE" });
+      }
+
+      const submittedAt = new Date();
+      const saved = await prisma.tmcTeacherCatalogueResponse.upsert({
+        where: {
+          tenantId_teacherContactId: {
+            tenantId,
+            teacherContactId: Number(req.tmcContact.id),
+          },
+        },
+        create: {
+          tenantId,
+          teacherContactId: Number(req.tmcContact.id),
+          selectedFilesJson: sanitizeJsonForStringColumn(selectedCatalogues),
+          submittedAt,
+        },
+        update: {
+          selectedFilesJson: sanitizeJsonForStringColumn(selectedCatalogues),
+          submittedAt,
+        },
+        select: { selectedFilesJson: true, submittedAt: true },
+      });
+      return res.status(201).json({
+        ok: true,
+        response: {
+          selectedCatalogues: parseSelectedCatalogueFiles(saved.selectedFilesJson),
+          submittedAt: saved.submittedAt,
+        },
+      });
+    } catch (err) {
+      if (isCatalogueResponseSchemaUnavailable(err)) {
+        return res.status(503).json({
+          error: "Catalogue response storage is not ready. Sync the database schema and restart the backend.",
+          code: "TMC_CATALOGUE_RESPONSE_STORAGE_NOT_READY",
+        });
+      }
+      console.error("[tmc-portal][teacher/catalogues/response]", err);
+      return res.status(500).json({ error: "Failed to submit catalogue selection", code: "TMC_CATALOGUES_SUBMIT_FAILED" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/catalogues/:fileId/thumbnail",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const fileId = String(req.params.fileId || "").trim();
+      if (!fileId || fileId.length > 255) return res.status(400).json({ error: "Invalid file id", code: "INVALID_FILE_ID" });
+      const allowed = await getAllowedTmcDriveFile(Number(req.portal.tenantId), fileId);
+      if (!allowed?.file?.thumbnailLink) return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+      const authClient = allowed.drive.context?._options?.auth;
+      const token = await authClient?.getAccessToken();
+      const thumbnail = await fetch(allowed.file.thumbnailLink, { headers: token?.token ? { Authorization: `Bearer ${token.token}` } : {} });
+      if (!thumbnail.ok) return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+      res.setHeader("Cache-Control", "private, max-age=1800");
+      res.setHeader("Content-Type", thumbnail.headers.get("content-type") || "image/jpeg");
+      return res.send(Buffer.from(await thumbnail.arrayBuffer()));
+    } catch (err) {
+      console.error("[tmc-portal][teacher/catalogues/thumbnail]", err);
+      return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/catalogues/:fileId/file",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const fileId = String(req.params.fileId || "").trim();
+      if (!fileId || fileId.length > 255) return res.status(400).json({ error: "Invalid file id", code: "INVALID_FILE_ID" });
+      const allowed = await getAllowedTmcDriveFile(Number(req.portal.tenantId), fileId);
+      if (!allowed) return res.status(404).json({ error: "Catalogue PDF not found", code: "NOT_FOUND" });
+      const pdf = await allowed.drive.files.get(
+        { fileId, alt: "media" },
+        { responseType: "arraybuffer" },
+      );
+      const originalName = String(allowed.file.name || "tmc-catalogue.pdf").replace(/[\r\n"]+/g, "_");
+      const safeName = originalName.replace(/[^\x20-\x7E]/g, "_");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(originalName)}`);
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.send(Buffer.from(pdf.data));
+    } catch (err) {
+      console.error("[tmc-portal][teacher/catalogues/file]", err);
+      return res.status(404).json({ error: "Catalogue PDF not found", code: "NOT_FOUND" });
+    }
   },
 );
 
@@ -2603,12 +2934,297 @@ router.get(
           parentPhone: true,
           consentCapturedAt: true,
           createdAt: true,
+          pendingRegistration: {
+            select: {
+              studentDob: true,
+              studentSchool: true,
+              studentClass: true,
+              studentGender: true,
+              parentRelation: true,
+            },
+          },
         },
       });
-      res.json({ trip, participants });
+      res.json({
+        trip,
+        participants: participants.map((participant) => ({
+          ...participant,
+          studentDob: participant.pendingRegistration?.studentDob || null,
+          studentSchool: participant.pendingRegistration?.studentSchool || null,
+          studentClass: participant.pendingRegistration?.studentClass || null,
+          studentGender: participant.pendingRegistration?.studentGender || null,
+          parentRelation: participant.pendingRegistration?.parentRelation || null,
+          pendingRegistration: undefined,
+        })),
+      });
     } catch (err) {
       console.error("[tmc-portal][teacher/participants]", err);
       res.status(500).json({ error: "Failed to load participants" });
+    }
+  },
+);
+
+// Trip-management data is deliberately exposed through the portal-token
+// surface instead of reusing the staff JWT routes. loadTeacherTrip scopes every
+// operation to both the tenant and the logged-in teacher's assignment.
+const TEACHER_ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+
+function parseTeacherParticipantIds(value) {
+  if (!Array.isArray(value)) return null;
+  const ids = value.map((item) => Number(item));
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) return null;
+  return [...new Set(ids)];
+}
+
+async function validateTeacherRoomParticipants(tripId, participantIds) {
+  if (!participantIds.length) return true;
+  const count = await prisma.tripParticipant.count({
+    // The parent trip is tenant + teacher scoped by loadTeacherTrip.
+    where: { id: { in: participantIds }, tripId },
+  });
+  return count === participantIds.length;
+}
+
+async function teacherRoomParticipantConflict(tripId, participantIds, excludedRoomId = null) {
+  if (!participantIds.length) return null;
+  const existing = await prisma.roomingAssignment.findMany({
+    where: {
+      tripId,
+      ...(excludedRoomId ? { id: { not: excludedRoomId } } : {}),
+    },
+    select: { participantIds: true },
+  });
+  const requested = new Set(participantIds);
+  for (const room of existing) {
+    let ids = [];
+    try { ids = JSON.parse(room.participantIds || "[]"); } catch (_err) { ids = []; }
+    const conflict = ids.find((id) => requested.has(Number(id)));
+    if (conflict != null) return Number(conflict);
+  }
+  return null;
+}
+
+router.get(
+  "/teacher/trips/:tripId/payment-plan",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const plan = await prisma.tripPaymentPlan.findUnique({ where: { tripId: trip.id } });
+      if (!plan) return res.status(404).json({ error: "Payment plan not found", code: "NOT_FOUND" });
+      return res.json(plan);
+    } catch (err) {
+      console.error("[tmc-portal][teacher/payment-plan]", err);
+      return res.status(500).json({ error: "Failed to load payment plan" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/trips/:tripId/instalments",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const where = { tripId: trip.id };
+      if (req.query.participantId) {
+        const participantId = Number.parseInt(req.query.participantId, 10);
+        if (Number.isInteger(participantId)) where.participantId = participantId;
+      }
+      const instalments = await prisma.tripInstalmentPayment.findMany({
+        where,
+        orderBy: [{ participantId: "asc" }, { instalmentIndex: "asc" }],
+        take: 500,
+      });
+      return res.json({ instalments });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/instalments]", err);
+      return res.status(500).json({ error: "Failed to load instalments" });
+    }
+  },
+);
+
+router.get(
+  "/teacher/trips/:tripId/rooming",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      // RoomingAssignment has no tenantId; loadTeacherTrip scopes its trip FK.
+      const rooming = await prisma.roomingAssignment.findMany({
+        // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+        where: { tripId: trip.id },
+        orderBy: { roomNumber: "asc" },
+      });
+      return res.json({ rooming });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming]", err);
+      return res.status(500).json({ error: "Failed to load rooming" });
+    }
+  },
+);
+
+router.post(
+  "/teacher/trips/:tripId/rooming",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const roomNumber = String(req.body?.roomNumber || "").trim();
+      const roomType = String(req.body?.roomType || "").trim().toLowerCase();
+      const participantIds = parseTeacherParticipantIds(req.body?.participantIds);
+      if (!roomNumber || !roomType || !participantIds) {
+        return res.status(400).json({ error: "roomNumber, roomType, participantIds[] required", code: "MISSING_FIELDS" });
+      }
+      const capacity = TEACHER_ROOM_CAPACITY[roomType];
+      if (!capacity) return res.status(400).json({ error: "invalid roomType", code: "INVALID_ROOM_TYPE" });
+      if (participantIds.length > capacity) return res.status(400).json({ error: `roomType "${roomType}" allows at most ${capacity} participants`, code: "ROOM_CAPACITY_EXCEEDED" });
+      if (!(await validateTeacherRoomParticipants(trip.id, participantIds))) return res.status(400).json({ error: "one or more participants are not on this trip", code: "PARTICIPANTS_OFF_TRIP" });
+      const duplicateRoom = await prisma.roomingAssignment.findFirst({ where: { tripId: trip.id, roomNumber }, select: { id: true } });
+      if (duplicateRoom) return res.status(409).json({ error: `Room number ${roomNumber} already exists on this trip`, code: "DUPLICATE_ROOM_NUMBER" });
+      const conflict = await teacherRoomParticipantConflict(trip.id, participantIds);
+      if (conflict != null) return res.status(409).json({ error: `Participant #${conflict} is already assigned to another room`, code: "DUPLICATE_ASSIGNMENT" });
+      const room = await prisma.roomingAssignment.create({ data: { tripId: trip.id, roomNumber, roomType, participantIds: JSON.stringify(participantIds) } });
+      return res.status(201).json(room);
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-create]", err);
+      return res.status(500).json({ error: "Failed to create room" });
+    }
+  },
+);
+
+router.patch(
+  "/teacher/trips/:tripId/rooming/:roomId",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const roomId = Number.parseInt(req.params.roomId, 10);
+      if (!Number.isInteger(roomId)) return res.status(400).json({ error: "roomId must be a number", code: "INVALID_ROOM_ID" });
+      const existing = await prisma.roomingAssignment.findFirst({ where: { id: roomId, tripId: trip.id } });
+      if (!existing) return res.status(404).json({ error: "Room not found", code: "ROOM_NOT_FOUND" });
+      const data = {};
+      if (req.body?.roomNumber !== undefined) {
+        const roomNumber = String(req.body.roomNumber || "").trim();
+        if (!roomNumber) return res.status(400).json({ error: "roomNumber is required", code: "INVALID_ROOM_NUMBER" });
+        const duplicateRoom = await prisma.roomingAssignment.findFirst({ where: { tripId: trip.id, roomNumber, NOT: { id: roomId } }, select: { id: true } });
+        if (duplicateRoom) return res.status(409).json({ error: `Room number ${roomNumber} already exists on this trip`, code: "DUPLICATE_ROOM_NUMBER" });
+        data.roomNumber = roomNumber;
+      }
+      const nextType = String(req.body?.roomType ?? existing.roomType).trim().toLowerCase();
+      if (!TEACHER_ROOM_CAPACITY[nextType]) return res.status(400).json({ error: "invalid roomType", code: "INVALID_ROOM_TYPE" });
+      data.roomType = nextType;
+      if (req.body?.participantIds !== undefined) {
+        const participantIds = parseTeacherParticipantIds(req.body.participantIds);
+        if (!participantIds) return res.status(400).json({ error: "participantIds must be an array of positive integers", code: "INVALID_PARTICIPANTS" });
+        if (participantIds.length > TEACHER_ROOM_CAPACITY[nextType]) return res.status(400).json({ error: `roomType "${nextType}" allows at most ${TEACHER_ROOM_CAPACITY[nextType]} participants`, code: "ROOM_CAPACITY_EXCEEDED" });
+        if (!(await validateTeacherRoomParticipants(trip.id, participantIds))) return res.status(400).json({ error: "one or more participants are not on this trip", code: "PARTICIPANTS_OFF_TRIP" });
+        const conflict = await teacherRoomParticipantConflict(trip.id, participantIds, roomId);
+        if (conflict != null) return res.status(409).json({ error: `Participant #${conflict} is already assigned to another room`, code: "DUPLICATE_ASSIGNMENT" });
+        data.participantIds = JSON.stringify(participantIds);
+      }
+      const room = await prisma.roomingAssignment.update({ where: { id: roomId }, data });
+      return res.json(room);
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-update]", err);
+      return res.status(500).json({ error: "Failed to update room" });
+    }
+  },
+);
+
+router.delete(
+  "/teacher/trips/:tripId/rooming/:roomId",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const roomId = Number.parseInt(req.params.roomId, 10);
+      if (!Number.isInteger(roomId)) return res.status(400).json({ error: "roomId must be a number", code: "INVALID_ROOM_ID" });
+      const existing = await prisma.roomingAssignment.findFirst({ where: { id: roomId, tripId: trip.id }, select: { id: true } });
+      if (!existing) return res.status(404).json({ error: "Room not found", code: "ROOM_NOT_FOUND" });
+      await prisma.roomingAssignment.delete({ where: { id: roomId } });
+      return res.json({ deleted: true, id: roomId });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-delete]", err);
+      return res.status(500).json({ error: "Failed to delete room" });
+    }
+  },
+);
+
+router.post(
+  "/teacher/trips/:tripId/rooming/auto",
+  verifyPortalToken,
+  requireTmcTenant,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const trip = await loadTeacherTrip(req, res);
+      if (!trip) return;
+      const requestedTypes = Array.isArray(req.body?.roomTypes) ? req.body.roomTypes : ["twin", "quad"];
+      const roomTypes = requestedTypes.map((value) => String(value).toLowerCase()).filter((value) => TEACHER_ROOM_CAPACITY[value]);
+      const types = roomTypes.length ? roomTypes : ["twin", "quad"];
+      const startRoom = Number(req.body?.startingRoomNumber) || 101;
+      const [participants, rooms] = await Promise.all([
+        // TripParticipant has no tenantId; loadTeacherTrip scopes the parent.
+        prisma.tripParticipant.findMany({
+          // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+          where: { tripId: trip.id },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        }),
+        // RoomingAssignment has no tenantId; loadTeacherTrip scopes the parent.
+        prisma.roomingAssignment.findMany({
+          // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+          where: { tripId: trip.id },
+          select: { participantIds: true },
+        }),
+      ]);
+      const assigned = new Set();
+      for (const room of rooms) {
+        try { const ids = JSON.parse(room.participantIds || "[]"); if (Array.isArray(ids)) ids.forEach((id) => assigned.add(Number(id))); } catch (_err) { /* ignore malformed legacy data */ }
+      }
+      const unassigned = participants.filter((participant) => !assigned.has(participant.id));
+      if (unassigned.length === 0) return res.status(201).json({ created: 0, skipped: 0, warnings: ["All participants already assigned"] });
+      const toCreate = [];
+      let roomNumber = startRoom;
+      let typeIndex = 0;
+      let current = [];
+      for (const participant of unassigned) {
+        const roomType = types[typeIndex % types.length];
+        current.push(participant.id);
+        if (current.length === TEACHER_ROOM_CAPACITY[roomType]) {
+          toCreate.push({ tripId: trip.id, roomNumber: String(roomNumber++), roomType, participantIds: JSON.stringify(current) });
+          current = [];
+          typeIndex += 1;
+        }
+      }
+      if (current.length) {
+        const roomType = types[typeIndex % types.length];
+        toCreate.push({ tripId: trip.id, roomNumber: String(roomNumber), roomType, participantIds: JSON.stringify(current) });
+      }
+      const result = await prisma.roomingAssignment.createMany({ data: toCreate });
+      return res.status(201).json({ created: result.count, skipped: 0, warnings: [] });
+    } catch (err) {
+      console.error("[tmc-portal][teacher/rooming-auto]", err);
+      return res.status(500).json({ error: "Failed to auto-allocate rooming" });
     }
   },
 );
@@ -3603,9 +4219,45 @@ router.get(
           tenantId: Number(req.portal.tenantId),
           parentContactId: Number(req.tmcContact.id),
         },
-        select: { id: true, fileUrl: true, storage: true, storageKey: true },
+        select: {
+          id: true,
+          captureMode: true,
+          fileUrl: true,
+          storage: true,
+          storageKey: true,
+          mimeType: true,
+          filename: true,
+          fileBlob: true,
+          answersJson: true,
+          termsSnapshot: true,
+          signatureName: true,
+          agreedAt: true,
+          uploadedAt: true,
+          tripId: true,
+        },
       });
       if (!document) return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+
+      // Consent forms are rendered from their signed answers and historically
+      // had no object-storage key. Materialise the PDF once so the client can
+      // use the same short-lived cloud URL flow as uploaded documents.
+      if (normalizeCaptureMode(document.captureMode) === "digital_consent" && !document.fileUrl && !document.storageKey) {
+        const pdfBuffer = await renderTmcDigitalConsentPdf(document);
+        const stored = await visaDocStore.storeDoc(pdfBuffer, PDF_MIME_TYPE);
+        await prisma.tmcParentDocument.update({
+          where: { id: document.id },
+          data: {
+            fileUrl: stored.url,
+            storage: stored.storage,
+            storageKey: stored.key,
+            mimeType: PDF_MIME_TYPE,
+            filename: `consent-form-${document.id}.pdf`,
+          },
+        });
+        document.fileUrl = stored.url;
+        document.storage = stored.storage;
+        document.storageKey = stored.key;
+      }
       const url = await visaDocStore.resolveViewUrl({
         attachmentUrl: document.fileUrl,
         attachmentStorage: document.storage,

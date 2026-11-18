@@ -8,18 +8,16 @@
  *
  * Breakpoint history:
  *   - #228 shipped at <=768px (phones only)
- *   - T2.1 raised to <=899px to catch tablets in landscape (iPad mini at
- *     768x1024, iPad in portrait, small Android tablets, plus split-screen
- *     phones in landscape mode). Wellness clinics overwhelmingly use phones
- *     and tablets, and the 240px sidebar + 50+ generic-vertical nav items
- *     was crowding tablet content at <900px.
+ *   - T2.1 raised to <=899px to catch tablets in landscape.
+ *   - The shared shell now uses a drawer below 1100px so tablet landscape
+ *     and small laptop windows do not lose the usable workspace to the rail.
  *
  * Full mobile parity (every page audited at 320/375/414/768) remains a
  * follow-up multi-day task.
  */
 
 /* ── Sidebar drawer transitions: scoped to mobile only. The transition is
-   only meaningful when the sidebar transforms (drawer slide at <900px).
+   only meaningful when the sidebar transforms (drawer slide below 1100px).
    Keeping it on desktop added an unused CSS property to the sidebar
    element with no visual effect. ─────────────────────────────────── */
 
@@ -446,7 +444,7 @@
 
 /* ── Hamburger toggle baseline (desktop): hidden. T2.1 moved this from an
    inline style on the button to a CSS class so the @media block below can
-   flip it on at <900px without an !important war with React's inline style
+   flip it on below 1100px without an !important war with React's inline style
    wins-over-stylesheet rule. ─────────────────────────────────────── */
 .sidebar-toggle {
   display: none;
@@ -557,9 +555,9 @@
   overflow-y: visible !important;
 }
 
-/* ── Mobile / tablet-portrait (<=899px): sidebar becomes off-canvas drawer.
-   T2.1 raised the breakpoint from 768px to 899px so iPads in portrait
-   (768px) and tablets in landscape get the drawer treatment too. ─── */
+/* ── Mobile / tablet (<1100px): sidebar becomes an off-canvas drawer.
+   A 250px permanent rail leaves too little workspace at 1024px once the
+   Leads controls and table are present. ─────────────────────────────── */
 @media (max-width: 899px) {
   .app-main > main {
     --crm-card-padding: clamp(0.75rem, 2vw, 1.25rem);
@@ -804,6 +802,77 @@
      own their own spacing can still add room inside this shared gutter. */
   .app-main > main {
     padding: 1rem !important;
+  }
+}
+
+/* Tablet landscape / small laptop shell. Keep this separate from the full
+   <=899px page-density rules: those pages can retain their desktop-sized
+   content while the shell still needs a drawer and a full-width workspace. */
+@media (min-width: 900px) and (max-width: 1099px) {
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px !important;
+    max-width: 85vw;
+    height: 100vh;
+    z-index: 999;
+    transform: translateX(-100%);
+    transition: transform 240ms cubic-bezier(0.25, 0.8, 0.25, 1);
+    will-change: transform;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .app-sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    pointer-events: none;
+  }
+
+  .sidebar-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .app-main {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex !important;
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  .app-shell header {
+    padding: 6px 12px !important;
+  }
+
+  .app-main > main {
+    min-width: 0;
+  }
+
+  .app-main > main > :not(.travel-content-frame),
+  .app-main > main :is(.card, .glass, section, article) {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .app-main > main
+    :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-main > main :is(.card, .glass):has(> table),
+  .app-main > main :is(.table-container, .table-wrapper) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -1071,25 +1140,26 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 }
 
 /* The desktop sidebar still reserves about 250px at tablet widths, so the
-   remaining app-main header can be narrower than the viewport suggests. Keep
-   the shared header on one line between 900px and 1099px by using compact
-   icon controls and a flexible search field. */
+   remaining app-main header can be narrower than the viewport suggests. Give
+   the search its own row between 900px and 1099px instead of forcing every
+   account control into the remaining desktop row. */
 @media (min-width: 900px) and (max-width: 1099px) {
   .app-topbar {
-    flex-wrap: nowrap !important;
+    flex-wrap: wrap !important;
     gap: 4px !important;
     padding: 6px 8px !important;
   }
 
   .app-header-search {
-    order: 0;
-    flex: 1 1 220px;
-    width: auto;
+    order: 10;
+    flex: 1 0 100%;
+    width: 100%;
+    min-width: 0;
     margin-right: 0 !important;
   }
 
   .omnibar-root {
-    width: clamp(145px, 30vw, 276px) !important;
+    width: 100% !important;
     min-width: 0 !important;
   }
 
@@ -1116,6 +1186,51 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
   }
 }
 
+/* Browser zoom reduces the CSS viewport while the desktop sidebar remains
+   visible. Treat that range as compact desktop: preserve the one-line shell,
+   give the search a flexible width, and remove optional text labels before
+   the account controls start competing for space. */
+@media (min-width: 1100px) and (max-width: 1599px) {
+  .app-topbar {
+    flex-wrap: nowrap !important;
+    gap: clamp(4px, 0.5vw, 8px) !important;
+    padding-inline: clamp(8px, 1vw, 16px) !important;
+    min-width: 0;
+  }
+
+  .app-header-search {
+    order: 0;
+    flex: 1 1 220px;
+    width: auto;
+    min-width: 0;
+    margin-right: 0 !important;
+  }
+
+  .app-tenant-chip {
+    flex: 0 1 min(230px, 22vw);
+    min-width: 0;
+    margin-right: 0;
+  }
+
+  .app-profile-name,
+  .app-tour-label {
+    display: none !important;
+  }
+
+  .app-tour-launcher,
+  .app-theme-toggle,
+  .app-logout-button {
+    flex: 0 0 auto;
+    justify-content: center;
+    padding-inline: 5px !important;
+  }
+
+  .app-profile-button {
+    flex: 0 0 auto;
+    padding-inline: 4px !important;
+  }
+}
+
 /* Quote Builder has several fixed two-column grids. Keep its summary and
    pricing controls readable when the sidebar has consumed tablet width. */
 @media (max-width: 899px) {
@@ -1126,31 +1241,78 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
 }
 
 @media (max-width: 600px) {
+  .app-topbar {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
+    grid-template-areas:
+      "menu tenant notifications tour profile theme logout"
+      "search search search search search search search";
+    align-items: center !important;
+    justify-content: initial !important;
+    column-gap: 4px !important;
+    row-gap: 6px !important;
+  }
+
   .app-topbar::before {
-    content: "";
-    flex-basis: 100%;
-    height: 0;
-    order: 9;
+    display: none !important;
+  }
+
+  .app-topbar > .sidebar-toggle {
+    grid-area: menu;
   }
 
   .app-header-search {
-    flex: 1 1 0;
-    width: auto;
-    order: 10;
-  }
-
-  .app-theme-toggle {
-    order: 11;
-    flex-shrink: 0;
-  }
-
-  .app-logout-button {
-    order: 12;
-    flex-shrink: 0;
+    grid-area: search;
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    order: initial;
+    margin-right: 0 !important;
   }
 
   .app-tenant-chip {
+    grid-area: tenant;
+    margin: 0 !important;
     max-width: max-content !important;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+
+  [data-tour="welcome-notifications"] {
+    grid-area: notifications;
+    min-width: 0;
+  }
+
+  .app-tour-launcher {
+    grid-area: tour;
+    min-width: 0;
+  }
+
+  .app-profile-button {
+    grid-area: profile;
+    min-width: 0;
+  }
+
+  .app-theme-toggle {
+    grid-area: theme;
+    min-width: 0;
+  }
+
+  .app-logout-button {
+    grid-area: logout;
+    min-width: 0;
+  }
+
+  .app-shell .app-topbar .omnibar-root {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .app-topbar > * {
+    min-width: 0;
+  }
+
+  .app-tenant-chip {
     flex-shrink: 0;
     padding-right: 4px !important;
   }

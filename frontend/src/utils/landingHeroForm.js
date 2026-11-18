@@ -23,6 +23,20 @@ export function resizeHeroFormFrame(frame, rawHeight) {
   return true;
 }
 
+export function safeHeroFormRedirectUrl(message, expectedFormId) {
+  const formId = String(expectedFormId || "");
+  if (!/^\d+$/.test(formId) || String(message?.formId || "") !== formId) return "";
+  const rawUrl = String(message?.redirectUrl || "").trim();
+  if (!rawUrl || rawUrl.length > 2048) return "";
+  try {
+    const target = new URL(rawUrl);
+    if (!["http:", "https:"].includes(target.protocol) || !target.hostname || target.username || target.password) return "";
+    return target.href;
+  } catch {
+    return "";
+  }
+}
+
 export function responsiveFormDevice(width) {
   const viewportWidth = Number(width);
   if (!Number.isFinite(viewportWidth)) return "desktop";

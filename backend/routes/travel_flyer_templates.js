@@ -118,7 +118,8 @@ const path = require("path");
 const s3 = require("../services/s3Service");
 
 // Flyer asset upload (PRD_TRAVEL_MARKETING_FLYER FR-3.2.2). memoryStorage so the
-// buffer can route to S3 (when AWS_S3_BUCKET_NAME is set) OR local disk (dev /
+// buffer can route to the configured object store (OCI takes precedence when
+// OCI credentials are set) OR local disk (dev /
 // no creds) — works now, uses S3 the moment the bucket env lands, no code change.
 const FLYER_IMAGE_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"];
 const flyerImageUpload = multer({
@@ -235,9 +236,8 @@ function withTemplateHash(row) {
 // POST /api/travel/flyer-templates/upload
 //
 // FR-3.2.2 — upload a flyer asset image (multipart/form-data, field "image").
-// Storage: AWS S3 via services/s3Service when AWS_S3_BUCKET_NAME is configured
-// (marketing flyers are public-shareable assets, so s3Service's public-read ACL
-// is appropriate here); otherwise written to local disk under
+// Storage: the shared object-storage adapter, which selects OCI before legacy S3
+// (marketing flyers are public-shareable assets); otherwise written to local disk under
 // backend/uploads/flyer-assets/tenant-<id>/ (served by the /uploads static
 // mount). ADMIN/MANAGER + travel-vertical only (matches the studio RBAC).
 // Returns { url, storage }.
@@ -264,9 +264,9 @@ router.post(
             req.file.mimetype,
             `flyer-assets/tenant-${tenantId}`,
           );
-          return res.status(201).json({ url, storage: "s3" });
+          return res.status(201).json({ url, storage: s3.isOciUrl(url) ? "ocs" : "s3" });
         }
-        // Local-disk fallback (no S3 configured).
+        // Local-disk fallback (no object store configured).
         const dir = path.join(__dirname, "..", "uploads", "flyer-assets", `tenant-${tenantId}`);
         await fs.promises.mkdir(dir, { recursive: true });
         const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${flyerImageExt(req.file.mimetype)}`;

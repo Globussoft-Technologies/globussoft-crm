@@ -77,7 +77,7 @@ router.get("/", async (req, res) => {
     ]);
     const withParsedOptions = rows.map((r) => ({
       ...r,
-      options: r.options ? JSON.parse(r.options) : null,
+      options: Array.isArray(r.options) ? r.options : (r.options ? JSON.parse(r.options) : null),
     }));
     if (paginationRequested) {
       return res.json({ data: withParsedOptions, total, page, offset, limit });

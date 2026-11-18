@@ -218,6 +218,9 @@ const NON_TENANT_MODELS = new Set([
   // to the whole platform, not to a single tenant, so they are intentionally
   // tenant-less. Mirrors TenantSetting's shape but at the platform level.
   'SystemSetting',
+  // SuperAdminAuditLog is platform-wide. organizationId is a snapshot only,
+  // with no Tenant relation, so the deletion record survives its organization.
+  'SuperAdminAuditLog',
   // G018 FX rate cache (PRD_TRAVEL_QUOTE_BUILDER FR-3.4). Currency-pair
   // rates are GLOBAL by design — every tenant shares the same INR/USD rate
   // for a given (baseCurrency, quoteCurrency, fetchedAt) tuple. The
@@ -368,6 +371,18 @@ describe('schema invariants — multi-tenant safety net', () => {
       `this test file IN THE SAME PR as the schema change. The audit\n` +
       `viewer + GDPR export both consume the documented shape.`,
     ).toEqual([]);
+  });
+
+  test('SuperAdminAuditLog is global and keeps a tenant-independent deletion snapshot', () => {
+    const auditLog = models.find((model) => model.name === 'SuperAdminAuditLog');
+    expect(auditLog, 'SuperAdminAuditLog model not found in schema.prisma').toBeDefined();
+    expect(auditLog.body).toMatch(/^\s*organizationId\s+Int\?/m);
+    expect(auditLog.body).toMatch(/^\s*actor\s+String\b/m);
+    expect(auditLog.body).toMatch(/^\s*action\s+String\b/m);
+    expect(auditLog.body).toMatch(/^\s*status\s+String\b/m);
+    expect(auditLog.body).toMatch(/^\s*reason\s+String\?\s+@db\.Text/m);
+    expect(auditLog.body).toMatch(/^\s*deletedRowCount\s+Int\?/m);
+    expect(auditLog.body).not.toMatch(/^\s*tenant\s+Tenant\s+@relation/m);
   });
 
   // ── Soft warnings ──────────────────────────────────────────────────

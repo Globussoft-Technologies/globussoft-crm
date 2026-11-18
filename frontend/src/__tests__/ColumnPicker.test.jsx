@@ -127,6 +127,48 @@ describe("ColumnPicker reorder", () => {
     expect(screen.queryByRole("button", { name: /Delete Priority field/i })).toBeNull();
   });
 
+  it("deletes multiple selected generic custom fields in one action", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/table-column-prefs/leads" && !opts) {
+        return Promise.resolve({
+          availableColumns: [
+            { key: "name", label: "Name" },
+            { key: "cf_priority", label: "Priority" },
+            { key: "cf_region", label: "Region" },
+          ],
+          visible: ["name"],
+        });
+      }
+      return Promise.resolve({ success: true });
+    });
+
+    const onFieldDeleted = vi.fn();
+    render(
+      <ColumnPicker
+        tableKey="leads"
+        deletableColumns={[
+          { id: 44, key: "cf_priority", fieldKey: "priority" },
+          { id: 45, key: "cf_region", fieldKey: "region" },
+        ]}
+        onFieldDeleted={onFieldDeleted}
+      />,
+    );
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads"));
+    fireEvent.click(screen.getByRole("button", { name: /Customize table/i }));
+    await screen.findByRole("dialog", { name: "Customize table columns" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Priority field for deletion" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Region field for deletion" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields/44", { method: "DELETE" });
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/lead-custom-fields/45", { method: "DELETE" });
+    });
+    expect(onFieldDeleted).toHaveBeenCalledTimes(2);
+    expect(notifySuccess).toHaveBeenCalledWith("2 fields deleted");
+  });
+
   it("lets users drag visible columns into a new order and saves that order", async () => {
     const onColumnsChange = vi.fn();
     render(<ColumnPicker tableKey="leads" onColumnsChange={onColumnsChange} />);
@@ -260,6 +302,40 @@ describe("ColumnPicker reorder", () => {
     const checkbox = actionsRow.querySelector('input[type="checkbox"]');
     expect(checkbox.checked).toBe(true);
     expect(checkbox.disabled).toBe(true);
+  });
+
+  it("moves Actions after newly added visible columns from an older saved order", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/table-column-prefs/leads" && !opts) {
+        return Promise.resolve({
+          availableColumns: [
+            { key: "name", label: "Name", lockedVisible: true },
+            { key: "email", label: "Email" },
+            { key: "actions", label: "Actions", lockedVisible: true },
+            { key: "utm_source", label: "UTM Source" },
+          ],
+          visible: ["name", "actions", "utm_source", "email"],
+        });
+      }
+      if (url === "/api/table-column-prefs/leads" && opts?.method === "PUT") {
+        return Promise.resolve({ visible: JSON.parse(opts.body).visible });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<ColumnPicker tableKey="leads" />);
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Customize table/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Customize table columns" });
+    expect([...dialog.querySelectorAll("[data-column-row]")].map((row) => row.getAttribute("data-column-row"))).toEqual([
+      "name",
+      "utm_source",
+      "email",
+      "actions",
+    ]);
   });
 
   it("resets the generic leads table to the default column set only", async () => {

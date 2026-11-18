@@ -57,6 +57,7 @@ const {
   matchLines,
   sumAmounts,
 } = require("../lib/supplierReconciliation");
+const s3Service = require("../services/s3Service");
 
 // ─── Multer setup for supplier-invoice uploads ──────────────────────────
 //
@@ -797,6 +798,8 @@ router.post(
   uploadHandler,
   async (req, res) => {
     let parent;
+    let uploadedObjectKey = null;
+    let uploadedObjectProvider = null;
     try {
       parent = await loadParentSupplier(req);
     } catch (e) {
@@ -842,12 +845,25 @@ router.post(
         parsedDate = d;
       }
 
+      let fileUrl = `/uploads/supplier-invoices/${req.file.filename}`;
+      if (s3Service.isConfigured()) {
+        const fileBuffer = await fs.promises.readFile(req.file.path);
+        fileUrl = await s3Service.uploadFile(
+          fileBuffer,
+          req.file.originalname || req.file.filename,
+          req.file.mimetype,
+          `travel/supplier-invoices/${req.travelTenant.id}/${parent.id}`,
+        );
+        uploadedObjectKey = s3Service.extractKeyFromUrl(fileUrl);
+        uploadedObjectProvider = s3Service.isOciUrl(fileUrl) ? "oci" : "aws";
+      }
+
       const created = await prisma.travelSupplierInvoiceUpload.create({
         data: {
           tenantId: req.travelTenant.id,
           supplierId: parent.id,
           filename: req.file.originalname || req.file.filename,
-          fileUrl: `/uploads/supplier-invoices/${req.file.filename}`,
+          fileUrl,
           fileMimeType: req.file.mimetype,
           fileSize: req.file.size,
           supplierInvoiceNumber: supplierInvoiceNumber
@@ -862,6 +878,12 @@ router.post(
           notes: notes ? String(notes) : null,
         },
       });
+      // Disk storage is only a temporary landing zone when OCI/S3 is active.
+      // Keep it for the local fallback, where the URL points at this file.
+      if (uploadedObjectKey) {
+        unlinkUploadedFile(req);
+        uploadedObjectKey = null;
+      }
       await writeAudit(
         "TravelSupplierInvoiceUpload",
         "CREATE",
@@ -873,6 +895,9 @@ router.post(
       res.status(201).json(created);
     } catch (e) {
       unlinkUploadedFile(req);
+      if (uploadedObjectKey) {
+        await s3Service.deleteFile(uploadedObjectKey, { provider: uploadedObjectProvider || "oci" }).catch(() => {});
+      }
       mapError(res, e, "Failed to upload invoice");
     }
   },
@@ -1017,9 +1042,14 @@ router.delete(
       await prisma.travelSupplierInvoiceUpload.delete({
         where: { id: uploadId },
       });
-      // Best-effort disk cleanup. File path may not exist if uploaded to
-      // remote storage; failure is non-fatal (audit trail is on the row).
-      if (upload.fileUrl && upload.fileUrl.startsWith("/uploads/")) {
+      const remoteKey = s3Service.extractKeyFromUrl(upload.fileUrl);
+      if (remoteKey) {
+        const provider = s3Service.isOciUrl(upload.fileUrl) ? "oci" : "aws";
+        await s3Service.deleteFile(remoteKey, { provider }).catch((error) => {
+          console.warn("[travel-supplier-reconciliation] remote invoice cleanup warning:", error.message);
+        });
+      } else if (upload.fileUrl && upload.fileUrl.startsWith("/uploads/")) {
+        // Best-effort disk cleanup for legacy/local rows.
         const relativePath = upload.fileUrl.replace(/^\/uploads\//, "");
         fs.unlink(path.join(__dirname, "..", "uploads", relativePath), () => {});
       }

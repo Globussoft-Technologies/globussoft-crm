@@ -301,7 +301,7 @@ function buildRegisterFlow(audience) {
           fields: [
             { name: 'name', label: 'Parent Name', type: 'text', required: true, placeholder: "Enter parent's name" },
             { name: 'email', label: 'Email', type: 'email', required: true, placeholder: 'email@example.com' },
-            { name: 'phone', label: 'Phone', type: 'tel', required: true, placeholder: '+91 XXXXX XXXXX' },
+            { name: 'phone', label: 'Phone', type: 'tel', required: true, placeholder: '+91 XXXXX XXXXX', exactPhoneDigits: 10, phoneCountryCode: '91' },
           ],
         },
       ],

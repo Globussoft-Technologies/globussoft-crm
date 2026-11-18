@@ -42,6 +42,7 @@ if (process.env.NODE_ENV === "production") {
 // triaging-stuck-deploy-gate skill). Required at top so the read happens
 // once at boot, not per request.
 const APP_VERSION = require("./package.json").version;
+const { isConnectorBinaryAvailable } = require("./lib/tallyConnectorBinary");
 
 const { initSentry } = require("./lib/sentry");
 
@@ -2111,6 +2112,7 @@ app.get("/api/health", async (req, res) => {
     version: APP_VERSION,
     uptime: process.uptime(),
     database: dbStatus,
+    tallyConnectorBinaryAvailable: isConnectorBinaryAvailable(),
   });
 });
 

@@ -113,16 +113,18 @@ describe('GET /api/lead-custom-fields', () => {
     expect(prisma.leadCustomFieldDefinition.count).toHaveBeenCalledWith({ where: { tenantId: TENANT_ID } });
   });
 
-  test('allows travel tenants and keeps the definition query tenant-scoped', async () => {
+  test('allows travel tenants without creating default fields', async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
 
     const res = await request(makeApp()).get('/api/lead-custom-fields');
 
     expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
     expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
       where: { tenantId: TENANT_ID },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
     });
+    expect(prisma.leadCustomFieldDefinition.create).not.toHaveBeenCalled();
   });
 
   test('rejects unsupported verticals before reading definitions', async () => {

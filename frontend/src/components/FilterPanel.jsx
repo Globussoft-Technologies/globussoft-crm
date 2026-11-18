@@ -76,6 +76,9 @@ export default function FilterPanel({
   allowedFieldKeys = null,
   allowedFieldLabels = null,
   allowedFieldDefinitions = null,
+  allowedValueOptions = null,
+  panelClassName = "",
+  additionalDefaultFieldKeys = null,
 }) {
   const isSingleFieldMode = Boolean(fieldKey);
   const isFreshsalesLayout = layoutVariant === "freshsales";
@@ -147,9 +150,12 @@ export default function FilterPanel({
           : baseUrl;
         const data = await fetchApi(requestUrl, { silent: true });
         if (valueRequestSequenceRef.current[field] !== requestId) return;
-        setValuesByField((prev) => ({
+          const overrideOptions = allowedValueOptions?.[field];
+          setValuesByField((prev) => ({
           ...prev,
-          [field]: Array.isArray(data?.values) ? data.values : [],
+            [field]: Array.isArray(overrideOptions)
+              ? overrideOptions
+              : Array.isArray(data?.values) ? data.values : [],
         }));
       } catch {
         if (valueRequestSequenceRef.current[field] !== requestId) return;
@@ -164,7 +170,7 @@ export default function FilterPanel({
         }
       }
     },
-    [valuesUrl],
+    [allowedValueOptions, valuesUrl],
   );
 
   const clearSearchedValuesFor = useCallback((field) => {
@@ -533,7 +539,13 @@ export default function FilterPanel({
       return;
     }
 
-    const defaults = FRESHSALES_DEFAULT_FIELD_KEYS.map((key) =>
+    const defaultFieldKeys = [
+      ...FRESHSALES_DEFAULT_FIELD_KEYS,
+      ...(Array.isArray(additionalDefaultFieldKeys)
+        ? additionalDefaultFieldKeys
+        : []),
+    ];
+    const defaults = [...new Set(defaultFieldKeys)].map((key) =>
       fields.find((field) => field.field === key),
     ).filter(Boolean);
     if (defaults.length === 0) return;
@@ -560,6 +572,7 @@ export default function FilterPanel({
     });
   }, [
     activeField,
+    additionalDefaultFieldKeys,
     clearSectionsOnReset,
     fields,
     filters,
@@ -1045,9 +1058,9 @@ export default function FilterPanel({
               <div
                 ref={panelRef}
                 className={
-                  isFreshsalesLayout
+                  `${isFreshsalesLayout
                     ? "filter-panel-drawer filter-panel-drawer--freshsales"
-                    : "filter-panel-drawer"
+                    : "filter-panel-drawer"}${panelClassName ? ` ${panelClassName}` : ""}`
                 }
                 role="dialog"
                 aria-modal="true"

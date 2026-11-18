@@ -142,11 +142,11 @@ describe('Layout', () => {
   });
 
   it.each(['generic', 'travel', 'wellness'])(
-    'keeps compact laptop layout scoped to the active vertical for %s',
+    'uses the full-width tablet drawer for the active vertical %s',
     async (vertical) => {
       window.innerWidth = 1024;
       const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
-        matches: false,
+        matches: query === '(max-width: 1099px)',
         media: query,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
@@ -154,8 +154,8 @@ describe('Layout', () => {
 
       try {
         renderLayout({ tenant: { vertical } });
-        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'false'));
-        expect(matchMedia).toHaveBeenCalledWith('(max-width: 899px)');
+        await waitFor(() => expect(screen.getByTestId('sidebar-stub')).toHaveAttribute('data-drawer', 'true'));
+        expect(matchMedia).toHaveBeenCalledWith('(max-width: 1099px)');
         const shell = document.querySelector('.app-shell');
         expect(shell).not.toHaveClass('app-shell--scaled');
         expect(shell).toHaveStyle({ inset: '0' });
@@ -180,9 +180,9 @@ describe('Layout', () => {
   });
 
   it('keeps the drawer layout below the desktop threshold', async () => {
-    window.innerWidth = 899;
+    window.innerWidth = 1099;
     const matchMedia = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
-      matches: query === '(max-width: 899px)',
+      matches: query === '(max-width: 1099px)',
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),

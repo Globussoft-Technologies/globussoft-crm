@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
+  BedDouble,
   Bell,
+  BookOpen,
   ChevronDown,
   CheckCircle2,
   Clipboard,
@@ -22,13 +24,17 @@ import {
   Sun,
   Users,
   UserRound,
+  WalletCards,
 } from "lucide-react";
 import TmcTeacherDiagnostics from "./TmcTeacherDiagnostics";
+import TmcTeacherCatalogues from "./TmcTeacherCatalogues";
+import { PaymentTab, RoomingTab } from "./TripDetail";
 import { persistTmcPortalView, readTmcPortalView } from "../../utils/tmcPortalView";
+import { useNotify } from "../../utils/notify";
 
 const TOKEN_KEY = "tmcTeacherPortalToken";
 const THEME_KEY = "tmcTeacherPortalTheme";
-const TEACHER_PORTAL_VIEWS = new Set(["dashboard", "diagnostic", "trips", "reviews", "profile"]);
+const TEACHER_PORTAL_VIEWS = new Set(["dashboard", "diagnostic", "catalogues", "trips", "reviews", "profile"]);
 
 const portalInteractionStyles = `
   [data-tmc-teacher-portal="true"] button:not([disabled]):not([data-tmc-no-hover]),
@@ -84,6 +90,12 @@ const portalInteractionStyles = `
     box-shadow: 0 10px 24px rgba(23, 59, 80, 0.10);
   }
 
+  [data-tmc-teacher-portal="true"] .tmc-teacher-trip-details-card {
+    height: min(680px, calc(100vh - 230px));
+    min-height: 500px;
+    box-sizing: border-box;
+  }
+
   [data-tmc-teacher-portal="true"][data-theme-mode="dark"] button:not([disabled]):not([data-tmc-no-hover]):hover,
   [data-tmc-teacher-portal="true"][data-theme-mode="dark"] [data-tmc-hover-card="true"]:hover {
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
@@ -122,7 +134,7 @@ const portalInteractionStyles = `
 
     [data-tmc-teacher-portal="true"] aside nav {
       display: grid !important;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
       overflow: visible;
     }
 
@@ -167,8 +179,33 @@ const portalInteractionStyles = `
       grid-template-columns: minmax(0, 1fr) !important;
     }
 
+    [data-tmc-teacher-portal="true"] .tmc-teacher-trip-details-card {
+      height: min(680px, calc(100vh - 300px)) !important;
+      min-height: 420px !important;
+    }
+
     [data-tmc-teacher-portal="true"] .tmc-teacher-title-row {
       flex-wrap: wrap;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-teacher-catalogues-content="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-page="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-fixed-header="true"] {
+      margin-bottom: 16px;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-browser="true"] {
+      display: block !important;
+    }
+
+    [data-tmc-teacher-portal="true"] [data-tmc-catalogue-scroll="true"] {
+      overflow: visible !important;
     }
   }
 
@@ -307,7 +344,7 @@ async function api(path, { token, method = "GET", body, basePath = "/api/portal/
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw Object.assign(new Error(data.error || `Request failed (${response.status})`), { status: response.status });
+    throw Object.assign(new Error(data.error || `Request failed (${response.status})`), { status: response.status, body: data });
   }
   return data;
 }
@@ -333,6 +370,7 @@ export default function TmcTeacherPortal() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [login, setLogin] = useState({ email: "", password: "" });
   const [themeMode, setThemeMode] = useState(readTheme);
+  const notify = useNotify();
 
   useEffect(() => {
     try {
@@ -386,6 +424,10 @@ export default function TmcTeacherPortal() {
     setError(message);
     navigate("/login", { replace: true });
   }, [navigate]);
+
+  const handlePortalExpired = useCallback((message) => {
+    logout(message || "Your teacher session is no longer available. Please sign in again.");
+  }, [logout]);
 
   const loadTrips = useCallback(async (activeToken = token) => {
     setLoading(true);
@@ -455,6 +497,20 @@ export default function TmcTeacherPortal() {
     }
   };
 
+  const tripRequest = useCallback((path, options = {}) => {
+    const portalPath = path.replace(/^\/api\/travel\/trips\//, "/teacher/trips/");
+    let body = options.body;
+    if (typeof body === "string") {
+      try { body = JSON.parse(body); } catch (_err) { /* keep the request readable */ }
+    }
+    return api(portalPath, {
+      token,
+      basePath: "/api/portal/tmc",
+      method: options.method,
+      body,
+    });
+  }, [token]);
+
   const submitTeacherReview = async (tripId, reviewData) => {
     setReviewSaving(true);
     setError("");
@@ -518,6 +574,8 @@ export default function TmcTeacherPortal() {
     ? "Dashboard"
     : activeView === "diagnostic"
       ? "Complete diagnostic"
+      : activeView === "catalogues"
+        ? "TMC Catalogues"
       : activeView === "trips"
         ? "Your trips"
         : activeView === "reviews"
@@ -536,10 +594,11 @@ export default function TmcTeacherPortal() {
         <nav style={styles.sidebarNav} aria-label="Teacher portal sections">
           <PortalNavButton icon={LayoutDashboard} label="Dashboard" active={activeView === "dashboard"} onClick={() => openView("dashboard")} />
           <PortalNavButton icon={ClipboardCheck} label="Diagnostic" active={activeView === "diagnostic"} onClick={() => openView("diagnostic")} />
+          <PortalNavButton icon={BookOpen} label="TMC Catalogues" active={activeView === "catalogues"} onClick={() => openView("catalogues")} />
           <PortalNavButton icon={Map} label="Trips" active={activeView === "trips"} onClick={() => openView("trips")} />
           <PortalNavButton icon={Clipboard} label="Trip review" active={activeView === "reviews"} onClick={() => openView("reviews")} />
         </nav>
-        <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, view assigned trips, submit trip reports, and review trip landing pages.</div>
+        <div style={styles.sidebarFooter}>Use this portal to complete your diagnostic, browse TMC catalogues, view assigned trips, and submit trip reports.</div>
       </aside>
 
       <div data-tmc-teacher-shell="true" style={styles.shell}>
@@ -567,7 +626,13 @@ export default function TmcTeacherPortal() {
           </div>
         </header>
         <main style={styles.main}>
-          <div style={styles.contentScroll}>
+          <div
+            data-tmc-teacher-catalogues-content={activeView === "catalogues" ? "true" : undefined}
+            style={{
+              ...styles.contentScroll,
+              ...(activeView === "catalogues" ? styles.cataloguesContentScroll : {}),
+            }}
+          >
             {error && <div role="alert" style={styles.error}>{error}</div>}
             {activeView === "dashboard" && <TeacherDashboard
               contact={contact}
@@ -585,7 +650,8 @@ export default function TmcTeacherPortal() {
               onOpenReviews={() => openView("reviews")}
               onOpenTrip={(trip) => { openView("trips"); openTrip(trip); }}
             />}
-            {activeView === "diagnostic" && <TmcTeacherDiagnostics token={token} tenantSlug={tenant?.slug} contact={contact} onSessionExpired={(message) => logout(message || "Your teacher session is no longer available. Please sign in again.")} />}
+            {activeView === "diagnostic" && <TmcTeacherDiagnostics token={token} tenantSlug={tenant?.slug} contact={contact} onSessionExpired={handlePortalExpired} />}
+            {activeView === "catalogues" && <TmcTeacherCatalogues token={token} onSessionExpired={handlePortalExpired} />}
             {activeView === "trips" && <TripsView
               trips={trips}
               loading={loading}
@@ -600,6 +666,8 @@ export default function TmcTeacherPortal() {
               onOpenLandingPage={openLandingPage}
               onSelectTripTab={setTripTab}
               onOpenReviews={() => openView("reviews")}
+              request={tripRequest}
+              notify={notify}
             />}
             {activeView === "reviews" && <TeacherReviewView
               reviewTrips={teacherReviews}
@@ -1027,16 +1095,27 @@ function TeacherReviewView({ reviewTrips, loading, saving, onRefresh, onSubmit }
   </div>;
 }
 
-function TripsView({ trips, loading, selectedTrip, tripTab, participants, landingPage, landingPageLoading, landingPageError, onRefresh, onOpenTrip, onOpenLandingPage, onSelectTripTab, onOpenReviews }) {
+function TripsView({ trips, loading, selectedTrip, tripTab, participants, landingPage, landingPageLoading, landingPageError, onRefresh, onOpenTrip, onOpenLandingPage, onSelectTripTab, onOpenReviews, request, notify }) {
   const [tripSearch, setTripSearch] = useState("");
   const normalizedTripSearch = tripSearch.trim().toLowerCase();
   const filteredTrips = normalizedTripSearch
     ? trips.filter((trip) => [trip.destination, trip.tripCode, trip.tripType].some((value) => String(value || "").toLowerCase().includes(normalizedTripSearch)))
     : trips;
+  const sharedVariables = {
+    "--bg-color": "var(--tmc-bg)",
+    "--surface-color": "var(--tmc-surface)",
+    "--subtle-bg": "var(--tmc-surface-soft)",
+    "--border-color": "var(--tmc-border)",
+    "--border-light": "var(--tmc-border-light)",
+    "--text-primary": "var(--tmc-text)",
+    "--text-secondary": "var(--tmc-muted)",
+    "--primary-color": "var(--tmc-primary)",
+    "--accent-color": "var(--tmc-primary)",
+  };
 
   return <>
     <div className="tmc-teacher-title-row" style={styles.titleRow}>
-      <div><h2 style={styles.title}>Trips finalized with your travel team</h2><p style={styles.muted}>Open a trip to view its participants and landing page.</p></div>
+      <div><h2 style={styles.title}>Trips finalized with your travel team</h2><p style={styles.muted}>Open a trip to view participants, payments, rooming, and its landing page.</p></div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button type="button" onClick={onOpenReviews} style={styles.secondary}><Clipboard size={15} /> Review a completed trip</button>
         <button type="button" onClick={onRefresh} style={styles.secondary}><RefreshCw size={15} /> Refresh</button>
@@ -1056,33 +1135,45 @@ function TripsView({ trips, loading, selectedTrip, tripTab, participants, landin
           </button>
         ))}
       </section>
-      <section style={styles.card} aria-label="Trip students">
-        {!selectedTrip ? <div style={styles.empty}>Select a trip to view its students and landing page.</div> : <>
+      <section className="tmc-teacher-trip-details-card" style={{ ...styles.card, display: "flex", flexDirection: "column", overflow: "hidden" }} aria-label="Trip students">
+        {!selectedTrip ? <div style={styles.empty}>Select a trip to view its participants, payments, rooming, and landing page.</div> : <>
           <div style={styles.sectionHeader}><div><h3 style={styles.sectionTitle}>{selectedTrip.destination || selectedTrip.tripCode}</h3><div style={styles.muted}>{formatDate(selectedTrip.departDate)} - {formatDate(selectedTrip.returnDate)}</div></div></div>
           <div style={styles.tripTabs} role="tablist" aria-label="Trip information">
             <button type="button" role="tab" aria-selected={tripTab === "students"} onClick={() => onSelectTripTab("students")} style={{ ...styles.tripTab, ...(tripTab === "students" ? styles.tripTabActive : {}) }}><Users size={15} /> Participants</button>
+            <button type="button" role="tab" aria-selected={tripTab === "payments"} onClick={() => onSelectTripTab("payments")} style={{ ...styles.tripTab, ...(tripTab === "payments" ? styles.tripTabActive : {}) }}><WalletCards size={15} /> Payments</button>
+            <button type="button" role="tab" aria-selected={tripTab === "rooming"} onClick={() => onSelectTripTab("rooming")} style={{ ...styles.tripTab, ...(tripTab === "rooming" ? styles.tripTabActive : {}) }}><BedDouble size={15} /> Rooming</button>
             <button type="button" role="tab" aria-selected={tripTab === "landing"} onClick={() => onOpenLandingPage(selectedTrip)} style={{ ...styles.tripTab, ...(tripTab === "landing" ? styles.tripTabActive : {}) }}><ExternalLink size={15} /> Landing page</button>
           </div>
-          {tripTab === "landing" ? <TripLandingPageView landingPage={landingPage} loading={landingPageLoading} error={landingPageError} /> : <>
-            <h4 style={styles.subheading}>Participants</h4>
-            {participants.length === 0 ? <div style={styles.muted}>No participants have registered yet.</div> : <div style={styles.list}>{participants.map((row) => <div key={`p-${row.id}`} style={styles.listRow}>
-              <div style={styles.participantPeople}>
-                <div style={styles.personBlock}>
-                  <span style={styles.personLabel}>Child / student</span>
-                  <strong>{row.fullName || "Name not provided"}</strong>
-                </div>
-                <div style={styles.personBlock}>
-                  <span style={styles.personLabel}>Parent / guardian</span>
-                  <strong>{row.parentName || "Name not provided"}</strong>
-                  {(row.parentEmail || row.parentPhone) && <div style={styles.personContact}>
-                    {row.parentEmail && <span>{row.parentEmail}</span>}
-                    {row.parentPhone && <span>{row.parentPhone}</span>}
-                  </div>}
-                </div>
+          <div style={styles.tripTabPanel}>
+            {tripTab === "landing" ? <TripLandingPageView landingPage={landingPage} loading={landingPageLoading} error={landingPageError} /> : tripTab === "payments" ? (
+              <div style={{ ...sharedVariables, minWidth: 0 }}>
+                <PaymentTab trip={{ ...selectedTrip, participants }} notify={notify} request={request} readOnly />
               </div>
-              <span style={styles.badge}>Participant</span>
-            </div>)}</div>}
-          </>}
+            ) : tripTab === "rooming" ? (
+              <div style={{ ...sharedVariables, minWidth: 0 }}>
+                <RoomingTab trip={{ ...selectedTrip, participants }} notify={notify} request={request} showExports={false} />
+              </div>
+            ) : <>
+              <h4 style={styles.subheading}>Participants</h4>
+              {participants.length === 0 ? <div style={styles.muted}>No participants have registered yet.</div> : <div style={styles.list}>{participants.map((row) => <div key={`p-${row.id}`} style={styles.listRow}>
+                <div style={styles.participantPeople}>
+                  <div style={styles.personBlock}>
+                    <span style={styles.personLabel}>Child / student</span>
+                    <strong>{row.fullName || "Name not provided"}</strong>
+                  </div>
+                  <div style={styles.personBlock}>
+                    <span style={styles.personLabel}>Parent / guardian</span>
+                    <strong>{row.parentName || "Name not provided"}</strong>
+                    {(row.parentEmail || row.parentPhone) && <div style={styles.personContact}>
+                      {row.parentEmail && <span>{row.parentEmail}</span>}
+                      {row.parentPhone && <span>{row.parentPhone}</span>}
+                    </div>}
+                  </div>
+                </div>
+                <span style={styles.badge}>Participant</span>
+              </div>)}</div>}
+            </>}
+          </div>
         </>}
       </section>
     </div>
@@ -1149,6 +1240,7 @@ const styles = {
   logoutConfirmButton: { minHeight: 38, padding: "0 16px", border: "1px solid #ef5149", borderRadius: 8, background: "#ef5149", color: "#fff", cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 700 },
   main: { minWidth: 0, minHeight: 0, height: "100%", overflow: "hidden" },
   contentScroll: { width: "100%", minHeight: 0, height: "100%", boxSizing: "border-box", padding: 32, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" },
+  cataloguesContentScroll: { display: "flex", flexDirection: "column", overflow: "hidden" },
   dashboard: { display: "grid", gap: 18 },
   reviewPage: { display: "grid", gap: 18, width: "min(100%, 1180px)", maxWidth: 1180, margin: "0 auto", paddingBottom: 24, boxSizing: "border-box" },
   reviewSelectCard: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, .9fr)", alignItems: "center", gap: "16px 24px", padding: 22, border: "1px solid var(--tmc-info-border)", borderRadius: 14, background: "linear-gradient(135deg, var(--tmc-info-bg) 0%, var(--tmc-surface) 72%)", boxShadow: "var(--tmc-question-shadow)" },
@@ -1227,6 +1319,7 @@ const styles = {
   tripTabs: { display: "flex", gap: 5, marginTop: 20, paddingBottom: 3, borderBottom: "1px solid var(--tmc-border)" },
   tripTab: { display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 11px", border: 0, borderBottomWidth: 2, borderBottomStyle: "solid", borderBottomColor: "transparent", background: "transparent", color: "var(--tmc-muted)", cursor: "pointer", fontSize: 13, fontWeight: 700 },
   tripTabActive: { borderBottomColor: "var(--tmc-primary)", color: "var(--tmc-primary)" },
+  tripTabPanel: { flex: "1 1 auto", minHeight: 0, minWidth: 0, marginTop: 18, paddingRight: 4, overflowY: "auto", overflowX: "hidden" },
   landingView: { display: "grid", gap: 14, marginTop: 18 },
   landingSummary: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, padding: 15, border: "1px solid var(--tmc-border)", borderRadius: 10, background: "var(--tmc-surface-soft)" },
   landingStatus: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },

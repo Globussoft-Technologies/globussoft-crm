@@ -1,8 +1,8 @@
-/*
+﻿/*
  * Wellness vertical theme — Dr. Enhance Wellness brand palette.
  * Exact values from enhancewelness.globusdemos.com color analysis.
  *
- * Sidebar/chip : #1F2220  (dark hero bg — charcoal with slight green-gray tint)
+ * Sidebar      : warm cream in light mode; #1F2220 charcoal in dark mode
  * Gold accent  : #C9A063  (button gradient end, "EST. 2009" label text)
  * Bronze       : #B98D5E  (awards section icons, star outlines)
  * Peach        : #E8B9A0  (button gradient start, warm highlight)
@@ -50,10 +50,18 @@
   --shadow-md:         0 4px 12px rgba(185, 141, 94, 0.12);
   --shadow-lg:         0 12px 40px rgba(185, 141, 94, 0.18);
 
-  /* Sidebar bg is its own variable so dynamic themeColor only updates
-     buttons/highlights — never the sidebar background. */
-  --sidebar-bg:        #1F2220;
-  --sidebar-bg-deep:   #161917;
+  /* Theme-aware panel tokens stay independent from the tenant's dynamic
+     accent color, which continues to drive buttons and highlights. */
+  --wellness-sidebar-bg:             #FAF6ED;
+  --wellness-sidebar-bg-deep:        #F1EADB;
+  --wellness-sidebar-border:       rgba(43, 43, 43, 0.12);
+  --wellness-sidebar-text:         #2B2B2B;
+  --wellness-sidebar-muted:        #66645F;
+  --wellness-sidebar-icon:         #766F63;
+  --wellness-sidebar-hover-bg:     rgba(201, 160, 99, 0.12);
+  --wellness-sidebar-active-bg:    rgba(201, 160, 99, 0.22);
+  --wellness-sidebar-active-color: #2B2B2B;
+  --wellness-sidebar-section:      #79572F;
 }
 
 /* ─── Dark mode ───────────────────────────────────────────────────────────── */
@@ -88,8 +96,16 @@ html[data-theme="dark"][data-vertical="wellness"],
   --shadow-md:         0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-lg:         0 12px 40px rgba(0, 0, 0, 0.65);
 
-  --sidebar-bg:        #1F2220;
-  --sidebar-bg-deep:   #161917;
+  --wellness-sidebar-bg:             #1F2220;
+  --wellness-sidebar-bg-deep:        #161917;
+  --wellness-sidebar-border:       rgba(201, 160, 99, 0.18);
+  --wellness-sidebar-text:         #F5F1E8;
+  --wellness-sidebar-muted:        rgba(245, 241, 232, 0.68);
+  --wellness-sidebar-icon:         rgba(245, 241, 232, 0.65);
+  --wellness-sidebar-hover-bg:     rgba(201, 160, 99, 0.13);
+  --wellness-sidebar-active-bg:    rgba(201, 160, 99, 0.22);
+  --wellness-sidebar-active-color: #FFFFFF;
+  --wellness-sidebar-section:      #C9A063;
 
   --page-header-count-bg: rgba(217, 164, 104, 0.18);
   --page-header-count-text: #F6D7A8;
@@ -171,82 +187,77 @@ html[data-theme="dark"][data-vertical="wellness"],
 }
 
 /* ─── Sidebar ─────────────────────────────────────────────────────────────── */
-/* #1F2220 = exact dark hero background from reference site.
-   The slight green-gray tint prevents the "dark brown" optical illusion
-   that pure near-blacks (#1A1A1A, #111) produce on warm-gamma displays. */
+/* The panel and navigation contrast follow the theme-aware sidebar tokens. */
 [data-vertical="wellness"] aside.glass {
-  background: linear-gradient(180deg, var(--sidebar-bg, #1F2220) 0%, var(--sidebar-bg-deep, #161917) 100%) !important;
-  border-right: 1px solid rgba(201, 160, 99, 0.18) !important;
-  --text-primary:   #F5F1E8;
-  --text-secondary: rgba(245, 241, 232, 0.68);
-  --text-tertiary:  rgba(245, 241, 232, 0.42);
-  --border-color:   rgba(201, 160, 99, 0.14);
-  color: #F5F1E8;
+  background: linear-gradient(180deg, var(--wellness-sidebar-bg) 0%, var(--wellness-sidebar-bg-deep) 100%) !important;
+  border-right: 1px solid var(--wellness-sidebar-border) !important;
+  --text-primary: var(--wellness-sidebar-text);
+  --text-secondary: var(--wellness-sidebar-muted);
+  --text-tertiary: var(--wellness-sidebar-icon);
+  --border-color: var(--wellness-sidebar-border);
+  color: var(--wellness-sidebar-text);
 }
-[data-vertical="wellness"] aside.glass h1 { color: #FFFFFF; }
+[data-vertical="wellness"] aside.glass h1 { color: var(--wellness-sidebar-text); }
 [data-vertical="wellness"] aside.glass a,
 [data-vertical="wellness"] aside.glass .nav-link {
-  color: rgba(245, 241, 232, 0.82) !important;
+  color: var(--wellness-sidebar-text) !important;
 }
 [data-vertical="wellness"] aside.glass .nav-link svg,
 [data-vertical="wellness"] aside.glass a svg {
-  color: rgba(245, 241, 232, 0.65);
+  color: var(--wellness-sidebar-icon);
   stroke: currentColor;
 }
 [data-vertical="wellness"] aside.glass .nav-link:hover,
 [data-vertical="wellness"] aside.glass a:hover {
-  background: rgba(201, 160, 99, 0.13) !important;
-  color: #FFFFFF !important;
+  background: var(--wellness-sidebar-hover-bg) !important;
+  color: var(--wellness-sidebar-text) !important;
 }
 [data-vertical="wellness"] aside.glass .nav-link:hover svg,
 [data-vertical="wellness"] aside.glass a:hover svg {
   color: var(--accent-color, #C9A063);
 }
 [data-vertical="wellness"] aside.glass .nav-link.active {
-  background: rgba(201, 160, 99, 0.22) !important;
-  color: #FFFFFF !important;
+  background: var(--wellness-sidebar-active-bg) !important;
+  color: var(--wellness-sidebar-active-color) !important;
   border-left: 3px solid var(--accent-color, #C9A063);
 }
 [data-vertical="wellness"] aside.glass .nav-link.active svg {
   color: var(--accent-color, #C9A063);
 }
 [data-vertical="wellness"] aside.glass .nav-link[aria-expanded="true"] {
-  background: rgba(201, 160, 99, 0.22) !important;
-  color: #FFFFFF !important;
+  background: var(--wellness-sidebar-active-bg) !important;
+  color: var(--wellness-sidebar-active-color) !important;
 }
 [data-vertical="wellness"] aside.glass .nav-link[aria-expanded="true"] svg {
   color: var(--accent-color, #C9A063);
 }
 
-/* Wellness navigation groups sit on the dark sidebar in both app themes.
-   The global [role="menu"] popover surface follows the page theme, which
-   becomes white in light mode while these sidebar links stay cream-colored. */
+/* Navigation groups use the same theme-aware surface and text as the sidebar. */
 [data-vertical="wellness"] .wellness-sidebar-submenu {
-  background: linear-gradient(180deg, var(--sidebar-bg, #1F2220), var(--sidebar-bg-deep, #161917)) !important;
-  color: #F5F1E8 !important;
-  border-color: rgba(201, 160, 99, 0.2) !important;
+  background: linear-gradient(180deg, var(--wellness-sidebar-bg), var(--wellness-sidebar-bg-deep)) !important;
+  color: var(--wellness-sidebar-text) !important;
+  border-color: var(--wellness-sidebar-border) !important;
 }
 [data-vertical="wellness"] .wellness-sidebar-submenu .nav-link {
-  color: rgba(245, 241, 232, 0.82) !important;
+  color: var(--wellness-sidebar-text) !important;
 }
 [data-vertical="wellness"] .wellness-sidebar-submenu .nav-link svg {
-  color: rgba(245, 241, 232, 0.65) !important;
+  color: var(--wellness-sidebar-icon) !important;
 }
 [data-vertical="wellness"] .wellness-sidebar-submenu .nav-link:hover,
 [data-vertical="wellness"] .wellness-sidebar-submenu .nav-link.active {
-  color: #FFFFFF !important;
+  color: var(--wellness-sidebar-active-color) !important;
 }
 [data-vertical="wellness"] .wellness-sidebar-submenu .nav-link:hover {
-  background: rgba(201, 160, 99, 0.13) !important;
+  background: var(--wellness-sidebar-hover-bg) !important;
 }
 [data-vertical="wellness"] .wellness-sidebar-submenu .nav-link.active {
-  background: rgba(201, 160, 99, 0.22) !important;
+  background: var(--wellness-sidebar-active-bg) !important;
 }
 
-/* Sidebar section labels — bronze matches awards/recognition accent.
-   #B98D5E on #1F2220 ≈ 5.6:1 contrast — passes WCAG AA. */
+/* Section labels use dark bronze in light mode and brighter gold in dark mode. */
 [data-vertical="wellness"] aside.glass [style*="textTransform"] {
-  color: var(--bronze-color, #B98D5E) !important;
+  color: var(--wellness-sidebar-section) !important;
   font-weight: 700 !important;
   letter-spacing: 0.06em;
 }

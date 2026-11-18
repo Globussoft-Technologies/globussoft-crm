@@ -658,7 +658,7 @@ describe('<TripDetail /> — Participants tab', () => {
 });
 
 describe('<TripDetail /> — Rooming tab', () => {
-  it('switching to Rooming fires GET /api/travel/trips/:id/rooming + renders count caption + XLSX link', async () => {
+  it('switching to Rooming fires GET /api/travel/trips/:id/rooming + renders the read-only count caption', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fetchApiMock.mockClear();
@@ -674,11 +674,10 @@ describe('<TripDetail /> — Rooming tab', () => {
     // (singular form for count === 1; rooming returns []).
     expect(await screen.findByText(/0 rooms/)).toBeInTheDocument();
     // Download-XLSX link — the auth token is appended via ?_t=.
-    const xlsxLink = screen.getByRole('link', { name: /Download rooming as XLSX/i });
-    expect(xlsxLink.getAttribute('href')).toContain(
-      '/api/travel/trips/101/rooming/export.xlsx',
-    );
-    expect(xlsxLink.getAttribute('href')).toContain('_t=test-token');
+    expect(screen.queryByRole('link', { name: /Download rooming as XLSX/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Download rooming as PDF/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Auto-allocate/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add room/i })).not.toBeInTheDocument();
   });
 
   it('filters orphaned participantIds from loaded rooms so the room-tile count + unassigned counter agree with the visible checkboxes', async () => {
@@ -714,7 +713,7 @@ describe('<TripDetail /> — Rooming tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
     // Room tile capacity readout must reflect the SURVIVING participant
     // only — not the orphaned 999. Pre-fix this rendered "2 / 2 assigned".
-    expect(await screen.findByText(/1 \/ 2 assigned/)).toBeInTheDocument();
+    expect(await screen.findByText(/twin \(1\/2\)/i)).toBeInTheDocument();
     expect(screen.queryByText(/2 \/ 2 assigned/)).toBeNull();
     // Header counter agrees with the tile: 1 valid participant who IS
     // assigned → 0 unassigned of 1 total.
@@ -806,25 +805,41 @@ describe('<TripDetail /> — Header date edge cases', () => {
   });
 });
 
-describe('<TripDetail /> — Rooming Add-room form', () => {
-  it('clicking "Add room" opens the inline room editor with capacity readout', async () => {
+describe('<TripDetail /> - Rooming admin viewer', () => {
+  it('shows rooming counts but hides admin allocation controls when no rooms exist', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
-    // Wait for rooming GET to resolve + the empty-state copy.
-    expect(
-      await screen.findByText(/No rooming assignments yet/i),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
-    // Room number input + room type select render.
-    expect(await screen.findByLabelText(/Room number/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Room type/i)).toBeInTheDocument();
-    // Default room type is "twin" (capacity 2). Assigned count "0 / 2".
-    expect(screen.getByText(/0 \/ 2 assigned/)).toBeInTheDocument();
-    // The form's "Add room" submit button is now distinct from the toggle —
-    // the toggle is gone (newRoom truthy hides it).
-    expect(screen.getByRole('button', { name: /^Add room$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Cancel new room/i })).toBeInTheDocument();
+    expect(await screen.findByText(/No rooming assignments yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/0 rooms/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Auto-allocate/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add room/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Download rooming/i })).not.toBeInTheDocument();
+  });
+
+  it('renders allocated rooms and participants without edit or delete controls', async () => {
+    const trip = makeTrip({
+      participants: [{ id: 901, fullName: 'Anaya Sharma' }],
+    });
+    installFetchMock({
+      trip,
+      rooming: {
+        rooming: [{
+          id: 7001,
+          tripId: 101,
+          roomNumber: '101',
+          roomType: 'twin',
+          participantIds: JSON.stringify([901]),
+        }],
+      },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    expect(await screen.findByText('Room 101')).toBeInTheDocument();
+    expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
+    expect(screen.queryByTitle('Edit room')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Delete room')).not.toBeInTheDocument();
   });
 });
 
@@ -1009,115 +1024,6 @@ describe('<TripDetail /> — Payment plan tab', () => {
 // All cases use stable mock object refs, findBy / waitFor for async, and
 // getAllByText where labels appear in tab + card chrome.
 
-describe('<TripDetail /> — Rooming create-room flow', () => {
-  it('createRoom POSTs /api/travel/trips/:id/rooming with the right body', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
-    await screen.findByText(/No rooming assignments yet/i);
-    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
-    const roomNum = await screen.findByLabelText(/Room number/i);
-    fireEvent.change(roomNum, { target: { value: '203' } });
-    fetchApiMock.mockClear();
-    installFetchMock();
-    // The form's submit button has aria-label "Add room" — but the toggle
-    // also reads "Add room" when visible. Once the form is open, the toggle
-    // is hidden so there's only one match. Scope by buttons + accessible
-    // name to be safe.
-    fireEvent.click(screen.getByRole('button', { name: /^Add room$/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/trips/101/rooming' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.roomNumber).toBe('203');
-      expect(body.roomType).toBe('twin');
-      expect(body.participantIds).toEqual([]);
-    });
-    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Room added/i));
-  });
-
-  it('createRoom with empty roomNumber surfaces notify.error + no POST fires', async () => {
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
-    await screen.findByText(/No rooming assignments yet/i);
-    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
-    await screen.findByLabelText(/Room number/i);
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Add room$/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/roomNumber is required/i),
-      );
-    });
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
-  });
-
-  it('Rooming load failure leaves rooms empty + does NOT crash the tab', async () => {
-    // Replace the rooming GET with a rejection. Other endpoints stay
-    // healthy so the trip itself still loads.
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
-        return Promise.resolve(makeTrip());
-      }
-      if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/rooming$/.test(url)) {
-        return Promise.reject(new Error('boom'));
-      }
-      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
-      if (method === 'GET' && /instalments$/.test(url)) return Promise.resolve({ instalments: [] });
-      return Promise.resolve(null);
-    });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
-    // Empty-state copy still renders (load() catch sets rooms=[]).
-    expect(
-      await screen.findByText(/No rooming assignments yet/i),
-    ).toBeInTheDocument();
-    // 0 rooms · ... caption visible — page survived the rejection.
-    expect(screen.getByText(/0 rooms/)).toBeInTheDocument();
-  });
-
-  it('RoomCard at-capacity unchecked participant buttons are not shown', async () => {
-    // 3 participants + a single room type (single, capacity 1) →
-    // after assigning P1, the "Add more participants" section disappears
-    // because the room is at capacity.
-    const tripWith3 = makeTrip({
-      participants: [
-        { id: 901, fullName: 'Anaya Sharma' },
-        { id: 902, fullName: 'Kabir Mehta' },
-        { id: 903, fullName: 'Riya Singh' },
-      ],
-    });
-    installFetchMock({ trip: tripWith3 });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
-    await screen.findByText(/No rooming assignments yet/i);
-    fireEvent.click(screen.getByRole('button', { name: /Add room/i }));
-    await screen.findByLabelText(/Room number/i);
-    // Switch room type to "single" (capacity 1).
-    const typeSelect = screen.getByLabelText(/Room type/i);
-    fireEvent.change(typeSelect, { target: { value: 'single' } });
-    // Capacity readout: "0 / 1 assigned".
-    expect(screen.getByText(/0 \/ 1 assigned/)).toBeInTheDocument();
-    // Assign Anaya — click the button showing her name.
-    const anayaBtn = screen.getByRole('button', { name: /Anaya Sharma/ });
-    fireEvent.click(anayaBtn);
-    // Now capacity reads 1 / 1.
-    expect(screen.getByText(/1 \/ 1 assigned/)).toBeInTheDocument();
-    // Anaya now appears in the selected participants area (as a pill).
-    expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
-    // The "Add more participants" section is hidden because capacity is full.
-    expect(screen.queryByText(/Add more participants/i)).not.toBeInTheDocument();
-  });
-});
-
 describe('<TripDetail /> — Payment plan with existing plan', () => {
   const planFixture = {
     id: 7001,
@@ -1266,6 +1172,14 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     await screen.findByRole('heading', { name: 'Documents to collect' });
   }
 
+  async function openParticipantsTab(trip = makeTrip()) {
+    installFetchMock({ trip });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByRole('heading', { name: 'Participant status' });
+  }
+
   it('shows custom requirements and participant upload status in the admin matrix', async () => {
     await openDocumentsTab(makeTrip({
       participants: [{
@@ -1295,8 +1209,8 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     expect(screen.queryByText(/Passport|Aadhaar|Visa documents/i)).not.toBeInTheDocument();
   });
 
-  it('opens participant details from the participant identity cell', async () => {
-    await openDocumentsTab(makeTrip({
+  it('opens participant details from the Participants tab identity cell', async () => {
+    await openParticipantsTab(makeTrip({
       participants: [{
         id: 901,
         fullName: 'Anaya Sharma',
@@ -1310,7 +1224,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'View details for Anaya Sharma' }));
     const modal = await screen.findByRole('dialog', { name: 'Participant details' });
-    expect(within(modal).getAllByText('Anaya Sharma')).toHaveLength(2);
+    expect(within(modal).getByText('Anaya Sharma')).toBeInTheDocument();
     expect(within(modal).getByText('riya@example.com')).toBeInTheDocument();
     expect(within(modal).getByText('+919876543210')).toBeInTheDocument();
     expect(within(modal).getByText('The Modern Classroom')).toBeInTheDocument();
@@ -1321,17 +1235,32 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     expect(screen.queryByRole('dialog', { name: 'Participant details' })).not.toBeInTheDocument();
   });
 
-  it('shows school and registration fields for a pending participant', async () => {
-    await openDocumentsTab(makeTrip({ participants: [] }), [{
-        id: 9001,
-        status: 'OTP_VERIFIED',
-        studentName: 'Aarav Iyer',
+  it('does not expose the participant-details trigger in the Documents tab', async () => {
+    await openDocumentsTab(makeTrip({
+      participants: [{
+        id: 901,
+        fullName: 'Anaya Sharma',
+        parentName: 'Riya Sharma',
+        parentEmail: 'riya@example.com',
+      }],
+    }));
+
+    expect(screen.queryByRole('button', { name: 'View details for Anaya Sharma' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Participant details' })).not.toBeInTheDocument();
+  });
+
+  it('shows school and registration fields for a participant', async () => {
+    await openParticipantsTab(makeTrip({
+      participants: [{
+        id: 902,
+        fullName: 'Aarav Iyer',
         studentSchool: 'Springfield School',
         studentClass: 'Grade 8',
         parentName: 'Rohan Iyer',
         parentEmail: 'rohan@example.com',
         parentPhone: '+919876543210',
-      }]);
+      }],
+    }));
 
     fireEvent.click(screen.getByRole('button', { name: 'View details for Aarav Iyer' }));
     const modal = await screen.findByRole('dialog', { name: 'Participant details' });
@@ -1344,9 +1273,17 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:uploaded-document');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-    rawFetchMock.mockResolvedValue({
-      ok: true,
-      blob: () => Promise.resolve(new Blob(['document'], { type: 'application/pdf' })),
+    rawFetchMock.mockImplementation(async (url) => {
+      if (url.endsWith('/view-url')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ url: 'https://objectstorage.ap-mumbai-1.oraclecloud.com/p/signed-parent-document' }),
+        };
+      }
+      return {
+        ok: true,
+        blob: () => Promise.resolve(new Blob(['document'], { type: 'application/pdf' })),
+      };
     });
     await openDocumentsTab(makeTrip({
       participants: [{
@@ -1369,12 +1306,12 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     fireEvent.click(screen.getByRole('button', { name: /View document/ }));
     await waitFor(() => {
       expect(rawFetchMock).toHaveBeenCalledWith(
-        '/api/travel/trips/101/participants/901/parent-documents/501/file',
+        '/api/travel/trips/101/participants/901/parent-documents/501/view-url',
         { headers: { Authorization: 'Bearer test-token' } },
       );
     });
-    expect(createObjectUrlSpy).toHaveBeenCalled();
-    expect(openSpy).toHaveBeenCalledWith('blob:uploaded-document', '_blank', 'noopener,noreferrer');
+    expect(createObjectUrlSpy).not.toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledWith('https://objectstorage.ap-mumbai-1.oraclecloud.com/p/signed-parent-document', '_blank', 'noopener,noreferrer');
 
     fireEvent.click(screen.getByRole('button', { name: 'Download' }));
     await waitFor(() => {

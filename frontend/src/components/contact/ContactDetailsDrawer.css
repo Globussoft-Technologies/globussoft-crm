@@ -170,3 +170,101 @@ body[data-vertical="generic"] .cd-tag-picker-actions {
 .cd-telephone-label { display: inline-block; margin-bottom: 0.8rem; padding: 0.35rem 0.5rem; border-radius: 4px; background: var(--subtle-bg-2); color: var(--text-primary); font-size: 0.7rem; }
 @media (max-width: 899px) { .cd-basic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .cd-drawer { width: 100vw; min-width: 0; } .cd-header-top { align-items: flex-start; } .cd-header-actions .cd-secondary-btn { display: none; } .cd-tools { align-items: flex-start; flex-direction: column; } .cd-basic-grid { grid-template-columns: 1fr; } }
+
+/* Keep generic contact details consistent with the typography used across
+   the CRM pages without changing the wellness/travel variants. */
+body[data-vertical="generic"] .cd-basic-field > span {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+body[data-vertical="generic"] .cd-basic-field strong {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+body[data-vertical="generic"] .cd-basic-field .cd-filled-value {
+  color: var(--primary-color, var(--accent-color));
+}
+body[data-vertical="generic"] .cd-basic-field .cd-empty-value,
+body[data-vertical="generic"] .cd-basic-field strong.is-empty {
+  color: var(--text-secondary);
+}
+
+body[data-vertical="generic"] .cd-generic-tags-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "label edit spacer"
+    "values values values";
+  align-items: center;
+  gap: 0.25rem 0.45rem;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  background: var(--subtle-bg);
+  color: var(--text-primary);
+}
+body[data-vertical="generic"] .cd-generic-tags-card > svg {
+  display: none;
+}
+body[data-vertical="generic"] .cd-generic-tags-card > span {
+  grid-area: label;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+body[data-vertical="generic"] .cd-generic-tags-card > .cd-tag-values {
+  grid-area: values;
+  min-height: 18px;
+}
+body[data-vertical="generic"] .cd-generic-tags-card .cd-generic-tag-edit {
+  grid-area: edit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+body[data-vertical="generic"] .cd-generic-tags-card .cd-generic-tag-edit:hover {
+  color: var(--primary-color, var(--accent-color));
+}
+body[data-vertical="generic"] .cd-generic-tags-card .cd-add-tag-btn {
+  display: none;
+}
+
+.cd-tag-color {
+  position: relative;
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  cursor: pointer;
+}
+.cd-tag-color input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.cd-tag-color-swatch {
+  display: block;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 3px var(--surface-color, #fff), 0 1px 2px rgba(15, 23, 42, 0.12);
+  pointer-events: none;
+}
+.cd-create-tag-color {
+  margin-left: 0.15rem;
+}

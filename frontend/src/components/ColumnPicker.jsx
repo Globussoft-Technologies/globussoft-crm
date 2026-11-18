@@ -4,6 +4,8 @@ import { SlidersHorizontal, Search, GripVertical, Trash2 } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
+const EMPTY_HIDDEN_COLUMN_KEYS = Object.freeze([]);
+
 // ── ColumnPicker — "Customize table" column-visibility popover ─────
 //
 // Generic-vertical-only feature (Settings > Lead Fields' sibling — this is
@@ -24,6 +26,7 @@ export default function ColumnPicker({
   tableKey,
   onColumnsChange,
   onAvailableColumnsChange,
+  hiddenColumnKeys = EMPTY_HIDDEN_COLUMN_KEYS,
   deletableColumns = [],
   onFieldDeleted,
 }) {
@@ -38,6 +41,7 @@ export default function ColumnPicker({
   const [draggedKey, setDraggedKey] = useState(null);
   const [dropKey, setDropKey] = useState(null);
   const [deletingKey, setDeletingKey] = useState(null);
+  const [selectedDeleteKeys, setSelectedDeleteKeys] = useState([]);
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
@@ -59,6 +63,24 @@ export default function ColumnPicker({
     "actions",
   ];
 
+  // Name identifies each row and Actions contains the row controls, so both
+  // are structural columns rather than reorderable fields. Keep them at the
+  // edges everywhere, including for preferences saved by older versions.
+  const normalizeColumnOrder = (keys, columns = available) => {
+    const availableKeys = new Set(columns.map((column) => column.key));
+    const unique = [];
+    for (const key of Array.isArray(keys) ? keys : []) {
+      if ((!columns.length || availableKeys.has(key)) && !unique.includes(key)) {
+        unique.push(key);
+      }
+    }
+    if (!columns.length) return unique;
+    const first = availableKeys.has("name") ? ["name"] : [];
+    const middle = unique.filter((key) => key !== "name" && key !== "actions");
+    const actions = availableKeys.has("actions") ? ["actions"] : [];
+    return [...first, ...middle, ...actions];
+  };
+
   const load = async () => {
     setLoading(true);
     try {
@@ -73,11 +95,18 @@ export default function ColumnPicker({
         loadedOnce.current = true;
         return;
       }
-      const availableColumns = Array.isArray(data.availableColumns) ? data.availableColumns : [];
-      setAvailable(availableColumns);
+      const availableColumns = (Array.isArray(data.availableColumns) ? data.availableColumns : [])
+        .map((column) => tableKey === "leads" && column.key === "lifecycleStage"
+          ? { ...column, label: "Status" }
+          : column);
+      const pickerColumns = availableColumns.filter(
+        (column) => !hiddenColumnKeys.includes(column.key),
+      );
+      setAvailable(pickerColumns);
       onAvailableColumnsChange?.(availableColumns);
-      setDraftVisible(data.visible);
-      onColumnsChange?.(data.visible);
+      const normalizedVisible = normalizeColumnOrder(data.visible, pickerColumns);
+      setDraftVisible(normalizedVisible);
+      onColumnsChange?.(normalizedVisible);
       loadedOnce.current = true;
     } catch (_err) {
       // Best-effort — a failed load just means the table falls back to
@@ -93,7 +122,7 @@ export default function ColumnPicker({
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tableKey]);
+  }, [hiddenColumnKeys, tableKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -169,7 +198,12 @@ export default function ColumnPicker({
   }, [open]);
 
   const toggleColumn = (key) => {
-    setDraftVisible((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+    setDraftVisible((prev) => {
+      const next = prev.includes(key)
+        ? prev.filter((k) => k !== key)
+        : [...prev, key];
+      return normalizeColumnOrder(next);
+    });
   };
 
   const moveVisibleColumn = (fromKey, toKey = null) => {
@@ -178,17 +212,29 @@ export default function ColumnPicker({
       if (fromIndex < 0) return prev;
       const next = [...prev];
       const [moved] = next.splice(fromIndex, 1);
-      if (!toKey) {
-        next.push(moved);
-        return next;
+      // A locked edge column is a visual drop zone, not a valid destination.
+      // Dropping onto Name inserts immediately after it; dropping onto
+      // Actions inserts immediately before it.
+      if (!toKey || toKey === "actions") {
+        const actionsIndex = next.indexOf("actions");
+        next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
+        return normalizeColumnOrder(next);
+      }
+      if (toKey === "name") {
+        next.splice(next.indexOf("name") + 1, 0, moved);
+        return normalizeColumnOrder(next);
       }
       const toIndex = next.indexOf(toKey);
       if (toIndex < 0) {
-        next.push(moved);
-        return next;
+        const actionsIndex = next.indexOf("actions");
+        next.splice(actionsIndex < 0 ? next.length : actionsIndex, 0, moved);
+        return normalizeColumnOrder(next);
       }
-      next.splice(toIndex, 0, moved);
-      return next;
+      // A downward drop should occupy the target row's original position.
+      // Since removing the source shifts that target up by one slot, insert
+      // after it; upward drops continue to insert before the target.
+      next.splice(fromIndex < prev.indexOf(toKey) ? toIndex + 1 : toIndex, 0, moved);
+      return normalizeColumnOrder(next);
     });
   };
 
@@ -236,9 +282,11 @@ export default function ColumnPicker({
     try {
       const data = await fetchApi(`/api/table-column-prefs/${tableKey}`, {
         method: "PUT",
-        body: JSON.stringify({ visible: draftVisible }),
+        body: JSON.stringify({ visible: normalizeColumnOrder(draftVisible) }),
       });
-      const saved = Array.isArray(data.visible) ? data.visible : draftVisible;
+      const saved = normalizeColumnOrder(
+        Array.isArray(data.visible) ? data.visible : draftVisible,
+      );
       setDraftVisible(saved);
       onColumnsChange?.(saved);
       setOpen(false);
@@ -251,12 +299,18 @@ export default function ColumnPicker({
 
   const handleReset = () => {
     if (tableKey === "leads") {
-      setDraftVisible(leadsDefaultColumns.filter((key) => available.some((column) => column.key === key)));
+      setDraftVisible(
+        normalizeColumnOrder(
+          leadsDefaultColumns.filter((key) => available.some((column) => column.key === key)),
+        ),
+      );
       return;
     }
     // Other tables keep the previous behaviour: every builtin column
     // visible, custom-field columns opt-in.
-    setDraftVisible(available.filter((c) => !c.key.startsWith("cf_")).map((c) => c.key));
+    setDraftVisible(
+      normalizeColumnOrder(available.filter((c) => !c.key.startsWith("cf_")).map((c) => c.key)),
+    );
   };
 
   const handleDeleteField = async (column) => {
@@ -277,10 +331,42 @@ export default function ColumnPicker({
       });
       setAvailable((current) => current.filter((item) => item.key !== column.key));
       setDraftVisible((current) => current.filter((key) => key !== column.key));
+      setSelectedDeleteKeys((current) => current.filter((key) => key !== column.key));
       onFieldDeleted?.(definition);
       notify.success("Field deleted");
     } catch (err) {
       notify.error(err?.message || "Failed to delete field");
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    const selected = available.filter((column) => selectedDeleteKeys.includes(column.key));
+    const definitions = selected
+      .map((column) => ({ column, definition: deletableColumns.find((item) => item.key === column.key) }))
+      .filter(({ definition }) => definition?.id);
+    if (!definitions.length) return;
+
+    const confirmed = await notify.confirm({
+      title: `Delete ${definitions.length} fields?`,
+      message: `These fields and their stored values will be removed from existing leads. This cannot be undone.`,
+      confirmText: "Delete fields",
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setDeletingKey("__multiple__");
+    try {
+      await Promise.all(definitions.map(({ definition }) => fetchApi(`/api/lead-custom-fields/${definition.id}`, { method: "DELETE" })));
+      const deletedKeys = new Set(definitions.map(({ column }) => column.key));
+      setAvailable((current) => current.filter((item) => !deletedKeys.has(item.key)));
+      setDraftVisible((current) => current.filter((key) => !deletedKeys.has(key)));
+      setSelectedDeleteKeys([]);
+      definitions.forEach(({ definition }) => onFieldDeleted?.(definition));
+      notify.success(`${definitions.length} fields deleted`);
+    } catch (err) {
+      notify.error(err?.message || "Failed to delete selected fields");
     } finally {
       setDeletingKey(null);
     }
@@ -295,7 +381,8 @@ export default function ColumnPicker({
   const isLockedFn = (column) => column.key === "name" || Boolean(column.lockedVisible);
   const matchesSearch = (column) =>
     !searchTerm || column.label.toLowerCase().includes(searchTerm);
-  const shownKeys = new Set(draftVisible);
+  const normalizedDraftVisible = normalizeColumnOrder(draftVisible);
+  const shownKeys = new Set(normalizedDraftVisible);
   // Locked columns (identity `name`, always-on `actions`) are always shown —
   // merge them in so older saved preferences that predate the key still
   // display them as fixed instead of dropping them into "not shown".
@@ -303,11 +390,12 @@ export default function ColumnPicker({
     if (c.lockedVisible) shownKeys.add(c.key);
   }
   if (availableByKey.has("name")) shownKeys.add("name");
-  const shown = [...shownKeys]
+  const shown = normalizeColumnOrder([...shownKeys])
     .map((key) => availableByKey.get(key))
     .filter(Boolean)
     .filter(matchesSearch);
   const hidden = filtered.filter((c) => !shownKeys.has(c.key));
+  const deletableHidden = hidden.filter((column) => deletableColumns.some((item) => item.key === column.key));
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
@@ -434,6 +522,38 @@ export default function ColumnPicker({
                           {c.label}
                         </span>
                       </label>
+                      {deletableColumns.some((item) => item.key === c.key) && (
+                        <>
+                          <input
+                            type="checkbox"
+                            checked={selectedDeleteKeys.includes(c.key)}
+                            onChange={() => setSelectedDeleteKeys((current) => current.includes(c.key) ? current.filter((key) => key !== c.key) : [...current, c.key])}
+                            aria-label={`Select ${c.label} field for deletion`}
+                            title={`Select ${c.label} field for deletion`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteField(c)}
+                            disabled={deletingKey === c.key || deletingKey === "__multiple__"}
+                            aria-label={`Delete ${c.label} field`}
+                            title={`Delete ${c.label} field`}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--danger-color, #dc2626)",
+                              padding: "0.2rem",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              cursor: deletingKey === c.key ? "wait" : "pointer",
+                              opacity: deletingKey === c.key ? 0.55 : 1,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -442,8 +562,20 @@ export default function ColumnPicker({
             )}
             {hidden.length > 0 && (
               <>
-                <div style={{ padding: "0.6rem 0.75rem 0.3rem", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Fields not shown in table
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.6rem 0.75rem 0.3rem" }}>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    Fields not shown in table
+                  </div>
+                  {deletableHidden.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDeleteKeys((current) => current.length === deletableHidden.length ? [] : deletableHidden.map((column) => column.key))}
+                      className="btn-secondary"
+                      style={{ fontSize: "0.7rem", padding: "0.2rem 0.45rem" }}
+                    >
+                      {selectedDeleteKeys.length === deletableHidden.length ? "Clear selection" : "Select all"}
+                    </button>
+                  )}
                 </div>
                 {hidden.map((c) => (
                   <div
@@ -457,27 +589,36 @@ export default function ColumnPicker({
                       </span>
                     </label>
                     {deletableColumns.some((item) => item.key === c.key) && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteField(c)}
-                        disabled={deletingKey === c.key}
-                        aria-label={`Delete ${c.label} field`}
-                        title={`Delete ${c.label} field`}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "var(--danger-color, #dc2626)",
-                          padding: "0.2rem",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          cursor: deletingKey === c.key ? "wait" : "pointer",
-                          opacity: deletingKey === c.key ? 0.55 : 1,
-                          flexShrink: 0,
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <>
+                        <input
+                          type="checkbox"
+                          checked={selectedDeleteKeys.includes(c.key)}
+                          onChange={() => setSelectedDeleteKeys((current) => current.includes(c.key) ? current.filter((key) => key !== c.key) : [...current, c.key])}
+                          aria-label={`Select ${c.label} field for deletion`}
+                          title={`Select ${c.label} field for deletion`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteField(c)}
+                          disabled={deletingKey === c.key || deletingKey === "__multiple__"}
+                          aria-label={`Delete ${c.label} field`}
+                          title={`Delete ${c.label} field`}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "var(--danger-color, #dc2626)",
+                            padding: "0.2rem",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: deletingKey === c.key ? "wait" : "pointer",
+                            opacity: deletingKey === c.key ? 0.55 : 1,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
                     )}
                   </div>
                 ))}
@@ -491,9 +632,22 @@ export default function ColumnPicker({
             <button type="button" onClick={handleReset} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
               Reset
             </button>
-            <button type="button" onClick={handleApply} disabled={saving} className="btn-primary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
-              {saving ? "Saving…" : "Apply"}
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {selectedDeleteKeys.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDeleteSelected}
+                  disabled={deletingKey !== null}
+                  className="btn-secondary"
+                  style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem", color: "var(--danger-color, #dc2626)", borderColor: "var(--danger-color, #dc2626)" }}
+                >
+                  {deletingKey === "__multiple__" ? "Deleting fields…" : `Delete selected (${selectedDeleteKeys.length})`}
+                </button>
+              )}
+              <button type="button" onClick={handleApply} disabled={saving || deletingKey !== null} className="btn-primary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
+                {saving ? "Saving…" : "Apply"}
+              </button>
+            </div>
           </div>
         </div>,
         document.body,

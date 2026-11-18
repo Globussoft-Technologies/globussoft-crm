@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ChevronDown, Edit3, PenLine, Plus, StickyNote, Trash2, X } from "lucide-react";
+import { ArrowLeft, Edit3, PenLine, Plus, StickyNote, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import EditContactModal from "../../components/EditContactModal";
@@ -17,9 +17,10 @@ const formatStatus = (value) => value ? String(value).replaceAll("_", " ") : "";
 export default function LeadDetail() {
   const { contactId } = useParams(); const location = useLocation(); const navigate = useNavigate();
   const notify = useNotify();
-  const [contact, setContact] = useState(null); const [contactError, setContactError] = useState(""); const [trips, setTrips] = useState([]); const [quotes, setQuotes] = useState([]); const [itineraries, setItineraries] = useState([]); const [activities, setActivities] = useState([]); const [paidAmounts, setPaidAmounts] = useState({}); const [tab, setTab] = useState("Trips"); const [editing, setEditing] = useState(false); const [note, setNote] = useState(""); const [editingNoteId, setEditingNoteId] = useState(null);
+  const [contact, setContact] = useState(null); const [contactError, setContactError] = useState(""); const [trips, setTrips] = useState([]); const [quotes, setQuotes] = useState([]); const [itineraries, setItineraries] = useState([]); const [activities, setActivities] = useState([]); const [paidAmounts, setPaidAmounts] = useState({}); const [tab, setTab] = useState("Trips"); const [editing, setEditing] = useState(false); const [note, setNote] = useState(""); const [editingNoteId, setEditingNoteId] = useState(null); const [terminalStage, setTerminalStage] = useState(""); const [terminalReason, setTerminalReason] = useState(""); const [terminalError, setTerminalError] = useState(""); const [savingStage, setSavingStage] = useState(false);
   const noteInputRef = useRef(null);
-  const backTo = location.state?.backTo || "/leads"; const backLabel = location.state?.backLabel || "Back to Leads";
+  const leadsReturnTo = location.search ? `/leads${location.search}` : "/leads";
+  const backTo = location.state?.returnTo || location.state?.backTo || leadsReturnTo; const backLabel = location.state?.backLabel || "Back to Leads";
   useEffect(() => {
     let mounted = true;
     setContact(null);
@@ -120,7 +121,45 @@ export default function LeadDetail() {
   const displayTrips = useMemo(() => [...allTrips, ...otherTrips], [allTrips, otherTrips]);
   const notes = activities.filter((activity) => activity.type === "Note");
   const totalValue = allTrips.reduce((sum, trip) => sum + (Number(trip.value) || 0), 0); const activeTrip = allTrips.find((trip) => !["completed", "cancelled"].includes(String(trip.status).toLowerCase())) || allTrips[0];
-  const moveStage = async (stage) => { if (!contact || contact.status === stage) return; const updated = await fetchApi("/api/contacts/" + contact.id, { method: "PUT", body: JSON.stringify({ status: stage }) }); setContact((current) => ({ ...current, ...updated, status: updated?.status || stage })); };
+  const updateStage = async (stage, reason = "") => {
+    const updated = await fetchApi("/api/contacts/" + contact.id, {
+      method: "PUT",
+      body: JSON.stringify({ status: stage, ...(reason ? { lifecycleTransitionReason: reason } : {}) }),
+    });
+    setContact((current) => ({ ...current, ...updated, status: updated?.status || stage }));
+    if (updated?.lifecycleActivity) {
+      setActivities((current) => [updated.lifecycleActivity, ...current.filter((item) => item.id !== updated.lifecycleActivity.id)]);
+    }
+  };
+  const moveStage = async (stage) => {
+    if (!contact || contact.status === stage) return;
+    if (TERMINAL_STAGES.includes(stage)) {
+      setTerminalStage(stage);
+      setTerminalReason("");
+      setTerminalError("");
+      return;
+    }
+    await updateStage(stage);
+  };
+  const confirmTerminalStage = async () => {
+    const reason = terminalReason.trim();
+    if (!reason) {
+      setTerminalError("Please enter a reason before updating the status.");
+      return;
+    }
+    setSavingStage(true);
+    setTerminalError("");
+    try {
+      await updateStage(terminalStage, reason);
+      setTerminalStage("");
+      setTerminalReason("");
+      setTab("Activity");
+    } catch (error) {
+      setTerminalError(error?.body?.error || "Unable to update the lead status.");
+    } finally {
+      setSavingStage(false);
+    }
+  };
   const addNote = async () => {
     const description = note.trim();
     if (!description) return;
@@ -157,11 +196,17 @@ export default function LeadDetail() {
     <Link className="travel-lead-back" to={backTo}><ArrowLeft size={14} /> {backLabel}</Link>
     <header className="travel-lead-header"><div className="travel-lead-identity"><div className="travel-lead-avatar">{initials}</div><div><h1>{contact.name || "Contact"}</h1><div className="travel-lead-subtitle">{contact.company || ""} · {contact.email || ""}</div></div><span className="travel-lead-badge">{contact.status || "Lead"}</span></div><div className="travel-lead-actions"><button className="travel-lead-button" type="button" onClick={() => setEditing(true)}><Edit3 size={14} /> Edit contact</button><button className="travel-lead-button" type="button" onClick={() => navigate("/travel/quotes/builder", { state: { contactId: contact.id } })}>Create quote</button><button className="travel-lead-button travel-lead-button-primary" type="button" onClick={() => navigate("/travel/trips", { state: { contactId: contact.id } })}><Plus size={15} /> New trip</button></div></header>
     <section className="travel-lead-card travel-lead-lifecycle-card"><div className="travel-lead-section-heading"><strong>Lifecycle stage</strong><span>Click a stage to move this travel lead</span></div><div className="travel-lead-lifecycle">{STAGES.map((stage, index) => <button type="button" key={stage} onClick={() => moveStage(stage)} className={`travel-lead-lifecycle-button${index === stageIndex ? " is-active" : ""}`}><span>Step {index + 1}</span><strong>{stage}</strong></button>)}<div className="travel-lead-lifecycle-terminals">{TERMINAL_STAGES.map((stage) => <button className="travel-lead-lifecycle-button" type="button" key={stage} onClick={() => moveStage(stage)}>{stage}</button>)}</div></div></section>
-    <div className="travel-lead-content"><aside className="travel-lead-sidebar"><section className="travel-lead-card travel-lead-info-card"><h2>Contact information</h2>{[["Email", contact.email], ["Phone", contact.phone], ["Company", contact.company], ["Source", contact.source], ["Lead score", contact.aiScore != null ? contact.aiScore + "/100" : ""], ["Created", formatDate(contact.createdAt)]].map(([name, value]) => <div className="travel-lead-info-row" key={name}><span>{name}</span><strong>{value || "—"}</strong></div>)}<label className="travel-lead-assignee">Assigned to<select defaultValue={contact.assignedTo?.id || contact.assignedToId || ""}><option value="">Unassigned</option><option value={contact.assignedTo?.id || contact.assignedToId || "current"}>{contact.assignedTo?.name || "Current owner"}</option></select><ChevronDown size={15} /></label></section><section className="travel-lead-card travel-lead-summary-card"><h2>Trip summary</h2><div className="travel-lead-summary-grid">{summary.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></section></aside>
+    <div className="travel-lead-content"><aside className="travel-lead-sidebar"><section className="travel-lead-card travel-lead-info-card"><h2>Contact information</h2>{[["Email", contact.email], ["Phone", contact.phone], ["Company", contact.company], ["Source", contact.source], ["Lead score", contact.aiScore != null ? contact.aiScore + "/100" : ""], ["Created", formatDate(contact.createdAt)]].map(([name, value]) => <div className="travel-lead-info-row" key={name}><span>{name}</span><strong>{value || "—"}</strong></div>)}<div className="travel-lead-info-row"><span>Assigned To</span><strong>{contact.assignedTo?.name || contact.assignedTo?.email || "Unassigned"}</strong></div></section><section className="travel-lead-card travel-lead-summary-card"><h2>Trip summary</h2><div className="travel-lead-summary-grid">{summary.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></section></aside>
       <main className="travel-lead-main"><nav className="travel-lead-tabs">{["Trips", "Quotes", "Activity", "Notes"].map((name) => <button className={tab === name ? "is-active" : ""} type="button" key={name} onClick={() => setTab(name)}>{name}</button>)}</nav>
         {tab === "Trips" && <><TripHero trip={activeTrip} onViewTrip={() => navigate(`/travel/trips/${activeTrip.id}`, { state: { backTo: `/travel/leads/${contactId}`, backLabel: "Back to Lead" } })} /><section className="travel-lead-trips"><h2>All trips</h2><div className="travel-lead-table-wrap"><table><thead><tr>{["Trip", "Destination", "Dates", "Type", "Value", "Paid amount", "Status"].map((name) => <th key={name}>{name}</th>)}</tr></thead><tbody>{displayTrips.length ? displayTrips.map((trip) => <tr key={trip.id}><td><strong>{trip.idLabel}</strong></td><td>{trip.destination || ""}</td><td>{formatDate(trip.startDate)} {trip.endDate ? `${ARROW} ${formatDate(trip.endDate)}` : ""}</td><td>{trip.type}</td><td>{formatMoney(trip.value, trip.currency)}</td><td>{formatMoney(trip.paidAmount, trip.currency)}</td><td>{formatStatus(trip.status)}</td></tr>) : <tr><td colSpan="7">No travel trips linked to this contact.</td></tr>}</tbody></table></div></section></>}
         {tab === "Quotes" && quotes.map((quote) => <div className="travel-lead-empty-row" key={quote.id}>Quote Q-{quote.id} — {formatMoney(quote.totalAmount, quote.currency)} — {formatStatus(quote.status)}</div>)}
-        {tab === "Activity" && activities.map((activity) => <div className="travel-lead-empty-row" key={activity.id}>{activity.type}: {activity.description || ""}</div>)}
+        {tab === "Activity" && <section className="travel-lead-activity-list" aria-label="Activity history">
+          {activities.map((activity) => <article className="travel-lead-activity-row" key={activity.id}>
+            <div><strong>{activity.type}</strong><span>{activity.description || ""}</span></div>
+            <div className="travel-lead-activity-meta"><strong>{activity.user?.name || activity.user?.email || "System"}</strong><time dateTime={activity.createdAt}>{formatDateTime(activity.createdAt)}</time></div>
+          </article>)}
+          {!activities.length && <div className="travel-lead-empty-row">No activity yet.</div>}
+        </section>}
         {tab === "Notes" && <section className="travel-lead-notes" aria-label="Notes">
           <div className="travel-lead-note-composer">
             <div className="travel-lead-note-input-wrap">
@@ -182,6 +227,17 @@ export default function LeadDetail() {
         </section>}
       </main></div>
     {editing && <EditContactModal contact={contact} customFieldDefs={[]} onClose={() => setEditing(false)} onSaved={(updated) => { setContact((current) => ({ ...current, ...updated })); setEditing(false); }} />}
+    {terminalStage && <div className="travel-lead-status-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingStage) setTerminalStage(""); }}>
+      <section className="travel-lead-status-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-status-title">
+        <button className="travel-lead-status-close" type="button" aria-label="Close" disabled={savingStage} onClick={() => setTerminalStage("")}><X size={18} /></button>
+        <h2 id="terminal-status-title">Move lead to {terminalStage}</h2>
+        <p>Please record why this lead is being marked as {terminalStage.toLowerCase()}. This will appear in Activity.</p>
+        <label htmlFor="terminal-status-reason">Reason</label>
+        <textarea id="terminal-status-reason" autoFocus maxLength="500" value={terminalReason} onChange={(event) => { setTerminalReason(event.target.value); setTerminalError(""); }} placeholder={`Enter the reason for ${terminalStage.toLowerCase()} status`} />
+        {terminalError && <div className="travel-lead-status-error" role="alert">{terminalError}</div>}
+        <div className="travel-lead-status-actions"><button className="travel-lead-button" type="button" disabled={savingStage} onClick={() => setTerminalStage("")}>Cancel</button><button className="travel-lead-button travel-lead-button-primary" type="button" disabled={savingStage} onClick={confirmTerminalStage}>{savingStage ? "Updating..." : `Mark as ${terminalStage}`}</button></div>
+      </section>
+    </div>}
   </div>;
 }
 

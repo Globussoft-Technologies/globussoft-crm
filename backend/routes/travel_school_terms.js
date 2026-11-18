@@ -384,6 +384,7 @@ router.post(
   async (req, res) => {
     let savedPath = null;
     let uploadedObjectKey = null;
+    let uploadedObjectProvider = null;
     try {
       if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
         return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
@@ -400,9 +401,8 @@ router.post(
       const storedName = `${req.user.tenantId}-${uploadId}${ext}`;
       let fileUrl;
       let storage = "disk";
-      let storageWarning = null;
 
-      if (s3Service.isOciConfigured()) {
+      if (s3Service.isConfigured()) {
         try {
           fileUrl = await s3Service.uploadFile(
             req.file.buffer,
@@ -411,10 +411,14 @@ router.post(
             `travel/school-term-calendars/${req.user.tenantId}`,
           );
           uploadedObjectKey = s3Service.extractKeyFromUrl(fileUrl);
-          storage = "ocs";
+          uploadedObjectProvider = s3Service.isOciUrl(fileUrl) ? "oci" : "aws";
+          storage = s3Service.isOciUrl(fileUrl) ? "ocs" : "s3";
         } catch (storageError) {
-          console.error("[travel-school-terms] OCS calendar upload error:", storageError.message);
-          storageWarning = "Oracle Cloud upload failed; the calendar was stored on local disk.";
+          console.error("[travel-school-terms] object-storage calendar upload error:", storageError.message);
+          return res.status(502).json({
+            error: "Couldn't store the calendar in object storage",
+            code: "STORAGE_FAILED",
+          });
         }
       }
 
@@ -444,11 +448,11 @@ router.post(
       indexRows.push(row);
       writeUploadIndex(indexRows);
       uploadedObjectKey = null;
-      res.status(201).json({ ...row, ...(storageWarning ? { storageWarning } : {}) });
+      res.status(201).json(row);
     } catch (e) {
       unlinkIfExists(savedPath);
       if (uploadedObjectKey) {
-        await s3Service.deleteFile(uploadedObjectKey, { provider: "oci" }).catch(() => {});
+        await s3Service.deleteFile(uploadedObjectKey, { provider: uploadedObjectProvider || "oci" }).catch(() => {});
       }
       if (e instanceof multer.MulterError && e.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ error: "File exceeds 10 MB limit", code: "FILE_TOO_LARGE" });
@@ -477,8 +481,10 @@ router.delete(
         return res.status(404).json({ error: "Upload not found", code: "UPLOAD_NOT_FOUND" });
       }
       const [removed] = rows.splice(idx, 1);
-      if (removed.storage === "ocs" && removed.objectKey) {
-        await s3Service.deleteFile(removed.objectKey, { provider: "oci" });
+      if (["ocs", "s3"].includes(removed.storage) && removed.objectKey) {
+        await s3Service.deleteFile(removed.objectKey, {
+          provider: removed.storage === "ocs" ? "oci" : "aws",
+        });
       } else {
         unlinkIfExists(path.join(UPLOAD_DIR, removed.storedName));
       }

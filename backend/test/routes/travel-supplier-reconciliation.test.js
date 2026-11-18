@@ -105,6 +105,7 @@ import { createRequire } from "node:module";
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
 const router = requireCJS("../../routes/travel_supplier_reconciliation");
+const s3Service = requireCJS("../../services/s3Service.js");
 
 function makeApp() {
   const app = express();
@@ -737,6 +738,63 @@ describe("invoice-uploads match + delete", () => {
       .set("Authorization", `Bearer ${tokenFor("ADMIN")}`);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe("UPLOAD_NOT_FOUND");
+  });
+});
+
+describe("invoice upload object storage", () => {
+  test("stores the invoice in the configured OCI-compatible object store", async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue(PARENT_SUPPLIER);
+    prisma.travelSupplierInvoiceUpload.create.mockImplementation(
+      async ({ data }) => ({ id: 501, ...data }),
+    );
+
+    const original = {
+      isConfigured: s3Service.isConfigured,
+      uploadFile: s3Service.uploadFile,
+      extractKeyFromUrl: s3Service.extractKeyFromUrl,
+      isOciUrl: s3Service.isOciUrl,
+    };
+    const objectUrl =
+      "https://objectstorage.ap-mumbai-1.oraclecloud.com/n/ns/b/bucket/o/travel/supplier-invoices/1/100/invoice.pdf";
+    try {
+      s3Service.isConfigured = vi.fn(() => true);
+      s3Service.uploadFile = vi.fn().mockResolvedValue(objectUrl);
+      s3Service.extractKeyFromUrl = vi
+        .fn()
+        .mockReturnValue("travel/supplier-invoices/1/100/invoice.pdf");
+      s3Service.isOciUrl = vi.fn(() => true);
+
+      const res = await request(makeApp())
+        .post("/api/travel/suppliers/100/invoice-uploads")
+        .set("Authorization", `Bearer ${tokenFor("ADMIN")}`)
+        .attach("file", Buffer.from("%PDF-1.7 test invoice"), {
+          filename: "invoice.pdf",
+          contentType: "application/pdf",
+        });
+
+      expect(res.status, `upload: ${res.text}`).toBe(201);
+      expect(res.body.fileUrl).toBe(objectUrl);
+      expect(s3Service.uploadFile).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        "invoice.pdf",
+        "application/pdf",
+        "travel/supplier-invoices/1/100",
+      );
+      expect(prisma.travelSupplierInvoiceUpload.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            tenantId: 1,
+            supplierId: 100,
+            fileUrl: objectUrl,
+          }),
+        }),
+      );
+    } finally {
+      s3Service.isConfigured = original.isConfigured;
+      s3Service.uploadFile = original.uploadFile;
+      s3Service.extractKeyFromUrl = original.extractKeyFromUrl;
+      s3Service.isOciUrl = original.isOciUrl;
+    }
   });
 });
 

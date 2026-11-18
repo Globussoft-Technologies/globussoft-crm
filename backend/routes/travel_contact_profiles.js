@@ -11,6 +11,7 @@ const { requireTravelTenant } = require("../middleware/travelGuards");
 const { sanitizeText } = require("../lib/sanitizeJson");
 const { parseCsv } = require("../lib/csvHelpers");
 const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
+const s3Service = require("../services/s3Service");
 
 const STORAGE_DIR = path.join(__dirname, "..", "uploads", "travel-contact-profiles");
 const DOCS_DIR = path.join(STORAGE_DIR, "documents");
@@ -454,20 +455,32 @@ function listDocuments(tenantId, contactId) {
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 }
 
-function findDocument(documentId) {
+function removeDocument(documentId, tenantId) {
   const rows = readJsonArray(DOCUMENTS_PATH);
-  const idx = rows.findIndex((row) => row.id === documentId);
+  const idx = rows.findIndex(
+    (row) => row.id === documentId && Number(row.tenantId) === Number(tenantId),
+  );
   if (idx < 0) return null;
   const existing = rows[idx];
   rows.splice(idx, 1);
   writeJsonArray(DOCUMENTS_PATH, rows);
-  const filePath = path.join(DOCS_DIR, existing.storedName || "");
-  try {
-    if (existing.storedName && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch {
-    // best effort
+  if (existing.storage === "disk" || !existing.storage) {
+    const filePath = path.join(DOCS_DIR, existing.storedName || "");
+    try {
+      if (existing.storedName && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // best effort
+    }
   }
   return existing;
+}
+
+async function removeRemoteDocument(document) {
+  if (!document || document.storage === "disk") return;
+  const key = document.storageKey || s3Service.extractKeyFromUrl(document.fileUrl);
+  if (!key) return;
+  const provider = document.storage === "ocs" ? "oci" : "aws";
+  await s3Service.deleteFile(key, { provider });
 }
 
 async function buildDuplicateHints(tenantId, contact, profile) {
@@ -769,6 +782,8 @@ router.post("/contact-profiles/by-contact/:contactId/documents", verifyToken, re
   if (!Number.isInteger(contactId) || contactId <= 0) {
     return res.status(400).json({ error: "Invalid contactId", code: "INVALID_CONTACT_ID" });
   }
+  const remoteDocuments = [];
+  const localPaths = [];
   try {
     const contact = await loadContactForTenant(req.travelTenant.id, contactId);
     if (!contact) {
@@ -783,7 +798,25 @@ router.post("/contact-profiles/by-contact/:contactId/documents", verifyToken, re
     for (const file of files) {
       const ext = path.extname(file.originalname || "") || ".bin";
       const storedName = `${Date.now()}-${crypto.randomUUID()}${ext}`;
-      fs.writeFileSync(path.join(DOCS_DIR, storedName), file.buffer);
+      let fileUrl;
+      let storage = "disk";
+      let storageKey = storedName;
+      if (s3Service.isConfigured()) {
+        fileUrl = await s3Service.uploadFile(
+          file.buffer,
+          storedName,
+          file.mimetype || "application/octet-stream",
+          `travel/contact-profiles/${req.travelTenant.id}/${contactId}/documents`,
+        );
+        storage = s3Service.isOciUrl(fileUrl) ? "ocs" : "s3";
+        storageKey = s3Service.extractKeyFromUrl(fileUrl);
+        remoteDocuments.push({ storage, storageKey, fileUrl });
+      } else {
+        const localPath = path.join(DOCS_DIR, storedName);
+        fs.writeFileSync(localPath, file.buffer);
+        localPaths.push(localPath);
+        fileUrl = `/api/uploads/travel-contact-profiles/${storedName}`;
+      }
       const row = {
         id: crypto.randomUUID(),
         tenantId: req.travelTenant.id,
@@ -796,7 +829,9 @@ router.post("/contact-profiles/by-contact/:contactId/documents", verifyToken, re
         mimeType: safeText(file.mimetype, 120),
         sizeBytes: file.size || file.buffer.length || 0,
         storedName,
-        fileUrl: `/api/uploads/travel-contact-profiles/${storedName}`,
+        fileUrl,
+        storage,
+        storageKey,
         createdAt: new Date().toISOString(),
         createdById: Number(req.user.userId) || null,
       };
@@ -806,6 +841,15 @@ router.post("/contact-profiles/by-contact/:contactId/documents", verifyToken, re
     writeJsonArray(DOCUMENTS_PATH, rows);
     res.status(201).json({ documents: created });
   } catch (e) {
+    // Do not leave a partial batch behind when one file or the index write
+    // fails. This is especially important for OCI objects because the JSON
+    // index is the only record that links them back to the contact profile.
+    for (const document of remoteDocuments || []) {
+      await removeRemoteDocument(document).catch(() => {});
+    }
+    for (const localPath of localPaths || []) {
+      await fs.promises.unlink(localPath).catch(() => {});
+    }
     console.error("[travel-contact-profiles] document upload error:", e.message);
     res.status(500).json({ error: "Failed to upload travel documents" });
   }
@@ -813,10 +857,13 @@ router.post("/contact-profiles/by-contact/:contactId/documents", verifyToken, re
 
 router.delete("/contact-profiles/documents/:documentId", verifyToken, requireTravelTenant, async (req, res) => {
   try {
-    const existing = findDocument(String(req.params.documentId || ""));
-    if (!existing || Number(existing.tenantId) !== Number(req.travelTenant.id)) {
+    const existing = removeDocument(String(req.params.documentId || ""), req.travelTenant.id);
+    if (!existing) {
       return res.status(404).json({ error: "Document not found", code: "DOCUMENT_NOT_FOUND" });
     }
+    await removeRemoteDocument(existing).catch((error) => {
+      console.warn("[travel-contact-profiles] remote document cleanup warning:", error.message);
+    });
     res.json({ ok: true });
   } catch (e) {
     console.error("[travel-contact-profiles] document delete error:", e.message);

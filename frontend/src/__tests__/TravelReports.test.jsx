@@ -227,6 +227,15 @@ const CROSS_BRAND_POPULATED = {
 
 const CROSS_BRAND_EMPTY = { subBrands: {} };
 
+const TRENDS_POPULATED = {
+  groupBy: 'monthly',
+  currency: 'INR',
+  rows: [
+    { period: '2026-07', subBrand: 'TMC', quotes: 6, acceptedQuotes: 2, quoteRevenue: 272795.39, itineraries: 3, itineraryRevenue: 180000, diagnostics: 751 },
+    { period: '2026-07', subBrand: 'RFU', quotes: 1, acceptedQuotes: 0, quoteRevenue: 0, itineraries: 1, itineraryRevenue: 0, diagnostics: 312 },
+  ],
+};
+
 const SUMMARY_POPULATED = {
   tmc: { trips: { total: 12, active: 4 }, revenue: { total: 1234567, currency: 'INR' }, schools: { unique: 8, repeat: 3, repeatRatePct: 37.5 } },
   rfu: { itineraries: { total: 9, revenue: 655000 }, customers: { unique: 7, repeat: 2, repeatRatePct: 28.6 }, currency: 'INR' },
@@ -243,6 +252,7 @@ function installFetchMock({
   tmc = TMC_POPULATED,
   rfu = RFU_POPULATED,
   crossBrand = CROSS_BRAND_POPULATED,
+  trends = TRENDS_POPULATED,
   summary = SUMMARY_POPULATED,
 } = {}) {
   fetchApiMock.mockImplementation((url) => {
@@ -259,6 +269,9 @@ function installFetchMock({
       return crossBrand instanceof Error
         ? Promise.reject(crossBrand)
         : Promise.resolve(crossBrand);
+    }
+    if (url.includes('/api/travel/reports/trends')) {
+      return trends instanceof Error ? Promise.reject(trends) : Promise.resolve(trends);
     }
     return Promise.resolve(null);
   });
@@ -309,6 +322,29 @@ describe('<TravelReports /> — page chrome + tabs', () => {
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
+  });
+
+  it('exports the active tab with the selected custom date range', async () => {
+    const blob = new Blob(['pdf'], { type: 'application/pdf' });
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(blob) });
+    vi.stubGlobal('fetch', fetchSpy);
+    if (!URL.createObjectURL) Object.defineProperty(URL, 'createObjectURL', { writable: true, value: () => 'blob:test' });
+    if (!URL.revokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { writable: true, value: () => {} });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    render(<TravelReports />);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('tab', { name: /Leads/i }));
+    fireEvent.change(screen.getByLabelText(/Date range/i), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-08-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /Download this report as PDF/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Download PDF$/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/travel/reports/export-pdf?tab=leads&from=2026-08-01&to=2026-08-31');
+    vi.restoreAllMocks();
   });
 });
 
@@ -534,6 +570,15 @@ describe('<TravelReports /> — Cross-brand tab content', () => {
         /No deal activity across any sub-brand yet\./i,
       ),
     ).toBeInTheDocument();
+  });
+
+  it('renders the period-by-sub-brand analytics table', async () => {
+    renderTravelReports();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('tab', { name: /Cross-brand/i }));
+    expect(await screen.findByText(/Sub-brand analytics by period/i)).toBeInTheDocument();
+    expect(screen.getAllByText('2026-07')).not.toHaveLength(0);
+    expect(screen.getAllByText('TMC').length).toBeGreaterThanOrEqual(1);
   });
 });
 

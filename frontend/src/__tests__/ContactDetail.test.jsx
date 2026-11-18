@@ -90,7 +90,15 @@ function makeFetchImpl(overrides = {}) {
 
 function LeadsListStub() {
   const location = useLocation();
-  return <div data-testid="leads-list-stub" data-search={location.search}>Leads list stub</div>;
+  return (
+    <div
+      data-testid="leads-list-stub"
+      data-search={location.search}
+      data-state={JSON.stringify(location.state || null)}
+    >
+      Leads list stub
+    </div>
+  );
 }
 
 beforeEach(() => {
@@ -102,13 +110,13 @@ beforeEach(() => {
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
-function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts', search = '' } = {}) {
+function renderPage({ contactId = 42, state, vertical, user, listType = 'contacts', search = '', renderBackdrop = true } = {}) {
   const detailPath = `/${listType}/${contactId}`;
   const page = (
     <MemoryRouter initialEntries={[state ? { pathname: detailPath, search, state } : `${detailPath}${search}`]}>
       <Routes>
         <Route path="/contacts/:id" element={<ContactDetail />} />
-        <Route path="/leads/:id" element={<ContactDetail />} />
+        <Route path="/leads/:id" element={<ContactDetail renderBackdrop={renderBackdrop} />} />
         <Route path="/contacts" element={<div data-testid="contacts-list-stub">Contacts list stub</div>} />
         <Route path="/leads" element={<LeadsListStub />} />
         <Route path="/travel/diagnostics" element={<div data-testid="diagnostics-list-stub">Diagnostics list stub</div>} />
@@ -159,6 +167,19 @@ describe('ContactDetail — current profile contract', () => {
     }
   });
 
+  it('renders the live computed score in the profile header when it differs from the stored score', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/ai_scoring/contact/42') return Promise.resolve({ liveComputedScore: 47 });
+      return baseFetch(url, opts);
+    });
+
+    renderPage();
+    const profile = await getProfile();
+    expect(profile.getByText('47', { exact: true })).toBeInTheDocument();
+    expect(profile.queryByText('85', { exact: true })).not.toBeInTheDocument();
+  });
+
   it('uses the originating diagnostics URL when closing the profile', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ state: { backTo: '/travel/diagnostics?page=2' } });
@@ -185,6 +206,152 @@ describe('ContactDetail — current profile contract', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close profile' }));
     expect(await screen.findByTestId('leads-list-stub')).toBeInTheDocument();
+  });
+
+  it('renders a direct Generic Leads URL as a full-page responsive profile', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=1&limit=10',
+    });
+
+    const profile = await screen.findByRole('region', { name: 'Contact profile' });
+    expect(profile).toHaveClass('cp-full-page');
+    expect(profile.querySelector('.cp-slide-panel')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close profile' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to Leads' })).toBeInTheDocument();
+  });
+
+  it('returns a direct page-3 lead URL to page 3 of Leads', async () => {
+    window.sessionStorage.clear();
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=3&limit=10',
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?page=3&limit=10',
+    );
+  });
+
+  it('returns to the router list page instead of a stale detail URL page', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=1&limit=10',
+      state: {
+        returnTo: '/leads?page=2&limit=10',
+        leadsListState: { pageIndex: 1, pageSize: 10 },
+        openFullPage: true,
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    const leadsList = await screen.findByTestId('leads-list-stub');
+    expect(leadsList).toHaveAttribute(
+      'data-search',
+      '?page=2&limit=10',
+    );
+    expect(JSON.parse(leadsList.getAttribute('data-state'))).not.toHaveProperty('openFullPage');
+  });
+
+  it('preserves the saved Leads return query when opening a direct detail URL', async () => {
+    const storageKey = 'globuscrm.leads.pagination.v1.tenant.user';
+    window.sessionStorage.setItem(storageKey, JSON.stringify({
+      pageIndex: 1,
+      pageSize: 10,
+      returnTo: '/leads?assignedToId=unassigned&page=2&limit=10',
+    }));
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=2&limit=10',
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?assignedToId=unassigned&page=2&limit=10',
+    );
+    window.sessionStorage.removeItem(storageKey);
+  });
+
+  it('keeps the wide profile drawer for in-app lead navigation state', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
+    expect(document.querySelector('.cp-slide-panel')).toBeInTheDocument();
+    expect(document.querySelector('.cp-full-page')).toBeNull();
+  });
+
+  it('lets an in-app lead drawer switch to the full-page profile', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Open full page/i }));
+
+    expect(await screen.findByRole('region', { name: 'Contact profile' })).toHaveClass('cp-full-page');
+    expect(screen.queryByRole('button', { name: /Open full page/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the originating Leads page after opening full page and returning', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      search: '?page=3&limit=10',
+      state: {
+        returnTo: '/leads?page=3&limit=10',
+        leadsListState: { pageIndex: 2, pageSize: 10 },
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Open full page/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to Leads' }));
+
+    expect(await screen.findByTestId('leads-list-stub')).toHaveAttribute(
+      'data-search',
+      '?page=3&limit=10',
+    );
+  });
+
+  it('does not render the removed Generic CRM status-bar resize control', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    await screen.findByRole('group', { name: 'Lead status stages' });
+    expect(screen.queryByRole('separator', { name: 'Resize status bar' })).not.toBeInTheDocument();
   });
 
   it('keeps the URL page in the embedded Generic Leads list when profile state is stale', async () => {
@@ -265,7 +432,7 @@ describe('ContactDetail — current profile contract', () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();
     const profile = await getProfile();
-    expect(profile.getByText('Qualified', { exact: true })).toBeInTheDocument();
+    expect(profile.getAllByText('Won', { exact: true }).length).toBeGreaterThan(0);
     expect(profile.getByText('85', { exact: true })).toBeInTheDocument();
   });
 
@@ -275,7 +442,7 @@ describe('ContactDetail — current profile contract', () => {
     const profile = await getProfile();
 
     expect(document.querySelector('.cp-email-value')).toHaveAttribute('title', BASE_CONTACT.email);
-    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Move to Interested / Unqualified');
+    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Change status to Interested');
   });
 
   it('does not render an orphan title/company separator when both values are empty', async () => {
@@ -580,7 +747,11 @@ describe('Generic CRM contact details', () => {
       </AuthContext.Provider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ Add tag' }));
+    const tagCard = document.querySelector('.cd-generic-tags-card');
+    expect(tagCard).toBeInTheDocument();
+    expect(tagCard.querySelector('.cd-generic-tag-edit')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Edit tags' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit tags' }));
     const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
     const vipLabel = within(picker).getByText('VIP', { exact: true });
     expect(vipLabel.closest('button')).toHaveAttribute('aria-selected', 'true');

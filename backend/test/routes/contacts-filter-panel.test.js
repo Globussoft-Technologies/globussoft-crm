@@ -528,6 +528,7 @@ describe("GET /api/contacts/filter-values/:field", () => {
     expect(res.status).toBe(200);
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
     expect(res.body.values).toEqual([
+      { value: "unassigned", label: "Unassigned" },
       { value: "7", label: "Jane Doe" },
       { value: "8", label: "noname@x.com" }, // falls back to email when name is null
     ]);
@@ -1028,6 +1029,51 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
     expect(res.status).toBe(200);
     const call = prisma.contact.findMany.mock.calls[0][0];
     expect(call.where.AND).toEqual([{ assignedToId: { in: [7, 8] } }]);
+  });
+
+  test('assignedToId contains supports the Unassigned option', async () => {
+    const filters = [
+      { field: "assignedToId", operator: "contains", values: ["unassigned"] },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([{ assignedToId: null }]);
+  });
+
+  test('assignedToId contains supports assigned and unassigned values together', async () => {
+    const filters = [
+      {
+        field: "assignedToId",
+        operator: "contains",
+        values: ["7", "unassigned"],
+      },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([
+      { OR: [{ assignedToId: { in: [7] } }, { assignedToId: null }] },
+    ]);
+  });
+
+  test('assignedToId is none of Unassigned excludes unassigned leads', async () => {
+    const filters = [
+      { field: "assignedToId", operator: "not_contains", values: ["unassigned"] },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([{ assignedToId: { not: null } }]);
   });
 
   test("Lifecycle Stage selections filter by exact configured stage keys", async () => {

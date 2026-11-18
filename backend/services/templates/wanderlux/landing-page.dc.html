@@ -496,9 +496,16 @@
                     </select>
                   </sc-if>
                   <!-- text / email / tel / number -->
-                  <sc-if value="{{ f.isInput }}">
+                  <sc-if value="{{ f.hasPhonePrefix }}">
+                    <div style="display:flex;align-items:center;width:100%;border:1px solid var(--c-border);border-radius:6px;background:var(--c-light);padding:0 14px">
+                      <span style="font-size:15px;font-family:var(--c-sans);color:var(--c-text);padding-right:10px;white-space:nowrap">{{ f.phonePrefix }}</span>
+                      <input type="tel" inputmode="numeric" maxlength="{{ f.maxLength }}" pattern="[6-9][0-9]{9}" onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" placeholder="10-digit mobile number" aria-label="{{ f.label }}" style="flex:1;min-width:0;width:100%;padding:13px 0;border:0;outline:none;font-size:15px;font-family:var(--c-sans);color:var(--c-text);background:transparent">
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ f.isStandardInput }}">
                     <input type="{{ f.type }}" onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" placeholder="{{ f.placeholder }}" aria-label="{{ f.label }}" style="width:100%;padding:13px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:15px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
                   </sc-if>
+                  <sc-if value="{{ f.error }}"><p role="alert" style="font-size:12px;color:#b42318;margin:6px 0 0">{{ f.error }}</p></sc-if>
                 </div>
               </sc-for>
 
@@ -831,12 +838,44 @@ function safeHref(u){
   return t || '#';
 }
 function pad(n){ return String(n).padStart(2, '0'); }
+const INDIAN_MOBILE_ERROR = 'Please enter a valid 10-digit mobile number starting with 6, 7, 8, or 9';
 function validateField(f, val){
   const v = (val == null ? '' : String(val)).trim();
   if(f.required && !v) return f.label + ' is required';
   if(v && f.type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return 'Please enter a valid email address';
-  if(v && f.type === 'tel'   && !/^[+\d][\d\s\-()]{6,}$/.test(v))     return 'Please enter a valid phone number';
+  if(v && f.type === 'tel'){
+    const digits = v.replace(/\D/g, '');
+    const countryCode = String(f.phoneCountryCode || '').replace(/\D/g, '');
+    const phoneError = Number(f.exactPhoneDigits) === 10 && countryCode === '91'
+      ? INDIAN_MOBILE_ERROR
+      : 'Please enter a valid phone number';
+    if(!/^[+\d][\d\s\-()]*$/.test(v)) return phoneError;
+    if(f.exactPhoneDigits){
+      const hasExplicitCountryPrefix = countryCode && v.indexOf('+' + countryCode) === 0;
+      const hasCountryPrefix = countryCode && digits.indexOf(countryCode) === 0
+        && (hasExplicitCountryPrefix || digits.length > f.exactPhoneDigits);
+      const nationalDigits = hasCountryPrefix
+        ? digits.slice(countryCode.length)
+        : digits;
+      if(nationalDigits.length !== f.exactPhoneDigits || (countryCode === '91' && !/^[6-9]/.test(nationalDigits))){
+        return phoneError;
+      }
+    } else if(!/^[+\d][\d\s\-()]{6,}$/.test(v)) {
+      return 'Please enter a valid phone number';
+    }
+  }
   return '';
+}
+function normalizeParentPhoneField(field, stepTitle){
+  const isLegacyIndianParentPhone = field && field.type === 'tel'
+    && /parent/i.test(String(stepTitle || ''))
+    && /phone/i.test(String(field.name || field.label || ''))
+    && /^\s*\+91\b/.test(String(field.placeholder || ''));
+  if(!isLegacyIndianParentPhone) return field;
+  return Object.assign({}, field, {
+    exactPhoneDigits: Number(field.exactPhoneDigits) || 10,
+    phoneCountryCode: String(field.phoneCountryCode || '91')
+  });
 }
 
 /* ----- DEFAULT CONFIG (Japan 2026 reference) ----- */
@@ -969,7 +1008,7 @@ var DEFAULT_CONFIG = {
       { title:'Step 2: Parent / Guardian', fields:[
         {name:'parent_name', label:'Parent / Guardian Name', type:'text', required:true, placeholder:'Enter full name'},
         {name:'parent_email', label:'Email', type:'email', required:true, placeholder:'email@example.com'},
-        {name:'parent_phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number'}
+        {name:'parent_phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number', exactPhoneDigits:10, phoneCountryCode:'91'}
       ]},
       { title:'Step 3: Confirm', fields:[
         {name:'participants', label:'Number of Participants', type:'number', required:false, placeholder:'1'}
@@ -1041,7 +1080,7 @@ var DEFAULT_CONFIG = {
 class Component extends DCLogic {
   state = {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
-    regStep:0, regValues:{}, regDraftToken:'', regError:'', regSubmitted:false, regSending:false,
+    regStep:0, regValues:{}, regFieldErrors:{}, regDraftToken:'', regError:'', regSubmitted:false, regSending:false,
     regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'', regPaymentCompleted:false, regPaymentLinkId:'', regPaymentBalance:null,
     brValues:{}, brError:'', brSubmitted:false, brSending:false,
     toast: null,
@@ -1296,8 +1335,46 @@ class Component extends DCLogic {
   }
 
   /* generic input/select setter for a given state bag + field name */
-  setField(bag, name){
-    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = { regError: bag === 'regValues' ? '' : st.regError }; patch[bag] = next; if(bag === 'regValues') { patch.regPaymentBalance = null; this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); } return patch; }); };
+  setField(bag, name, field){
+    return (e) => {
+      const v = e && e.target ? e.target.value : '';
+      this.setState(st => {
+        const next = Object.assign({}, st[bag]);
+        let acceptedValue = v;
+        let phoneError = '';
+        const fixedPhone = bag === 'regValues' && field && field.type === 'tel'
+          && Number(field.exactPhoneDigits) === 10 && String(field.phoneCountryCode || '') === '91';
+        if(fixedPhone){
+          const previousValue = next[name] || '';
+          if(!/^\d*$/.test(v)){
+            acceptedValue = previousValue;
+            phoneError = INDIAN_MOBILE_ERROR;
+          } else {
+            const digits = v.slice(0, field.exactPhoneDigits);
+            if(digits && !/^[6-9]/.test(digits)){
+              acceptedValue = previousValue;
+              phoneError = INDIAN_MOBILE_ERROR;
+            } else {
+              acceptedValue = digits ? '+' + field.phoneCountryCode + digits : '';
+              phoneError = digits ? validateField(field, acceptedValue) : '';
+            }
+          }
+        }
+        next[name] = acceptedValue;
+        const patch = { regError: bag === 'regValues' ? '' : st.regError };
+        patch[bag] = next;
+        if(bag === 'regValues') {
+          if(field && field.type === 'tel'){
+            const fieldErrors = Object.assign({}, st.regFieldErrors);
+            fieldErrors[name] = fixedPhone ? phoneError : (v.trim() ? validateField(field, v) : '');
+            patch.regFieldErrors = fieldErrors;
+          }
+          patch.regPaymentBalance = null;
+          this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex });
+        }
+        return patch;
+      });
+    };
   }
 
   showToast(message, tone){
@@ -1628,7 +1705,9 @@ class Component extends DCLogic {
       // Passport/document collection is owned by the parent portal. Keep
       // other registration fields, but never make passport status a payment
       // prerequisite on an older saved landing page.
-      fields: (step.fields || []).filter((field) => String(field && field.name || '').toLowerCase() !== 'passport_status')
+      fields: (step.fields || [])
+        .filter((field) => String(field && field.name || '').toLowerCase() !== 'passport_status')
+        .map((field) => normalizeParentPhoneField(field, step.title))
     })).filter((step) => {
       const title = String(step && step.title || '').toLowerCase();
       return !title.includes('document') && !title.includes('payment') && (step.fields || []).length > 0;
@@ -1643,11 +1722,25 @@ class Component extends DCLogic {
     const curStep = rsteps[stepIdx] || { title:'', fields:[] };
     out.regStepTitle = curStep.title || '';
     out.regProgress = rsteps.map((s,i) => ({ color: i <= stepIdx ? 'var(--c-brand)' : 'var(--c-border)' }));
-    out.regFields = (curStep.fields || []).map(f => ({
-      name:f.name, label:f.label, type:f.type || 'text', required: !!f.required, placeholder: f.placeholder || '',
-      reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
-      options: f.options || [], value: this.state.regValues[f.name] || '', onInput: this.setField('regValues', f.name)
-    }));
+    out.regFields = (curStep.fields || []).map(f => {
+      const countryCode = String(f.phoneCountryCode || '').replace(/\D/g, '');
+      const hasPhonePrefix = f.type === 'tel' && Number(f.exactPhoneDigits) === 10 && countryCode === '91';
+      const storedValue = String(this.state.regValues[f.name] || '');
+      const storedDigits = storedValue.replace(/\D/g, '');
+      const explicitCountryPrefix = storedValue.trim().indexOf('+' + countryCode) === 0;
+      const value = hasPhonePrefix && (explicitCountryPrefix || storedDigits.length > f.exactPhoneDigits) && storedDigits.indexOf(countryCode) === 0
+        ? storedDigits.slice(countryCode.length)
+        : (hasPhonePrefix ? storedDigits : storedValue);
+      return {
+        name:f.name, label:f.label, type:f.type || 'text', required: !!f.required, placeholder:f.placeholder || '',
+        exactPhoneDigits:f.exactPhoneDigits || 0, phoneCountryCode:countryCode,
+        hasPhonePrefix, phonePrefix:hasPhonePrefix ? '+' + countryCode : '', maxLength:hasPhonePrefix ? f.exactPhoneDigits : 0,
+        error:this.state.regFieldErrors[f.name] || (hasPhonePrefix && storedValue ? validateField(f, storedValue) : ''),
+        reqMark:f.required ? ' *' : '', isSelect:f.type === 'select',
+        isStandardInput:f.type !== 'select' && !hasPhonePrefix,
+        options:f.options || [], value, onInput:this.setField('regValues', f.name, f)
+      };
+    });
     out.regShowBack = stepIdx > 0;
     out.regIsLast = stepIdx >= rsteps.length - 1;
     out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast);
@@ -1721,7 +1814,10 @@ class Component extends DCLogic {
       return () => {
         if(this.state.regSending || this.state.regPaymentLoading) return;
         const fields = (steps[idx] && steps[idx].fields) || [];
-        for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
+        for(const f of fields){
+          const err = validateField(f, this.state.regValues[f.name]) || this.state.regFieldErrors[f.name] || '';
+          if(err){ this.setState({ regError: err }); return; }
+        }
         this.setState({ regError:'' });
         if(out.regPaymentCompleted){
           this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });

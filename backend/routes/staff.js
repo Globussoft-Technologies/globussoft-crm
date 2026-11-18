@@ -369,9 +369,8 @@ router.get("/", async (req, res) => {
       // don't leak the shared clinic field into their staff records.
       ...(isTravel ? {} : { wellnessRole: true }),
       // Travel-only (Q25): which sub-brand(s) this staff member is scoped to.
-      // null = all brands. Frontend Staff modal reads this to pre-fill the
-      // sub-brand picker (travel tenants only); harmless null for others.
-      subBrandAccess: true,
+      // Do not query or expose this field for generic / wellness tenants.
+      ...(isTravel ? { subBrandAccess: true } : {}),
       // PRD Gap §1.5 — assigned commission profile (FK, nullable). Frontend
       // dropdown reads this to show the current assignment.
       commissionProfileId: true,
@@ -394,12 +393,24 @@ router.get("/", async (req, res) => {
       // display badge. Single-role-per-user enforced upstream, so
       // findFirst with desc order is deterministic.
       userRoles: {
+        where: {
+          role: {
+            OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
+          },
+        },
         take: 1,
         orderBy: { assignedAt: "desc" },
         select: {
           roleId: true,
           role: {
-            select: { id: true, key: true, name: true, landingPath: true, dataScope: true, subBrandScopeJson: true },
+            select: {
+              id: true,
+              key: true,
+              name: true,
+              landingPath: true,
+              dataScope: true,
+              ...(isTravel ? { subBrandScopeJson: true } : {}),
+            },
           },
         },
       },
@@ -452,7 +463,9 @@ router.get("/", async (req, res) => {
               name: u.userRoles[0].role.name,
               landingPath: u.userRoles[0].role.landingPath || null,
               dataScope: u.userRoles[0].role.dataScope || "ALL",
-              subBrandScope: parseSubBrandScope(u.userRoles[0].role.subBrandScopeJson),
+              ...(isTravel
+                ? { subBrandScope: parseSubBrandScope(u.userRoles[0].role.subBrandScopeJson) }
+                : {}),
             }
           : null;
       delete u.userRoles;

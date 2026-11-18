@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Lock, MessageSquareText, RefreshCw, Save, X } from "lucide-react";
 import { fetchApi } from "../utils/api";
+import { createPortal } from "react-dom";
 import { useNotify } from "../utils/notify";
 
 const EMPTY_CONFIG = {
@@ -37,7 +38,7 @@ function SecretRow({ label, value, onRotate }) {
   );
 }
 
-function RotateCredentialDialog({ field, label, onClose, onSaved }) {
+function RotateCredentialDialog({ field, label, onClose, onSaved, portal = false }) {
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -53,8 +54,8 @@ function RotateCredentialDialog({ field, label, onClose, onSaved }) {
     }
   };
 
-  return (
-    <div role="presentation" style={{ position: "fixed", inset: 0, zIndex: 220, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem", background: "var(--overlay-bg)", backdropFilter: "blur(8px)" }}>
+  const dialog = (
+    <div role="presentation" className={portal ? "gs-dialog" : undefined} style={{ position: "fixed", inset: 0, zIndex: 220, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem", background: "var(--overlay-bg)", backdropFilter: "blur(8px)" }}>
       <form onSubmit={submit} className="card" role="dialog" aria-modal="true" aria-labelledby="twilio-credential-title" style={{ width: "min(460px, 100%)", padding: "1.5rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "0.5rem" }}>
           <h3 id="twilio-credential-title" style={{ fontSize: "1.1rem", fontWeight: 600 }}>Rotate {label}</h3>
@@ -71,22 +72,30 @@ function RotateCredentialDialog({ field, label, onClose, onSaved }) {
       </form>
     </div>
   );
+  return portal ? createPortal(dialog, document.body) : dialog;
 }
 
-export default function TwilioSettingsCard({ embedded = false }) {
+export default function TwilioSettingsCard({ embedded = false, portalDialogs = false, onConnectionStatusChange }) {
   const notify = useNotify();
   const [config, setConfig] = useState(EMPTY_CONFIG);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rotating, setRotating] = useState(null);
+  const [savedConnected, setSavedConnected] = useState(null);
+
+  useEffect(() => {
+    onConnectionStatusChange?.({ ready: savedConnected, loading });
+  }, [onConnectionStatusChange, savedConnected, loading]);
 
   const loadConfig = async () => {
     try {
       const rows = await fetchApi("/api/sms/config");
       const twilio = Array.isArray(rows) ? rows.find((row) => row?.provider === "twilio") : null;
       setConfig(twilio ? { ...EMPTY_CONFIG, ...twilio } : EMPTY_CONFIG);
+      setSavedConnected(Array.isArray(rows) ? Boolean(twilio?.isActive && twilio.apiKey?.configured && twilio.authToken?.configured && twilio.senderId?.trim()) : null);
     } catch {
       setConfig(EMPTY_CONFIG);
+      setSavedConnected(null);
     } finally {
       setLoading(false);
     }
@@ -151,7 +160,7 @@ export default function TwilioSettingsCard({ embedded = false }) {
           </button>
         </div>
       )}
-      {rotating && <RotateCredentialDialog field={rotating.field} label={rotating.label} onClose={() => setRotating(null)} onSaved={rotate} />}
+      {rotating && <RotateCredentialDialog field={rotating.field} label={rotating.label} onClose={() => setRotating(null)} onSaved={rotate} portal={portalDialogs} />}
     </CardFrame>
   );
 }

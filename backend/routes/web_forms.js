@@ -720,6 +720,8 @@ function defaultSettings() {
 
     showPoweredBy: true,
 
+    footerText: "",
+
     successMessage:
       "Thank you! Your information has been received. We will be in touch with you shortly to assist with your account.",
 
@@ -1058,6 +1060,8 @@ function normalizeSettings(raw) {
 
     showPoweredBy: settings.showPoweredBy !== false,
 
+    footerText: textOr(settings.footerText).slice(0, 300),
+
     successMessage: textOr(
       settings.successMessage,
       defaultSettings().successMessage,
@@ -1130,6 +1134,15 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function buildEmbedContainerId(form) {
+  const reference = form?.id != null && String(form.id) !== "" ? form.id : form?.slug;
+  const safeReference = String(reference == null ? "" : reference)
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `gbs-web-form-embed-${safeReference || "preview"}`;
+}
+
 const EMBED_ATTRIBUTION_QUERY_KEYS = [
   "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content",
   "gclid", "gbraid", "wbraid", "fbclid", "fbc", "fbp", "gad_source",
@@ -1140,34 +1153,58 @@ const EMBED_ATTRIBUTION_QUERY_KEYS = [
   "hsa_net", "hsa_ver",
 ];
 
-function buildEmbedHostScript(enableAttribution) {
-  if (!enableAttribution) {
-    return '<script>(function(frame){if(!frame)return;var lastDevice="";function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>';
-  }
-  const keys = JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS);
-  return `<script>(function(frame){if(!frame)return;var keys=${keys},maxAge=7776000,lastDevice="";function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}function remember(name,value){if(!value)return readCookie(name);var saved=readCookie(name);if(saved)return saved;try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age="+maxAge+"; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}return value;}function attribution(){var values={},query;try{query=new URLSearchParams(location.search);}catch(e){query=null;}for(var i=0;i<keys.length;i++){var key=keys[i],value=storedAttribution(key)||(query?query.get(key):"");value=remember("gbs_"+key,value||"");if(value)values[key]=value;}return values;}var savedAttribution=attribution();function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},"*");}catch(e){}}function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:savedAttribution},"*");}catch(e){}sendDevice();}window.addEventListener("resize",sendDevice);window.addEventListener("message",function(event){if(event.source!==frame.contentWindow||!event.data||event.data.source!=="gbs-web-form")return;if(event.data.type==="ready")send();if(event.data.type==="size"){var height=Number(event.data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}});frame.addEventListener("load",send);})(document.currentScript.previousElementSibling);</script>`;
+function buildEmbedHostRuntime(config, shouldCreateContainer = false) {
+  const safeConfig = JSON.stringify(config).replace(/</g, "\\u003c");
+  return `(function(script){
+if(!script||!script.parentNode)return;
+var config=${safeConfig};
+var keys=${JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS)};
+var taggedVisitKeys=["utm_source","utm_medium","utm_campaign","utm_id","utm_term","utm_content","gclid","gbraid","wbraid","fbclid","fbc","fbp","campaign_id","adset_id","ad_id","campaign_name","adset_name","ad_name"];
+var container=null;
+if(!${shouldCreateContainer ? "true" : "false"}){var previous=script.previousElementSibling;if(previous&&previous.id===config.containerId&&previous.classList.contains("gbs-web-form-embed"))container=previous;}
+if(!container){container=document.createElement("div");container.className="gbs-web-form-embed";container.id=config.containerId;container.style.cssText="display:block;width:100%;";var suffix=1;while(document.getElementById(container.id)){container.id=config.containerId+"-"+suffix++;}script.parentNode.insertBefore(container,script.nextSibling);}
+if(container.id===config.containerId&&document.getElementById(config.containerId)!==container){var requestedId=config.containerId,suffix=1;do{container.id=requestedId+"-"+suffix++;}while(document.getElementById(container.id)&&document.getElementById(container.id)!==container);}
+if(container.dataset.gbsWebFormLoaded==="true")return;
+container.dataset.gbsWebFormLoaded="true";
+var frame=document.createElement("iframe");frame.className="gbs-web-form-iframe";frame.title=config.title;frame.allow="geolocation *";frame.loading="lazy";frame.style.cssText="width:100%;height:620px;min-height:0;border:0;display:block;";
+var frameUrl=new URL(config.frameUrl,document.baseURI);
+function readCookie(name){try{var prefix=name+"=",parts=document.cookie.split(";");for(var i=0;i<parts.length;i++){var part=parts[i].trim();if(part.indexOf(prefix)===0){try{return decodeURIComponent(part.substring(prefix.length));}catch(e){return part.substring(prefix.length);}}}}catch(e){}return "";}
+function writeCookie(name,value){try{document.cookie=name+"="+encodeURIComponent(String(value).slice(0,2000))+"; Max-Age=7776000; Path=/; SameSite=Lax"+(location.protocol==="https:"?"; Secure":"");}catch(e){}}
+function storedAttribution(key){return readCookie("gbs_"+key)||readCookie(key)||(key==="fbc"?readCookie("_fbc"):key==="fbp"?readCookie("_fbp"):"");}
+var pageQuery=new URLSearchParams(location.search);var isTaggedVisit=taggedVisitKeys.some(function(key){return pageQuery.has(key);});var attribution={};
+keys.forEach(function(key){var value;if(isTaggedVisit){value=pageQuery.has(key)?(pageQuery.get(key)||""):"";writeCookie("gbs_"+key,value);}else{value=storedAttribution(key);if(value&&!readCookie("gbs_"+key))writeCookie("gbs_"+key,value);}if(value){value=String(value).slice(0,2000);attribution[key]=value;frameUrl.searchParams.set(key,value);}});
+var frameOrigin=frameUrl.origin;var lastDevice="";var redirecting=false;
+function device(){var width=window.innerWidth||document.documentElement.clientWidth||0;return width<=640?"mobile":width<=900?"tablet":"desktop";}
+function send(){try{frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"context",pageUrl:location.href,pageTitle:document.title,attribution:attribution},frameOrigin);sendDevice();}catch(e){}}
+function sendDevice(){try{var next=device();if(next===lastDevice)return;lastDevice=next;frame.contentWindow.postMessage({source:"gbs-web-form-host",type:"responsive-device",device:next},frameOrigin);}catch(e){}}
+function safeRedirect(value){if(typeof value!=="string"||!value.trim()||value.length>2048)return "";try{var target=new URL(value.trim());if((target.protocol!=="http:"&&target.protocol!=="https:")||!target.hostname||target.username||target.password)return "";return target.href;}catch(e){return "";}}
+function isFrameMessage(event){return event.source===frame.contentWindow&&event.origin===frameOrigin&&event.data&&event.data.source==="gbs-web-form";}
+window.addEventListener("resize",sendDevice);
+window.addEventListener("message",function(event){if(!isFrameMessage(event))return;var data=event.data;if(data.type==="ready")send();if(data.type==="size"){var height=Number(data.height);if(Number.isFinite(height)&&height>0){frame.style.height=Math.ceil(height)+"px";frame.style.minHeight="0";}}if(data.type==="success-redirect"&&!redirecting){var expectedId=frameUrl.searchParams.get("id"),expectedSlug=frameUrl.searchParams.get("slug");var matches=expectedId?String(data.formId||"")===expectedId:expectedSlug?String(data.formSlug||"")===expectedSlug:false;var redirectUrl=safeRedirect(data.redirectUrl);if(matches&&redirectUrl){redirecting=true;window.location.assign(redirectUrl);}}});
+frame.addEventListener("load",send);container.appendChild(frame);frame.src=frameUrl.toString();
+})(document.currentScript);`;
 }
 
 function buildEmbedCode(form, origin) {
-  const configuredBase =
-    origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
-  const base = String(configuredBase).replace(
-    /\/+$/,
-    "",
-  );
-
-  const safeTitle = escapeHtml(form?.name || "Web form");
-
-  const query =
-    form?.id != null && String(form.id) !== ""
-      ? `id=${encodeURIComponent(form.id)}`
-      : `slug=${encodeURIComponent(form?.slug || "")}`;
-
+  const configuredBase = origin || process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "https://globuscrm.com";
+  const base = String(configuredBase).replace(/\/+$/, "");
+  const containerId = buildEmbedContainerId(form);
+  const formId = form?.id != null && String(form.id) !== "" ? String(form.id) : "";
+  const formSlug = String(form?.slug || "");
+  const params = new URLSearchParams(formId ? { id: formId } : { slug: formSlug });
+  if (form?.scope && form.scope !== "generic") params.set("scope", form.scope);
+  const frameUrl = `${base}/embed/web-form.html?${params.toString()}`;
+  const config = {
+    containerId,
+    frameUrl,
+    formId,
+    formSlug,
+    title: `${String(form?.name || "Globus CRM").trim()} web form`,
+  };
   return [
     "<!-- Globussoft CRM web form -->",
-
-    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" allow="geolocation *" style="width:100%;height:auto;border:0;display:block;" loading="lazy"></iframe>`,
-    buildEmbedHostScript(!form?.scope || form.scope === "generic"),
+    `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;"></div>`,
+    `<script>${buildEmbedHostRuntime(config)}</script>`,
   ].join("\n");
 }
 
@@ -1210,12 +1247,33 @@ async function findDuplicateFormName(tenantId, scope, name, excludeId = null) {
   });
 }
 
-function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = []) {
+function isValidTrackingCookieDomain(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(String(value || "").trim());
+}
+
+async function resolveGenericTrackingCookieDomain(tenantId) {
+  const raw = await getSetting(tenantId, KEYS.GENERIC_TRACKING_COOKIE_DOMAINS, {
+    coerce: String,
+    fallback: "{}",
+  });
+  try {
+    const parsed = JSON.parse(String(raw || "{}"));
+    const candidate = parsed?.selectedDomain || Object.keys(parsed).find((key) => key !== "selectedDomain" && key !== "domains");
+    return isValidTrackingCookieDomain(candidate) ? String(candidate).trim().toLowerCase() : "";
+  } catch (_err) {
+    return "";
+  }
+}
+
+function shapeForm(row, submissionCount = 0, origin = null, isPublic = false, leadFieldDefinitions = [], trackingCookieDomain = "") {
   if (!row) return null;
 
   const fields = normalizeFields(row.fieldsJson, row.scope || "generic", leadFieldDefinitions);
   const style = normalizeStyle(row.styleJson);
   const settings = normalizeSettings(row.settingsJson);
+  if ((row.scope || "generic") === "generic" && trackingCookieDomain && !settings.trackingCookieDomain) {
+    settings.trackingCookieDomain = trackingCookieDomain;
+  }
 
   if (isPublic) {
     const payload = {
@@ -1472,7 +1530,10 @@ async function listWithCounts(tenantId, scope) {
     );
   }
 
-  return forms.map((form) => shapeForm(form, counts[form.id] || 0));
+  const trackingCookieDomain = scope === "generic"
+    ? await resolveGenericTrackingCookieDomain(tenantId)
+    : "";
+  return forms.map((form) => shapeForm(form, counts[form.id] || 0, null, false, [], trackingCookieDomain));
 }
 
 // Public routes -------------------------------------------------------------
@@ -1507,7 +1568,10 @@ async function loadLeadFieldDefinitions(tenantId) {
 
 async function buildPublicFormPayload(form, origin) {
   const leadFieldDefinitions = await loadLeadFieldDefinitions(form.tenantId);
-  const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions);
+  const trackingCookieDomain = (form.scope || "generic") === "generic"
+    ? await resolveGenericTrackingCookieDomain(form.tenantId)
+    : "";
+  const publicPayload = shapeForm(form, 0, origin, true, leadFieldDefinitions, trackingCookieDomain);
   if (supportsAdvancedWebFormFeatures(form.scope || "generic")) {
     const recaptchaSiteKey = form.scope === "travel"
       ? KEYS.TRAVEL_RECAPTCHA_SITE_KEY
@@ -2697,7 +2761,10 @@ router.get("/:id", verifyToken, async (req, res) => {
         .status(404)
         .json({ error: "Form not found", code: "FORM_NOT_FOUND" });
 
-    res.json(shapeForm(form, 0, `${req.protocol}://${req.get("host")}`));
+    const trackingCookieDomain = scope === "generic"
+      ? await resolveGenericTrackingCookieDomain(req.user.tenantId)
+      : "";
+    res.json(shapeForm(form, 0, `${req.protocol}://${req.get("host")}`, false, [], trackingCookieDomain));
   } catch (err) {
     console.error("[web-forms] get error:", err && err.message);
 

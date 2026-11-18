@@ -8,6 +8,7 @@ import {
   Mail,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Phone,
   Plus,
   Search,
@@ -24,6 +25,18 @@ import { AuthContext } from '../../appContexts';
 import './ContactDetailsDrawer.css';
 
 const GROUPS = [{ key: 'basic', label: 'Basic information', openByDefault: true }];
+
+const expandScientificNotation = (value) => {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return raw;
+  const [, sign, integerPart, fractionPart = '', exponentText] = match;
+  const digits = integerPart + fractionPart;
+  const decimalIndex = integerPart.length + Number(exponentText);
+  if (decimalIndex <= 0) return `${sign}0.${'0'.repeat(-decimalIndex)}${digits}`;
+  if (decimalIndex >= digits.length) return `${sign}${digits}${'0'.repeat(decimalIndex - digits.length)}`;
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+};
 
 const GENERIC_DETAIL_TABS = [
   { key: 'all', label: 'All details' },
@@ -252,6 +265,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     : contact?.overallPickupStatus || contact?.currentStatus || contact?.workflowStatus;
   const genericBasicFields = [
     { label: 'Name', key: 'name', value: contact?.name },
+    { label: 'External ID', key: 'externalId', value: contact?.externalId, readOnly: true },
     { label: 'Email', key: 'email', value: contact?.email },
     { label: 'First Name', key: 'firstName', value: contact?.firstName || nameParts[0] },
     { label: 'Last Name', key: 'lastName', value: contact?.lastName || nameParts.slice(1).join(' ') },
@@ -259,16 +273,16 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Company', key: 'company', value: contact?.company },
     { label: 'Lead Score', key: 'aiScore', value: contact?.aiScore, readOnly: true },
     { label: 'Source', key: 'source', value: contact?.source },
-    { label: 'Web Form', key: 'webForm', value: latestWebFormSubmission?.webForm?.name || contact?.webFormName, readOnly: true },
+    { label: 'Web Form', key: 'webForm', value: latestWebFormSubmission?.webForm?.name || contact?.webFormName || customFields.webForm, readOnly: true },
     { label: 'Medium', key: 'medium', value: contact?.medium },
-    { label: 'Pickup Location', key: 'pickupLocation', value: genericWorkflowDetails?.pickupAddress || contact?.pickupAddress || contact?.pickupLocation, readOnly: true },
-    { label: 'Plot Assign', key: 'plotAssign', value: assignedPlots.map((plot) => plot?.plotNumber || plot?.name).filter(Boolean).join(', ') || contact?.plotAssign, readOnly: true },
-    { label: 'Overall Status', key: 'overallPickupStatus', value: overallPickupStatus, readOnly: true },
-    { label: 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email, owner: true },
+    { label: 'Pickup Location', key: 'pickupLocation', value: genericWorkflowDetails?.pickupAddress || contact?.pickupAddress || contact?.pickupLocation || customFields.pickupLocation, readOnly: true },
+    { label: 'Plot Assign', key: 'plotAssign', value: assignedPlots.map((plot) => plot?.plotNumber || plot?.name).filter(Boolean).join(', ') || contact?.plotAssign || customFields.plotAssign, readOnly: true },
+    { label: 'Overall Status', key: 'overallPickupStatus', value: overallPickupStatus || customFields.overallPickupStatus, readOnly: true },
+    { label: 'Sales owner', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email || customFields.assignedTo, owner: true },
     { label: 'Created', key: 'createdAt', value: contact?.createdAt, readOnly: true },
-    { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId, readOnly: true },
-    { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus, readOnly: true },
-    { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore, readOnly: true },
+    { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId || customFields.campaign, readOnly: true },
+    { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus || customFields.callStatus, readOnly: true },
+    { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore ?? customFields.callifiedScore, readOnly: true },
     ...(lifecycleStageLabel
       ? [{ label: 'Lifecycle Stage', key: 'lifecycleStageKey', value: lifecycleStageLabel, readOnly: true }]
       : []),
@@ -355,7 +369,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const visibleAdFields = adFields.filter(fieldIsVisible);
   const displayValue = (value) => value === null || value === undefined || value === ''
     ? <span className="cd-empty-value">Click to add</span>
-    : <span className="cd-filled-value">{String(value)}</span>;
+    : <span className="cd-filled-value">{expandScientificNotation(value)}</span>;
 
   const toggleGroup = (key) => setOpenGroups((current) => ({ ...current, [key]: !current[key] }));
   const runAction = (key) => onAction?.(key);
@@ -588,9 +602,10 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
           {(!isGeneric || activeDetailTab === 'all') && <section className="cd-all-details">
             <h4>All details</h4>
             {isGenericTagManager ? (
-              <div className="cd-tags cd-tag-manager">
+              <div className="cd-tags cd-tag-manager cd-generic-tags-card">
                 <Tag size={13} />
                 <span>Tags</span>
+                <button type="button" className="cd-generic-tag-edit" onClick={openTagPicker} aria-label="Edit tags" title="Edit tags"><Pencil size={14} /></button>
                 <div className="cd-tag-values">
                   {tags.map((tag) => {
                     const nameValue = String(tag);
@@ -614,13 +629,13 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                               <span className="cd-tag-option-check">{isPendingTag(record.name) ? '✓' : ''}</span>
                               <span className="cd-tag-chip" style={{ background: record.color, borderColor: record.color, color: tagTextColor(record.color) }}>{record.name}</span>
                             </button>
-                            <label className="cd-tag-color"><input type="color" value={record.color} onChange={(event) => changeGenericTagColor(record.name, event.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /></label>
+                            <label className="cd-tag-color"><input type="color" value={record.color} onChange={(event) => changeGenericTagColor(record.name, event.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /><span className="cd-tag-color-swatch" style={{ backgroundColor: record.color }} aria-hidden="true" /></label>
                           </div>
                         )) : <div className="cd-tag-picker-message">No tags available.</div>}
                       </div>
                       <form className="cd-create-tag" onSubmit={(event) => { event.preventDefault(); createGenericTag(); }}>
                         <strong>Create new tag</strong>
-                        <div className="cd-create-tag-row"><input value={newTagName} onChange={(event) => setNewTagName(event.target.value)} placeholder="Tag name" aria-label="New tag name" /><input type="color" value={newTagColor} onChange={(event) => setNewTagColor(event.target.value)} aria-label="New tag color" /><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div>
+                        <div className="cd-create-tag-row"><input value={newTagName} onChange={(event) => setNewTagName(event.target.value)} placeholder="Tag name" aria-label="New tag name" /><label className="cd-tag-color cd-create-tag-color"><input type="color" value={newTagColor} onChange={(event) => setNewTagColor(event.target.value)} aria-label="New tag color" /><span className="cd-tag-color-swatch" style={{ backgroundColor: newTagColor }} aria-hidden="true" /></label><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div>
                       </form>
                       {tagMutationError && <div className="cd-tag-picker-error" role="alert">{tagMutationError}</div>}
                       <div className="cd-tag-picker-actions"><button type="button" className="cd-tag-picker-cancel" onClick={() => setTagPickerOpen(false)}>Cancel</button><button type="button" className="cd-tag-picker-apply" onClick={applyPendingTags} disabled={tagSelectionSaving || tagCreating}>{tagSelectionSaving ? 'Applying...' : 'Apply tags'}</button></div>

@@ -1313,6 +1313,7 @@ router.post(
   uploadBoardingPassOrReject,
   async (req, res) => {
     let uploadedObjectKey = null;
+    let uploadedObjectProvider = null;
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
@@ -1334,9 +1335,8 @@ router.post(
       }
       let url = `/uploads/boarding-passes/${req.file.filename}`;
       let storage = "disk";
-      let storageWarning = null;
 
-      if (s3Service.isOciConfigured()) {
+      if (s3Service.isConfigured()) {
         try {
           const fileBuffer = await fs.promises.readFile(req.file.path);
           url = await s3Service.uploadFile(
@@ -1346,11 +1346,16 @@ router.post(
             `travel/web-checkins/${req.travelTenant.id}/boarding-passes`,
           );
           uploadedObjectKey = s3Service.extractKeyFromUrl(url);
-          storage = "ocs";
+          uploadedObjectProvider = s3Service.isOciUrl(url) ? "oci" : "aws";
+          storage = s3Service.isOciUrl(url) ? "ocs" : "s3";
           await fs.promises.unlink(req.file.path).catch(() => {});
         } catch (storageError) {
-          console.error("[travel-webcheckin] OCS boarding-pass upload error:", storageError.message);
-          storageWarning = "Oracle Cloud upload failed; the boarding pass was stored on local disk.";
+          console.error("[travel-webcheckin] object-storage boarding-pass upload error:", storageError.message);
+          await fs.promises.unlink(req.file.path).catch(() => {});
+          return res.status(502).json({
+            error: "Couldn't store the boarding pass in object storage",
+            code: "STORAGE_FAILED",
+          });
         }
       }
 
@@ -1363,13 +1368,12 @@ router.post(
         success: true,
         url,
         storage,
-        ...(storageWarning ? { storageWarning } : {}),
         webcheckin: updated,
       });
     } catch (e) {
       if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
       if (uploadedObjectKey) {
-        await s3Service.deleteFile(uploadedObjectKey, { provider: "oci" }).catch(() => {});
+        await s3Service.deleteFile(uploadedObjectKey, { provider: uploadedObjectProvider || "oci" }).catch(() => {});
       }
       console.error("[travel-webcheckin] upload error:", e.message);
       res.status(500).json({ error: "Failed to upload boarding pass" });

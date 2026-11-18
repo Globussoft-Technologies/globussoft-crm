@@ -90,6 +90,10 @@ prisma.contact = {
   update: vi.fn(),
   upsert: vi.fn(),
 };
+prisma.activity = {
+  findFirst: vi.fn(),
+  create: vi.fn(),
+};
 prisma.service = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
@@ -113,6 +117,8 @@ prisma.booking = {
 };
 prisma.leadCustomFieldDefinition = {
   findMany: vi.fn(),
+  findFirst: vi.fn(),
+  create: vi.fn(),
 };
 prisma.leadCustomFieldValue = {
   findMany: vi.fn(),
@@ -164,6 +170,8 @@ beforeEach(() => {
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
   prisma.contact.upsert.mockReset();
+  prisma.activity.findFirst.mockReset().mockResolvedValue(null);
+  prisma.activity.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.service.findMany.mockReset();
   prisma.service.findFirst.mockReset();
   prisma.service.create.mockReset();
@@ -178,6 +186,8 @@ beforeEach(() => {
   prisma.membershipPlan.update.mockReset();
   prisma.booking.findMany.mockReset();
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldDefinition.findFirst.mockReset().mockResolvedValue(null);
+  prisma.leadCustomFieldDefinition.create.mockReset().mockImplementation(async ({ data }) => ({ id: 99, ...data }));
   prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.genericImportHistory.findMany.mockReset().mockResolvedValue([]);
@@ -222,6 +232,7 @@ describe('GET /api/csv/contacts/import-history', () => {
         updated: true,
         skipped: true,
         errors: true,
+        columns: true,
         contacts: true,
         errorRows: true,
         completedAt: true,
@@ -236,6 +247,19 @@ describe('GET /api/csv/contacts/import-history', () => {
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('IMPORT_HISTORY_NOT_AVAILABLE');
     expect(prisma.genericImportHistory.findMany).not.toHaveBeenCalled();
+  });
+
+  test('falls back when the deployed database has not added the optional columns column yet', async () => {
+    prisma.genericImportHistory.findMany
+      .mockRejectedValueOnce(new Error('The column `globussoft_crm.GenericImportHistory.columns` does not exist in the current database.'))
+      .mockResolvedValueOnce([{ id: 13, tenantId: 1, fileName: 'legacy.csv', errors: 0, contacts: [], errorRows: [] }]);
+
+    const res = await request(makeApp()).get('/api/csv/contacts/import-history');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: 13, status: 'Completed' });
+    expect(prisma.genericImportHistory.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.genericImportHistory.findMany.mock.calls[1][0].select).not.toHaveProperty('columns');
   });
 });
 
@@ -383,11 +407,12 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     prisma.contact.findMany.mockResolvedValue([{ id: 103, deletedAt: null }]);
     prisma.contact.update.mockResolvedValue({ id: 103 });
     const res = await request(makeApp()).post('/api/csv/contacts/import.csv')
-      .set('Content-Type', 'text/csv').send('name,phone\nUpdated Name,+919876543210\n');
+      .set('Content-Type', 'text/csv').send('name,phone,department\nUpdated Name,+919876543210,Sales\n');
     expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0 });
     expect(res.body.importedContacts[0]).toMatchObject({
       action: 'updated',
       reason: 'Existing contact matched and updated',
+      department: 'Sales',
     });
     expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 103 } }));
   });
@@ -519,6 +544,91 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     });
   });
 
+  test('persists mapped native fields beyond the core contact columns', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 106 });
+    const csv = 'Id,Email,WhatsApp,Medium,Tags,Score,Website,State\n'
+      + 'LEAD-106,lead106@example.com,9999999999,Google,"warm,priority",88,example.com,IN-KA\n';
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({
+        Id: 'id', Email: 'email', WhatsApp: 'whatsappPhone', Medium: 'medium',
+        Tags: 'tags', Score: 'aiScore', Website: 'website', State: 'stateCode',
+      }))
+      .attach('file', Buffer.from(csv), { filename: 'native-fields.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        whatsappPhone: '9999999999',
+        medium: 'Google',
+        tagsJson: JSON.stringify(['warm', 'priority']),
+        aiScore: 88,
+        website: 'example.com',
+        stateCode: 'IN-KA',
+      }),
+    }));
+    expect(prisma.contact.create.mock.calls[0][0].data).not.toHaveProperty('externalId');
+    expect(prisma.leadCustomFieldValue.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ contactId: 106, valueText: 'LEAD-106' }),
+    }));
+  });
+
+  test('turns Recent note and activity history columns into contact activities', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 107 });
+    const csv = 'name,email,Recent note,Last activity type,Last activity date,Last contacted mode\n'
+      + 'Activity Lead,activity@example.com,Called about pricing,Call,2026-03-09T07:45:05Z,Phone\n';
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .attach('file', Buffer.from(csv), { filename: 'activity-fields.csv', contentType: 'text/csv' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ description: 'Called about pricing' }),
+    }));
+    expect(prisma.activity.create).toHaveBeenCalledTimes(2);
+    expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        contactId: 107,
+        type: 'Note',
+        description: 'Called about pricing',
+        createdAt: expect.any(Date),
+      }),
+    }));
+    expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        contactId: 107,
+        type: 'Call',
+        description: expect.stringContaining('Last contacted mode: Phone'),
+      }),
+    }));
+  });
+
+  test('stores mapper fields without a Contact column as custom values instead of dropping them', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 108 });
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .field('mapping', JSON.stringify({ name: 'name', 'Web Form': 'webForm' }))
+      .field('mappingFieldTypes', JSON.stringify({ 'Web Form': 'text' }))
+      .attach('file', Buffer.from('name,Web Form\nMapped Lead,Landing Page API\n'), {
+        filename: 'fallback-field.csv',
+        contentType: 'text/csv',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
+    expect(prisma.leadCustomFieldDefinition.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ fieldKey: 'webForm', fieldType: 'text' }),
+    }));
+    expect(prisma.leadCustomFieldValue.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ contactId: 108, valueText: 'Landing Page API' }),
+    }));
+  });
+
   test('maps Generic lifecycle-stage labels to lifecycleStageKey instead of creating a custom field', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 100 });
@@ -543,7 +653,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
   });
 
-  test('normalizes Freshsales Generic status values to CRM statuses', async () => {
+  test('stores Generic CRM spreadsheet status values directly on the contact', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 101 });
 
@@ -555,13 +665,13 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 3, updated: 0, skipped: 0, errors: [] });
     expect(prisma.contact.create.mock.calls.map(([call]) => call.data.status)).toEqual([
-      'Lead',
-      'Prospect',
-      'Junk',
+      'New',
+      'Qualified',
+      'Lost',
     ]);
   });
 
-  test('recovers a stale Generic mapping that sends Status to lifecycleStageKey', async () => {
+  test('keeps a stale Status mapping independent from lifecycle stage', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 102 });
 
@@ -576,7 +686,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ name: 'Mapped Lead', status: 'Lead', lifecycleStageKey: 'new' }),
+      data: expect.objectContaining({ name: 'Mapped Lead', status: 'New' }),
     }));
   });
 
@@ -756,6 +866,24 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
     expect(prisma.genericImportHistory.create).toHaveBeenCalledOnce();
+  });
+
+  test('completes the import when the history table is missing the optional columns column', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 103 });
+    prisma.genericImportHistory.create
+      .mockRejectedValueOnce(new Error('The column `globussoft_crm.GenericImportHistory.columns` does not exist in the current database.'))
+      .mockResolvedValueOnce({ id: 2 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,email\nLegacy Schema,legacy-schema@example.com\n');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(prisma.genericImportHistory.create).toHaveBeenCalledTimes(2);
+    expect(prisma.genericImportHistory.create.mock.calls[1][0].data).not.toHaveProperty('columns');
   });
 
   test('does not write Generic import history for a Wellness import', async () => {

@@ -196,6 +196,31 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
   background: var(--text-secondary);
 }
 
+/* Travel Leads owns a split records grid. Keep every layer shrinkable so the
+   page never widens the application frame, while the grid's synchronized
+   scrollbar remains responsible for columns that do not fit. */
+.travel-app-shell .travel-content-frame .leads-page-root--travel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: clamp(0.75rem, 3vw, 2rem) !important;
+  overflow-x: hidden;
+}
+
+.travel-app-shell
+  .travel-content-frame
+  .leads-page-root--travel
+  .travel-leads-table-card {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.leads-page-root--travel .travel-leads-actions-host {
+  min-width: 0;
+}
+
 @media (max-width: 899px) {
   .finance-page .finance-page__filters.pricing-rules-filters > svg {
     display: none;
@@ -232,29 +257,6 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
     gap: 8px !important;
   }
 
-  .travel-leads-filters {
-    display: grid !important;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px !important;
-  }
-
-  .travel-leads-filter-controls {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-    min-width: 0;
-    gap: 8px !important;
-  }
-
-  .travel-leads-filter-controls > svg {
-    display: none;
-  }
-
-  .travel-leads-filter-controls > select {
-    width: 100% !important;
-    min-width: 0 !important;
-  }
-
   .travel-leads-search-toolbar {
     display: grid !important;
     grid-template-columns: minmax(0, 1fr);
@@ -284,6 +286,10 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
   .travel-leads-search-controls > div > button {
     min-width: 0;
     max-width: 100%;
+  }
+
+  .travel-leads-actions-host {
+    width: 100%;
   }
 
   .travel-leads-search-actions {
@@ -443,6 +449,74 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
 }
 
 @media (max-width: 600px) {
+  .travel-app-shell .travel-content-frame .leads-page-root--travel {
+    padding: 0.75rem !important;
+  }
+
+  .leads-page-root--travel .leads-page-header {
+    margin-bottom: 0.75rem !important;
+  }
+
+  .leads-page-root--travel .travel-leads-search-controls {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .leads-page-root--travel .travel-leads-search-controls > * {
+    grid-column: 1 / -1 !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .leads-page-root--travel .travel-leads-search-controls > div > button,
+  .leads-page-root--travel .travel-leads-search-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .leads-page-root--travel .travel-leads-actions-host {
+    display: block !important;
+  }
+
+  .leads-page-root--travel .travel-leads-table-card {
+    border-radius: 12px !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .leads-table-frozen-pane {
+    width: clamp(9.5rem, 52%, 12rem) !important;
+    max-width: 58%;
+  }
+
+  .leads-page-root--travel
+    .leads-table-frozen-pane
+    table.leads-table
+    a {
+    display: block;
+    max-width: 100%;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .leads-page-root--travel .leads-pagination-footer {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .leads-page-root--travel .leads-pagination-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .leads-page-root--travel .leads-pagination-page-size,
+  .leads-page-root--travel .leads-pagination-navigation {
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+    margin-left: 0 !important;
+  }
+
   .travel-staff-page .travel-staff-stats {
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -565,7 +639,7 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     box-sizing: border-box;
-    padding: 10px !important;
+    padding: 0 !important;
   }
 
   .travel-leads-actions-toolbar > button,
@@ -787,6 +861,22 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
 }
 
 @media (max-width: 380px) {
+  .leads-page-root--travel .leads-page-header__actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .leads-page-root--travel .travel-leads-actions-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .leads-page-root--travel
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-control
+    > [role="menu"] {
+    width: min(18rem, calc(100vw - 2rem)) !important;
+    max-width: calc(100vw - 2rem);
+  }
+
   .itineraries-page__header-actions {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -156,6 +156,7 @@ const KEYS = {
   TRAVEL_EXTERNAL_REVIEW_URL:            "travel.externalReviewUrl",
   GENERIC_RECAPTCHA_SITE_KEY:            "generic.webForm.recaptcha.siteKey",
   GENERIC_RECAPTCHA_SECRET_KEY:          "generic.webForm.recaptcha.secretKey",
+  GENERIC_TRACKING_COOKIE_DOMAINS:       "generic.webForm.trackingCookieDomains",
   TRAVEL_RECAPTCHA_SITE_KEY:             "travel.webForm.recaptcha.siteKey",
   TRAVEL_RECAPTCHA_SECRET_KEY:           "travel.webForm.recaptcha.secretKey",
   GENERIC_CONTACT_LIFECYCLE_STAGES:      "generic.contactLifecycleStages",
@@ -173,6 +174,7 @@ const KEYS = {
 // $50, LLM $100, Booking/Expedia $100). Reading via `process.env.<KEY>
 // ?? <fallback>` lets ops override the floor without code changes.
 const DEFAULTS = {
+  [KEYS.GENERIC_TRACKING_COOKIE_DOMAINS]: "{}",
   [KEYS.GENERIC_CONTACT_LIFECYCLE_STAGES]: JSON.stringify([
     { id: "new", title: "New", options: [{ id: "new", label: "New", status: "Lead", negative: false }] },
     { id: "contacted", title: "Contacted", options: [{ id: "contacted", label: "Contacted", status: "Prospect", negative: false }] },

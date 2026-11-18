@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, slugifyWebFormName, textOrBlank } from '../utils/webForms';
+import { buildGenericTrackingCookieSetupCode, buildWebFormEmbedCode, buildWebFormPreviewUrl, buildWebFormScriptEmbedCode, getWebFormPreviewViewportWidth, hasDuplicateWebFormName, normalizeTrackingCookieDomain, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
 // These assertions check source contracts, not the formatter's quote style
 // or whitespace. Runtime/layout assertions below remain unchanged.
@@ -35,8 +35,8 @@ describe('webForms helpers', () => {
     expect(hasDuplicateWebFormName(forms, '', 1)).toBe(false);
   });
 
-  test('builds a website snippet that preserves first-touch Generic tracking cookies', () => {
-    const source = buildGenericTrackingCookieSetupCode()
+  test('builds a website snippet that replaces the complete campaign on a new tagged visit', () => {
+    const source = buildGenericTrackingCookieSetupCode('https://poweradspy.com/')
       .replace(/^<script>\s*/, '')
       .replace(/\s*<\/script>$/, '');
     const cookies = new Map();
@@ -59,10 +59,43 @@ describe('webForms helpers', () => {
     expect(cookies.get('gbs_utm_source')).toBe('google');
     expect(cookies.get('gbs_gclid')).toBe('click-123');
 
-    context.window.location.search = '?utm_source=facebook&gclid=click-456';
+    context.window.location.search = '?utm_source=facebook&utm_medium=cpc';
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('facebook');
+    expect(cookies.get('gbs_gclid')).toBe('');
+    expect(cookies.get('gbs_utm_campaign')).toBe('');
+    expect(source).toContain('Domain=poweradspy.com');
+    expect(source).toContain('SameSite=Lax');
+    expect(source).toContain('Secure');
+  });
+
+  test('preserves cookies on untagged pages and ignores device-only URLs', () => {
+    const source = buildGenericTrackingCookieSetupCode()
+      .replace(/^<script>\s*/, '')
+      .replace(/\s*<\/script>$/, '');
+    const cookies = new Map([['gbs_utm_source', 'google']]);
+    const document = {};
+    Object.defineProperty(document, 'cookie', {
+      get: () => [...cookies].map(([key, value]) => `${key}=${value}`).join('; '),
+      set: (value) => {
+        const pair = value.split(';', 1)[0];
+        const separator = pair.indexOf('=');
+        cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+      },
+    });
+    const context = { document, URLSearchParams, window: { location: { search: '?device=mobile', protocol: 'https:' } } };
     runInNewContext(source, context);
     expect(cookies.get('gbs_utm_source')).toBe('google');
-    expect(cookies.get('gbs_gclid')).toBe('click-123');
+    context.window.location.search = '';
+    runInNewContext(source, context);
+    expect(cookies.get('gbs_utm_source')).toBe('google');
+  });
+
+  test('normalizes full URLs without broadening the selected hostname', () => {
+    expect(normalizeTrackingCookieDomain('https://app.poweradspy.com/path')).toBe('app.poweradspy.com');
+    expect(normalizeTrackingCookieDomain('poweradspy.com')).toBe('poweradspy.com');
+    expect(normalizeTrackingCookieDomain('https://poweradspy.com.evil.example')).toBe('poweradspy.com.evil.example');
+    expect(normalizeTrackingCookieDomain('not a domain')).toBe('');
   });
 });
 
@@ -96,33 +129,26 @@ describe('buildWebFormPreviewUrl', () => {
 });
 
 describe('buildWebFormEmbedCode', () => {
-  test('builds an iframe snippet and public link for the form slug', () => {
+  test('builds a single root div with the existing iframe flow and a public link', () => {
     const code = buildWebFormEmbedCode({ name: 'Contact Us', slug: 'contact-us' }, 'https://crm.example.com');
 
+    expect(code).toContain('<div class="gbs-web-form-embed" id="gbs-web-form-embed-contact-us"');
+    expect(code).toContain('document.createElement("iframe")');
     expect(code).toContain('https://crm.example.com/embed/web-form.html?slug=contact-us');
-    expect(code.match(/https:\/\/crm\.example\.com\/embed\/web-form\.html\?slug=contact-us/g)).toHaveLength(2);
-    expect(code).toContain('title="Contact Us"');
-    expect(code).toContain('style="width:100%;height:auto;border:0;display:block;"');
-    expect(code).toContain('allow="geolocation *"');
-    expect(code).not.toContain('min-height:760px');
-    expect(code).toContain('source!=="gbs-web-form"');
-    expect(code).toContain('type:"responsive-device"');
-    expect(code).toContain('window.innerWidth');
-    expect(code).toContain('Max-Age="+maxAge');
-    expect(code).toContain('attribution:savedAttribution');
-    expect(code).toContain('"utm_source"');
-    expect(code).toContain('"utm_id"');
-    expect(code).toContain('"campaign_id"');
-    expect(code).toContain('"site_source_name"');
-    expect(code).toContain('"landing_page"');
-    expect(code).toContain('"referrer"');
-    expect(code).toContain('"hsa_ver"');
+    expect(code).toContain('gbs-web-form-host');
+    expect(code).not.toMatch(/<\/?(?:html|head|body)\b/i);
+    expect(code).not.toContain('<iframe');
+    expect(code).toContain('Open public form');
+    expect(code.match(/<div\b/g)).toHaveLength(1);
+    const script = code.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+    expect(() => Function(script)).not.toThrow();
   });
 
-  test('escapes the iframe title safely', () => {
+  test('does not interpolate an untrusted form name into embed markup', () => {
     const code = buildWebFormEmbedCode({ name: 'Lead <Form>', slug: 'lead-form' }, 'https://crm.example.com');
 
-    expect(code).toContain('title="Lead &lt;Form&gt;"');
+    expect(code).not.toContain('Lead <Form>');
+    expect(code).not.toContain('Lead &lt;Form&gt;');
   });
 
   test('prefers the stable numeric id for public links when present', () => {
@@ -132,172 +158,135 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).not.toContain('?slug=contact-us');
   });
 
-  test('keeps host attribution cookies scoped to Generic CRM forms', () => {
+  test('preserves the form scope in the iframe URL', () => {
     const code = buildWebFormEmbedCode(
       { id: 102, name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' },
       'https://crm.example.com',
     );
 
-    expect(code).not.toContain('Max-Age="+maxAge');
-    expect(code).not.toContain('attribution:savedAttribution');
-    expect(code).toContain('type:"responsive-device"');
-  });
-
-  test('captures and forwards first-touch attribution from the external page', () => {
-    const code = buildWebFormEmbedCode(
-      { id: 103, name: 'External Contact', slug: 'external-contact', scope: 'generic' },
-      'https://crm.example.com',
-    );
-    const scriptBody = code.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-    const messages = [];
-    const frameListeners = {};
-    const frame = {
-      contentWindow: { postMessage: (message) => messages.push(message) },
-      addEventListener: (name, callback) => { frameListeners[name] = callback; },
-      style: {},
-    };
-    const originalUrl = window.location.href;
-
-    document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
-    document.cookie = 'gbs_utm_medium=; Max-Age=0; Path=/';
-    document.cookie = 'gbs_gclid=; Max-Age=0; Path=/';
-    window.history.replaceState({}, '', '/contact?utm_source=adwords&utm_medium=ppc&gclid=click-123');
-    globalThis.__gbsEmbedTestFrame = frame;
-
-    try {
-      const executable = scriptBody.replace(
-        'document.currentScript.previousElementSibling',
-        'globalThis.__gbsEmbedTestFrame',
-      );
-      Function(executable)();
-      frameListeners.load();
-
-      expect(document.cookie).toContain('gbs_utm_source=adwords');
-      expect(document.cookie).toContain('gbs_utm_medium=ppc');
-      expect(document.cookie).toContain('gbs_gclid=click-123');
-      expect(messages).toContainEqual(expect.objectContaining({
-        source: 'gbs-web-form-host',
-        type: 'context',
-        attribution: expect.objectContaining({
-          utm_source: 'adwords',
-          utm_medium: 'ppc',
-          gclid: 'click-123',
-        }),
-      }));
-    } finally {
-      delete globalThis.__gbsEmbedTestFrame;
-      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
-      document.cookie = 'gbs_utm_medium=; Max-Age=0; Path=/';
-      document.cookie = 'gbs_gclid=; Max-Age=0; Path=/';
-      window.history.replaceState({}, '', originalUrl);
-    }
-  });
-
-  test('preserves first-touch attribution when a later visit has new campaign parameters', () => {
-    const code = buildWebFormEmbedCode(
-      { id: 106, name: 'External Contact', scope: 'generic' },
-      'https://crm.example.com',
-    );
-    const scriptBody = code.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-    const messages = [];
-    const frameListeners = {};
-    const frame = {
-      contentWindow: { postMessage: (message) => messages.push(message) },
-      addEventListener: (name, callback) => { frameListeners[name] = callback; },
-      style: {},
-    };
-    const originalUrl = window.location.href;
-
-    document.cookie = 'gbs_utm_source=first-campaign; Path=/';
-    document.cookie = 'gbs_utm_campaign=launch-one; Path=/';
-    window.history.replaceState({}, '', '/contact?utm_source=later-campaign&utm_campaign=launch-two');
-    globalThis.__gbsEmbedTestFrame = frame;
-
-    try {
-      Function(scriptBody.replace(
-        'document.currentScript.previousElementSibling',
-        'globalThis.__gbsEmbedTestFrame',
-      ))();
-      frameListeners.load();
-
-      expect(document.cookie).toContain('gbs_utm_source=first-campaign');
-      expect(document.cookie).toContain('gbs_utm_campaign=launch-one');
-      expect(messages).toContainEqual(expect.objectContaining({
-        source: 'gbs-web-form-host',
-        type: 'context',
-        attribution: expect.objectContaining({
-          utm_source: 'first-campaign',
-          utm_campaign: 'launch-one',
-        }),
-      }));
-    } finally {
-      delete globalThis.__gbsEmbedTestFrame;
-      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
-      document.cookie = 'gbs_utm_campaign=; Max-Age=0; Path=/';
-      window.history.replaceState({}, '', originalUrl);
-    }
+    expect(code).toContain('scope=travel');
+    expect(code).not.toContain('<iframe');
   });
 });
 
 describe('buildWebFormScriptEmbedCode', () => {
-  test('builds a script-only Generic CRM embed that creates the iframe and retains tracking', () => {
+  test('builds a script-only Generic CRM embed that creates a root div and iframe', () => {
     const code = buildWebFormScriptEmbedCode(
       { id: 104, name: 'Contact </script> Form', scope: 'generic' },
       'https://crm.example.com',
     );
 
     expect(code).toMatch(/^<script>/);
+    expect(code).toContain('container.className="gbs-web-form-embed"');
+    expect(code).toContain('container.id=config.containerId');
     expect(code).toContain('document.createElement("iframe")');
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=104');
-    expect(code).toContain('frame.allow="geolocation *"');
-    expect(code).toContain('attribution:savedAttribution');
-    expect(code).toContain('frameUrl.searchParams.set(key');
-    expect(code).toContain('readTrackingCookie("gbs_"+key)');
-    expect(code).toContain('Max-Age="+maxAge');
+    expect(code).toContain('gbs-web-form-host');
     expect(code).not.toContain('Contact </script> Form');
-    expect(code).toContain('Contact \\u003c/script> Form');
     expect(() => Function(code.slice('<script>'.length, -'</script>'.length))).not.toThrow();
   });
 
-  test('forwards stored host cookies when a script embed URL has no tracking query', () => {
+  test('mounts the form in a unique iframe container and forwards host attribution', () => {
     const code = buildWebFormScriptEmbedCode(
       { id: 107, name: 'Cookie Contact', scope: 'generic' },
       'https://crm.example.com',
     );
     const scriptBody = code.slice('<script>'.length, -'</script>'.length);
-    const insertedFrames = [];
-    const script = {
-      parentNode: {
-        insertBefore: (frame) => insertedFrames.push(frame),
-      },
-      nextSibling: null,
+    const inserted = [];
+    const elements = [];
+    let cookieJar = '';
+    const hostLocation = {
+      href: 'https://customer.example/contact?utm_source=google&gclid=click-123',
+      search: '?utm_source=google&gclid=click-123',
+      protocol: 'https:',
+      assign: vi.fn(),
     };
+    const hostWindow = {
+      innerWidth: 1200,
+      location: hostLocation,
+      addEventListener: vi.fn(),
+    };
+    const parent = {
+      insertBefore: (node) => {
+        inserted.push(node);
+        elements.push(node);
+      },
+    };
+    const document = {
+      baseURI: 'https://customer.example/contact',
+      title: 'Contact page',
+      documentElement: { clientWidth: 1200 },
+      createElement: (tagName) => {
+        if (tagName === 'div') {
+          return {
+            className: '', id: '', style: {}, dataset: {}, children: [],
+            classList: { contains: (name) => this.className?.split(' ').includes(name) },
+            appendChild(node) { this.children.push(node); },
+          };
+        }
+        return {
+          className: '', title: '', allow: '', loading: '', style: {}, src: '',
+          contentWindow: { postMessage: vi.fn() },
+          listeners: {},
+          addEventListener(name, callback) { this.listeners[name] = callback; },
+        };
+      },
+      getElementById: (id) => elements.find((node) => node.id === id) || null,
+      get cookie() { return cookieJar; },
+      set cookie(value) { cookieJar = value; },
+    };
+    const script = { parentNode: parent, nextSibling: null };
     const originalUrl = window.location.href;
 
-    document.cookie = 'utm_source=stored-source; Path=/';
-    document.cookie = 'utm_campaign=stored-campaign; Path=/';
-    document.cookie = '_fbc=fb.1.1234567890.saved; Path=/';
-    window.history.replaceState({}, '', '/contact');
-    globalThis.__gbsScriptEmbedTag = script;
-
     try {
-      Function(scriptBody.replace('document.currentScript);', 'globalThis.__gbsScriptEmbedTag);'))();
+      Function('document', 'window', 'location', 'URL', 'URLSearchParams', 'script', scriptBody.replace('document.currentScript', 'script'))(
+        document, hostWindow, hostLocation, URL, URLSearchParams, script,
+      );
 
-      expect(insertedFrames).toHaveLength(1);
-      const frameUrl = new URL(insertedFrames[0].src);
-      expect(frameUrl.searchParams.get('utm_source')).toBe('stored-source');
-      expect(frameUrl.searchParams.get('utm_campaign')).toBe('stored-campaign');
-      expect(frameUrl.searchParams.get('fbc')).toBe('fb.1.1234567890.saved');
-      expect(document.cookie).toContain('gbs_utm_source=stored-source');
-      expect(document.cookie).toContain('gbs_fbc=fb.1.1234567890.saved');
+      expect(inserted).toHaveLength(1);
+      const container = inserted[0];
+      expect(container.className).toBe('gbs-web-form-embed');
+      expect(container.id).toBe('gbs-web-form-embed-107');
+      const frame = container.children[0];
+      expect(frame.src).toContain('https://crm.example.com/embed/web-form.html?id=107');
+      expect(frame.src).toContain('utm_source=google');
+      expect(frame.src).toContain('gclid=click-123');
+      expect(frame.allow).toBe('geolocation *');
+      frame.listeners.load();
+      expect(frame.contentWindow.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+        source: 'gbs-web-form-host',
+        type: 'context',
+        pageUrl: hostLocation.href,
+        pageTitle: 'Contact page',
+        attribution: expect.objectContaining({ utm_source: 'google', gclid: 'click-123' }),
+      }), 'https://crm.example.com');
+      const messageHandler = hostWindow.addEventListener.mock.calls.find(([type]) => type === 'message')[1];
+      messageHandler({
+        source: frame.contentWindow,
+        origin: 'https://crm.example.com',
+        data: { source: 'gbs-web-form', type: 'size', height: 384 },
+      });
+      expect(frame.style.height).toBe('384px');
+      messageHandler({
+        source: frame.contentWindow,
+        origin: 'https://crm.example.com',
+        data: {
+          source: 'gbs-web-form', type: 'success-redirect', formId: '107',
+          redirectUrl: 'https://customer.example/thank-you',
+        },
+      });
+      expect(hostLocation.assign).toHaveBeenCalledWith('https://customer.example/thank-you');
+      hostLocation.assign.mockClear();
+      messageHandler({
+        source: frame.contentWindow,
+        origin: 'https://attacker.example',
+        data: {
+          source: 'gbs-web-form', type: 'success-redirect', formId: '107',
+          redirectUrl: 'https://customer.example/forged',
+        },
+      });
+      expect(hostLocation.assign).not.toHaveBeenCalled();
     } finally {
-      delete globalThis.__gbsScriptEmbedTag;
-      document.cookie = 'utm_source=; Max-Age=0; Path=/';
-      document.cookie = 'utm_campaign=; Max-Age=0; Path=/';
-      document.cookie = '_fbc=; Max-Age=0; Path=/';
-      document.cookie = 'gbs_utm_source=; Max-Age=0; Path=/';
-      document.cookie = 'gbs_utm_campaign=; Max-Age=0; Path=/';
-      document.cookie = 'gbs_fbc=; Max-Age=0; Path=/';
       window.history.replaceState({}, '', originalUrl);
     }
   });

@@ -4,7 +4,7 @@ import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { observeSplitTableRowHeights } from '../utils/splitTableRowHeights';
 import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff, UserPlus } from 'lucide-react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import ColumnPicker from '../components/ColumnPicker';
@@ -161,93 +161,18 @@ function validateCsvRow(row) {
   return issues;
 }
 
-function ContactPreviewDrawer({ contact, loading, onClose, onEdit, onConvert, onOpenFullDetail }) {
-  if (!contact) return null;
-
-  const valueOrNotSet = (value) => value || 'Not set';
-  const assignedTo = contact?.assignedTo?.name || contact?.assignedTo?.email || (contact?.assignedToId ? `Staff #${contact.assignedToId}` : 'Unassigned');
-  const details = [
-    ['Email', contact?.email],
-    ['Phone', contact?.phone],
-    ['Category', contact?.company],
-    ['Title', contact?.title],
-    ['Status', contact?.status || 'Lead'],
-    ['Assigned', assignedTo],
-    ['Created', contact?.createdAt ? formatDate(contact.createdAt) : null],
-  ];
-
-  return (
-    <div
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.45)', display: 'flex', justifyContent: 'flex-end', zIndex: 1000 }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Contact preview"
-    >
-      <aside
-        style={{ width: 'min(520px, 100vw)', height: '100vh', overflowY: 'auto', background: 'var(--bg-color)', color: 'var(--text-primary)', padding: '1.25rem', boxShadow: '-18px 0 40px rgba(15, 23, 42, 0.28)' }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>Contact preview</div>
-            <h2 style={{ margin: '0.2rem 0 0', fontSize: '1.25rem' }}>{contact?.name || 'Unnamed contact'}</h2>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{contact?.title || contact?.company || 'No title or company yet'}</div>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close contact preview" style={{ border: 0, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4 }}>
-            <X size={18} />
-          </button>
-        </div>
-
-        {loading ? (
-          <div style={{ padding: '2rem 0', color: 'var(--text-secondary)' }}>Loading contact…</div>
-        ) : (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem', marginTop: '1rem' }}>
-              {[
-                ['Status', contact.status || 'Lead'],
-                ['Assigned', assignedTo],
-                ['Score', `${contact.aiScore ?? 0}/100`],
-              ].map(([label, value]) => (
-                <div key={label} className="card" style={{ padding: '0.85rem' }}>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{label}</div>
-                  <strong>{valueOrNotSet(value)}</strong>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-              <button type="button" className="btn-secondary" onClick={onOpenFullDetail}>Open full detail</button>
-              <button type="button" className="btn-secondary" onClick={onEdit}>Edit contact</button>
-              {String(contact.status || 'Lead') === 'Lead' && (
-                <button type="button" className="btn-secondary" onClick={onConvert}>Convert to Prospect</button>
-              )}
-            </div>
-            <section style={{ marginTop: '1.25rem' }}>
-              <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem' }}>Contact information</h3>
-              {details.map(([label, value]) => (
-                <div key={label} style={{ display: 'grid', gridTemplateColumns: '120px minmax(0, 1fr)', gap: '0.75rem', padding: '0.6rem 0', borderBottom: '1px solid var(--border-color)' }}>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{label}</span>
-                  <span style={{ overflowWrap: 'anywhere' }}>{valueOrNotSet(value)}</span>
-                </div>
-              ))}
-            </section>
-          </>
-        )}
-      </aside>
-    </div>
-  );
-}
-
 const Contacts = () => {
   const notify = useNotify();
-  const navigate = useNavigate();
+  const location = useLocation();
+  const [contactParams, setContactParams] = useSearchParams();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   // Server-driven pagination (?limit=&offset=&page=) — `contacts` holds ONLY
   // the current page's rows; header/footer totals come from the envelope's
   // `total`, falling back to the loaded rows when the backend (or a test
   // mock) answers with the legacy plain array.
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(() => Math.max(1, Number(contactParams.get('page')) || 1));
+  const [pageSize, setPageSize] = useState(() => Math.max(1, Number(contactParams.get('limit')) || 10));
   const [pageInput, setPageInput] = useState('1');
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -287,7 +212,7 @@ const Contacts = () => {
   // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts".
   // Membership filtering is applied by the contacts API so it covers the
   // entire view before limit/offset are applied.
-  const [activeViewId, setActiveViewId] = useState(null);
+  const [activeViewId, setActiveViewId] = useState(() => contactParams.get('viewId') || null);
   // Generic + Travel tenant-scoped Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // Generic + Travel "Customize table" column-visibility picker
@@ -337,86 +262,111 @@ const Contacts = () => {
   // per-cell custom-field editing above, for editing everything (name,
   // email, phone, company, status, custom fields) in one place at once.
   const [editingContact, setEditingContact] = useState(null);
-  const [previewContact, setPreviewContact] = useState(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const previewRequestId = useRef(0);
-
-  const closeContactPreview = () => {
-    previewRequestId.current += 1;
-    setPreviewContact(null);
-    setPreviewLoading(false);
-  };
-
-  const openContactPreview = async (contact) => {
-    const requestId = ++previewRequestId.current;
-    setPreviewContact(contact);
-    setPreviewLoading(true);
-    try {
-      const fullContact = await fetchApi(`/api/contacts/${contact.id}`, { silent: true });
-      if (previewRequestId.current === requestId) {
-        setPreviewContact((current) => current?.id === contact.id ? { ...current, ...fullContact } : current);
-      }
-    } catch {
-      // Keep the list row data visible if the detail request fails.
-    } finally {
-      if (previewRequestId.current === requestId) setPreviewLoading(false);
-    }
-  };
-
-  const convertPreviewToProspect = async () => {
-    if (!previewContact || previewContact.status === 'Prospect') return;
-    try {
-      const updated = await fetchApi(`/api/contacts/${previewContact.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ status: 'Prospect' }),
-      });
-      setPreviewContact((current) => ({ ...current, ...updated, status: 'Prospect' }));
-      setContacts((rows) => rows.map((row) => row.id === previewContact.id ? { ...row, ...updated, status: 'Prospect' } : row));
-      notify.success('Contact moved to Prospect');
-    } catch (error) {
-      notify.error(error?.body?.error || 'Could not update contact status');
-    }
-  };
 
   // #461: search + status filter inputs were rendered without value/onChange
   // and the table read straight from `contacts`, so neither one filtered.
   // Wire both to local state and derive a filtered view client-side
   // (mirrors the existing Leads.jsx pattern). Status === 'All' = show all.
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
+  const [searchTerm, setSearchTerm] = useState(() => contactParams.get('q') || '');
+  const [statusFilter, setStatusFilter] = useState(() => contactParams.get('status') || 'All');
 
   // Drill-down entry from the Lead Reports cluster — e.g. the funnel's
   // "Converted" stage links to /contacts?status=Customer. Seeds the existing
   // status dropdown so the applied filter is visible and clearable.
-  const [drillParams] = useSearchParams();
-  useEffect(() => {
-    const status = drillParams.get('status');
-    if (status) setStatusFilter(status);
-  }, [drillParams]);
   // Assigned-To + Lead Score range filters, same client-side pattern as
   // search/status above. assignedToFilter: '' = all, 'unassigned' = no
   // assignee, else a staff id (string, matches <option value>). scoreFilter:
   // '' = all, else "min-max" bucket key parsed at filter time.
-  const [assignedToFilter, setAssignedToFilter] = useState('');
-  const [scoreFilter, setScoreFilter] = useState('');
+  const [assignedToFilter, setAssignedToFilter] = useState(() => contactParams.get('unassigned') === 'true' ? 'unassigned' : (contactParams.get('assignedToId') || ''));
+  const [scoreFilter, setScoreFilter] = useState(() => {
+    const min = contactParams.get('scoreMin');
+    const max = contactParams.get('scoreMax');
+    return min && max ? `${min}-${max}` : '';
+  });
   // Debounced search term for the server-side ?q= param so typing doesn't
   // fire a request per keystroke (mirrors Clients.jsx). Client-side
   // narrowing below stays instant on the raw `searchTerm`.
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(() => (contactParams.get('q') || '').trim());
   useEffect(() => {
+    const nextSearchTerm = searchTerm.trim();
+    // The URL initializer already seeded the debounced value. Do not treat
+    // that initial synchronization as a new filter and reset a restored page.
+    if (nextSearchTerm === debouncedSearchTerm) return undefined;
     const t = setTimeout(() => {
       setPage(1);
-      setDebouncedSearchTerm(searchTerm.trim());
+      setDebouncedSearchTerm(nextSearchTerm);
     }, 300);
     return () => clearTimeout(t);
-  }, [searchTerm]);
+  }, [debouncedSearchTerm, searchTerm]);
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
   // dynamic field-picker + operator + checkbox-values panel, separate from
   // the fixed dropdowns above. Applied server-side via ?filters=<JSON>
   // (backend/routes/contacts.js FILTERABLE_FIELDS) so it isn't bounded by
   // the same-page 500-row client cap the way the dropdowns above are.
-  const [advancedFilters, setAdvancedFilters] = useState([]);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [advancedFilters, setAdvancedFilters] = useState(() => {
+    try { return JSON.parse(contactParams.get('filters') || '[]'); } catch { return []; }
+  });
+  const [sortConfig, setSortConfig] = useState(() => ({
+    key: contactParams.get('sortBy') || null,
+    direction: contactParams.get('sortDirection') || null,
+  }));
+  const urlSyncRef = useRef({ written: null, applying: false, initialized: false });
+
+  // Keep the complete list view in the URL so opening a contact and browser
+  // Back/Forward restore the same server-side result set. The URL is also the
+  // durable source when this component remounts after a detail/preview route.
+  useEffect(() => {
+    const serialized = contactParams.toString();
+    if (!urlSyncRef.current.initialized) {
+      urlSyncRef.current.initialized = true;
+      return;
+    }
+    if (urlSyncRef.current.written === serialized) {
+      urlSyncRef.current.written = null;
+      return;
+    }
+    urlSyncRef.current.applying = true;
+    setPage(Math.max(1, Number(contactParams.get('page')) || 1));
+    setPageSize(Math.max(1, Number(contactParams.get('limit')) || 10));
+    setSearchTerm(contactParams.get('q') || '');
+    setStatusFilter(contactParams.get('status') || 'All');
+    setAssignedToFilter(contactParams.get('unassigned') === 'true' ? 'unassigned' : (contactParams.get('assignedToId') || ''));
+    const min = contactParams.get('scoreMin');
+    const max = contactParams.get('scoreMax');
+    setScoreFilter(min && max ? `${min}-${max}` : '');
+    setActiveViewId(contactParams.get('viewId') || null);
+    try { setAdvancedFilters(JSON.parse(contactParams.get('filters') || '[]')); } catch { setAdvancedFilters([]); }
+    setSortConfig({ key: contactParams.get('sortBy') || null, direction: contactParams.get('sortDirection') || null });
+  }, [contactParams, setContactParams]);
+
+  useEffect(() => {
+    if (urlSyncRef.current.applying) {
+      urlSyncRef.current.applying = false;
+      return;
+    }
+    const next = new URLSearchParams();
+    next.set('page', String(page));
+    next.set('limit', String(pageSize));
+    if (searchTerm.trim()) next.set('q', searchTerm.trim());
+    if (statusFilter !== 'All') next.set('status', statusFilter);
+    if (assignedToFilter === 'unassigned') next.set('unassigned', 'true');
+    else if (assignedToFilter) next.set('assignedToId', assignedToFilter);
+    const scoreBucket = CONTACTS_SCORE_BUCKETS.find(bucket => bucket.value === scoreFilter);
+    if (scoreBucket) {
+      next.set('scoreMin', String(scoreBucket.min));
+      next.set('scoreMax', String(scoreBucket.max));
+    }
+    if (activeViewId != null) next.set('viewId', String(activeViewId));
+    if (advancedFilters.length) next.set('filters', JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
+    if (sortConfig.key && sortConfig.direction) {
+      next.set('sortBy', sortConfig.key);
+      next.set('sortDirection', sortConfig.direction);
+    }
+    if (next.toString() !== contactParams.toString()) {
+      urlSyncRef.current.written = next.toString();
+      setContactParams(next);
+    }
+  }, [activeViewId, advancedFilters, assignedToFilter, contactParams, page, pageSize, searchTerm, scoreFilter, setContactParams, sortConfig.direction, sortConfig.key, statusFilter]);
   const [columnLayout, setColumnLayout] = useState(() => {
     if (typeof window === 'undefined') return { widths: {} };
     try {
@@ -1217,37 +1167,9 @@ const Contacts = () => {
           }}
         >
           <div style={{ minWidth: 0, flex: 1 }}>
-            {isTravel ? (
-              <button
-                type="button"
-                onClick={() => openContactPreview(contact)}
-                aria-label={`Preview contact ${contact.name || contact.email || ''}`}
-                style={{
-                  color: 'var(--text-primary)',
-                  textDecoration: 'none',
-                  display: 'block',
-                  width: '100%',
-                  padding: 0,
-                  border: 0,
-                  background: 'transparent',
-                  textAlign: 'left',
-                  font: 'inherit',
-                  pointerEvents: 'all',
-                  position: 'relative',
-                  zIndex: 10,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontWeight: 600,
-                }}
-                className="hover-underline"
-              >
-                {contact.name || 'Unnamed contact'}
-              </button>
-            ) : (
-              <Link
-                to={`/contacts/${contact.id}`}
+            <Link
+                to={`${isTravel ? `/travel/leads/${contact.id}` : `/contacts/${contact.id}`}${location.search}`}
+                state={location.search ? { backTo: `/contacts${location.search}`, backLabel: 'Back to Contacts' } : (isTravel ? { backTo: '/contacts', backLabel: 'Back to Contacts' } : undefined)}
                 style={{
                   color: 'var(--text-primary)',
                   textDecoration: 'none',
@@ -1261,8 +1183,7 @@ const Contacts = () => {
                 className="hover-underline"
               >
                 {contact.name || 'Unnamed contact'}
-              </Link>
-            )}
+            </Link>
             <div
               style={{
                 fontSize: '0.75rem',
@@ -1827,7 +1748,7 @@ const Contacts = () => {
               {total === 0 ? 'No contacts' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
             </span>
             <select className="input-field" aria-label="Contacts per page" value={pageSize} onChange={e => { setPageSize(parseInt(e.target.value) || 10); setPage(1); }} style={{ padding: '0.2rem 0.35rem', fontSize: '0.75rem', borderRadius: '7px', width: 'auto' }}>
-              {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
+              {[5, 10, 20, 25, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
             </select>
             <button className="btn-secondary" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage(p => Math.max(p - 1, 1))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: page <= 1 ? 0.45 : 1, cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{page} / {totalPages}</span>
@@ -2051,7 +1972,7 @@ const Contacts = () => {
                     setPage(1);
                   }}
                 >
-                  {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                  {[5, 10, 20, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}
                 </select>
               </div>
               <div className="contacts-pagination-navigation">
@@ -2362,25 +2283,6 @@ const Contacts = () => {
         />
       )}
 
-      <ContactPreviewDrawer
-        contact={previewContact}
-        loading={previewLoading}
-        onClose={closeContactPreview}
-        onEdit={() => {
-          setEditingContact(previewContact);
-          closeContactPreview();
-        }}
-        onConvert={convertPreviewToProspect}
-        onOpenFullDetail={() => {
-          const path = isTravel ? `/travel/leads/${previewContact?.id}` : `/contacts/${previewContact?.id}`;
-          navigate(path, {
-            state: {
-              backTo: isTravel ? "/contacts" : "/contacts",
-              backLabel: "Back to Contacts",
-            },
-          });
-        }}
-      />
     </div>
   );
 };

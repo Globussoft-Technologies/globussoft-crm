@@ -377,8 +377,8 @@ describe('GET /api/travel/reports/tmc — happy path', () => {
     // topDestinations sorted by revenue DESC. Bali aggregates to $4000;
     // Singapore is $5000 → Singapore first.
     expect(res.body.revenue.topDestinations).toEqual([
-      { destination: 'Singapore', revenue: 5000 },
-      { destination: 'Bali', revenue: 4000 },
+      { destination: 'Singapore', revenue: 5000, tripId: 2, tripCode: null, tripCount: 1 },
+      { destination: 'Bali', revenue: 4000, tripId: 1, tripCode: null, tripCount: 2 },
     ]);
     expect(res.body.revenue.currency).toBe('INR');
   });
@@ -399,7 +399,7 @@ describe('GET /api/travel/reports/tmc — happy path', () => {
     expect(res.status).toBe(200);
     expect(res.body.revenue.total).toBe(500000);
     expect(res.body.revenue.topDestinations).toEqual([
-      { destination: 'Australia', revenue: 500000 },
+      { destination: 'Australia', revenue: 500000, tripId: 101, tripCode: null, tripCount: 1 },
     ]);
   });
 
@@ -777,6 +777,50 @@ describe('GET /api/travel/reports/cross-brand — happy path', () => {
 });
 
 // ─── Error path ────────────────────────────────────────────────────
+
+describe('GET /api/travel/reports/trends — date grouping + sub-brand drill-down', () => {
+  test('groups daily rows and scopes each source query to the tenant and allowed brands', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc', 'rfu']),
+    });
+    prisma.travelQuote.findMany.mockResolvedValue([
+      { subBrand: 'tmc', status: 'Accepted', totalAmount: 125000, createdAt: new Date('2026-07-03T10:00:00Z') },
+      { subBrand: 'tmc', status: 'Draft', totalAmount: 50000, createdAt: new Date('2026-07-03T11:00:00Z') },
+    ]);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { subBrand: 'rfu', status: 'CONFIRMED', totalAmount: 90000, createdAt: new Date('2026-07-04T10:00:00Z') },
+    ]);
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { subBrand: 'tmc', createdAt: new Date('2026-07-03T12:00:00Z') },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/trends?from=2026-07-01&to=2026-07-31&groupBy=daily')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.groupBy).toBe('daily');
+    expect(res.body.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ period: '2026-07-03', subBrand: 'tmc', quotes: 2, acceptedQuotes: 1, quoteRevenue: 125000, diagnostics: 1 }),
+      expect.objectContaining({ period: '2026-07-04', subBrand: 'rfu', itineraries: 1, itineraryRevenue: 90000 }),
+    ]));
+    for (const model of [prisma.travelQuote, prisma.itinerary, prisma.travelDiagnostic]) {
+      expect(model.findMany.mock.calls[0][0].where).toMatchObject({
+        tenantId: 1,
+        subBrand: { in: ['tmc', 'rfu'] },
+      });
+    }
+  });
+
+  test('falls back to monthly for an unsupported grouping', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/reports/trends?groupBy=quarterly')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.groupBy).toBe('monthly');
+  });
+});
 
 describe('travel_reports — error path', () => {
   test('TMC: prisma throws → 500 with "Failed to compute TMC report"; no DB-msg leak', async () => {

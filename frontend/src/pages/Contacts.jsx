@@ -1102,6 +1102,7 @@ const Contacts = () => {
           <div style={{ minWidth: 0, flex: 1 }}>
             <Link
                 to={isTravel ? `/travel/leads/${contact.id}` : `/contacts/${contact.id}`}
+                state={isTravel ? { backTo: '/contacts', backLabel: 'Back to Contacts' } : undefined}
                 style={{
                   color: 'var(--text-primary)',
                   textDecoration: 'none',

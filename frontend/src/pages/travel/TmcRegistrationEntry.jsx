@@ -31,6 +31,9 @@ export default function TmcRegistrationEntry() {
         const query = new URLSearchParams({ next });
         if (data.tenantSlug) query.set("tenantSlug", data.tenantSlug);
         if (data.registrationType === "TEACHER") query.set("tmcRole", "TEACHER");
+        // Keep the opaque landing-page draft handle so the shared form can
+        // fetch the server-side name/email captured before payment.
+        if (params.get("draftToken")) query.set("draftToken", params.get("draftToken"));
         window.location.replace(`/customer/register?${query.toString()}`);
       } catch (err) {
         if (alive) setError(err.message || "Unable to open this registration link.");

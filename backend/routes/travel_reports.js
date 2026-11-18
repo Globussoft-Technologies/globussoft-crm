@@ -411,7 +411,15 @@ function drawPdfMetricCards(doc, metrics) {
     doc.roundedRect(x, y, w, h, 6).fillAndStroke("#f7f9fc", "#d8deea");
     doc.restore();
     doc.font("Helvetica-Bold").fontSize(8).fillColor("#5f6b7a").text(String(metric.label).toUpperCase(), x + 10, y + 10, { width: w - 20, lineBreak: false, ellipsis: true });
-    doc.font("Helvetica-Bold").fontSize(15).fillColor(metric.negative ? "#dc2626" : "#132238").text(String(metric.value), x + 10, y + 27, { width: w - 20, lineBreak: false, ellipsis: true });
+    const valueText = String(metric.value ?? "");
+    // Keep long labels (notably TMC's top destination) inside the fixed
+    // 56px card instead of allowing PDFKit to wrap below the card boundary.
+    const maxValueChars = 22;
+    const compactValue = valueText.length > maxValueChars
+      ? `${valueText.slice(0, maxValueChars - 1)}…`
+      : valueText;
+    const valueSize = compactValue.length > 18 ? 11 : 15;
+    doc.font("Helvetica-Bold").fontSize(valueSize).fillColor(metric.negative ? "#dc2626" : "#132238").text(compactValue, x + 10, y + 27, { width: w - 20, height: 20, lineBreak: false, ellipsis: true });
     x += w + gap;
   });
   doc.y = y + h + 10;
@@ -679,13 +687,14 @@ async function quoteAgentActivityBySubBrand(tenantId, subBrand, dateRange = null
 // originating diagnostic, which TmcTrip doesn't link directly — we approximate
 // by Deal.subBrand='tmc' joined to Deal.diagnosticId.
 
-async function buildTmcReport(tenantId, dateRange = null) {
+async function buildTmcReport(tenantId, dateRange = null, tripId = null) {
     // All trips, separated by status: active = confirmed | in-trip | completed.
     // cancelled trips are excluded from revenue totals.
     const ACTIVE_STATUSES = ["confirmed", "in-trip", "completed"];
 
     const tripWhere = { tenantId };
     if (dateRange) tripWhere.createdAt = dateRange;
+    if (tripId != null) tripWhere.id = tripId;
     const activeWhere = { ...tripWhere, status: { in: ACTIVE_STATUSES } };
     const dealWhere = { tenantId, subBrand: "tmc", deletedAt: null };
     if (dateRange) dealWhere.createdAt = dateRange;
@@ -877,7 +886,9 @@ router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) =>
       return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
     }
     const dateRange = parseDateRange(req);
-    res.json(await buildTmcReport(req.travelTenant.id, dateRange));
+    const requestedTripId = req.query.tripId == null ? null : Number(req.query.tripId);
+    const tripId = Number.isInteger(requestedTripId) && requestedTripId > 0 ? requestedTripId : null;
+    res.json(await buildTmcReport(req.travelTenant.id, dateRange, tripId));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] TMC error:", e.message);
@@ -1135,17 +1146,21 @@ router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req,
 });
 
 // ── PDF export ─────────────────────────────────────────────────────
-// GET /api/travel/reports/export-pdf?tab=tmc|rfu|cross-brand
+// GET /api/travel/reports/export-pdf?tab=overview|tmc|rfu|cross-brand|brand-tours|agents|leads
 // Renders the chosen report tab as a branded, tabular PDF — the travel-side
 // equivalent of the (now generic-only) /api/reports/export-pdf. Sub-brand
 // access is enforced exactly like the JSON endpoints.
 router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, res) => {
+  let doc = null;
   try {
     const requestedTab = String(req.query.tab || "overview");
-    const tab = ["overview", "tmc", "rfu", "cross-brand"].includes(requestedTab) ? requestedTab : "overview";
+    const supportedTabs = ["overview", "tmc", "rfu", "cross-brand", "brand-tours", "agents", "leads"];
+    const tab = supportedTabs.includes(requestedTab) ? requestedTab : "overview";
     const allowed = await getSubBrandAccessSet(req.user.userId);
     const tenantId = req.travelTenant.id;
     const dateRange = parseDateRange(req);
+    const requestedTripId = req.query.tripId == null ? null : Number(req.query.tripId);
+    const tripId = Number.isInteger(requestedTripId) && requestedTripId > 0 ? requestedTripId : null;
     if (tab === "tmc" && !canAccessSubBrand(allowed, "tmc")) {
       return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
     }
@@ -1153,7 +1168,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       return res.status(403).json({ error: "RFU sub-brand access required", code: "SUB_BRAND_DENIED" });
     }
 
-    const doc = new PDFDocument({ margin: 50, size: "A4", bufferPages: true });
+    doc = new PDFDocument({ margin: 50, size: "A4", bufferPages: true });
     // Embed Poppins (has the ₹ glyph) so currency renders — built-in Helvetica
     // prints "¹". Skipped under test for text-extraction simplicity; mirrors the
     // quote-PDF approach. Cache-bust the pre-cached default so the swap takes.
@@ -1176,7 +1191,15 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
     res.setHeader("Content-Disposition", `attachment; filename=travel-${tab}-report.pdf`);
     doc.pipe(res);
 
-    const TITLES = { overview: "Complete Travel Report", tmc: "TMC - School Trips", rfu: "RFU - Umrah", "cross-brand": "Cross-brand Performance" };
+    const TITLES = {
+      overview: "Complete Travel Report",
+      tmc: "TMC - School Trips",
+      rfu: "RFU - Umrah",
+      "cross-brand": "Cross-brand Performance",
+      "brand-tours": "Brand Tours",
+      agents: "Agent Performance",
+      leads: "Lead Engagement",
+    };
     const tenantName = req.travelTenant?.name || req.travelTenant?.slug || "Travel CRM";
     const period = reportPeriodLabel(dateRange);
     drawPdfHeader(doc, {
@@ -1288,7 +1311,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
         amountTable("RFU Itinerary Revenue by Status", "Status", rfuData.itineraries.byStatus, rfuData.itineraries.amountByStatus);
       }
     } else if (tab === "tmc") {
-      const d = await buildTmcReport(tenantId, dateRange);
+      const d = await buildTmcReport(tenantId, dateRange, tripId);
       kpiTable([
         ["Revenue", inr(d.revenue.total)],
         ["Active Trips", String(d.trips.active)],
@@ -1328,10 +1351,10 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
         ["Itinerary Revenue", inr(itineraryRevenue)],
         ["Accepted Quote Value", inr(quoteRevenue)],
         ["Collected", inr(collected)],
-        { label: "Itineraries", value: String(d.itineraries.total), note: "All statuses", accent: REPORT_COLORS.navy },
-        { label: "Customers", value: String(d.customers.unique), note: `Repeat Customers ${d.customers.repeat}`, accent: REPORT_COLORS.navy },
-        { label: "Repeat rate", value: `${d.customers.repeatRatePct}%`, note: "Returning customers", accent: REPORT_COLORS.navy },
-        { label: "Quote volume", value: String(Object.values(d.quotes.byStatus || {}).reduce((sum, n) => sum + Number(n || 0), 0)), note: "All quote statuses", accent: REPORT_COLORS.navy },
+        ["Itineraries", String(d.itineraries.total)],
+        ["Customers", String(d.customers.unique)],
+        ["Repeat rate", `${d.customers.repeatRatePct}%`],
+        ["Quote volume", String(Object.values(d.quotes.byStatus || {}).reduce((sum, n) => sum + Number(n || 0), 0))],
       ]);
 
       tableSection("Itinerary Revenue Source Detail", [
@@ -1364,7 +1387,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       amountTable("Itinerary Revenue by Status", "Status", d.itineraries.byStatus, d.itineraries.amountByStatus);
       countTable("Diagnostics by Package Fit", d.diagnostics.byTier, "Package fit");
       countTable("Diagnostics by Lead Type", d.diagnostics.byClassification, "Lead type");
-    } else {
+    } else if (tab === "cross-brand") {
       const d = await buildCrossBrandReport(tenantId, allowed, dateRange);
       const agentProductivity = await agentProductivitySummary(req, allowed, dateRange);
       const brands = Object.entries(d.subBrands || {});
@@ -1401,11 +1424,73 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       for (const [b, m] of brands) {
         amountTable(`${SUB_BRAND_LABEL[b] || reportHumanize(b)} - Legacy Deals by Stage`, "Stage", m.dealsByStage, m.dealAmountByStage);
       }
+    } else if (tab === "brand-tours") {
+      const d = await buildBrandTourReport(req, allowed, dateRange);
+      kpiTable([
+        ["Tours", String(d.summary.totalTours)],
+        ["Revenue", inr(d.summary.totalRevenue)],
+        ["Sub-brands", String(d.summary.brandCount)],
+        ["Destinations", String(d.summary.destinationCount)],
+      ]);
+      tableSection("Brand Tour Performance", [
+        { header: "Sub-brand", width: 95 }, { header: "Destination", width: 145 },
+        { header: "Tours", width: 48, align: "right" }, { header: "Pax", width: 48, align: "right" },
+        { header: "Accepted", width: 62, align: "right" }, { header: "Revenue", width: 97, align: "right" },
+      ], (d.rows || []).map((r) => [
+        SUB_BRAND_LABEL[r.subBrand] || reportHumanize(r.subBrand),
+        r.destination || "-",
+        String(r.tourCount || 0),
+        String(r.totalPax || 0),
+        String(r.acceptedCount || 0),
+        inr(r.revenue || 0),
+      ]), "Tours are grouped by sub-brand and destination.");
+    } else if (tab === "agents") {
+      const d = await buildAgentReport(req, allowed, dateRange);
+      kpiTable([
+        ["Active Agents", String(d.summary.activeAgents)],
+        ["Actions", String(d.summary.totalActions)],
+        ["Created Quotes", String(d.summary.totalCreatedQuotes)],
+        ["Collected", inr(d.summary.totalCollected)],
+      ]);
+      agentPerformanceTable("Agent Performance", d.rows || []);
+    } else if (tab === "leads") {
+      const d = await buildLeadReport(req, allowed, dateRange);
+      kpiTable([
+        ["Leads", String(d.summary.leads)],
+        ["Active Leads", String(d.summary.activeLeads)],
+        ["Quotes", String(d.summary.totalQuotes)],
+        ["Itineraries", String(d.summary.totalItineraries)],
+        ["Diagnostics", String(d.summary.totalDiagnostics)],
+        ["Touchpoints", String(d.summary.totalTouchpoints)],
+      ]);
+      tableSection("Lead Engagement", [
+        { header: "Lead", width: 125 }, { header: "Sub-brand", width: 80 },
+        { header: "Status", width: 65 }, { header: "Quotes", width: 48, align: "right" },
+        { header: "Itins", width: 45, align: "right" }, { header: "Diagnostics", width: 62, align: "right" },
+        { header: "Activity", width: 70, align: "right" },
+      ], (d.rows || []).map((r) => [
+        r.leadName || r.email || `Lead #${r.contactId}`,
+        SUB_BRAND_LABEL[r.subBrand] || reportHumanize(r.subBrand),
+        reportHumanize(r.status),
+        String(r.quoteCount || 0),
+        String(r.itineraryCount || 0),
+        String(r.diagnosticCount || 0),
+        String(Number(r.touchpointCount || 0) + Number(r.activityCount || 0)),
+      ]), "Engagement counts are filtered to the selected date range.");
     }
 
     doc.end();
   } catch (e) {
     console.error("[travel-reports] export-pdf error:", e.message);
+    // PDFKit pipes headers/body as soon as the document is created. Once the
+    // stream has started, a JSON error response would trigger
+    // ERR_HTTP_HEADERS_SENT and crash the backend. Terminate the PDF stream
+    // instead; callers already receive a failed/incomplete download.
+    if (res.headersSent) {
+      if (doc && !doc.destroyed) doc.destroy();
+      if (!res.writableEnded) res.end();
+      return;
+    }
     res.status(500).json({ error: "Failed to generate report PDF" });
   }
 });

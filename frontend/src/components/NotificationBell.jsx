@@ -9,6 +9,7 @@ import { Bell, Check, CheckCheck, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import { fetchApi } from "../utils/api";
+import { resolveNotificationLink } from "../utils/notificationLinks";
 import { AuthContext } from "../App";
 
 const getNotificationTime = (notification) => {
@@ -28,7 +29,8 @@ const PAGE_SIZE = 25;
 
 const NotificationBell = () => {
   const navigate = useNavigate();
-  const { user } = useContext(AuthContext);
+  const { user, tenant } = useContext(AuthContext);
+  const tenantVertical = tenant?.vertical || user?.tenant?.vertical || user?.vertical || "generic";
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
@@ -401,8 +403,9 @@ const NotificationBell = () => {
                 title={`${n.title}\n${n.message}`}
                 onClick={() => {
                   if (!n.isRead) markAsRead(n.id);
-                  if (n.link) {
-                    navigate(n.link);
+                  const notificationLink = resolveNotificationLink(n, tenantVertical);
+                  if (notificationLink) {
+                    navigate(notificationLink);
                     setOpen(false);
                   }
                 }}

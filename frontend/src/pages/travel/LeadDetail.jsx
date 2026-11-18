@@ -19,7 +19,8 @@ export default function LeadDetail() {
   const notify = useNotify();
   const [contact, setContact] = useState(null); const [contactError, setContactError] = useState(""); const [trips, setTrips] = useState([]); const [quotes, setQuotes] = useState([]); const [itineraries, setItineraries] = useState([]); const [activities, setActivities] = useState([]); const [paidAmounts, setPaidAmounts] = useState({}); const [tab, setTab] = useState("Trips"); const [editing, setEditing] = useState(false); const [note, setNote] = useState(""); const [editingNoteId, setEditingNoteId] = useState(null); const [terminalStage, setTerminalStage] = useState(""); const [terminalReason, setTerminalReason] = useState(""); const [terminalError, setTerminalError] = useState(""); const [savingStage, setSavingStage] = useState(false);
   const noteInputRef = useRef(null);
-  const backTo = location.state?.backTo || "/leads"; const backLabel = location.state?.backLabel || "Back to Leads";
+  const leadsReturnTo = location.search ? `/leads${location.search}` : "/leads";
+  const backTo = location.state?.returnTo || location.state?.backTo || leadsReturnTo; const backLabel = location.state?.backLabel || "Back to Leads";
   useEffect(() => {
     let mounted = true;
     setContact(null);

@@ -3158,7 +3158,9 @@ router.put(
             category: "lead",
             entityType: "lead",
             entityId: row.id,
-            link: "/contacts/" + row.id,
+            link:
+              (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
+              row.id,
             io: req.io,
           });
         } catch (notifyErr) {
@@ -4200,7 +4202,9 @@ router.put("/:id/assign", requireContactOrLeadUpdate, async (req, res) => {
           category: "lead",
           entityType: "lead",
           entityId: contact.id,
-          link: "/contacts/" + contact.id,
+          link:
+            (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
+            contact.id,
           io: req.io,
         });
       } catch (notifyErr) {

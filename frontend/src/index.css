@@ -7043,7 +7043,26 @@ body[data-vertical="travel"]
   tbody
   tr:hover
   td {
-  background: var(--surface-hover);
+  background: var(--surface-color) !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+/* The Travel Leads data grid is an interaction surface, not a promotional
+   card. Keep the whole card stationary and suppress the global card shimmer. */
+body[data-vertical="travel"] .leads-page-root .travel-leads-table-card,
+body[data-vertical="travel"] .leads-page-root .travel-leads-table-card:hover {
+  transform: none !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+  border-color: var(--border-color) !important;
+  transition: none !important;
+}
+
+body[data-vertical="travel"] .leads-page-root .travel-leads-table-card::before,
+body[data-vertical="travel"]
+  .leads-page-root
+  .travel-leads-table-card:hover::before {
+  display: none !important;
 }
 
 /* Keep long source labels inside their pill instead of letting the nested

@@ -49,9 +49,9 @@ function makeFetchImpl({ contact = CONTACT, trips = [TRIP], quotes = [], itinera
   };
 }
 
-function renderPage() {
+function renderPage({ state, search = '' } = {}) {
   return render(
-    <MemoryRouter initialEntries={["/travel/leads/77"]}>
+    <MemoryRouter initialEntries={[{ pathname: "/travel/leads/77", search, state }]}>
       <Routes>
         <Route path="/travel/leads/:contactId" element={<LeadDetail />} />
         <Route path="/travel/quotes/builder" element={<div>Quote builder</div>} />
@@ -75,6 +75,23 @@ describe("LeadDetail", () => {
     expect(screen.getByText("goa-jan-2026")).toBeTruthy();
     expect(screen.getAllByText("₹5,000").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("confirmed")).toBeTruthy();
+  });
+
+  it("uses Contacts as the back destination when opened from Contacts", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ state: { backTo: "/contacts", backLabel: "Back to Contacts" } });
+
+    expect(await screen.findByRole("link", { name: /Back to Contacts/i })).toHaveAttribute("href", "/contacts");
+  });
+
+  it("preserves the Leads query string in the fallback Back link", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ search: "?page=3&limit=25&q=school&sortBy=name&sortDirection=desc" });
+
+    expect(await screen.findByRole("link", { name: /Back to Leads/i })).toHaveAttribute(
+      "href",
+      "/leads?page=3&limit=25&q=school&sortBy=name&sortDirection=desc",
+    );
   });
 
   it("shows the recorded paid amount in the All trips table", async () => {

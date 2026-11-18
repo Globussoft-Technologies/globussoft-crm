@@ -74,6 +74,14 @@ export default function TravelReports() {
   const [customTo, setCustomTo] = useState("");
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportTab, setExportTab] = useState(tab);
+  const [exportDatePreset, setExportDatePreset] = useState(datePreset);
+  const [exportFrom, setExportFrom] = useState(customFrom);
+  const [exportTo, setExportTo] = useState(customTo);
+  const [exportScope, setExportScope] = useState("summary");
+  const [exportTripId, setExportTripId] = useState("");
+  const [exportTrips, setExportTrips] = useState([]);
   const { activeSubBrand } = useActiveSubBrand();
   const isTmc = activeSubBrand === "tmc";
 
@@ -86,19 +94,57 @@ export default function TravelReports() {
 
   // Download the ACTIVE tab as a branded, tabular PDF. Raw fetch (not fetchApi)
   // because we need the binary blob + auth header, mirroring Reports.jsx.
+  const exportDateParams = useMemo(() => exportDatePreset === "custom"
+    ? { from: exportFrom, to: exportTo }
+    : getPresetRange(exportDatePreset), [exportDatePreset, exportFrom, exportTo]);
+
+  useEffect(() => {
+    if (!exportDialogOpen || exportTab !== "tmc") return;
+    const query = new URLSearchParams({ fields: "summary", limit: "200" });
+    if (exportDateParams.from) query.set("from", exportDateParams.from);
+    if (exportDateParams.to) query.set("to", exportDateParams.to);
+    fetchApi(`/api/travel/trips?${query.toString()}`)
+      .then((response) => {
+        const trips = Array.isArray(response?.trips) ? response.trips : (Array.isArray(response) ? response : []);
+        // The list endpoint may be older than the date-filter contract, so
+        // enforce the selected report period in the picker as well. Reports
+        // use createdAt for their date range; keep the same semantics here.
+        const filtered = trips.filter((trip) => {
+          const createdAt = new Date(trip.createdAt);
+          if (Number.isNaN(createdAt.getTime())) return false;
+          if (exportDateParams.from && createdAt < new Date(`${exportDateParams.from}T00:00:00`)) return false;
+          if (exportDateParams.to && createdAt > new Date(`${exportDateParams.to}T23:59:59.999`)) return false;
+          return true;
+        });
+        setExportTrips(filtered);
+      })
+      .catch(() => setExportTrips([]));
+  }, [exportDialogOpen, exportTab, exportDateParams.from, exportDateParams.to]);
+
+  const openExportDialog = () => {
+    setExportTab(tab);
+    setExportDatePreset(datePreset);
+    setExportFrom(customFrom);
+    setExportTo(customTo);
+    setExportScope("summary");
+    setExportTripId("");
+    setExportDialogOpen(true);
+  };
+
   const downloadPdf = () => {
     setExporting(true);
+    setExportDialogOpen(false);
     const token = getAuthToken();
-    const exportTab = "overview";
     const q = new URLSearchParams({ tab: exportTab });
-    if (dateParams.from) q.set("from", dateParams.from);
-    if (dateParams.to) q.set("to", dateParams.to);
+    if (exportDateParams.from) q.set("from", exportDateParams.from);
+    if (exportDateParams.to) q.set("to", exportDateParams.to);
+    if (exportTab === "tmc" && exportScope === "trip" && exportTripId) q.set("tripId", exportTripId);
     fetch(`/api/travel/reports/export-pdf?${q.toString()}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => { if (!res.ok) throw new Error("PDF export failed"); return res.blob(); })
       .then((blob) => {
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
-        link.download = "travel-report.pdf";
+        link.download = `travel-${exportTab}${exportScope === "trip" ? `-trip-${exportTripId}` : ""}-report.pdf`;
         link.click();
         URL.revokeObjectURL(link.href);
       })
@@ -119,7 +165,7 @@ export default function TravelReports() {
         </div>
         <button
           type="button"
-          onClick={downloadPdf}
+          onClick={openExportDialog}
           disabled={exporting}
           style={{
             display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 16px",
@@ -204,11 +250,77 @@ export default function TravelReports() {
       {tab === "brand-tours" && <BrandToursTab dateParams={dateParams} />}
       {tab === "agents" && <AgentsTab dateParams={dateParams} />}
       {tab === "leads" && <LeadsTab dateParams={dateParams} />}
+      {exportDialogOpen && (
+        <div role="presentation" onClick={() => setExportDialogOpen(false)} style={exportOverlay}>
+          <div role="dialog" aria-modal="true" aria-labelledby="export-report-title" onClick={(event) => event.stopPropagation()} style={exportDialog}>
+            <h2 id="export-report-title" style={{ margin: 0, fontSize: 18 }}>Download PDF report</h2>
+            <p style={{ margin: "6px 0 16px", color: "var(--text-secondary)", fontSize: 13 }}>Choose the report type and period to include.</p>
+            <label style={exportField}>Report type
+              <select value={exportTab} onChange={(event) => { setExportTab(event.target.value); setExportScope("summary"); setExportTripId(""); }} style={filterSelect}>
+                <option value="overview">All reports</option>
+                {TABS.filter((item) => item.key !== "overview").map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+              </select>
+            </label>
+            <label style={exportField}>Period
+              <select value={exportDatePreset} onChange={(event) => setExportDatePreset(event.target.value)} style={filterSelect}>
+                {DATE_PRESETS.map((preset) => <option key={preset.key} value={preset.key}>{preset.label}</option>)}
+              </select>
+            </label>
+            {exportDatePreset === "custom" && <div style={{ display: "flex", gap: 10 }}>
+              <label style={exportField}>From<input type="date" value={exportFrom} onChange={(event) => setExportFrom(event.target.value)} style={filterInput} /></label>
+              <label style={exportField}>To<input type="date" value={exportTo} onChange={(event) => setExportTo(event.target.value)} style={filterInput} /></label>
+            </div>}
+            {exportTab === "tmc" && <>
+              <label style={exportField}>Scope
+                <select value={exportScope} onChange={(event) => setExportScope(event.target.value)} style={filterSelect}>
+                  <option value="summary">All TMC trips</option><option value="trip">Particular trip</option>
+                </select>
+              </label>
+              {exportScope === "trip" && <label style={exportField}>Trip
+                <TripPicker trips={exportTrips} value={exportTripId} onChange={setExportTripId} />
+              </label>}
+            </>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
+              <button type="button" onClick={() => setExportDialogOpen(false)} style={exportCancelButton}>Cancel</button>
+              <button type="button" disabled={exportTab === "tmc" && exportScope === "trip" && !exportTripId} onClick={downloadPdf} style={exportConfirmButton}>Download PDF</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Shared loader + error chrome ──────────────────────────────────
+
+function TripPicker({ trips, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const selected = trips.find((trip) => String(trip.id) === String(value));
+  const filteredTrips = trips.filter((trip) => `${trip.tripCode || ""} ${trip.destination || ""}`.toLowerCase().includes(search.trim().toLowerCase()));
+  return (
+    <div style={{ position: "relative" }}>
+      {open ? (
+        <div style={{ display: "flex", gap: 8 }}>
+          <input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search trips..." aria-label="Search trips" style={{ ...filterInput, flex: 1, minWidth: 0 }} />
+          <button type="button" onClick={() => { setSearch(""); setOpen(false); }} style={tripPickerCancel}>Cancel</button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => { setSearch(""); setOpen(true); }} aria-haspopup="listbox" aria-expanded={open} style={{ ...filterSelect, width: "100%", textAlign: "left", cursor: "pointer" }}>
+          {selected ? `${selected.tripCode || `Trip #${selected.id}`} — ${selected.destination || "Untitled"}` : "Select a trip"}
+        </button>
+      )}
+      {open && <div role="listbox" aria-label="Trips" style={tripPickerMenu}>
+        {filteredTrips.length === 0 && <div style={tripPickerEmpty}>No matching trips</div>}
+        {filteredTrips.map((trip) => (
+          <button type="button" role="option" aria-selected={String(trip.id) === String(value)} key={trip.id} onClick={() => { onChange(String(trip.id)); setOpen(false); }} style={tripPickerOption}>
+            {trip.tripCode || `Trip #${trip.id}`} — {trip.destination || "Untitled"}
+          </button>
+        ))}
+      </div>}
+    </div>
+  );
+}
 
 function useReport(path, params = null) {
   const notify = useNotify();
@@ -1656,6 +1768,21 @@ const filterInput = {
   border: "1px solid var(--border-color)", outline: "none",
   minWidth: 130,
 };
+const exportOverlay = {
+  position: "fixed", inset: 0, zIndex: 1000, background: "rgba(15, 23, 42, 0.45)",
+  display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+};
+const exportDialog = {
+  width: "min(100%, 460px)", background: "var(--modal-bg, #ffffff)", borderRadius: 16,
+  padding: 24, maxHeight: "calc(100vh - 32px)", overflowY: "auto", boxShadow: "0 24px 70px rgba(15, 23, 42, 0.25)", color: "var(--text-primary)",
+};
+const exportField = { display: "flex", flexDirection: "column", gap: 6, marginTop: 12, fontSize: 12, fontWeight: 700 };
+const exportCancelButton = { border: "1px solid var(--border-color, #d1d5db)", background: "transparent", borderRadius: 8, padding: "9px 14px", cursor: "pointer" };
+const exportConfirmButton = { border: 0, background: "var(--primary-color, #2563eb)", color: "#fff", borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontWeight: 700 };
+const tripPickerMenu = { marginTop: 4, maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--modal-bg, #fff)", boxShadow: "0 12px 24px rgba(0,0,0,.25)" };
+const tripPickerOption = { display: "block", width: "100%", padding: "9px 10px", border: 0, borderBottom: "1px solid var(--border-color)", background: "transparent", color: "var(--text-primary)", textAlign: "left", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const tripPickerEmpty = { padding: 10, color: "var(--text-secondary)", fontSize: 12 };
+const tripPickerCancel = { border: "1px solid var(--border-color)", borderRadius: 8, padding: "0 10px", background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: 12 };
 const tabStrip = {
   display: "flex", gap: 4, borderBottom: "1px solid var(--border-color)",
   marginBottom: 16, flexWrap: "wrap",

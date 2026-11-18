@@ -323,6 +323,29 @@ describe('<TravelReports /> — page chrome + tabs', () => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
   });
+
+  it('exports the active tab with the selected custom date range', async () => {
+    const blob = new Blob(['pdf'], { type: 'application/pdf' });
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(blob) });
+    vi.stubGlobal('fetch', fetchSpy);
+    if (!URL.createObjectURL) Object.defineProperty(URL, 'createObjectURL', { writable: true, value: () => 'blob:test' });
+    if (!URL.revokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { writable: true, value: () => {} });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    render(<TravelReports />);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('tab', { name: /Leads/i }));
+    fireEvent.change(screen.getByLabelText(/Date range/i), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-08-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /Download this report as PDF/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Download PDF$/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/travel/reports/export-pdf?tab=leads&from=2026-08-01&to=2026-08-31');
+    vi.restoreAllMocks();
+  });
 });
 
 describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {

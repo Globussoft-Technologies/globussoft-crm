@@ -58,6 +58,9 @@ function installCustomerRegisterFetch() {
     if (path.startsWith('/api/auth/public/tenants')) {
       return fetchResponse(TENANTS);
     }
+    if (path.startsWith('/api/portal/tmc/registration-context')) {
+      return fetchResponse({ prefill: { email: 'paid-parent@example.com', name: 'Paid Parent' } });
+    }
     if (path.startsWith('/api/auth/check-email')) {
       return fetchResponse({ exists: false });
     }
@@ -96,6 +99,26 @@ describe('<CustomerRegister /> organization autocomplete', () => {
       expect(orgInput).toBeDisabled();
     });
     expect(screen.queryByText(/No matching organizations found/i)).not.toBeInTheDocument();
+  });
+
+  it('fetches landing-page identity from the payment registration draft', async () => {
+    renderPage('/customer/register?next=%2Ftmc%2Fparent-portal&tenantSlug=travel-stall&draftToken=draft-123');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Email Address/i)).toHaveValue('paid-parent@example.com');
+      expect(screen.getByLabelText(/Full name/i)).toHaveValue('Paid Parent');
+    });
+    expect(global.fetch.mock.calls.some(([url]) => String(url).includes('draftToken=draft-123'))).toBe(true);
+  });
+
+  it('restores identity from the landing-page draft when the legacy redirect has no token', async () => {
+    localStorage.setItem('landing-registration-draft:tmc-trip', JSON.stringify({
+      regValues: { parent_email: 'legacy-parent@example.com', parent_name: 'Legacy Parent' },
+    }));
+    renderPage('/customer/register?next=%2Ftmc%2Fparent-portal&tenantSlug=travel-stall');
+
+    expect(await screen.findByLabelText(/Email Address/i)).toHaveValue('legacy-parent@example.com');
+    expect(screen.getByLabelText(/Full name/i)).toHaveValue('Legacy Parent');
   });
 
   it('does not rate a password as good before it reaches eight characters', async () => {

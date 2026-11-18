@@ -526,6 +526,34 @@ describe('<NotificationBell />', () => {
     await waitFor(() => expect(screen.queryByText('Linked')).not.toBeInTheDocument());
   });
 
+  it('opens legacy travel lead notification links on the travel lead detail page', async () => {
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({
+        notifications: [{
+          id: 34,
+          title: 'New lead assigned',
+          message: 'Zara was assigned to you',
+          type: 'info',
+          entityType: 'lead',
+          isRead: false,
+          link: '/contacts/111',
+          createdAt: new Date().toISOString(),
+        }],
+        total: 1,
+      });
+
+    renderWithAuth(<NotificationBell />, {
+      user: { id: 1, name: 'Travel Agent', tenant: { vertical: 'travel' } },
+    });
+
+    await user.click(await screen.findByRole('button', { name: /notifications/i }));
+    await user.click(await screen.findByText('New lead assigned'));
+
+    expect(navigateMock).toHaveBeenCalledWith('/travel/leads/111');
+  });
+
   it('#853: the footer does not expose a "View all notifications" button', async () => {
     const user = userEvent.setup();
     fetchApi

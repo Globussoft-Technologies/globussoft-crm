@@ -62,7 +62,7 @@ beforeEach(() => {
       const ids = where?.id?.in || [];
       return ids.map((id) => productMap.get(id)).filter(Boolean);
     }),
-    update: vi.fn().mockResolvedValue({ id: 200, currentStock: 49 }),
+    updateMany: vi.fn().mockResolvedValue({ count: 1 }),
   };
   prisma.visit = {
     findUnique: vi.fn(),
@@ -124,7 +124,7 @@ describe('lib/autoConsumptionApplier — applyAutoConsumptionForVisit', () => {
     expect(result.applied).toHaveLength(2);
     expect(result.skipped).toHaveLength(0);
     expect(prisma.serviceConsumption.create).toHaveBeenCalledTimes(2);
-    expect(prisma.product.update).toHaveBeenCalledTimes(2);
+    expect(prisma.product.updateMany).toHaveBeenCalledTimes(2);
   });
 
   test('accumulates fractional mL into partialMlUsed without decrementing stock', async () => {
@@ -134,7 +134,7 @@ describe('lib/autoConsumptionApplier — applyAutoConsumptionForVisit', () => {
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    const stockUpdate = prisma.product.updateMany.mock.calls[0][0];
     expect(stockUpdate.data.partialMlUsed).toBe(0.5);
     expect(stockUpdate.data.currentStock).toBeUndefined();
     const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
@@ -151,7 +151,7 @@ describe('lib/autoConsumptionApplier — applyAutoConsumptionForVisit', () => {
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    const stockUpdate = prisma.product.updateMany.mock.calls[0][0];
     expect(stockUpdate.data.currentStock.decrement).toBe(1);
     expect(stockUpdate.data.partialMlUsed).toBe(0);
   });
@@ -213,9 +213,9 @@ describe('lib/autoConsumptionApplier — start (eventBus listener)', () => {
 // Extension cases (Tick #N) — pin under-covered branches in applyAutoConsumptionForVisit
 // ─────────────────────────────────────────────────────────────────────────────
 describe('lib/autoConsumptionApplier — extended coverage', () => {
-  test('emits low-stock warning when consumed units take stock to <= 0', async () => {
-    // Cotton has currentStock=3, threshold=5; consume 5 units (volume=1 → 5 units deducted)
-    // → newStock = -2, must warn.
+  test('warns when usage is recorded but stock is insufficient', async () => {
+    // Cotton has currentStock=3; the 5-unit usage is recorded, but the stock
+    // guard must prevent a negative balance and report the mismatch.
     const drainRule = {
       ...RULES[1],
       quantityPerVisit: 5,
@@ -228,9 +228,10 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
         id: 7, serviceId: 100, tenantId: 1, status: 'completed',
       });
       expect(result.applied).toHaveLength(1);
-      // At least one console.warn call contains the low-stock signal.
+      expect(result.applied[0].stockUpdated).toBe(false);
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
       const lowStockCall = warnSpy.mock.calls.find((c) =>
-        typeof c[0] === 'string' && c[0].includes('[autoConsumption]') && c[0].includes('low-stock')
+        typeof c[0] === 'string' && c[0].includes('[autoConsumption]') && c[0].includes('INSUFFICIENT_STOCK')
       );
       expect(lowStockCall).toBeDefined();
       expect(lowStockCall[0]).toContain('Cotton');
@@ -246,15 +247,15 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
     expect(prisma.autoConsumptionRule.findMany).not.toHaveBeenCalled();
   });
 
-  test('applied[] entries carry { ruleId, productId, qty } shape', async () => {
+  test('applied[] entries include stock-update outcome alongside consumption details', async () => {
     prisma.autoConsumptionRule.findMany.mockResolvedValue(RULES);
     const result = await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
     expect(result.applied).toHaveLength(2);
     // qty is the raw consumedMl (rule.quantityPerVisit) — not unit count.
-    expect(result.applied[0]).toEqual({ ruleId: 1, productId: 200, qty: 1 });
-    expect(result.applied[1]).toEqual({ ruleId: 2, productId: 201, qty: 0.5 });
+    expect(result.applied[0]).toEqual({ ruleId: 1, productId: 200, qty: 1, stockUpdated: true });
+    expect(result.applied[1]).toEqual({ ruleId: 2, productId: 201, qty: 0.5, stockUpdated: true });
   });
 
   test('does NOT write audit log when applied.length === 0 (all rules failed)', async () => {
@@ -310,7 +311,7 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    const stockUpdate = prisma.product.updateMany.mock.calls[0][0];
     expect(stockUpdate.data.currentStock.decrement).toBe(2);
     const consumption = prisma.serviceConsumption.create.mock.calls[0][0];
     expect(consumption.data.qty).toBe(2);
@@ -349,7 +350,7 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
     expect(result.skipped).toHaveLength(1);
     expect(result.skipped[0].reason).toBe('PRODUCT_NOT_FOUND');
     expect(prisma.serviceConsumption.create).not.toHaveBeenCalled();
-    expect(prisma.product.update).not.toHaveBeenCalled();
+    expect(prisma.product.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -374,8 +375,8 @@ describe('lib/autoConsumptionApplier — unit conversion', () => {
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    const stockUpdate = prisma.product.update.mock.calls[0][0];
     // 15 ml → 0.015 ltr; no whole bottle consumed yet.
+    const stockUpdate = prisma.product.updateMany.mock.calls[0][0];
     expect(stockUpdate.data.partialMlUsed).toBeCloseTo(0.015, 5);
     expect(stockUpdate.data.currentStock).toBeUndefined();
     // ServiceConsumption row records the qty in the product's base unit.
@@ -398,8 +399,8 @@ describe('lib/autoConsumptionApplier — unit conversion', () => {
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    const stockUpdate = prisma.product.update.mock.calls[0][0];
     // 0.6 + 0.5 = 1.1 → one whole bottle deducted, 0.1 partial remaining.
+    const stockUpdate = prisma.product.updateMany.mock.calls[0][0];
     expect(stockUpdate.data.currentStock.decrement).toBe(1);
     expect(stockUpdate.data.partialMlUsed).toBeCloseTo(0.1, 5);
   });
@@ -438,7 +439,7 @@ describe('lib/autoConsumptionApplier — unit conversion', () => {
     await applyAutoConsumptionForVisit({
       id: 7, serviceId: 100, tenantId: 1, status: 'completed',
     });
-    const stockUpdate = prisma.product.update.mock.calls[0][0];
+    const stockUpdate = prisma.product.updateMany.mock.calls[0][0];
     expect(stockUpdate.data.currentStock.decrement).toBe(2);
   });
 
@@ -463,7 +464,7 @@ describe('lib/autoConsumptionApplier — unit conversion', () => {
     expect(result.skipped).toHaveLength(1);
     expect(result.skipped[0].reason).toContain('UNIT_INCOMPATIBLE');
     expect(prisma.serviceConsumption.create).not.toHaveBeenCalled();
-    expect(prisma.product.update).not.toHaveBeenCalled();
+    expect(prisma.product.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -482,8 +483,8 @@ describe('lib/autoConsumptionApplier — idempotency (duplicate completion event
     expect(result.applied[0].productId).toBe(201);
     expect(result.skipped).toHaveLength(1);
     expect(result.skipped[0].reason).toBe('ALREADY_APPLIED');
-    // Only one product.update call — for the not-yet-deducted product.
-    expect(prisma.product.update).toHaveBeenCalledTimes(1);
+    // Only one guarded stock update — for the not-yet-deducted product.
+    expect(prisma.product.updateMany).toHaveBeenCalledTimes(1);
   });
 
   test('skips ALL rules when every product is already deducted (full replay)', async () => {
@@ -498,7 +499,7 @@ describe('lib/autoConsumptionApplier — idempotency (duplicate completion event
     expect(result.applied).toHaveLength(0);
     expect(result.skipped).toHaveLength(2);
     expect(prisma.serviceConsumption.create).not.toHaveBeenCalled();
-    expect(prisma.product.update).not.toHaveBeenCalled();
+    expect(prisma.product.updateMany).not.toHaveBeenCalled();
   });
 
   test('queries serviceConsumption.findMany scoped to visitId + tenantId', async () => {

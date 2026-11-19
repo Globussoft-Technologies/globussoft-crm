@@ -234,6 +234,8 @@ const DEFAULTS = {
   [KEYS.CALLIFIED_PENDING_RETRY_DAY_INTERVAL]: 1,
   [KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL]: "10:00",
   [KEYS.CALLIFIED_RETRY_TIMEZONE]: "UTC",
+  // Generic fallback; tenant settings resolve this to Asia/Kolkata for India.
+  [KEYS.ATTENDANCE_TIMEZONE]: "UTC",
   // Generic CRM Leads page — auto-campaign assignment rules default.
   [KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES]: JSON.stringify({ enabled: false, rules: [] }),
   // Generic CRM Leads page — qualified lead auto-assignment defaults.

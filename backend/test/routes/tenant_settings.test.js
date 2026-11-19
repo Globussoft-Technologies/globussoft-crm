@@ -87,6 +87,18 @@ beforeEach(() => {
 });
 
 describe('GET /api/tenant-settings/', () => {
+  test('uses IST as the attendance timezone default for Indian tenants', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ country: 'IN' });
+    prisma.tenantSetting.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/tenant-settings/')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.defaults[KEYS.ATTENDANCE_TIMEZONE]).toBe('Asia/Kolkata');
+  });
+
   test('returns settings list + defaults envelope', async () => {
     prisma.tenantSetting.findMany.mockResolvedValue([
       {

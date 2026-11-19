@@ -83,6 +83,7 @@ prisma.leaveRequest = {
 };
 prisma.user = prisma.user || {};
 prisma.user.findFirst = vi.fn();
+prisma.user.findMany = vi.fn();
 prisma.biometricDevice = prisma.biometricDevice || {};
 prisma.biometricDevice.findMany = vi.fn();
 // verifyToken does an optional revoked-token lookup — stub it absent so the
@@ -162,6 +163,7 @@ function makeRow({
 beforeEach(() => {
   prisma.attendance.findMany.mockReset();
   prisma.leaveRequest.findMany.mockReset();
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.attendance.findMany.mockResolvedValue([]);
   prisma.leaveRequest.findMany.mockResolvedValue([]);
 });

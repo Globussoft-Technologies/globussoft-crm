@@ -661,7 +661,7 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       const bucket = classifyPunctuality(r, attendanceTimezone);
       if (bucket === "EARLY") earlyCount += 1;
       else if (bucket === "ON_TIME") onTimeCount += 1;
-      const isLateArrival = bucket === "AFTER" || (!bucket && r.status === "LATE");
+      const isLateArrival = bucket === "AFTER" || r.status === "LATE";
       if (isLateArrival) lateArrivalCount += 1;
       const dep = classifyDeparture(r, attendanceTimezone);
       if (dep === "EARLY") earlyDepartureCount += 1;

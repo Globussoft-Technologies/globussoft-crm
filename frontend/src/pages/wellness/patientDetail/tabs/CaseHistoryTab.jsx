@@ -2,6 +2,7 @@
 import { Stethoscope, FileText, FileSignature, ChevronDown, ChevronUp } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { RxDetailModal } from '../shared/components';
+import { getImportedVisitDetails } from '../../../../utils/wellnessImportDetails';
 
 // Strip every customer-facing reference to the Zylu POS — patient.source
 // values like "zylu-import", inline "[ZYLU-#nnn]" markers, and visit-note
@@ -143,6 +144,21 @@ export default function CaseHistoryTab({ patient }) {
       {filterBar}
       {events.map((e, i) => {
         const clickable = e.kind === 'rx';
+        const importedVisit = e.kind === 'visit'
+          ? getImportedVisitDetails(e.data)
+          : null;
+        const visitService = e.data.service?.name || importedVisit?.services;
+        const showAdditionalServices = Boolean(
+          importedVisit?.services &&
+          e.data.service?.name &&
+          importedVisit.services.toLowerCase() !== e.data.service.name.trim().toLowerCase(),
+        );
+        const visitStatus = e.data.status;
+        const visitStatusLabel = visitStatus
+          ? String(visitStatus)
+              .replace(/[_-]+/g, ' ')
+              .replace(/\b\w/g, (character) => character.toUpperCase())
+          : '';
         return (
           <div
             key={i}
@@ -161,7 +177,7 @@ export default function CaseHistoryTab({ patient }) {
                   {kindIcon(e.kind)}
                   <strong style={{ textTransform: 'capitalize' }}>{kindLabel(e.kind)}</strong>
                   {e.kind === 'visit' && e.data.status === 'cancelled' && <span style={cancelledVisitBadgeStyle}>Cancelled visit</span>}
-                  {e.kind === 'visit' && e.data.service?.name && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.service.name}</span>}
+                  {e.kind === 'visit' && visitService && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {visitService}</span>}
                   {e.kind === 'consent' && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.templateName}</span>}
                 </div>
                 {/* #244: pin Asia/Kolkata so test browsers / users in non-IST
@@ -172,9 +188,32 @@ export default function CaseHistoryTab({ patient }) {
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{new Date(e.date).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
               </div>
               {e.kind === 'visit' && (
-                <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                  {scrubZylu(e.data.notes) || 'No notes'}
-                  {e.data.amountCharged && <> • <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(e.data.amountCharged).toLocaleString('en-IN')}</strong></>}
+                <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {importedVisit ? (
+                    <>
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
+                        gap: '0.35rem 1rem',
+                        marginTop: '0.45rem',
+                      }}>
+                        {importedVisit.staff && <div><strong style={{ color: 'var(--text-primary)' }}>Provider:</strong> {importedVisit.staff}</div>}
+                        {importedVisit.bookingType && <div><strong style={{ color: 'var(--text-primary)' }}>Visit type:</strong> {importedVisit.bookingType}</div>}
+                        {visitStatusLabel && <div><strong style={{ color: 'var(--text-primary)' }}>Status:</strong> {visitStatusLabel}</div>}
+                        {showAdditionalServices && <div><strong style={{ color: 'var(--text-primary)' }}>Services:</strong> {importedVisit.services}</div>}
+                      </div>
+                      {importedVisit.bookingNotes && <div style={{ marginTop: '0.45rem' }}><strong style={{ color: 'var(--text-primary)' }}>Notes:</strong> {scrubZylu(importedVisit.bookingNotes)}</div>}
+                      {importedVisit.cancelReason && <div style={{ marginTop: '0.45rem' }}><strong style={{ color: 'var(--text-primary)' }}>Cancellation reason:</strong> {scrubZylu(importedVisit.cancelReason)}</div>}
+                    </>
+                  ) : (
+                    scrubZylu(e.data.notes) || 'No notes recorded.'
+                  )}
+                  {e.data.amountCharged !== null && e.data.amountCharged !== undefined && Number.isFinite(Number(e.data.amountCharged)) && (
+                    <div style={{ marginTop: '0.45rem' }}>
+                      <strong style={{ color: 'var(--text-primary)' }}>Amount charged:</strong>{' '}
+                      <strong style={{ color: 'var(--success-color)' }}>₹{Math.round(Number(e.data.amountCharged)).toLocaleString('en-IN')}</strong>
+                    </div>
+                  )}
                 </div>
               )}
               {e.kind === 'rx' && (

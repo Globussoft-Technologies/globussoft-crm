@@ -32,7 +32,11 @@
 const prisma = require("./prisma");
 const { bus } = require("./eventBus");
 const { isConvertible, convertQuantity } = require("./consumptionUnits");
-const { SOURCE_TYPES, usagePricing } = require("./inventoryConsumption");
+const {
+  SOURCE_TYPES,
+  applyProductConsumptionDelta,
+  usagePricing,
+} = require("./inventoryConsumption");
 
 /**
  * Apply all auto-consumption rules for a visit. Exposed for unit testing
@@ -133,22 +137,7 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
         }
         consumedMl = convertQuantity(consumedMl, ruleUnit, productUnit);
       }
-      const volume = rule.product.volume || 1;
-      let newPartialMlUsed = (rule.product.partialMlUsed || 0) + consumedMl;
-      let unitsToDeduct = 0;
-
-      // If partial consumption >= volume, decrement a full unit
-      if (newPartialMlUsed >= volume) {
-        unitsToDeduct = Math.floor(newPartialMlUsed / volume);
-        newPartialMlUsed = newPartialMlUsed % volume;
-      }
-
-      console.log(
-        `[autoConsumption] rule ${rule.id}: consumed=${consumedMl}ml, product=${rule.product.name}, ` +
-        `volume=${volume}ml/unit, units_before=${rule.product.currentStock}, ` +
-        `partial_before=${rule.product.partialMlUsed}, units_to_deduct=${unitsToDeduct}, partial_after=${newPartialMlUsed}`
-      );
-
+      let stockUpdate;
       await prisma.$transaction(async (tx) => {
         const pricing = usagePricing({
           qty: consumedMl,
@@ -171,17 +160,36 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
             tenantId: visit.tenantId,
           },
         });
-        const updateData = { partialMlUsed: newPartialMlUsed };
-        if (unitsToDeduct > 0) {
-          updateData.currentStock = { decrement: unitsToDeduct };
-        }
-        await tx.product.update({ where: { id: rule.productId }, data: updateData });
+        stockUpdate = await applyProductConsumptionDelta(
+          tx,
+          rule.product,
+          consumedMl,
+          visit.tenantId,
+        );
       });
 
-      out.applied.push({ ruleId: rule.id, productId: rule.productId, qty: consumedMl });
+      out.applied.push({
+        ruleId: rule.id,
+        productId: rule.productId,
+        qty: consumedMl,
+        stockUpdated: Boolean(stockUpdate?.applied),
+      });
 
-      const newStock = (rule.product.currentStock || 0) - unitsToDeduct;
-      console.log(`[autoConsumption] ✓ stock: ${rule.product.currentStock} units → ${newStock} units, partial: ${newPartialMlUsed}ml`);
+      const newStock = stockUpdate?.applied
+        ? stockUpdate.currentStock
+        : (rule.product.currentStock || 0);
+      if (!stockUpdate?.applied) {
+        console.warn(
+          `[autoConsumption] product '${rule.product.name}' (id=${rule.productId}) ` +
+          `usage was recorded but stock was not changed: ${stockUpdate?.reason || "STOCK_UPDATE_FAILED"}`
+        );
+        continue;
+      }
+      console.log(
+        `[autoConsumption] rule ${rule.id}: consumed=${consumedMl} ${productUnit || "units"}, ` +
+        `product=${rule.product.name}, stock=${rule.product.currentStock} → ${newStock}, ` +
+        `partial=${stockUpdate.partialMlUsed}`
+      );
       if (newStock <= 0) {
         console.warn(
           `[autoConsumption] product '${rule.product.name}' (id=${rule.productId}) ` +

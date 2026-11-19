@@ -56,8 +56,8 @@ export default function InventoryTab({ patient, onSaved }) {
       notify.error('Product name is required.');
       return;
     }
-    if (Number(editForm.qty) < 1) {
-      notify.error('Quantity must be at least 1.');
+    if (!Number.isFinite(Number(editForm.qty)) || Number(editForm.qty) <= 0) {
+      notify.error('Quantity must be greater than 0.');
       return;
     }
     if (Number(editForm.unitCost) < 0) {
@@ -67,15 +67,16 @@ export default function InventoryTab({ patient, onSaved }) {
     if (savingEdit) return;
     setSavingEdit(true);
     try {
-      await fetchApi(`/api/wellness/visits/${visitId}/consumptions/${item.id}`, {
+      const result = await fetchApi(`/api/wellness/visits/${visitId}/consumptions/${item.id}`, {
         method: 'PUT',
         body: JSON.stringify({
           productName: editForm.productName.trim(),
-          qty: parseInt(editForm.qty) || 1,
+          qty: parseFloat(editForm.qty),
           unitCost: parseFloat(editForm.unitCost) || 0,
         }),
       });
-      notify.success('Consumption item updated.');
+      if (result?.stockWarning) notify.info(result.stockWarning);
+      else notify.success('Consumption item updated.');
       cancelEdit();
       const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
       setItems(next);
@@ -153,7 +154,7 @@ export default function InventoryTab({ patient, onSaved }) {
                         <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.transactionType || emptyCell('No transaction type')}</td>
                         <td style={{ ...textCellStyle, padding: '0.4rem 1rem' }}>{i.productCode || emptyCell('No product code')}</td>
                         <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>
-                          <input aria-label="Quantity" type="number" min={1} value={editForm.qty} onChange={(e) => setEditForm({ ...editForm, qty: e.target.value === '' ? '' : (parseInt(e.target.value) || 1) })} style={{ ...inputStyle, textAlign: 'left' }} />
+                          <input aria-label="Quantity" type="number" min={0.001} step="any" value={editForm.qty} onChange={(e) => setEditForm({ ...editForm, qty: e.target.value === '' ? '' : e.target.value })} style={{ ...inputStyle, textAlign: 'left' }} />
                         </td>
                         <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>{Number(i.salePrice) > 0 ? `₹${Number(i.salePrice).toLocaleString('en-IN')}` : emptyCell('No sale price')}</td>
                         <td style={{ ...numericCellStyle, padding: '0.4rem 1rem' }}>
@@ -185,7 +186,7 @@ export default function InventoryTab({ patient, onSaved }) {
                       </tr>
                     )
                   ))}
-                  {items.length === 0 && <tr><td colSpan={13} style={{ ...textCellStyle, color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
+                  {items.length === 0 && <tr><td colSpan={13} style={{ ...textCellStyle, textAlign: 'center', verticalAlign: 'middle', color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
                   {items.length > 0 && (
                     <tr style={{ borderTop: '2px solid rgba(255,255,255,0.08)' }}>
                       <td colSpan={11} style={{ ...numericCellStyle, fontWeight: 600 }}>Total cost</td>

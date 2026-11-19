@@ -1595,7 +1595,7 @@ router.get("/inventory/movements", canReadInventory, async (req, res) => {
       }),
       prisma.serviceConsumption.findMany({
         where: tenantWhere(req, { productId }),
-        orderBy: { createdAt: "desc" },
+        orderBy: { visit: { visitDate: "desc" } },
         take: 200,
         include: { visit: { select: { id: true, visitDate: true, patientId: true } } },
       }),
@@ -1624,8 +1624,13 @@ router.get("/inventory/movements", canReadInventory, async (req, res) => {
       ...consumptions.map((c) => ({
         kind: "CONSUMPTION",
         id: c.id,
-        at: c.createdAt,
+        // Imported usage rows were written when the migration ran. Use the
+        // visit date for the movement so the ledger reflects when stock was
+        // consumed, not when the import happened.
+        at: c.visit ? c.visit.visitDate : c.createdAt,
         delta: -c.qty,
+        unit: c.unit,
+        sourceType: c.sourceType,
         visitId: c.visitId,
         visitDate: c.visit ? c.visit.visitDate : null,
         unitCost: c.unitCost,

@@ -707,7 +707,7 @@ export default function Products() {
                         </td>
                         <td style={{ padding: '0.4rem' }}>#{m.visitId ?? '—'}</td>
                         <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>
-                          {Number(m.delta).toFixed(1)} {selectedProductForDetails.unit || ''}
+                          {Number(m.delta).toFixed(1)} {m.unit || selectedProductForDetails.unit || ''}
                         </td>
                       </tr>
                     ))}

@@ -185,6 +185,8 @@ const Layout = () => {
   );
   const isGenericLeadsPage =
     !isWellness && !isTravel && location.pathname === "/leads";
+  const isGenericExpensesPage =
+    !isWellness && !isTravel && location.pathname === "/expenses";
   // The built-in Softphone FAB is intentionally disabled for Generic CRM.
   // Keep its import and mount code commented so it can be restored later
   // without affecting the separate GenericLeadsAssistant chat on /leads.
@@ -644,7 +646,7 @@ const Layout = () => {
         </header>
         <main
           data-tour="page-content"
-          className={`${isPickupPlotModule ? "" : "page-fade-in"}${isWellness || isTravel ? "" : " generic-page-content"}`}
+          className={`${isPickupPlotModule ? "" : "page-fade-in"}${isWellness || isTravel ? "" : " generic-page-content"}${isGenericExpensesPage ? " generic-expenses-page-content" : ""}`}
           style={{
             flex: 1,
             minWidth: 0,

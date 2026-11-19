@@ -1,11 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import { Network, Plus, Trash2, Edit2, X, MapPin, Users, Eye, ArrowLeft } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import TopScrollSync from '../components/TopScrollSync';
+import { AuthContext } from '../App';
+import { TERRITORY_COUNTRIES, statesForCountry } from '../data/territoryGeo';
+import SearchableSelect from '../components/ui/SearchableSelect';
+import MultiSelectDropdown from '../components/MultiSelectDropdown';
 
 export default function Territories() {
   const notify = useNotify();
+  const { tenant, user } = useContext(AuthContext) || {};
+  const isGeneric = (tenant?.vertical || user?.tenant?.vertical || user?.vertical || 'generic') === 'generic';
   const [territories, setTerritories] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,9 +24,39 @@ export default function Territories() {
 
   const [form, setForm] = useState({
     name: '',
+    code: '',
+    description: '',
+    country: '',
+    selectedStates: [],
+    city: '',
+    managerId: '',
+    isActive: true,
+    customState: '',
     regionsText: '',
     selectedUserIds: [],
   });
+
+  const availableStates = useMemo(() => statesForCountry(form.country), [form.country]);
+  const stateOptions = useMemo(() => {
+    const knownCodes = new Set(availableStates.map(state => state.code));
+    const customOptions = form.selectedStates
+      .filter(code => !knownCodes.has(code))
+      .map(code => ({ value: code, label: code }));
+    return [...availableStates.map(state => ({ value: state.code, label: state.name })), ...customOptions];
+  }, [availableStates, form.selectedStates]);
+  const countryOptions = useMemo(() => TERRITORY_COUNTRIES.map(country => ({ value: country.code, label: country.name })), []);
+  const managerUsers = useMemo(() => users.filter((member) => {
+    const role = String(member.primaryRole?.key || member.primaryRole?.name || member.role || '').toUpperCase().replace(/[ _-]+/g, '');
+    return !['USER', 'CUSTOMER', 'SALESPERSON', 'SALESREPRESENTATIVE', 'SALESREP'].includes(role);
+  }), [users]);
+  const teamUsers = useMemo(() => users.filter((member) => {
+    const role = String(member.primaryRole?.key || member.primaryRole?.name || member.role || '').toUpperCase().replace(/[ _-]+/g, '');
+    return role !== 'CUSTOMER';
+  }), [users]);
+  const teamOptions = useMemo(() => teamUsers.map(member => ({
+    value: member.id,
+    label: `${member.name || member.email} · ${member.primaryRole?.name || member.role || 'Staff'}`,
+  })), [teamUsers]);
 
   useEffect(() => {
     loadAll();
@@ -48,7 +84,7 @@ export default function Territories() {
 
   const openNew = () => {
     setEditing(null);
-    setForm({ name: '', regionsText: '', selectedUserIds: [] });
+    setForm({ name: '', code: '', description: '', country: '', selectedStates: [], city: '', managerId: '', isActive: true, customState: '', regionsText: '', selectedUserIds: [] });
     setShowModal(true);
   };
 
@@ -56,6 +92,14 @@ export default function Territories() {
     setEditing(t);
     setForm({
       name: t.name || '',
+      code: t.code || '',
+      description: t.description || '',
+      country: t.country || '',
+      selectedStates: Array.isArray(t.states) ? t.states : [],
+      city: t.city || '',
+      managerId: t.managerId ? String(t.managerId) : '',
+      isActive: t.isActive !== false,
+      customState: '',
       regionsText: Array.isArray(t.regions) ? t.regions.join(', ') : '',
       selectedUserIds: Array.isArray(t.assignedUserIds) ? t.assignedUserIds.map(Number) : [],
     });
@@ -64,9 +108,21 @@ export default function Territories() {
 
   const save = async () => {
     if (!form.name.trim()) { showToast('Name is required', 'error'); return; }
+    if (isGeneric && !form.country) { showToast('Country is required', 'error'); return; }
     const payload = {
       name: form.name.trim(),
-      regions: form.regionsText.split(',').map(s => s.trim()).filter(Boolean),
+      ...(isGeneric ? {
+        code: form.code.trim(),
+        description: form.description.trim(),
+        country: form.country,
+        states: form.selectedStates,
+        city: form.city.trim(),
+        managerId: form.managerId || null,
+        isActive: form.isActive,
+      } : {}),
+      regions: isGeneric
+        ? form.selectedStates.map((state) => `${form.country}-${state}`)
+        : form.regionsText.split(',').map(s => s.trim()).filter(Boolean),
       assignedUserIds: form.selectedUserIds,
     };
     try {
@@ -113,6 +169,12 @@ export default function Territories() {
       const has = f.selectedUserIds.includes(uid);
       return { ...f, selectedUserIds: has ? f.selectedUserIds.filter(x => x !== uid) : [...f.selectedUserIds, uid] };
     });
+  };
+
+  const addCustomState = () => {
+    const value = form.customState.trim();
+    if (!value || form.selectedStates.includes(value)) return;
+    setForm(current => ({ ...current, selectedStates: [...current.selectedStates, value], customState: '' }));
   };
 
   const userName = (id) => {
@@ -314,15 +376,61 @@ export default function Territories() {
               <input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. North America West" style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }} />
             </div>
 
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Regions (comma-separated)</label>
-              <input className="input-field" value={form.regionsText} onChange={e => setForm({ ...form, regionsText: e.target.value })} placeholder="US-CA, US-NY, US-WA" style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }} />
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: 4 }}>
-                Matched against contact city/state/country (case-insensitive substring).
+            {isGeneric ? (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  <div>
+                    <label htmlFor="territory-code" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Code</label>
+                    <input id="territory-code" className="input-field" value={form.code} onChange={e => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="SOUTH-001" style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }} />
+                  </div>
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label htmlFor="territory-description" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</label>
+                  <textarea id="territory-description" className="input-field" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Describe this territory" rows={3} style={{ boxSizing: 'border-box', width: '100%', marginTop: 4, resize: 'vertical' }} />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label htmlFor="territory-country" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Country *</label>
+                  <SearchableSelect
+                    id="territory-country"
+                    ariaLabel="Country"
+                    value={form.country}
+                    options={countryOptions}
+                    placeholder="Select country"
+                    searchPlaceholder="Search countries"
+                    onChange={value => setForm({ ...form, country: value, selectedStates: [] })}
+                    style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }}
+                  />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>States / regions</div>
+                  {!form.country ? <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>Select a country first.</div> : <MultiSelectDropdown options={stateOptions} selected={form.selectedStates} onChange={values => setForm({ ...form, selectedStates: values })} placeholder="Select states or regions" ariaLabel="States / regions" menuHeight={280} searchable />}
+                  {form.country && availableStates.length === 0 && <div style={{ display: 'flex', gap: '0.5rem', marginTop: 6 }}><input className="input-field" value={form.customState} onChange={e => setForm({ ...form, customState: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomState(); } }} placeholder="Add state or region" style={{ flex: 1 }} /><button type="button" className="btn-secondary" onClick={addCustomState}>Add</button></div>}
+                </div>
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginBottom: '1rem' }}>
+                  <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Assignment</div>
+                  <label htmlFor="territory-manager" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Territory manager</label>
+                  <select id="territory-manager" className="input-field" value={form.managerId} onChange={e => setForm({ ...form, managerId: e.target.value })} style={{ boxSizing: 'border-box', width: '100%', marginTop: 4, marginBottom: '0.85rem' }}>
+                    <option value="">Select manager</option>
+                    {managerUsers.map(u => <option key={u.id} value={u.id}>{u.name || u.email} · {u.primaryRole?.name || u.role}</option>)}
+                  </select>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Team / sales representatives</div>
+                  <div style={{ display: 'none' }}>
+                    {teamUsers.length === 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No eligible staff available.</span>}
+                    {teamUsers.map(u => <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', cursor: 'pointer' }}><input type="checkbox" checked={form.selectedUserIds.includes(u.id)} onChange={() => toggleUser(u.id)} /><span>{u.name || u.email} · {u.primaryRole?.name || u.role}</span></label>)}
+                  </div>
+                  <MultiSelectDropdown options={teamOptions} selected={form.selectedUserIds} onChange={values => setForm({ ...form, selectedUserIds: values })} placeholder="Select team members" ariaLabel="Team / sales representatives" menuHeight={260} searchable />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.85rem', fontSize: '0.85rem' }}><input type="checkbox" checked={form.isActive} onChange={e => setForm({ ...form, isActive: e.target.checked })} />Active territory</label>
+                </div>
+              </>
+            ) : (
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Regions (comma-separated)</label>
+                <input className="input-field" value={form.regionsText} onChange={e => setForm({ ...form, regionsText: e.target.value })} placeholder="US-CA, US-NY, US-WA" style={{ boxSizing: 'border-box', width: '100%', marginTop: 4 }} />
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: 4 }}>Matched against contact city/state/country (case-insensitive substring).</div>
               </div>
-            </div>
+            )}
 
-            <div style={{ marginBottom: '1.25rem' }}>
+            {!isGeneric && <div style={{ marginBottom: '1.25rem' }}>
               <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>Assigned Users</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', maxHeight: 180, overflowY: 'auto', padding: '0.4rem', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }}>
                 {users.length === 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.4rem' }}>No users available</span>}
@@ -349,7 +457,7 @@ export default function Territories() {
                   );
                 })}
               </div>
-            </div>
+            </div>}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>

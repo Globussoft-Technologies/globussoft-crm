@@ -2887,7 +2887,7 @@ export default function App() {
                         element={
                           <RoleGuard
                             requiredPermission={{ module: "staff", action: "manage" }}
-                            feature="Sales Teams"
+                            feature="Teams"
                           >
                             <SalesTeams />
                           </RoleGuard>

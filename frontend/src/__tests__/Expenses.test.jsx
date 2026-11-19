@@ -9,10 +9,12 @@
  * code reality per the verifying-gap-card-claims standing rule.
  *
  * Scope:
- *   1. Page chrome: heading, 4 totals chips (Pending / Approved / Reimbursed /
- *      total count), New Expense button + modal form + Submit-for-Approval button.
+ *   1. Page chrome: heading, 4 Generic CRM summary cards (Pending / Approved /
+ *      Reimbursed / total count), New Expense button + modal form +
+ *      Submit-for-Approval button.
  *   2. Mount fires GET /api/expenses (component does NOT load /api/contacts).
- *   3. Empty list renders "No expenses recorded yet." + "0 total expenses".
+ *   3. Empty list renders "No expenses recorded yet." + a zero total-expenses
+ *      summary card.
  *   4. Each row renders title + $-formatted amount + CategoryBadge +
  *      StatusBadge + user-name-or-email-or-em-dash + formatted date; long
  *      payment/category values expose their full text as native tooltips.
@@ -168,16 +170,21 @@ describe('<Expenses /> — page surface', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the heading + 4 totals chips + New Expense button, and opens the form on click', async () => {
+  it('renders the Generic summary cards + New Expense button, and opens the form on click', async () => {
     renderExpenses();
     expect(
       await screen.findByRole('heading', { name: /Expense Management/i }),
     ).toBeInTheDocument();
-    // Totals row chip text — Pending: 15.00, Approved: 42.75, Reimbursed: 1000.00, 4 total.
-    expect(await screen.findByText(/Pending:\s*\$15\.00/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Approved:\s*\$42\.75/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Reimbursed:\s*\$1000\.00/i)).toBeInTheDocument();
-    expect(await screen.findByText(/4 total expenses/i)).toBeInTheDocument();
+    const pendingCard = screen.getByText('Total pending').parentElement;
+    const approvedCard = screen.getByText('Total approved').parentElement;
+    const reimbursedCard = screen.getByText('Total reimbursed').parentElement;
+    const totalCard = screen.getByText('Total expenses').parentElement;
+    expect(within(pendingCard).getByText('$15.00')).toBeInTheDocument();
+    expect(within(approvedCard).getByText('$42.75')).toBeInTheDocument();
+    expect(within(reimbursedCard).getByText('$1000.00')).toBeInTheDocument();
+    expect(within(totalCard).getByText('4')).toBeInTheDocument();
+    expect(document.querySelector('.expenses-page--generic')).toBeInTheDocument();
+    expect(document.querySelector('.expenses-table-scroll')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /New Expense/i })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /New Expense/i }));
     expect(await screen.findByRole('heading', { name: /New Expense/i })).toBeInTheDocument();
@@ -219,7 +226,7 @@ describe('<Expenses /> — page surface', () => {
     expect(await screen.findByText('Figma seat')).toBeInTheDocument();
   });
 
-  it('empty list renders the "No expenses recorded yet." placeholder + 0 total chip', async () => {
+  it('empty list renders the "No expenses recorded yet." placeholder + zero total card', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/expenses') return Promise.resolve([]);
       return Promise.resolve(null);
@@ -228,7 +235,8 @@ describe('<Expenses /> — page surface', () => {
     expect(
       await screen.findByText(/No expenses recorded yet\./i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/0 total expenses/i)).toBeInTheDocument();
+    const totalCard = screen.getByText('Total expenses').parentElement;
+    expect(within(totalCard).getByText('0')).toBeInTheDocument();
   });
 
   it('renders one row per expense with title, $-formatted amount, category, status, user-or-em-dash, date', async () => {
@@ -241,10 +249,11 @@ describe('<Expenses /> — page surface', () => {
     // Row amounts now use the canonical formatMoney() helper (mocked above
     // as `$${Number(n).toFixed(2)}` — real INR/USD switching is covered by
     // money.test.js).
-    expect(screen.getByText('$120.50')).toBeInTheDocument();
-    expect(screen.getByText('$15.00')).toBeInTheDocument();
-    expect(screen.getByText('$42.75')).toBeInTheDocument();
-    expect(screen.getByText('$1000.00')).toBeInTheDocument();
+    const expenseTable = screen.getByRole('table');
+    expect(within(expenseTable).getByText('$120.50')).toBeInTheDocument();
+    expect(within(expenseTable).getByText('$15.00')).toBeInTheDocument();
+    expect(within(expenseTable).getByText('$42.75')).toBeInTheDocument();
+    expect(within(expenseTable).getByText('$1000.00')).toBeInTheDocument();
 
     // Category badges are rendered in the table. SearchableSelect options are
     // portal-rendered only while the picker is open, so they are not present

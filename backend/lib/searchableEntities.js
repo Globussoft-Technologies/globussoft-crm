@@ -340,7 +340,7 @@ const SEARCHABLE_ENTITIES = [
     verticals: ['generic'], fixedWhere: { userType: 'STAFF' }
   },
   {
-    key: 'salesTeams', model: 'salesTeam', label: 'Sales Teams', icon: 'Users',
+    key: 'salesTeams', model: 'salesTeam', label: 'Teams', icon: 'Users',
     color: '#8b5cf6', bg: 'rgba(139, 92, 246, 0.12)', border: 'rgba(139, 92, 246, 0.25)',
     searchFields: ['name'], selectFields: ['id', 'name'], verticals: ['generic']
   },

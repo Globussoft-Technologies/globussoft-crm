@@ -98,8 +98,25 @@ router.get("/", async (req, res) => {
 // arbitrary external mailboxes. Schedules are an automated export channel —
 // they must not be a generic "email arbitrary data anywhere" feature.
 const ALLOWED_REPORT_TYPES = new Set(["deals", "contacts", "tasks", "calls", "invoices", "expenses"]);
-const ALLOWED_REPORT_FORMATS = new Set(["PDF", "CSV", "XLSX"]);
-const ALLOWED_FREQUENCIES = new Set(["daily", "weekly", "monthly", "quarterly"]);
+const ALLOWED_REPORT_FORMATS = new Set(["PDF", "CSV"]);
+const ALLOWED_FREQUENCIES = new Set(["daily", "weekly", "monthly", "quarterly", "weekly-last", "monthly-last", "quarterly-last", "custom"]);
+
+function isValidCronExpression(value) {
+  if (typeof value !== "string" || value.trim().length > 100) return false;
+  const fields = value.trim().split(/\s+/);
+  return fields.length === 5 && fields.every(field => /^(?:\*|\d+)(?:[-/,](?:\*|\d+))*$/.test(field));
+}
+
+function normalizeReportTypes(value) {
+  if (Array.isArray(value)) return value.map(type => String(type));
+  if (typeof value === "string" && value.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(type => String(type));
+    } catch { /* keep legacy scalar value */ }
+  }
+  return value ? [String(value)] : ["deals"];
+}
 
 async function validateRecipientsAgainstTenant(recipients, tenantId) {
   // Reuse the shape check (regex, count, etc.). #127: shape error must
@@ -136,7 +153,9 @@ router.post("/", async (req, res) => {
 
     // #171: validate enums up front — reject "EXE" / "NOT_A_TYPE" / "every-5-minutes"
     // instead of silently coercing or persisting garbage.
-    if (reportType !== undefined && !ALLOWED_REPORT_TYPES.has(reportType)) {
+    const reportTypes = normalizeReportTypes(reportType);
+    const invalidReportType = reportTypes.find(type => !ALLOWED_REPORT_TYPES.has(type));
+    if (invalidReportType) {
       return res.status(400).json({
         error: `reportType must be one of: ${[...ALLOWED_REPORT_TYPES].join(", ")}`,
         code: "INVALID_REPORT_TYPE",
@@ -154,6 +173,9 @@ router.post("/", async (req, res) => {
         code: "INVALID_FREQUENCY",
       });
     }
+    if (frequency === "custom" && !isValidCronExpression(cronExpression)) {
+      return res.status(400).json({ error: "cronExpression must contain five valid cron fields", code: "INVALID_CRON_EXPRESSION" });
+    }
 
     // #171: tenant-bounded recipients (was the headline security finding).
     if (recipients !== undefined) {
@@ -168,11 +190,11 @@ router.post("/", async (req, res) => {
     const schedule = await prisma.reportSchedule.create({
       data: {
         name: sanitizeText(name),
-        reportType: reportType || 'deals',
+        reportType: reportTypes.length === 1 ? reportTypes[0] : JSON.stringify(reportTypes),
         metrics: metrics ? sanitizeJsonForStringColumn(metrics) : null,
         groupBy: groupBy || null,
         frequency: frequency || 'weekly',
-        cronExpression: cronExpression || getCronFromFrequency(frequency || 'weekly'),
+        cronExpression: frequency === 'custom' ? cronExpression.trim() : getCronFromFrequency(frequency || 'weekly'),
         recipients: sanitizeJsonForStringColumn(recipients || [req.user.email || 'admin@globussoft.com']),
         format: format || 'PDF',
         enabled: enabled !== false,
@@ -205,10 +227,23 @@ router.put("/:id", async (req, res) => {
     if (metrics !== undefined) data.metrics = sanitizeJsonForStringColumn(metrics);
     if (groupBy !== undefined) data.groupBy = groupBy;
     if (frequency !== undefined) {
+      if (!ALLOWED_FREQUENCIES.has(frequency)) {
+        return res.status(400).json({ error: `frequency must be one of: ${[...ALLOWED_FREQUENCIES].join(", ")}`, code: "INVALID_FREQUENCY" });
+      }
+      if (frequency === "custom" && !isValidCronExpression(cronExpression ?? existing.cronExpression)) {
+        return res.status(400).json({ error: "cronExpression must contain five valid cron fields", code: "INVALID_CRON_EXPRESSION" });
+      }
       data.frequency = frequency;
-      if (!cronExpression) data.cronExpression = getCronFromFrequency(frequency);
+      data.cronExpression = frequency === 'custom'
+        ? (cronExpression ?? existing.cronExpression).trim()
+        : getCronFromFrequency(frequency);
     }
-    if (cronExpression !== undefined) data.cronExpression = cronExpression;
+    if (cronExpression !== undefined && frequency === undefined) {
+      if (!isValidCronExpression(cronExpression)) {
+        return res.status(400).json({ error: "cronExpression must contain five valid cron fields", code: "INVALID_CRON_EXPRESSION" });
+      }
+      data.cronExpression = cronExpression.trim();
+    }
     if (recipients !== undefined) {
       // #171: same tenant-bounded check on update.
       const recipErr = await validateRecipientsAgainstTenant(recipients, req.user.tenantId);
@@ -222,9 +257,11 @@ router.put("/:id", async (req, res) => {
       data.format = format;
     }
     if (reportType !== undefined) {
-      if (!ALLOWED_REPORT_TYPES.has(reportType)) {
+      const reportTypes = normalizeReportTypes(reportType);
+      if (reportTypes.some(type => !ALLOWED_REPORT_TYPES.has(type))) {
         return res.status(400).json({ error: `reportType must be one of: ${[...ALLOWED_REPORT_TYPES].join(", ")}`, code: "INVALID_REPORT_TYPE" });
       }
+      data.reportType = reportTypes.length === 1 ? reportTypes[0] : JSON.stringify(reportTypes);
     }
     if (enabled !== undefined) data.enabled = enabled;
 
@@ -274,6 +311,10 @@ function getCronFromFrequency(frequency) {
     case 'daily': return '0 8 * * *';       // 8am daily
     case 'weekly': return '0 8 * * 1';      // Monday 8am
     case 'monthly': return '0 8 1 * *';     // 1st of month 8am
+    case 'quarterly': return '0 8 1 1,4,7,10 *'; // 1st day of quarter, 8am
+    case 'weekly-last': return '0 8 * * 0';  // Sunday 8am; engine applies last-day preset
+    case 'monthly-last': return '0 8 * * *'; // engine applies last-day preset
+    case 'quarterly-last': return '0 8 * * *'; // engine applies last-day preset
     default: return '0 8 * * 1';
   }
 }

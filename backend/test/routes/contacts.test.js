@@ -570,6 +570,38 @@ describe('GET /api/contacts — list', () => {
     expect(res.body).toMatchObject({ total: 6, page: 2, totalPages: 2 });
   });
 
+  test('Generic New Call Status includes null, blank, and legacy raw values', async () => {
+    const res = await request(makeApp()).get(
+      '/api/contacts?status=Lead&includeCrmStatuses=true&page=1&limit=100&callifiedLeadStatus=yet_to_call',
+    );
+
+    expect(res.status).toBe(200);
+    const where = prisma.contact.findMany.mock.calls[0][0].where;
+    const newStatusClause = where.AND.find((clause) => clause.OR);
+    expect(newStatusClause.OR).toEqual(expect.arrayContaining([
+      { callifiedLeadStatus: null },
+      { callifiedLeadStatus: '' },
+      { callifiedLeadStatus: { contains: 'yet' } },
+    ]));
+    expect(prisma.contact.count).toHaveBeenCalledWith({ where });
+  });
+
+  test('Generic advanced Filter by New Call Status uses the same normalization', async () => {
+    const filters = encodeURIComponent(JSON.stringify([
+      { field: 'callifiedLeadStatus', operator: 'contains', values: ['yet_to_call'] },
+    ]));
+    const res = await request(makeApp()).get(
+      `/api/contacts?includeCrmStatuses=true&page=1&limit=100&filters=${filters}`,
+    );
+
+    expect(res.status).toBe(200);
+    const where = prisma.contact.findMany.mock.calls[0][0].where;
+    const serializedWhere = JSON.stringify(where);
+    expect(serializedWhere).toContain('"callifiedLeadStatus":null');
+    expect(serializedWhere).toContain('"callifiedLeadStatus":""');
+    expect(serializedWhere).toContain('"contains":"yet"');
+  });
+
   test('does not apply Generic-only fixed filters to another vertical', async () => {
     const res = await request(makeApp({ vertical: 'travel' })).get(
       '/api/contacts?page=1&leadSource=Referral&callifiedCampaignId=41&callifiedLeadStatus=qualified',

@@ -237,6 +237,8 @@ describe('iframe web-form embeds', () => {
     expect(code).toContain('<div class="gbs-web-form-embed" id="gbs-web-form-embed-7"');
     expect(code).toContain('document.createElement("iframe")');
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=7');
+    expect(code).toContain('embed=1');
+    expect(code).toContain('max-width:620px;margin:0 auto;');
     expect(code).toContain('gbs-web-form-host');
     expect(code.match(/<div\b/g)).toHaveLength(1);
     expect(code).not.toMatch(/<\/?(?:html|head|body)\b/i);

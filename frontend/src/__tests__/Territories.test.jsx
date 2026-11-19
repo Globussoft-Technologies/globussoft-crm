@@ -253,7 +253,6 @@ describe('<Territories /> — page surface', () => {
       expect(body.country).toBe('IN');
       expect(body.states).toEqual(['MH']);
       expect(body.regions).toEqual(['IN-MH']);
-      expect(body.assignedUserIds).toEqual([]);
     });
   });
 

@@ -2408,6 +2408,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                           return keys.map((key) => renderOverviewField(key));
                         })()}
                       </div>
+                      <button type="button" className="cp-link-btn cp-overview-show-all" onClick={() => setActiveTab('details')}>Show all</button>
                     </>
                   )}
                   {prefs.blocks && (
@@ -2535,7 +2536,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} lifecycleStageLabel={isGeneric ? activeStage : ''} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
           {activeTab === 'conversations' && <ConversationsTab key={`conversation-${conversationRefreshKey}`} contact={contact} contactId={id} hideSms={isTravel || isWellness} showWhatsapp={isGeneric} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}

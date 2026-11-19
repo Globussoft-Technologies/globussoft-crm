@@ -721,16 +721,6 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   description: "textarea",
 };
-const GENERIC_STATUS_FILTER_OPTIONS = Object.freeze([
-  { value: "new", label: "New" },
-  { value: "contacted", label: "Contacted" },
-  { value: "interested", label: "Interested" },
-  { value: "unqualified", label: "Unqualified" },
-  { value: "qualified", label: "Qualified" },
-  { value: "lost", label: "Lost" },
-  { value: "won", label: "Won" },
-  { value: "churned", label: "Churned" },
-]);
 const GENERIC_BACKEND_STATUS_OPTIONS = ["New", "Contacted", "Won", "Churned", "Junk", "Interested", "Unqualified", "Qualified", "Lost"];
 const GENERIC_STATUS_DISPLAY_MAP = { Lead: "New", Prospect: "Contacted", Customer: "Won" };
 const TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS = Object.freeze(["subBrand"]);
@@ -808,7 +798,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   webForm: 170,
   tags: 190,
   campaign: 190,
-  callStatus: 160,
+  callStatus: 190,
   callifiedAi: 122,
   callifiedScore: 128,
   interestedPlotArea: 190,
@@ -10007,7 +9997,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const renderLeadCallifiedBodyCell = (lead, key) => {
     if (key === "campaign") {
       return (
-        <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
+        <td className="leads-call-status-cell" style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
           <ScrollableSelect
             value={lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : ""}
             onChange={(campaignId) => handleCampaignChange(lead, campaignId)}
@@ -10033,7 +10023,7 @@ const Leads = ({ initialListState = null } = {}) => {
             <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "var(--surface-hover)", color: "var(--text-secondary)" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Classifying…</span>
           ) : (
             <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
-              <select className="input-field" value={normalizeCallStatus(lead.callifiedLeadStatus)} onChange={(e) => handleLeadStatusChange(lead, e.target.value)} disabled={!callifiedConfigured || !canLeadUpdate} style={{ padding: ".25rem .6rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, border: "none", cursor: "pointer", minWidth: "90px", color: meta.color, backgroundColor: meta.bg }} aria-label={`Call status for ${lead.name || "lead"}`}>
+              <select className="input-field leads-call-status-select" value={normalizeCallStatus(lead.callifiedLeadStatus)} onChange={(e) => handleLeadStatusChange(lead, e.target.value)} disabled={!callifiedConfigured || !canLeadUpdate} style={{ padding: ".25rem .6rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, border: "none", cursor: "pointer", minWidth: "125px", color: meta.color, backgroundColor: meta.bg }} aria-label={`Call status for ${lead.name || "lead"}`}>
                 {CALL_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
               {lead.callifiedLeadStatus && normalizeCallStatus(lead.callifiedLeadStatus) !== CALL_STATUS.YET_TO_CALL && <span title={buildLeadStatusTooltip(lead, { maxRetries: dnpMaxRetries })} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", cursor: "help", marginLeft: ".25rem", flexShrink: 0 }}><Info size={14} /></span>}
@@ -11627,9 +11617,11 @@ const Leads = ({ initialListState = null } = {}) => {
             </div>
 
             <FilterPanel
-              fieldsUrl="/api/contacts/filter-fields?status=Lead"
+              fieldsUrl={isGeneric ? "/api/contacts/filter-fields" : "/api/contacts/filter-fields?status=Lead"}
               valuesUrl={(field) =>
-                `/api/contacts/filter-values/${field}?status=Lead`
+                isGeneric
+                  ? `/api/contacts/filter-values/${field}?includeCrmStatuses=true`
+                  : `/api/contacts/filter-values/${field}?status=Lead`
               }
               filters={advancedFilters}
               onChange={(filters) => {
@@ -11662,10 +11654,6 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
-              allowedValueOptions={isGeneric ? {
-                status: GENERIC_STATUS_FILTER_OPTIONS,
-                lifecycleStageKey: GENERIC_STATUS_FILTER_OPTIONS,
-              } : undefined}
               additionalDefaultFieldKeys={
                 isTravel ? TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS : undefined
               }
@@ -13416,6 +13404,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         )}
                         {isLeadFixedColumnVisible("callStatus") && (
                           <td
+                            className="leads-call-status-cell"
                             style={getBodyCellStyle("callStatus")}
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -13490,7 +13479,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                   }}
                                 >
                                   <select
-                                    className="input-field"
+                                    className="input-field leads-call-status-select"
                                     value={normalizeCallStatus(
                                       lead.callifiedLeadStatus,
                                     )}
@@ -13510,7 +13499,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                       fontWeight: 600,
                                       border: "none",
                                       cursor: "pointer",
-                                      minWidth: "90px",
+                                      minWidth: "125px",
                                       color: meta.color,
                                       backgroundColor: meta.bg,
                                     }}
@@ -15074,9 +15063,11 @@ const Leads = ({ initialListState = null } = {}) => {
           )}
         {headerFilterRequest && (
           <FilterPanel
-            fieldsUrl="/api/contacts/filter-fields?status=Lead"
+            fieldsUrl={isGeneric ? "/api/contacts/filter-fields" : "/api/contacts/filter-fields?status=Lead"}
             valuesUrl={(field) =>
-              `/api/contacts/filter-values/${field}?status=Lead`
+              isGeneric
+                ? `/api/contacts/filter-values/${field}?includeCrmStatuses=true`
+                : `/api/contacts/filter-values/${field}?status=Lead`
             }
             filters={advancedFilters}
             onChange={(filters) => {
@@ -15091,7 +15082,6 @@ const Leads = ({ initialListState = null } = {}) => {
             showSelectedFilters={false}
             showCountBadge={false}
             onClose={() => setHeaderFilterRequest(null)}
-            allowedValueOptions={isGeneric ? { status: GENERIC_STATUS_FILTER_OPTIONS } : undefined}
           />
         )}
         {renameFieldState && (

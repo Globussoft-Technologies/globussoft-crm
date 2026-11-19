@@ -701,7 +701,7 @@ const TRACKING_FILTER_FIELDS = Object.freeze({
 });
 
 const CALL_STATUS_LABELS = {
-  [CALL_STATUS.YET_TO_CALL]: "Yet to Call",
+  [CALL_STATUS.YET_TO_CALL]: "New",
   [CALL_STATUS.CONNECTED]: "Connected",
   [CALL_STATUS.DNP]: "DNP",
   [CALL_STATUS.QUALIFIED]: "Qualified",
@@ -933,6 +933,39 @@ function buildFilterClause(fieldDef, operator, values) {
     };
   }
   return { OR: list.map((v) => ({ [column]: { contains: String(v) } })) };
+}
+
+// The UI normalizes any raw Callified value that is not a recognized outcome
+// to the New (yet_to_call) bucket. Keep the database predicate in sync with
+// that behavior, including legacy/unknown strings rather than only NULL and
+// the canonical literal.
+function buildYetToCallCallStatusClause() {
+  const column = "callifiedLeadStatus";
+  const classifiedFragments = [
+    "qualified", "hot", "junk", "cold", "pending", "follow_up", "unclear",
+    "dnp", "not_picked", "no_answer", "unanswered", "busy", "voicemail", "failed",
+    "connected", "in_progress", "calling",
+  ];
+  return {
+    OR: [
+      { [column]: null },
+      { [column]: "" },
+      { [column]: { contains: "yet" } },
+      {
+        AND: [
+          { [column]: { not: null } },
+          { [column]: { not: "" } },
+          {
+            NOT: {
+              OR: classifiedFragments.map((fragment) => ({
+                [column]: { contains: fragment },
+              })),
+            },
+          },
+        ],
+      },
+    ],
+  };
 }
 
 // Same operator semantics as buildFilterClause, but against the related
@@ -1673,7 +1706,21 @@ router.get("/", async (req, res) => {
             field: "callifiedLeadStatus",
           });
         }
-        where.callifiedLeadStatus = callifiedLeadStatus;
+        // The Generic Leads table normalizes an empty/null Callified status to
+        // "New" (yet_to_call). Include those legacy/unclassified rows when
+        // filtering for Yet to Call; matching only the literal value would
+        // incorrectly return just explicitly classified rows.
+        if (
+          (req.user.vertical || "generic") === "generic" &&
+          callifiedLeadStatus === CALL_STATUS.YET_TO_CALL
+        ) {
+          where.AND = [
+            ...(Array.isArray(where.AND) ? where.AND : []),
+            buildYetToCallCallStatusClause(),
+          ];
+        } else {
+          where.callifiedLeadStatus = callifiedLeadStatus;
+        }
       }
     }
     // Freshsales-style "Filter by" panel — ?filters=<JSON array>, each entry
@@ -1818,7 +1865,30 @@ router.get("/", async (req, res) => {
           if (ids !== null) clauses.push({ id: { in: ids } });
           continue;
         }
-        const clause = buildFilterClause(fieldDef, f.operator, rawValues);
+        let clause;
+        // Generic Leads renders NULL/blank Callified statuses as the New
+        // (yet_to_call) option. The advanced Filter by panel must use the
+        // same normalization as the table and direct query filter.
+        if (
+          (req.user.vertical || "generic") === "generic" &&
+          f.field === "callifiedLeadStatus" &&
+          f.operator === "contains" &&
+          rawValues.some((value) => String(value) === CALL_STATUS.YET_TO_CALL)
+        ) {
+          const otherValues = rawValues.filter(
+            (value) => String(value) !== CALL_STATUS.YET_TO_CALL,
+          );
+          clause = {
+            OR: [
+              buildYetToCallCallStatusClause(),
+              ...otherValues.map((value) => ({
+                callifiedLeadStatus: { contains: String(value) },
+              })),
+            ],
+          };
+        } else {
+          clause = buildFilterClause(fieldDef, f.operator, rawValues);
+        }
         if (clause) clauses.push(clause);
       }
       if (clauses.length > 0) where.AND = [...(where.AND || []), ...clauses];
@@ -2077,17 +2147,22 @@ router.get("/filter-values/:field", async (req, res) => {
   try {
     const viewAllLeads = await canViewAllLeads(req);
     const tenantId = req.user.tenantId;
-    // Same ?status scoping as /filter-fields (see that route's comment) —
-    // Leads.jsx passes ?status=Lead so the value list only shows values
-    // that actually occur among Lead-status rows, matching what /filter-
-    // fields already gated the field's very presence on. Without this, a
-    // field could correctly appear in the Leads picker (gated on Lead-scoped
-    // presence) but its value list would still include values that only
-    // ever occur on Customer/Prospect rows — same mismatch, one level down.
+    // Non-generic callers may pass ?status=... to scope values. Generic
+    // Leads passes ?includeCrmStatuses=true because its list intentionally
+    // includes every CRM status; the value list must use that same scope.
+    const genericLeadsPageScope =
+      req.query.includeCrmStatuses === "true" &&
+      (req.user.vertical || "generic") === "generic";
     const statusScope =
-      typeof req.query.status === "string" && req.query.status
+      !genericLeadsPageScope &&
+      typeof req.query.status === "string" &&
+      req.query.status
         ? req.query.status
         : null;
+    const assignedToScope =
+      genericLeadsPageScope && !viewAllLeads
+        ? { assignedToId: req.user.userId }
+        : {};
     const valueSearch =
       typeof req.query.q === "string" ? req.query.q.trim().slice(0, 191) : "";
     const scopeWhere = statusScope ? { status: statusScope } : {};
@@ -2123,8 +2198,14 @@ router.get("/filter-values/:field", async (req, res) => {
           valueText: valueSearch
             ? { contains: valueSearch }
             : { not: null },
-          ...(statusScope
-            ? { contact: { status: statusScope, deletedAt: null } }
+          ...(statusScope || Object.keys(assignedToScope).length
+            ? {
+                contact: {
+                  ...(statusScope ? { status: statusScope } : {}),
+                  ...assignedToScope,
+                  deletedAt: null,
+                },
+              }
             : {}),
         },
         select: { valueText: true },
@@ -2311,11 +2392,17 @@ router.get("/filter-values/:field", async (req, res) => {
       });
     }
     if (req.params.field === "callifiedLeadStatus") {
+      const callStatusValueWhere = genericLeadsPageScope
+        ? {}
+        : { callifiedLeadStatus: { not: null } };
+      const callStatusScope = genericLeadsPageScope
+        ? [scopeWhere, assignedToScope, callStatusValueWhere]
+        : [scopeWhere, callStatusValueWhere];
       const rows = await prisma.contact.findMany({
         where: {
           tenantId,
           deletedAt: null,
-          AND: [scopeWhere, { callifiedLeadStatus: { not: null } }],
+          AND: callStatusScope,
         },
         select: { callifiedLeadStatus: true },
         distinct: ["callifiedLeadStatus"],
@@ -2325,8 +2412,9 @@ router.get("/filter-values/:field", async (req, res) => {
       const seen = new Set();
       const values = [];
       for (const row of rows) {
-        if (row.callifiedLeadStatus == null || row.callifiedLeadStatus === "")
+        if (!genericLeadsPageScope && (row.callifiedLeadStatus == null || row.callifiedLeadStatus === "")) {
           continue;
+        }
         const normalized = normalizeLeadStatus(row.callifiedLeadStatus);
         if (seen.has(normalized)) continue;
         seen.add(normalized);
@@ -2439,7 +2527,15 @@ router.get("/filter-values/:field", async (req, res) => {
           ? { [fieldDef.column]: notNullFilter }
           : {};
     const rows = await prisma.contact.findMany({
-      where: { tenantId, deletedAt: null, AND: [scopeWhere, columnPredicate] },
+      where: {
+        tenantId,
+        deletedAt: null,
+        AND: [
+          scopeWhere,
+          ...(Object.keys(assignedToScope).length ? [assignedToScope] : []),
+          columnPredicate,
+        ],
+      },
       select: { [fieldDef.column]: true },
       distinct: [fieldDef.column],
       orderBy: { [fieldDef.column]: "asc" },

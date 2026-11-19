@@ -45,18 +45,6 @@ export default function Territories() {
     return [...availableStates.map(state => ({ value: state.code, label: state.name })), ...customOptions];
   }, [availableStates, form.selectedStates]);
   const countryOptions = useMemo(() => TERRITORY_COUNTRIES.map(country => ({ value: country.code, label: country.name })), []);
-  const managerUsers = useMemo(() => users.filter((member) => {
-    const role = String(member.primaryRole?.key || member.primaryRole?.name || member.role || '').toUpperCase().replace(/[ _-]+/g, '');
-    return !['USER', 'CUSTOMER', 'SALESPERSON', 'SALESREPRESENTATIVE', 'SALESREP'].includes(role);
-  }), [users]);
-  const teamUsers = useMemo(() => users.filter((member) => {
-    const role = String(member.primaryRole?.key || member.primaryRole?.name || member.role || '').toUpperCase().replace(/[ _-]+/g, '');
-    return role !== 'CUSTOMER';
-  }), [users]);
-  const teamOptions = useMemo(() => teamUsers.map(member => ({
-    value: member.id,
-    label: `${member.name || member.email} · ${member.primaryRole?.name || member.role || 'Staff'}`,
-  })), [teamUsers]);
 
   useEffect(() => {
     loadAll();
@@ -117,13 +105,12 @@ export default function Territories() {
         country: form.country,
         states: form.selectedStates,
         city: form.city.trim(),
-        managerId: form.managerId || null,
         isActive: form.isActive,
       } : {}),
       regions: isGeneric
         ? form.selectedStates.map((state) => `${form.country}-${state}`)
         : form.regionsText.split(',').map(s => s.trim()).filter(Boolean),
-      assignedUserIds: form.selectedUserIds,
+      ...(!isGeneric ? { assignedUserIds: form.selectedUserIds } : {}),
     };
     try {
       if (editing) {
@@ -406,21 +393,7 @@ export default function Territories() {
                   {!form.country ? <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>Select a country first.</div> : <MultiSelectDropdown options={stateOptions} selected={form.selectedStates} onChange={values => setForm({ ...form, selectedStates: values })} placeholder="Select states or regions" ariaLabel="States / regions" menuHeight={280} searchable />}
                   {form.country && availableStates.length === 0 && <div style={{ display: 'flex', gap: '0.5rem', marginTop: 6 }}><input className="input-field" value={form.customState} onChange={e => setForm({ ...form, customState: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomState(); } }} placeholder="Add state or region" style={{ flex: 1 }} /><button type="button" className="btn-secondary" onClick={addCustomState}>Add</button></div>}
                 </div>
-                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginBottom: '1rem' }}>
-                  <div style={{ fontWeight: 700, marginBottom: '0.75rem' }}>Assignment</div>
-                  <label htmlFor="territory-manager" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Territory manager</label>
-                  <select id="territory-manager" className="input-field" value={form.managerId} onChange={e => setForm({ ...form, managerId: e.target.value })} style={{ boxSizing: 'border-box', width: '100%', marginTop: 4, marginBottom: '0.85rem' }}>
-                    <option value="">Select manager</option>
-                    {managerUsers.map(u => <option key={u.id} value={u.id}>{u.name || u.email} · {u.primaryRole?.name || u.role}</option>)}
-                  </select>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Team / sales representatives</div>
-                  <div style={{ display: 'none' }}>
-                    {teamUsers.length === 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No eligible staff available.</span>}
-                    {teamUsers.map(u => <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', cursor: 'pointer' }}><input type="checkbox" checked={form.selectedUserIds.includes(u.id)} onChange={() => toggleUser(u.id)} /><span>{u.name || u.email} · {u.primaryRole?.name || u.role}</span></label>)}
-                  </div>
-                  <MultiSelectDropdown options={teamOptions} selected={form.selectedUserIds} onChange={values => setForm({ ...form, selectedUserIds: values })} placeholder="Select team members" ariaLabel="Team / sales representatives" menuHeight={260} searchable />
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.85rem', fontSize: '0.85rem' }}><input type="checkbox" checked={form.isActive} onChange={e => setForm({ ...form, isActive: e.target.checked })} />Active territory</label>
-                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.85rem', marginBottom: '1rem', fontSize: '0.85rem' }}><input type="checkbox" checked={form.isActive} onChange={e => setForm({ ...form, isActive: e.target.checked })} />Active territory</label>
               </>
             ) : (
               <div style={{ marginBottom: '1rem' }}>

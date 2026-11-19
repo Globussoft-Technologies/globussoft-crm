@@ -133,8 +133,9 @@ describe('buildWebFormEmbedCode', () => {
     const code = buildWebFormEmbedCode({ name: 'Contact Us', slug: 'contact-us' }, 'https://crm.example.com');
 
     expect(code).toContain('<div class="gbs-web-form-embed" id="gbs-web-form-embed-contact-us"');
+    expect(code).toContain('style="display:block;width:100%;max-width:620px;margin:0 auto;"');
     expect(code).toContain('document.createElement("iframe")');
-    expect(code).toContain('https://crm.example.com/embed/web-form.html?slug=contact-us');
+    expect(code).toContain('https://crm.example.com/embed/web-form.html?slug=contact-us&embed=1');
     expect(code).toContain('gbs-web-form-host');
     expect(code).not.toMatch(/<\/?(?:html|head|body)\b/i);
     expect(code).not.toContain('<iframe');
@@ -179,8 +180,9 @@ describe('buildWebFormScriptEmbedCode', () => {
     expect(code).toMatch(/^<script>/);
     expect(code).toContain('container.className="gbs-web-form-embed"');
     expect(code).toContain('container.id=config.containerId');
+    expect(code).toContain('max-width:620px;margin:0 auto;');
     expect(code).toContain('document.createElement("iframe")');
-    expect(code).toContain('https://crm.example.com/embed/web-form.html?id=104');
+    expect(code).toContain('https://crm.example.com/embed/web-form.html?id=104&embed=1');
     expect(code).toContain('gbs-web-form-host');
     expect(code).not.toContain('Contact </script> Form');
     expect(() => Function(code.slice('<script>'.length, -'</script>'.length))).not.toThrow();
@@ -247,8 +249,9 @@ describe('buildWebFormScriptEmbedCode', () => {
       const container = inserted[0];
       expect(container.className).toBe('gbs-web-form-embed');
       expect(container.id).toBe('gbs-web-form-embed-107');
+      expect(container.style.cssText).toContain('max-width:620px;margin:0 auto;');
       const frame = container.children[0];
-      expect(frame.src).toContain('https://crm.example.com/embed/web-form.html?id=107');
+      expect(frame.src).toContain('https://crm.example.com/embed/web-form.html?id=107&embed=1');
       expect(frame.src).toContain('utm_source=google');
       expect(frame.src).toContain('gclid=click-123');
       expect(frame.allow).toBe('geolocation *');
@@ -711,6 +714,11 @@ describe('public web form embed footer', () => {
   test('assigns each rendered web form a form-specific root id without breaking legacy custom CSS', () => {
     const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
 
+    expect(html).toContain('<html lang="en">');
+    expect(html).toContain('<head>');
+    expect(html).toContain('<body>');
+    expect(html).toContain('document.body.style.background = isEmbeddedForm');
+    expect(html).toContain('document.body.style.padding = "0"');
     expect(html).toContain('<div class="gbs-web-form-root"></div>');
     expect(html).not.toContain('<div id="app"></div>');
     expect(html).toContain('return "formid-" + (safeReference || "preview");');

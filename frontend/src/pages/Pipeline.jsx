@@ -181,6 +181,63 @@ export default function Pipeline() {
   const [stageFilter, setStageFilter] = useState(''); const [ownerFilter, setOwnerFilter] = useState(''); const [pipelineId, setPipelineId] = useState(() => searchParams.get('pipelineId') || ''); const [dealType, setDealType] = useState(() => searchParams.get('dealType') || ''); const [dealKind, setDealKind] = useState(() => searchParams.get('dealKind') || ''); const [showFilters, setShowFilters] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false); const [showCardCustomizer, setShowCardCustomizer] = useState(false); const [cardFields, setCardFields] = useState(() => { try { return JSON.parse(localStorage.getItem(cardFieldsKey)) || { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } catch { return { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } });
   const [expandedStageIds, setExpandedStageIds] = useState([]);
   const [showCreate, setShowCreate] = useState(false); const [createDealDefaults, setCreateDealDefaults] = useState({}); const [selectedDeal, setSelectedDeal] = useState(null); const [dragged, setDragged] = useState(null);
+  const genericBoardRef = useRef(null);
+
+  const updateGenericBoardScroll = useCallback(() => {
+    const board = genericBoardRef.current || document.querySelector('.generic-deals-pipeline .deals-pipeline-board');
+    if (!board || !isGeneric) return;
+    genericBoardRef.current = board;
+    const canScrollLeft = board.scrollLeft > 1;
+    const canScrollRight = board.scrollLeft + board.clientWidth < board.scrollWidth - 1;
+    const leftArrow = board.parentElement?.querySelector('.deals-pipeline-scroll-arrow--left');
+    const rightArrow = board.parentElement?.querySelector('.deals-pipeline-scroll-arrow--right');
+    if (leftArrow) leftArrow.disabled = !canScrollLeft;
+    if (rightArrow) rightArrow.disabled = !canScrollRight;
+  }, [isGeneric]);
+
+  useEffect(() => {
+    if (!isGeneric || view !== 'kanban') return undefined;
+    const board = genericBoardRef.current || document.querySelector('.generic-deals-pipeline .deals-pipeline-board');
+    if (!board) return undefined;
+    genericBoardRef.current = board;
+    updateGenericBoardScroll();
+    board.addEventListener('scroll', updateGenericBoardScroll, { passive: true });
+    window.addEventListener('resize', updateGenericBoardScroll);
+    return () => {
+      board.removeEventListener('scroll', updateGenericBoardScroll);
+      window.removeEventListener('resize', updateGenericBoardScroll);
+    };
+  }, [isGeneric, view, stages.length, deals.length, updateGenericBoardScroll]);
+
+  const scrollGenericBoard = useCallback((direction) => {
+    const board = genericBoardRef.current;
+    if (!board) return;
+    const distance = Math.max(board.clientWidth * 0.75, KANBAN_COLUMN_MIN_WIDTH);
+    if (typeof board.scrollBy === 'function') board.scrollBy({ left: direction * distance, behavior: 'smooth' });
+    else board.scrollLeft += direction * distance;
+    updateGenericBoardScroll();
+  }, [updateGenericBoardScroll]);
+
+  useEffect(() => {
+    if (!isGeneric || view !== 'kanban') return undefined;
+    const board = document.querySelector('.generic-deals-pipeline .deals-pipeline-board');
+    if (!board || board.parentElement.querySelector('.deals-pipeline-scroll-arrow')) return undefined;
+    const host = board.parentElement;
+    const arrows = [-1, 1].map((direction) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `deals-pipeline-scroll-arrow ${direction < 0 ? 'deals-pipeline-scroll-arrow--left' : 'deals-pipeline-scroll-arrow--right'}`;
+      button.setAttribute('aria-label', `Scroll pipeline ${direction < 0 ? 'left' : 'right'}`);
+      button.title = `Scroll pipeline ${direction < 0 ? 'left' : 'right'}`;
+      button.textContent = direction < 0 ? '‹' : '›';
+      button.addEventListener('click', () => scrollGenericBoard(direction));
+      host.appendChild(button);
+      return button;
+    });
+    host.style.position = 'relative';
+    updateGenericBoardScroll();
+    return () => arrows.forEach((button) => button.remove());
+  }, [isGeneric, view, stages.length, deals.length, scrollGenericBoard, updateGenericBoardScroll]);
 
   useEffect(() => {
     if (searchParams.get('create') !== '1') return;

@@ -1162,7 +1162,7 @@ var keys=${JSON.stringify(EMBED_ATTRIBUTION_QUERY_KEYS)};
 var taggedVisitKeys=["utm_source","utm_medium","utm_campaign","utm_id","utm_term","utm_content","gclid","gbraid","wbraid","fbclid","fbc","fbp","campaign_id","adset_id","ad_id","campaign_name","adset_name","ad_name"];
 var container=null;
 if(!${shouldCreateContainer ? "true" : "false"}){var previous=script.previousElementSibling;if(previous&&previous.id===config.containerId&&previous.classList.contains("gbs-web-form-embed"))container=previous;}
-if(!container){container=document.createElement("div");container.className="gbs-web-form-embed";container.id=config.containerId;container.style.cssText="display:block;width:100%;";var suffix=1;while(document.getElementById(container.id)){container.id=config.containerId+"-"+suffix++;}script.parentNode.insertBefore(container,script.nextSibling);}
+if(!container){container=document.createElement("div");container.className="gbs-web-form-embed";container.id=config.containerId;container.style.cssText="display:block;width:100%;max-width:620px;margin:0 auto;";var suffix=1;while(document.getElementById(container.id)){container.id=config.containerId+"-"+suffix++;}script.parentNode.insertBefore(container,script.nextSibling);}
 if(container.id===config.containerId&&document.getElementById(config.containerId)!==container){var requestedId=config.containerId,suffix=1;do{container.id=requestedId+"-"+suffix++;}while(document.getElementById(container.id)&&document.getElementById(container.id)!==container);}
 if(container.dataset.gbsWebFormLoaded==="true")return;
 container.dataset.gbsWebFormLoaded="true";
@@ -1192,6 +1192,7 @@ function buildEmbedCode(form, origin) {
   const formId = form?.id != null && String(form.id) !== "" ? String(form.id) : "";
   const formSlug = String(form?.slug || "");
   const params = new URLSearchParams(formId ? { id: formId } : { slug: formSlug });
+  params.set("embed", "1");
   if (form?.scope && form.scope !== "generic") params.set("scope", form.scope);
   const frameUrl = `${base}/embed/web-form.html?${params.toString()}`;
   const config = {
@@ -1203,7 +1204,7 @@ function buildEmbedCode(form, origin) {
   };
   return [
     "<!-- Globussoft CRM web form -->",
-    `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;"></div>`,
+    `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;max-width:620px;margin:0 auto;"></div>`,
     `<script>${buildEmbedHostRuntime(config)}</script>`,
   ].join("\n");
 }

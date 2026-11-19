@@ -21,7 +21,7 @@
 //     totalRows, present, halfDay, late, absent, holiday, totalMinutes,
 //     early,         // #802 — clock-in strictly before (start - tolerance)
 //     onTime,        // #802 — clock-in within ±tolerance of scheduled start
-//     policy: { shiftStartHour, shiftStartMinute, onTimeToleranceMin },
+//     policy: { shiftStartHour, shiftStartMinute, onTimeToleranceMin, timezone },
 //     byUser: { [userId]: { userId, days, minutes, present, halfDay,
 //                            late, absent, leaves, early?, onTime? } }
 //   }
@@ -54,6 +54,8 @@ const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
 // the three history endpoints (/me /staff/:id /summary) silently returned empty
 // rows when the operator passed to < from.
 const { validateDateRange } = require("../lib/validateDateRange");
+const { parseDateTimeLocalInTZ } = require("../lib/datetime");
+const { KEYS, getSetting } = require("../lib/tenantSettings");
 // Geo-tagged attendance (wellness only) — see lib/attendanceGeofence.js for
 // the full design rationale (multi-location, unenforced-when-unassigned,
 // accuracy threshold, per-Location radius).
@@ -184,6 +186,58 @@ function anchorDay(d) {
   return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
 }
 
+function anchorDayInTimezone(value, timezone) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Date.UTC(
+    Number(partMap.year),
+    Number(partMap.month) - 1,
+    Number(partMap.day),
+  ));
+}
+
+async function resolveAttendanceTimezone(tenantId) {
+  let country = "";
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { country: true },
+    });
+    country = String(tenant?.country || "").toUpperCase();
+  } catch (_error) {}
+
+  const fallback = country === "IN" ? "Asia/Kolkata" : "UTC";
+  let configured = fallback;
+  try {
+    configured = await getSetting(tenantId, KEYS.ATTENDANCE_TIMEZONE, {
+      coerce: String,
+      fallback,
+    });
+  } catch (_error) {}
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: configured }).format(new Date());
+    return configured;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function scheduledShiftInstant(row, hour, minute, timezone) {
+  const date = row.date instanceof Date ? row.date : new Date(row.date);
+  const dateKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  return parseDateTimeLocalInTZ(
+    `${dateKey}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+    timezone,
+  );
+}
+
 // Validate ISO date strings on inbound query params. Returns Date or null.
 function parseISO(s) {
   if (!s) return null;
@@ -193,19 +247,17 @@ function parseISO(s) {
 
 // #802 — Early / On-Time derivation for the /summary aggregator.
 //
-// No ShiftPolicy model exists yet, so we apply a single tenant-wide default
-// scheduled-start (09:00 UTC) and a tolerance window. The constants are
+// No ShiftPolicy model exists yet, so we apply a tenant-wide local-time
+// default scheduled-start (09:00) and a tolerance window. The constants are
 // env-overridable so demo / production operators can tune them without a
 // schema migration:
 //   - ATTENDANCE_SHIFT_START_HOUR (0-23, default 9)        -- the scheduled
-//     clock-in hour, UTC. Attendance.date is anchored to 00:00 UTC of the
-//     calendar day, so we apply this hour to that anchor for the comparison.
+//     clock-in hour in the tenant's attendance timezone.
 //   - ATTENDANCE_SHIFT_START_MINUTE (0-59, default 0)
 //   - ATTENDANCE_ON_TIME_TOLERANCE_MIN (default 15)        -- a clock-in
 //     within ±tolerance of the scheduled start counts as ON_TIME. Earlier
 //     than (start - tolerance) counts as EARLY. Later than (start +
-//     tolerance) counts as neither (and the LATE flag is set elsewhere; we
-//     don't re-derive it here, we just count rows where status === 'LATE').
+//     tolerance) counts as AFTER / late.
 //
 // These three counters (`early`, `onTime`) are derived purely from
 // clockInAt — they're orthogonal to the Attendance.status enum and don't
@@ -225,8 +277,8 @@ const ON_TIME_TOLERANCE_MIN = (() => {
 })();
 
 // Shift-end policy — mirrors the start-side constants so /summary can compute
-// Early / On-Time / Late Departure KPIs from clockOutAt. Defaults to 18:00 UTC
-// (6 PM). Operators can tune via ATTENDANCE_SHIFT_END_HOUR / _MINUTE.
+// Early / On-Time / Late Departure KPIs from clockOutAt. Defaults to 18:00 in
+// the tenant's attendance timezone. Operators can tune via ATTENDANCE_SHIFT_END_HOUR / _MINUTE.
 const SHIFT_END_HOUR = (() => {
   const v = parseInt(process.env.ATTENDANCE_SHIFT_END_HOUR, 10);
   return Number.isFinite(v) && v >= 0 && v <= 23 ? v : 18;
@@ -238,18 +290,10 @@ const SHIFT_END_MINUTE = (() => {
 
 // Returns "EARLY" | "ON_TIME" | "AFTER" | null. null means the row has no
 // clockInAt (ABSENT / HOLIDAY / un-punched-in).
-function classifyPunctuality(row) {
+function classifyPunctuality(row, timezone = "UTC") {
   if (!row || !row.clockInAt) return null;
-  const dayAnchor = row.date instanceof Date ? row.date : new Date(row.date);
-  const scheduled = new Date(Date.UTC(
-    dayAnchor.getUTCFullYear(),
-    dayAnchor.getUTCMonth(),
-    dayAnchor.getUTCDate(),
-    SHIFT_START_HOUR,
-    SHIFT_START_MINUTE,
-    0,
-    0
-  ));
+  const scheduled = scheduledShiftInstant(row, SHIFT_START_HOUR, SHIFT_START_MINUTE, timezone);
+  if (Number.isNaN(scheduled.getTime())) return null;
   const clockIn = row.clockInAt instanceof Date ? row.clockInAt : new Date(row.clockInAt);
   const deltaMin = (clockIn.getTime() - scheduled.getTime()) / 60000;
   if (deltaMin < -ON_TIME_TOLERANCE_MIN) return "EARLY";
@@ -262,18 +306,10 @@ function classifyPunctuality(row) {
 //   EARLY    — left before (shiftEnd - tolerance) — left early
 //   ON_TIME  — within ±tolerance of shiftEnd
 //   LATE     — left after (shiftEnd + tolerance) — worked overtime / late departure
-function classifyDeparture(row) {
+function classifyDeparture(row, timezone = "UTC") {
   if (!row || !row.clockOutAt) return null;
-  const dayAnchor = row.date instanceof Date ? row.date : new Date(row.date);
-  const scheduled = new Date(Date.UTC(
-    dayAnchor.getUTCFullYear(),
-    dayAnchor.getUTCMonth(),
-    dayAnchor.getUTCDate(),
-    SHIFT_END_HOUR,
-    SHIFT_END_MINUTE,
-    0,
-    0
-  ));
+  const scheduled = scheduledShiftInstant(row, SHIFT_END_HOUR, SHIFT_END_MINUTE, timezone);
+  if (Number.isNaN(scheduled.getTime())) return null;
   const clockOut = row.clockOutAt instanceof Date ? row.clockOutAt : new Date(row.clockOutAt);
   const deltaMin = (clockOut.getTime() - scheduled.getTime()) / 60000;
   if (deltaMin < -ON_TIME_TOLERANCE_MIN) return "EARLY";
@@ -288,9 +324,10 @@ function classifyDeparture(row) {
 router.post("/clock-in", verifyToken, async (req, res) => {
   try {
     const now = new Date();
-    const day = anchorDay(now);
     const userId = req.user.userId;
     const tenantId = req.user.tenantId;
+    const timezone = await resolveAttendanceTimezone(tenantId);
+    const day = anchorDayInTimezone(now, timezone);
 
     // Look for an existing row for today. If present, refuse a duplicate
     // clock-in (the user already started a shift). This is the most common
@@ -380,9 +417,10 @@ router.post("/clock-in", verifyToken, async (req, res) => {
 router.post("/clock-out", verifyToken, async (req, res) => {
   try {
     const now = new Date();
-    const day = anchorDay(now);
     const userId = req.user.userId;
     const tenantId = req.user.tenantId;
+    const timezone = await resolveAttendanceTimezone(tenantId);
+    const day = anchorDayInTimezone(now, timezone);
 
     const existing = await prisma.attendance.findUnique({
       where: { tenantId_userId_date: { tenantId, userId, date: day } },
@@ -573,6 +611,7 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
     }
 
     const rows = await prisma.attendance.findMany({ where });
+    const attendanceTimezone = await resolveAttendanceTimezone(req.user.tenantId);
 
     // #804 — fetch approved leave-requests overlapping the period so the
     // per-user breakdown can surface a leaves count. Filter to APPROVED only
@@ -606,30 +645,34 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       leaves = [];
     }
 
-    // #802 — punctuality buckets derived from clockInAt vs a tenant-wide
+    // #802 — punctuality buckets derived from clockInAt vs a tenant-local
     // scheduled-start (env-tunable). Independent of Attendance.status — a
     // PRESENT row can be EARLY, ON_TIME, or neither; an ABSENT row (no
     // clockInAt) is classified as null and contributes to neither counter.
     let earlyCount = 0;
     let onTimeCount = 0;
+    let lateArrivalCount = 0;
     // Departure-side mirror: Early / On-Time / Late Departure (from clockOutAt).
     let earlyDepartureCount = 0;
     let onTimeDepartureCount = 0;
     let lateDepartureCount = 0;
     const punctualityByUser = new Map(); // userId -> { early, onTime, earlyDeparture, onTimeDeparture, lateDeparture }
     for (const r of rows) {
-      const bucket = classifyPunctuality(r);
+      const bucket = classifyPunctuality(r, attendanceTimezone);
       if (bucket === "EARLY") earlyCount += 1;
       else if (bucket === "ON_TIME") onTimeCount += 1;
-      const dep = classifyDeparture(r);
+      const isLateArrival = bucket === "AFTER" || r.status === "LATE";
+      if (isLateArrival) lateArrivalCount += 1;
+      const dep = classifyDeparture(r, attendanceTimezone);
       if (dep === "EARLY") earlyDepartureCount += 1;
       else if (dep === "ON_TIME") onTimeDepartureCount += 1;
       else if (dep === "LATE") lateDepartureCount += 1;
-      if (bucket || dep) {
+      if (bucket || dep || isLateArrival) {
         const k = r.userId;
-        const acc = punctualityByUser.get(k) || { early: 0, onTime: 0, earlyDeparture: 0, onTimeDeparture: 0, lateDeparture: 0 };
+        const acc = punctualityByUser.get(k) || { early: 0, onTime: 0, late: 0, earlyDeparture: 0, onTimeDeparture: 0, lateDeparture: 0 };
         if (bucket === "EARLY") acc.early += 1;
         else if (bucket === "ON_TIME") acc.onTime += 1;
+        if (isLateArrival) acc.late += 1;
         if (dep === "EARLY") acc.earlyDeparture += 1;
         else if (dep === "ON_TIME") acc.onTimeDeparture += 1;
         else if (dep === "LATE") acc.lateDeparture += 1;
@@ -641,7 +684,7 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       totalRows: rows.length,
       present: rows.filter((r) => r.status === "PRESENT").length,
       halfDay: rows.filter((r) => r.status === "HALF_DAY").length,
-      late: rows.filter((r) => r.status === "LATE").length,
+      late: lateArrivalCount,
       absent: rows.filter((r) => r.status === "ABSENT").length,
       holiday: rows.filter((r) => r.status === "HOLIDAY").length,
       // #802 — Early / On-Time KPI tiles. Derived from clockInAt; see
@@ -664,6 +707,7 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
         shiftEndHour: SHIFT_END_HOUR,
         shiftEndMinute: SHIFT_END_MINUTE,
         onTimeToleranceMin: ON_TIME_TOLERANCE_MIN,
+        timezone: attendanceTimezone,
       },
       byUser: {},
     };
@@ -684,7 +728,6 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       summary.byUser[k].minutes += r.totalMinutes || 0;
       if (r.status === "PRESENT") summary.byUser[k].present += 1;
       if (r.status === "HALF_DAY") summary.byUser[k].halfDay += 1;
-      if (r.status === "LATE") summary.byUser[k].late += 1;
       if (r.status === "ABSENT") summary.byUser[k].absent += 1;
     }
     // #804 — overlay approved leaves onto the per-user buckets. A user with
@@ -723,9 +766,26 @@ router.get("/summary", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req
       };
       summary.byUser[k].early = p.early;
       summary.byUser[k].onTime = p.onTime;
+      summary.byUser[k].late = p.late;
       summary.byUser[k].earlyDeparture = p.earlyDeparture;
       summary.byUser[k].onTimeDeparture = p.onTimeDeparture;
       summary.byUser[k].lateDeparture = p.lateDeparture;
+    }
+
+    const summaryUserIds = [...new Set(
+      Object.values(summary.byUser).map((row) => row.userId).filter(Number.isFinite),
+    )];
+    if (summaryUserIds.length > 0) {
+      const staffUsers = await prisma.user.findMany({
+        where: { tenantId: req.user.tenantId, id: { in: summaryUserIds } },
+        select: { id: true, name: true, email: true },
+      });
+      const staffById = new Map(staffUsers.map((user) => [user.id, user]));
+      for (const row of Object.values(summary.byUser)) {
+        const staff = staffById.get(row.userId);
+        row.name = staff?.name || null;
+        row.email = staff?.email || null;
+      }
     }
     res.json(summary);
   } catch (e) {
@@ -764,13 +824,14 @@ router.get("/list", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, r
       take: 500,
       include: { user: { select: { id: true, name: true, email: true } } },
     });
+    const attendanceTimezone = await resolveAttendanceTimezone(req.user.tenantId);
 
     // Decorate each row with the punctuality + departure label + recorded-via
     // channel so the table can render without re-deriving anything.
     const items = rows.map((r) => ({
       ...r,
-      arrivalStatus: classifyPunctuality(r),     // "EARLY" | "ON_TIME" | "AFTER" | null
-      departureStatus: classifyDeparture(r),     // "EARLY" | "ON_TIME" | "LATE" | null
+      arrivalStatus: classifyPunctuality(r, attendanceTimezone),     // "EARLY" | "ON_TIME" | "AFTER" | null
+      departureStatus: classifyDeparture(r, attendanceTimezone),     // "EARLY" | "ON_TIME" | "LATE" | null
       // `source` on the row reflects the LAST write. We surface a coarse
       // "recordedVia" for both legs based on which leg has a location ID
       // attached — biometric punches carry locationId from the device, manual
@@ -1079,15 +1140,15 @@ function buildAttendanceExportWhere(req) {
 const ATTENDANCE_ARRIVAL_LABELS = { EARLY: "Early", ON_TIME: "On Time", AFTER: "Late" };
 const ATTENDANCE_DEPARTURE_LABELS = { EARLY: "Early", ON_TIME: "On Time", LATE: "Late" };
 
-function buildAttendanceExportRow(r) {
+function buildAttendanceExportRow(r, timezone = "UTC") {
   return {
     employeeName: r.user?.name || `User #${r.userId}`,
     employeeEmail: r.user?.email || "",
     date: r.date ? new Date(r.date).toISOString().slice(0, 10) : "",
     checkIn: r.clockInAt ? new Date(r.clockInAt).toISOString() : "",
     checkOut: r.clockOutAt ? new Date(r.clockOutAt).toISOString() : "",
-    checkInType: ATTENDANCE_ARRIVAL_LABELS[classifyPunctuality(r)] || "N/A",
-    checkOutType: ATTENDANCE_DEPARTURE_LABELS[classifyDeparture(r)] || "N/A",
+    checkInType: ATTENDANCE_ARRIVAL_LABELS[classifyPunctuality(r, timezone)] || "N/A",
+    checkOutType: ATTENDANCE_DEPARTURE_LABELS[classifyDeparture(r, timezone)] || "N/A",
     checkInRecordedVia: r.clockInLocationId ? "biometric" : "manual",
     checkOutRecordedVia: r.clockOutLocationId ? "biometric" : "manual",
     status: r.status || "",
@@ -1170,7 +1231,8 @@ router.get("/export", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req,
       take: 10000,
       include: { user: { select: { id: true, name: true, email: true } } },
     });
-    const exportRows = rows.map(buildAttendanceExportRow);
+    const attendanceTimezone = await resolveAttendanceTimezone(req.user.tenantId);
+    const exportRows = rows.map((row) => buildAttendanceExportRow(row, attendanceTimezone));
     const stamp = new Date().toISOString().slice(0, 10);
 
     if (resolveAttendanceFormat(req) === "xlsx") {
@@ -1690,7 +1752,8 @@ router.post("/biometric/webhook", async (req, res) => {
       return res.status(404).json({ error: "User not found in device's tenant", code: "USER_NOT_FOUND" });
     }
 
-    const day = anchorDay(ts);
+    const attendanceTimezone = await resolveAttendanceTimezone(device.tenantId);
+    const day = anchorDayInTimezone(ts, attendanceTimezone);
     const existing = await prisma.attendance.findUnique({
       where: { tenantId_userId_date: { tenantId: device.tenantId, userId, date: day } },
     });

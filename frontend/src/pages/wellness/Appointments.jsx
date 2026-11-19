@@ -4,6 +4,7 @@ import { Calendar, Search, Filter, RefreshCw, UserPlus, Phone, Package, ChevronL
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { useNotify } from '../../utils/notify';
+import { getImportedVisitDetails } from '../../utils/wellnessImportDetails';
 import { AssignDoctorModal, displayStatus } from './Calendar';
 import CallifiedCallDialog from '../../components/CallifiedCallDialog';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -399,7 +400,15 @@ export default function Appointments() {
               </tr>
             )}
             {!loading &&
-              visits.map((v) => (
+              visits.map((v) => {
+                const imported = getImportedVisitDetails(v);
+                const sourceStaff = imported?.staff && imported.staff.trim().toLowerCase() !== String(v.doctor?.name || '').trim().toLowerCase()
+                  ? imported.staff
+                  : '';
+                const sourceServices = imported?.services && imported.services.trim().toLowerCase() !== String(v.service?.name || '').trim().toLowerCase()
+                  ? imported.services
+                  : '';
+                return (
                 <tr key={v.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <Td>
                     <div style={{ fontWeight: 600 }}>
@@ -441,11 +450,36 @@ export default function Appointments() {
                       {v.doctor?.name || (
                         <span style={{ color: 'var(--text-secondary)' }}>Unassigned</span>
                       )}
+                      {sourceStaff && (
+                        <div style={{ maxWidth: 220, marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'normal' }}>
+                          Source staff: {sourceStaff}
+                        </div>
+                      )}
                     </Td>
                   )}
                   <Td>
                     {v.service?.name || (
                       <span style={{ color: 'var(--text-secondary)' }}>-</span>
+                    )}
+                    {sourceServices && (
+                      <div style={{ maxWidth: 240, marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'normal' }}>
+                        Source services: {sourceServices}
+                      </div>
+                    )}
+                    {v.bookingType === 'IN_HOME' && imported?.bookingType && (
+                      <div style={{ marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Source booking type: {imported.bookingType}
+                      </div>
+                    )}
+                    {imported?.bookingNotes && (
+                      <div title={imported.bookingNotes} style={{ maxWidth: 260, marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                        Booking note: {imported.bookingNotes}
+                      </div>
+                    )}
+                    {imported?.cancelReason && (
+                      <div title={imported.cancelReason} style={{ maxWidth: 260, marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                        Void/cancel reason: {imported.cancelReason}
+                      </div>
                     )}
                     {v.treatmentPlan && (
                       <div
@@ -533,7 +567,8 @@ export default function Appointments() {
                     </div>
                   </Td>
                 </tr>
-              ))}
+                );
+              })}
           </tbody>
         </table>
       </div>

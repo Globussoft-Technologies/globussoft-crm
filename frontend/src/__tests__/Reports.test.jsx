@@ -497,7 +497,7 @@ describe('<Reports /> — broad page surface', () => {
     expect(screen.getByText(/Report Name/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/e\.g\. Weekly Sales Summary/i)).toBeInTheDocument();
     expect(screen.getByText(/Report Type/i)).toBeInTheDocument();
-    expect(screen.getByText(/Frequency/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Frequency$/i)).toBeInTheDocument();
     expect(screen.getByText(/Format/i)).toBeInTheDocument();
     expect(
       screen.getByPlaceholderText(/admin@company\.com.*manager@company\.com/i)
@@ -586,6 +586,7 @@ describe('<Reports /> — broad page surface', () => {
     });
     render(<Reports />);
     fireEvent.click(screen.getByRole('button', { name: /Detailed Data/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Scheduled Reports/i }));
 
     await waitFor(() => {
       expect(
@@ -635,7 +636,8 @@ describe('<Reports /> — broad page surface', () => {
       ).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /CSV/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Excel \/ CSV/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /CSV \(\.csv\)/i }));
 
     await waitFor(() => {
       const fetchCall = fetchSpy.mock.calls.find(

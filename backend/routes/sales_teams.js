@@ -13,6 +13,18 @@ const includeTeam = {
   updatedBy: { select: userSelect },
 };
 const tenantWhere = (req, id) => ({ id, tenantId: req.user.tenantId });
+const validScopes = new Set(["Sales", "Support", "Technical", "Marketing", "HR", "Finance", "Operations"]);
+const readTeamFields = (body, generic = false) => ({
+  scope: validScopes.has(String(body?.scope || "")) ? String(body.scope) : "Sales",
+  description: body?.description === undefined ? undefined : String(body.description || "").trim() || null,
+  status: body?.status === "Inactive" ? "Inactive" : "Active",
+  ...(generic ? {
+    territoryMode: body?.territoryMode === "team" ? "team" : "individual",
+    territoryId: body?.territoryMode === "team" && body?.territoryId !== null && body?.territoryId !== undefined && body?.territoryId !== ""
+      ? (Number.isInteger(Number(body.territoryId)) && Number(body.territoryId) > 0 ? Number(body.territoryId) : null)
+      : null,
+  } : {}),
+});
 const resolveManagerId = async (req, res) => {
   if (req.body?.managerId === null || req.body?.managerId === "") return null;
   const managerId = Number(req.body?.managerId);
@@ -21,7 +33,7 @@ const resolveManagerId = async (req, res) => {
     return undefined;
   }
   const manager = await prisma.user.findFirst({
-    where: { id: managerId, tenantId: req.user.tenantId, role: { in: ["ADMIN", "MANAGER"] }, deactivatedAt: null },
+    where: { id: managerId, tenantId: req.user.tenantId, ...(req.user.vertical === "generic" ? {} : { role: { in: ["ADMIN", "MANAGER"] } }), deactivatedAt: null },
     select: { id: true },
   });
   if (!manager) {
@@ -46,7 +58,7 @@ router.post("/", async (req, res) => {
     const managerId = req.body?.managerId === undefined ? null : await resolveManagerId(req, res);
     if (managerId === undefined) return;
     const users = await prisma.user.findMany({ where: { tenantId: req.user.tenantId, id: { in: memberIds } }, select: { id: true } });
-    const team = await prisma.salesTeam.create({ data: { name, managerId, tenantId: req.user.tenantId, createdById: req.user.userId, updatedById: req.user.userId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
+    const team = await prisma.salesTeam.create({ data: { name, ...readTeamFields(req.body, req.user.vertical === "generic"), managerId, tenantId: req.user.tenantId, createdById: req.user.userId, updatedById: req.user.userId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
     res.status(201).json(team);
   } catch (_err) { res.status(500).json({ error: "Failed to create team", code: "TEAM_CREATE_FAILED" }); }
 });
@@ -66,7 +78,7 @@ router.put("/:id", async (req, res) => {
       await prisma.salesTeamMember.deleteMany({ where: { teamId: id, tenantId: req.user.tenantId } });
       await prisma.salesTeamMember.createMany({ data: users.map(({ id: userId }) => ({ teamId: id, userId, tenantId: req.user.tenantId })) });
     }
-    res.json(await prisma.salesTeam.update({ where: { id }, data: { name, managerId, updatedById: req.user.userId }, include: includeTeam }));
+    res.json(await prisma.salesTeam.update({ where: { id }, data: { name, ...readTeamFields(req.body, req.user.vertical === "generic"), managerId, updatedById: req.user.userId }, include: includeTeam }));
   } catch (_err) { res.status(500).json({ error: "Failed to update team", code: "TEAM_UPDATE_FAILED" }); }
 });
 

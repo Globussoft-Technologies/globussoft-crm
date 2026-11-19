@@ -44,13 +44,16 @@ function isSensitiveKey(key) {
   return SENSITIVE_KEYS.has(key);
 }
 
-function publicDefaults() {
-  return Object.fromEntries(
-    Object.entries(DEFAULTS).map(([key, value]) => [
-      key,
-      isSensitiveKey(key) ? null : value,
-    ]),
-  );
+function publicDefaults(overrides = {}) {
+  return {
+    ...Object.fromEntries(
+      Object.entries(DEFAULTS).map(([key, value]) => [
+        key,
+        isSensitiveKey(key) ? null : value,
+      ]),
+    ),
+    ...overrides,
+  };
 }
 
 function sensitiveDefaultState() {
@@ -73,6 +76,19 @@ function isKnownKey(key) {
 function defaultCategoryFor(key) {
   if (typeof key === "string" && key.startsWith("budgetCap_")) return "budget";
   return "general";
+}
+
+async function defaultForTenant(tenantId, key) {
+  if (key === KEYS.ATTENDANCE_TIMEZONE) {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { country: true },
+    });
+    return String(tenant?.country || "").toUpperCase() === "IN"
+      ? "Asia/Kolkata"
+      : "UTC";
+  }
+  return DEFAULTS[key] !== undefined ? DEFAULTS[key] : null;
 }
 
 // Per-key validation for operator-facing toggles/numbers. Returns
@@ -245,27 +261,36 @@ function validateTenantSettingValue(key, rawValue) {
       return { ok: false, code: "INVALID_RETRY_TIMEZONE", error: "Retry timezone must be a valid IANA timezone." };
     }
   }
+  if (key === KEYS.ATTENDANCE_TIMEZONE) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: String(rawValue) }).format(new Date());
+    } catch {
+      return { ok: false, code: "INVALID_ATTENDANCE_TIMEZONE", error: "Attendance timezone must be a valid IANA timezone." };
+    }
+  }
   return { ok: true };
 }
 
 // ─── GET / — list all overrides for caller's tenant + defaults map ────
 //
-// Returns BOTH the active rows AND the env-var defaults so the operator
-// UI can show "currently overridden" vs "running on default" per key in a
-// single response (no second round trip).
+// Returns the active rows and effective defaults so the operator UI can show
+// "currently overridden" vs "running on default" per key in one response.
 router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const rows = await prisma.tenantSetting.findMany({
-      where: { tenantId },
-      select: { key: true, value: true, category: true },
-      orderBy: [{ category: "asc" }, { key: "asc" }],
-    });
+    const [rows, attendanceTimezoneDefault] = await Promise.all([
+      prisma.tenantSetting.findMany({
+        where: { tenantId },
+        select: { key: true, value: true, category: true },
+        orderBy: [{ category: "asc" }, { key: "asc" }],
+      }),
+      defaultForTenant(tenantId, KEYS.ATTENDANCE_TIMEZONE),
+    ]);
     res.json({
       settings: rows.map((row) => isSensitiveKey(row.key)
         ? { ...row, value: "", hasValue: Boolean(row.value) }
         : row),
-      defaults: publicDefaults(),
+      defaults: publicDefaults({ [KEYS.ATTENDANCE_TIMEZONE]: attendanceTimezoneDefault }),
       sensitiveDefaults: sensitiveDefaultState(),
       allowedKeys: ALLOWED_KEYS,
     });
@@ -368,7 +393,7 @@ router.get("/:key", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const key = String(req.params.key);
-    let rawDefaultValue = DEFAULTS[key] !== undefined ? DEFAULTS[key] : null;
+    let rawDefaultValue = await defaultForTenant(tenantId, key);
     let defaultValue = isSensitiveKey(key) ? null : rawDefaultValue;
 
     const row = await prisma.tenantSetting.findUnique({
@@ -521,9 +546,7 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       key: updated.key,
       value: isSensitiveKey(key) ? "" : updated.value,
       ...(isSensitiveKey(key) ? { hasValue: Boolean(updated.value) } : {}),
-      defaultValue: isSensitiveKey(key)
-        ? null
-        : (DEFAULTS[key] !== undefined ? DEFAULTS[key] : null),
+      defaultValue: isSensitiveKey(key) ? null : await defaultForTenant(tenantId, key),
       isOverride: true,
       category: updated.category,
     });

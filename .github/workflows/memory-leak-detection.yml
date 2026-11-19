@@ -226,7 +226,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      NODE_OPTIONS: --max-old-space-size=1536
+      NODE_OPTIONS: --max-old-space-size=3072
     steps:
       - uses: actions/checkout@v5
       - name: Set up Node 24
@@ -243,5 +243,5 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
-          node --max-old-space-size=1536 ./node_modules/.bin/vite build --logLevel=error
-          echo "::notice::Frontend vite build completed within 1.5 GB heap ceiling"
+          node --max-old-space-size=3072 ./node_modules/.bin/vite build --logLevel=error
+          echo "::notice::Frontend vite build completed within 3 GB heap ceiling"

@@ -2841,7 +2841,7 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Team & Access", <>
-        <Link to="/sales-teams" icon={Users} label="Sales Teams" managerOnly />
+        <Link to="/sales-teams" icon={Users} label="Teams" managerOnly />
         <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
         <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
         <Link to="/territories" icon={Network} label="Territories" managerOnly />

@@ -184,7 +184,7 @@ async function findContactByImportedExternalId(tenantId, customFields, definitio
         ...typedWhere,
       },
       select: {
-        contact: { select: { id: true, deletedAt: true } },
+        contact: { select: { id: true, deletedAt: true, updatedAt: true } },
       },
       orderBy: { id: "asc" },
       take: 2,
@@ -958,6 +958,11 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         if (lifecycleStageKey) createData.lifecycleStageKey = lifecycleStageKey;
         const nativeImportData = isGeneric ? buildGenericNativeImportData(row) : {};
         Object.assign(createData, nativeImportData);
+        // When the source only provides the original creation date, a newly
+        // imported lead should not appear as updated at import time.
+        if (isGeneric && createData.createdAt && !createData.updatedAt) {
+          createData.updatedAt = createData.createdAt;
+        }
         const customFields = {};
         for (const definition of customDefinitions) {
           const mappedKey = `cf_${definition.fieldKey}`;
@@ -977,18 +982,27 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         if (source) updateData.source = source;
         if (lifecycleStageKey) updateData.lifecycleStageKey = lifecycleStageKey;
         Object.assign(updateData, nativeImportData);
+        // Imports must not rewrite the source record's creation timestamp or
+        // make an unchanged lead look freshly updated. Prisma's @updatedAt
+        // value is preserved by explicitly passing the existing timestamp.
+        if (isGeneric) {
+          delete updateData.createdAt;
+          delete updateData.updatedAt;
+        }
 
         let existing = null;
         if (email) {
           existing = await prisma.contact.findFirst({
             where: { email, tenantId: req.user.tenantId },
-            select: { id: true, deletedAt: true },
+            select: isGeneric
+              ? { id: true, deletedAt: true, updatedAt: true }
+              : { id: true, deletedAt: true },
           });
         }
         if (isGeneric && nativeImportData.externalId) {
           const externalMatch = await prisma.contact.findFirst({
             where: { externalId: nativeImportData.externalId, tenantId: req.user.tenantId },
-            select: { id: true, email: true, deletedAt: true },
+            select: { id: true, email: true, deletedAt: true, updatedAt: true },
           });
           if (externalMatch && existing && externalMatch.id !== existing.id) {
             recordImportError(
@@ -1017,7 +1031,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
           // matches before any update or tombstone deletion.
           const matches = await prisma.contact.findMany({
             where: { phone, tenantId: req.user.tenantId },
-            select: { id: true, deletedAt: true },
+            select: { id: true, deletedAt: true, updatedAt: true },
             orderBy: { id: "asc" },
             take: 2,
           });
@@ -1033,6 +1047,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         }
         let wasExisting = Boolean(existing);
         if (existing) {
+          if (isGeneric && existing.updatedAt) updateData.updatedAt = existing.updatedAt;
           await prisma.contact.update({ where: { id: existing.id }, data: updateData });
         } else {
           try {
@@ -1044,13 +1059,14 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
             if (isGeneric && nativeImportData.externalId && createError?.code === "P2002") {
               existing = await prisma.contact.findFirst({
                 where: { externalId: nativeImportData.externalId, tenantId: req.user.tenantId },
-                select: { id: true, deletedAt: true },
+                select: { id: true, deletedAt: true, updatedAt: true },
               });
               if (existing?.deletedAt) {
                 await hardDeleteContact(prisma, existing.id);
                 existing = null;
               }
               if (existing) {
+                if (isGeneric && existing.updatedAt) updateData.updatedAt = existing.updatedAt;
                 await prisma.contact.update({ where: { id: existing.id }, data: updateData });
                 wasExisting = true;
               } else {

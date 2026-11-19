@@ -26,6 +26,7 @@ import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 import { useSearchParams } from "react-router-dom";
 import { useActiveSubBrand } from "../utils/subBrand";
+import { getImportedInvoicePaymentBreakdown } from "../utils/wellnessImportDetails";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
 import TopScrollSync from "../components/TopScrollSync";
 import SearchableSingleSelect from "./wellness/services/SearchableSingleSelect";
@@ -369,18 +370,29 @@ function formatInvoiceQuantity(item) {
   return displayUnit ? `${quantity} ${displayUnit}` : String(quantity);
 }
 
-function formatPaymentMode(mode) {
+function formatPaymentMode(mode, invoiceAmount) {
   const labels = {
     manual: "Manual",
     razorpay: "Razorpay",
+    stripe: "Stripe",
     netbanking: "Net banking",
     wallet: "Wallet",
     emi: "EMI",
+    online: "Online",
+    paylater: "Pay later",
+    combined: "Mixed payment",
+    wallet_redemption: "Wallet redemption",
+    cashback_redemption: "Cashback redemption",
+    cashback: "Cashback",
   };
+  const hasZeroAmount = invoiceAmount !== null
+    && invoiceAmount !== undefined
+    && Number.isFinite(Number(invoiceAmount))
+    && Number(invoiceAmount) === 0;
   return WELLNESS_PAYMENT_MODES.find((option) => option.value === mode)?.label
     || labels[String(mode || "").toLowerCase()]
     || mode
-    || "Payment not received";
+    || (hasZeroAmount ? "No payment required" : "Payment not received");
 }
 
 const WELLNESS_PAYMENT_MODES = [
@@ -953,7 +965,7 @@ export default function Invoices() {
         ? hasSelectedCurrency
           ? totalInCurrency(outstanding, selectedCurrency, currencyRateByCode, getOutstandingAmount)
           : totalInCurrency(outstanding, fallbackCurrency, currencyRateByCode, getOutstandingAmount)
-        : totalsByCurrency(outstanding, fallbackCurrency),
+        : totalsByCurrency(outstanding, fallbackCurrency, getOutstandingAmount),
       totalPaidThisMonth: isGeneric
         ? hasSelectedCurrency
           ? totalInCurrency(
@@ -3012,6 +3024,7 @@ export default function Invoices() {
                   )}
                   {visibleInvoices.map((inv) => {
                     const wellnessLineItems = getInvoiceLineItems(inv);
+                    const importedPaymentBreakdown = getImportedInvoicePaymentBreakdown(inv);
                     const plotDetails = isGeneric ? getPlotInvoiceDetails(inv) : null;
                     const isPlotInvoice = Boolean(plotDetails) || /^PLOT-/i.test(inv.invoiceNum || "");
                     const displayInvoiceNum = isPlotInvoice
@@ -3154,8 +3167,16 @@ export default function Invoices() {
                         )}
                       </td>
                       {isWellness && (
-                        <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)" }}>
-                          {formatPaymentMode(inv.paymentMode)}
+                        <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                          <div>{formatPaymentMode(inv.paymentMode, inv.amount)}</div>
+                          {(inv.paymentMode === "combined" || inv.paymentMode === "other") && importedPaymentBreakdown.length > 0 && (
+                            <div
+                              title={importedPaymentBreakdown.map((item) => `${item.mode}: ${formatCurrency(item.amount, invoiceCurrency)}`).join(" · ")}
+                              style={{ maxWidth: 210, marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.3 }}
+                            >
+                              {importedPaymentBreakdown.map((item) => `${item.mode}: ${formatCurrency(item.amount, invoiceCurrency)}`).join(" · ")}
+                            </div>
+                          )}
                         </td>
                       )}
                       <td style={{ padding: "0.75rem 0.4rem" }}>

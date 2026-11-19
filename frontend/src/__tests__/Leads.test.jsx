@@ -2802,7 +2802,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
   it('opens the new header Filter by drawer without changing the existing column filter flows', async () => {
     let resolveEmailSearch;
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+      if (url === '/api/contacts/filter-fields' && opts?.silent === true) {
         return Promise.resolve({
           fields: [
             { field: 'status', label: 'Status', kind: 'text' },
@@ -2840,10 +2840,15 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           ] });
         });
       }
-      if (url === '/api/contacts/filter-values/lifecycleStageKey?status=Lead' && opts?.silent === true) {
+      if (typeof url === 'string' && url.includes('/api/contacts/filter-values/status') && opts?.silent === true) {
         return Promise.resolve({ values: [
-          { value: 'tenant-custom', label: 'Tenant Custom Stage' },
           { value: 'new', label: 'New' },
+          { value: 'contacted', label: 'Contacted' },
+          { value: 'interested', label: 'Interested' },
+          { value: 'qualified', label: 'Qualified' },
+          { value: 'lost', label: 'Lost' },
+          { value: 'won', label: 'Won' },
+          { value: 'churned', label: 'Churned' },
         ] });
       }
       return leadsFetchMock(url, opts);
@@ -2926,7 +2931,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     ).toBeInTheDocument();
     await waitFor(() => expect(resolveEmailSearch).toBeTypeOf('function'));
     expect(fetchApiMock).toHaveBeenCalledWith(
-      '/api/contacts/filter-values/email?status=Lead&q=ka',
+      '/api/contacts/filter-values/email?includeCrmStatuses=true&q=ka',
       { silent: true },
     );
     await act(async () => resolveEmailSearch());
@@ -2974,7 +2979,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     await waitFor(() => {
       const filterFieldsCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true,
+        ([url, opts]) => url === '/api/contacts/filter-fields' && opts?.silent === true,
       );
       expect(filterFieldsCall).toBeDefined();
     });
@@ -3019,11 +3024,24 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           ],
         });
       }
-      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+      if (url === '/api/contacts/filter-fields' && opts?.silent === true) {
         return Promise.resolve({
           fields: [
             { field: 'status', label: 'Status', kind: 'text' },
             { field: 'lifecycleStageKey', label: 'Status', kind: 'enum' },
+          ],
+        });
+      }
+      if (typeof url === 'string' && url.includes('/api/contacts/filter-values/status')) {
+        return Promise.resolve({
+          values: [
+            { value: 'new', label: 'New' },
+            { value: 'contacted', label: 'Contacted' },
+            { value: 'interested', label: 'Interested' },
+            { value: 'qualified', label: 'Qualified' },
+            { value: 'lost', label: 'Lost' },
+            { value: 'won', label: 'Won' },
+            { value: 'churned', label: 'Churned' },
           ],
         });
       }
@@ -3077,7 +3095,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           ],
         });
       }
-      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+      if (url === '/api/contacts/filter-fields' && opts?.silent === true) {
         return Promise.resolve({
           fields: [
             { field: 'name', label: 'Name', kind: 'text' },
@@ -4318,7 +4336,10 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     expect(screen.getByLabelText(/Assign Callified campaign for Alice Smith/i)).toBeEnabled();
-    expect(screen.getByLabelText(/Call status for Alice Smith/i)).toBeEnabled();
+    const aliceCallStatus = screen.getByLabelText(/Call status for Alice Smith/i);
+    expect(aliceCallStatus).toBeEnabled();
+    expect(within(aliceCallStatus).getByRole('option', { name: 'New' })).toBeInTheDocument();
+    expect(within(aliceCallStatus).queryByRole('option', { name: 'Yet to Call' })).toBeNull();
     expect(screen.getByRole('button', { name: /Call settings/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeEnabled();
   });

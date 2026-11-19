@@ -238,7 +238,7 @@ export default function Vendors() {
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
                 <th style={cellStyle}>Name</th>
-                <th style={cellStyle}>Contact</th>
+                <th style={cellStyle}>Contact person</th>
                 <th style={cellStyle}>Phone</th>
                 <th style={cellStyle}>GSTIN</th>
                 <th style={cellStyle}>Status</th>

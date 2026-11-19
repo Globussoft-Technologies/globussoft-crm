@@ -66,7 +66,8 @@ const TEMPLATES = [
     module: "contact",
     triggerType: "contact.created_or_updated",
     execution: "once",
-    description: "Notify Meta when a lead is identified as junk so future campaign data can be improved.",
+    description:
+      "Notify Meta when a lead is identified as junk so future campaign data can be improved.",
     groups: [
       {
         name: "Identify junk leads",
@@ -74,39 +75,57 @@ const TEMPLATES = [
         clauses: [
           { entity: "contact", field: "tags", op: "icontains", value: "junk" },
           { entity: "contact", field: "status", op: "eq", value: "Junk" },
-          { entity: "contact", field: "callifiedLeadStatus", op: "eq", value: "junk" },
+          {
+            entity: "contact",
+            field: "callifiedLeadStatus",
+            op: "eq",
+            value: "junk",
+          },
         ],
       },
       {
         name: "Require Meta lead ID",
         match: "all",
-        clauses: [{ entity: "contact", field: "metaLeadgenId", op: "exists", value: true }],
+        clauses: [
+          {
+            entity: "contact",
+            field: "metaLeadgenId",
+            op: "exists",
+            value: true,
+          },
+        ],
       },
     ],
-    actions: [{
-      type: "send_webhook",
-      config: {
-        url: "https://globussoft.ai/wp-json/junk-suppression/v1/webhook",
-        method: "POST",
-        encoding: "json",
-        bodyMode: "advanced",
-        bodyTemplate: JSON.stringify({
-          event: "junk_lead",
-          contact_id: "{{contactId}}",
-          meta_leadgen_id: "{{metaLeadgenId}}",
-          external_id: "{{externalId}}",
-          name: "{{name}}",
-          email: "{{email}}",
-          phone: "{{phone}}",
-          source: "{{source}}",
-          tags: "{{tags}}",
-          status: "{{status}}",
-          callified_lead_status: "{{callifiedLeadStatus}}",
-          callified_lead_status_reason: "{{callifiedLeadStatusReason}}",
-          meta_signal: "{{metaSignal}}",
-        }, null, 2),
+    actions: [
+      {
+        type: "send_webhook",
+        config: {
+          url: "https://globussoft.ai/wp-json/junk-suppression/v1/webhook",
+          method: "POST",
+          encoding: "json",
+          bodyMode: "advanced",
+          bodyTemplate: JSON.stringify(
+            {
+              event: "junk_lead",
+              contact_id: "{{contactId}}",
+              meta_leadgen_id: "{{metaLeadgenId}}",
+              external_id: "{{externalId}}",
+              name: "{{name}}",
+              email: "{{email}}",
+              phone: "{{phone}}",
+              source: "{{source}}",
+              tags: "{{tags}}",
+              status: "{{status}}",
+              callified_lead_status: "{{callifiedLeadStatus}}",
+              callified_lead_status_reason: "{{callifiedLeadStatusReason}}",
+              meta_signal: "{{metaSignal}}",
+            },
+            null,
+            2,
+          ),
+        },
       },
-    }],
+    ],
   },
   {
     name: "Send welcome email to new leads",
@@ -115,15 +134,25 @@ const TEMPLATES = [
     triggerType: "contact.created",
     execution: "once",
     description: "Greet every new lead the moment they enter the CRM.",
-    groups: [{ name: "Has an email address", match: "all", clauses: [{ entity: "contact", field: "email", op: "exists", value: true }] }],
-    actions: [{
-      type: "send_email",
-      config: {
-        to: "{{email}}",
-        subject: "Thanks for getting in touch, {{name}}",
-        body: "Hi {{name}},\n\nThanks for reaching out. A member of our team will be in touch shortly.\n\nBest regards,\nThe team",
+    groups: [
+      {
+        name: "Has an email address",
+        match: "all",
+        clauses: [
+          { entity: "contact", field: "email", op: "exists", value: true },
+        ],
       },
-    }],
+    ],
+    actions: [
+      {
+        type: "send_email",
+        config: {
+          to: "{{email}}",
+          subject: "Thanks for getting in touch, {{name}}",
+          body: "Hi {{name}},\n\nThanks for reaching out. A member of our team will be in touch shortly.\n\nBest regards,\nThe team",
+        },
+      },
+    ],
   },
   {
     name: "Set reminder to call new website leads",
@@ -131,12 +160,29 @@ const TEMPLATES = [
     module: "contact",
     triggerType: "contact.created",
     execution: "once",
-    description: "Create a same-day call-back task for every lead that arrives from the website.",
-    groups: [{ name: "Came from the website", match: "any", clauses: [
-      { entity: "contact", field: "source", op: "icontains", value: "web" },
-      { entity: "contact", field: "source", op: "eq", value: "Organic" },
-    ] }],
-    actions: [{ type: "create_task", config: { title: "Call new website lead: {{name}}", dueInDays: 0, priority: "High", taskType: "Call" } }],
+    description:
+      "Create a same-day call-back task for every lead that arrives from the website.",
+    groups: [
+      {
+        name: "Came from the website",
+        match: "any",
+        clauses: [
+          { entity: "contact", field: "source", op: "icontains", value: "web" },
+          { entity: "contact", field: "source", op: "eq", value: "Organic" },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "create_task",
+        config: {
+          title: "Call new website lead: {{name}}",
+          dueInDays: 0,
+          priority: "High",
+          taskType: "Call",
+        },
+      },
+    ],
   },
   {
     name: "Add deal for qualified leads",
@@ -144,9 +190,33 @@ const TEMPLATES = [
     module: "contact",
     triggerType: "contact.updated",
     execution: "once",
-    description: "Open a deal automatically the moment a lead is marked as qualified.",
-    groups: [{ name: "Lead became a prospect", match: "all", clauses: [{ entity: "contact", field: "status", op: "changed_to", value: "Prospect" }] }],
-    actions: [{ type: "create_deal", config: { title: "{{name}} — new opportunity", stage: "lead", amount: "0", expectedCloseInDays: 30 } }],
+    description:
+      "Open a deal automatically the moment a lead is marked as qualified.",
+    groups: [
+      {
+        name: "Lead became a prospect",
+        match: "all",
+        clauses: [
+          {
+            entity: "contact",
+            field: "status",
+            op: "changed_to",
+            value: "Prospect",
+          },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "create_deal",
+        config: {
+          title: "{{name}} — new opportunity",
+          stage: "lead",
+          amount: "0",
+          expectedCloseInDays: 30,
+        },
+      },
+    ],
   },
   {
     name: "Follow up on new deals",
@@ -154,9 +224,20 @@ const TEMPLATES = [
     module: "deal",
     triggerType: "deal.created",
     execution: "once",
-    description: "Give every new deal an owner task two days out so nothing goes quiet.",
+    description:
+      "Give every new deal an owner task two days out so nothing goes quiet.",
     groups: [{ name: "", match: "all", clauses: [] }],
-    actions: [{ type: "create_task", config: { title: "Follow up on {{title}}", dueInDays: 2, priority: "Medium", taskType: "Follow Up" } }],
+    actions: [
+      {
+        type: "create_task",
+        config: {
+          title: "Follow up on {{title}}",
+          dueInDays: 2,
+          priority: "Medium",
+          taskType: "Follow Up",
+        },
+      },
+    ],
   },
   {
     name: "Notify your team when deals are won",
@@ -164,9 +245,18 @@ const TEMPLATES = [
     module: "deal",
     triggerType: "deal.won",
     execution: "every",
-    description: "Celebrate closed business — notify the deal owner as soon as a deal is won.",
+    description:
+      "Celebrate closed business — notify the deal owner as soon as a deal is won.",
     groups: [{ name: "", match: "all", clauses: [] }],
-    actions: [{ type: "send_notification", config: { title: "Deal won: {{title}}", message: "{{title}} closed at {{amount}}. Nice work!" } }],
+    actions: [
+      {
+        type: "send_notification",
+        config: {
+          title: "Deal won: {{title}}",
+          message: "{{title}} closed at {{amount}}. Nice work!",
+        },
+      },
+    ],
   },
   {
     name: "Notify your team when deals are lost",
@@ -176,7 +266,15 @@ const TEMPLATES = [
     execution: "every",
     description: "Capture the reason a deal was lost while it is still fresh.",
     groups: [{ name: "", match: "all", clauses: [] }],
-    actions: [{ type: "send_notification", config: { title: "Deal lost: {{title}}", message: "{{title}} was marked lost. Reason: {{lostReason}}" } }],
+    actions: [
+      {
+        type: "send_notification",
+        config: {
+          title: "Deal lost: {{title}}",
+          message: "{{title}} was marked lost. Reason: {{lostReason}}",
+        },
+      },
+    ],
   },
   {
     name: "Change contact status to Interested",
@@ -184,12 +282,24 @@ const TEMPLATES = [
     module: "contact",
     triggerType: "contact.updated",
     execution: "every",
-    description: "Promote a lead to Prospect once its AI score clears the qualification bar.",
-    groups: [{ name: "High intent", match: "all", clauses: [
-      { entity: "contact", field: "aiScore", op: "gte", value: "70" },
-      { entity: "contact", field: "status", op: "eq", value: "Lead" },
-    ] }],
-    actions: [{ type: "update_field", config: { entity: "contact", field: "status", value: "Prospect" } }],
+    description:
+      "Promote a lead to Prospect once its AI score clears the qualification bar.",
+    groups: [
+      {
+        name: "High intent",
+        match: "all",
+        clauses: [
+          { entity: "contact", field: "aiScore", op: "gte", value: "70" },
+          { entity: "contact", field: "status", op: "eq", value: "Lead" },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "update_field",
+        config: { entity: "contact", field: "status", value: "Prospect" },
+      },
+    ],
   },
   {
     name: "Follow up on cold leads",
@@ -198,10 +308,37 @@ const TEMPLATES = [
     scheduled: true,
     triggerType: "schedule.date_field",
     execution: "once",
-    description: "Chase leads that were created 14 days ago and never progressed past Lead.",
-    scheduleConfig: { mode: "date_field", entity: "contact", field: "createdAt", offsetDays: 14, timeOfDay: "09:00", lookbackDays: 2, maxRecords: 500 },
-    groups: [{ name: "Still a lead", match: "all", clauses: [{ entity: "contact", field: "status", op: "eq", value: "Lead" }] }],
-    actions: [{ type: "create_task", config: { title: "Cold lead check-in: {{name}}", dueInDays: 1, priority: "Medium", taskType: "Call" } }],
+    description:
+      "Chase leads that were created 14 days ago and never progressed past Lead.",
+    scheduleConfig: {
+      mode: "date_field",
+      entity: "contact",
+      field: "createdAt",
+      offsetDays: 14,
+      timeOfDay: "09:00",
+      lookbackDays: 2,
+      maxRecords: 500,
+    },
+    groups: [
+      {
+        name: "Still a lead",
+        match: "all",
+        clauses: [
+          { entity: "contact", field: "status", op: "eq", value: "Lead" },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "create_task",
+        config: {
+          title: "Cold lead check-in: {{name}}",
+          dueInDays: 1,
+          priority: "Medium",
+          taskType: "Call",
+        },
+      },
+    ],
   },
   {
     name: "Notify your team about new leads",
@@ -211,7 +348,15 @@ const TEMPLATES = [
     execution: "once",
     description: "Ping the lead owner as soon as a new lead lands.",
     groups: [{ name: "", match: "all", clauses: [] }],
-    actions: [{ type: "send_notification", config: { title: "New lead: {{name}}", message: "{{name}} ({{email}}) arrived from {{source}}." } }],
+    actions: [
+      {
+        type: "send_notification",
+        config: {
+          title: "New lead: {{name}}",
+          message: "{{name}} ({{email}}) arrived from {{source}}.",
+        },
+      },
+    ],
   },
   {
     name: "Start customer onboarding after deal closure",
@@ -219,13 +364,28 @@ const TEMPLATES = [
     module: "deal",
     triggerType: "deal.won",
     execution: "once",
-    description: "Kick off onboarding — tag the account, open a kickoff task, and confirm by email.",
+    description:
+      "Kick off onboarding — tag the account, open a kickoff task, and confirm by email.",
     groups: [{ name: "", match: "all", clauses: [] }],
     actions: [
       { type: "add_tag", config: { tags: "customer, onboarding" } },
-      { type: "create_task", config: { title: "Onboarding kickoff: {{title}}", dueInDays: 1, priority: "High", taskType: "Meeting" } },
+      {
+        type: "create_task",
+        config: {
+          title: "Onboarding kickoff: {{title}}",
+          dueInDays: 1,
+          priority: "High",
+          taskType: "Meeting",
+        },
+      },
       { type: "wait", config: { delayMinutes: 1440 } },
-      { type: "send_email", config: { subject: "Welcome aboard!", body: "Hi {{name}},\n\nWelcome aboard. Your onboarding call is being scheduled and we will confirm the time shortly.\n\nBest regards,\nThe team" } },
+      {
+        type: "send_email",
+        config: {
+          subject: "Welcome aboard!",
+          body: "Hi {{name}},\n\nWelcome aboard. Your onboarding call is being scheduled and we will confirm the time shortly.\n\nBest regards,\nThe team",
+        },
+      },
     ],
   },
   {
@@ -235,10 +395,37 @@ const TEMPLATES = [
     scheduled: true,
     triggerType: "schedule.date_field",
     execution: "once",
-    description: "Remind the deal owner 30 days before a deal's expected close date.",
-    scheduleConfig: { mode: "date_field", entity: "deal", field: "expectedClose", offsetDays: -30, timeOfDay: "09:00", lookbackDays: 2, maxRecords: 500 },
-    groups: [{ name: "Still open", match: "all", clauses: [{ entity: "deal", field: "stage", op: "nin", value: ["won", "lost"] }] }],
-    actions: [{ type: "create_task", config: { title: "Renewal outreach: {{title}}", dueInDays: 0, priority: "High", taskType: "Call" } }],
+    description:
+      "Remind the deal owner 30 days before a deal's expected close date.",
+    scheduleConfig: {
+      mode: "date_field",
+      entity: "deal",
+      field: "expectedClose",
+      offsetDays: -30,
+      timeOfDay: "09:00",
+      lookbackDays: 2,
+      maxRecords: 500,
+    },
+    groups: [
+      {
+        name: "Still open",
+        match: "all",
+        clauses: [
+          { entity: "deal", field: "stage", op: "nin", value: ["won", "lost"] },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "create_task",
+        config: {
+          title: "Renewal outreach: {{title}}",
+          dueInDays: 0,
+          priority: "High",
+          taskType: "Call",
+        },
+      },
+    ],
   },
   {
     name: "Manage contact ownership based on account",
@@ -246,9 +433,28 @@ const TEMPLATES = [
     module: "contact",
     triggerType: "contact.created",
     execution: "once",
-    description: "Distribute unowned incoming leads evenly across the team, round-robin.",
-    groups: [{ name: "Unassigned", match: "all", clauses: [{ entity: "contact", field: "assignedToId", op: "not_exists", value: true }] }],
-    actions: [{ type: "assign_agent", config: { entity: "contact", mode: "round_robin", userIds: [] } }],
+    description:
+      "Distribute unowned incoming leads evenly across the team, round-robin.",
+    groups: [
+      {
+        name: "Unassigned",
+        match: "all",
+        clauses: [
+          {
+            entity: "contact",
+            field: "assignedToId",
+            op: "not_exists",
+            value: true,
+          },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "assign_agent",
+        config: { entity: "contact", mode: "round_robin", userIds: [] },
+      },
+    ],
   },
   {
     name: "Manage deal ownership based on account",
@@ -258,7 +464,12 @@ const TEMPLATES = [
     execution: "once",
     description: "Give a new deal the same owner as the account it belongs to.",
     groups: [{ name: "", match: "all", clauses: [] }],
-    actions: [{ type: "assign_agent", config: { entity: "deal", mode: "record_owner" } }],
+    actions: [
+      {
+        type: "assign_agent",
+        config: { entity: "deal", mode: "record_owner" },
+      },
+    ],
   },
   {
     name: "Send LinkedIn connection to new leads",
@@ -267,14 +478,36 @@ const TEMPLATES = [
     triggerType: "contact.created",
     execution: "once",
     description: "Push new leads to an outreach automation over a webhook.",
-    groups: [{ name: "Has a company", match: "all", clauses: [{ entity: "contact", field: "company", op: "exists", value: true }] }],
-    actions: [{
-      type: "send_webhook",
-      config: {
-        url: "", method: "POST", encoding: "json", bodyMode: "advanced",
-        bodyTemplate: JSON.stringify({ name: "{{name}}", company: "{{company}}", email: "{{email}}", title: "{{title}}" }, null, 2),
+    groups: [
+      {
+        name: "Has a company",
+        match: "all",
+        clauses: [
+          { entity: "contact", field: "company", op: "exists", value: true },
+        ],
       },
-    }],
+    ],
+    actions: [
+      {
+        type: "send_webhook",
+        config: {
+          url: "",
+          method: "POST",
+          encoding: "json",
+          bodyMode: "advanced",
+          bodyTemplate: JSON.stringify(
+            {
+              name: "{{name}}",
+              company: "{{company}}",
+              email: "{{email}}",
+              title: "{{title}}",
+            },
+            null,
+            2,
+          ),
+        },
+      },
+    ],
   },
   {
     name: "Chase overdue invoices",
@@ -282,11 +515,26 @@ const TEMPLATES = [
     module: "invoice",
     triggerType: "invoice.overdue",
     execution: "once",
-    description: "Email the customer and open a collections task the day an invoice goes past due.",
+    description:
+      "Email the customer and open a collections task the day an invoice goes past due.",
     groups: [{ name: "", match: "all", clauses: [] }],
     actions: [
-      { type: "send_email", config: { subject: "Invoice {{invoiceNum}} is overdue", body: "Hello,\n\nOur records show invoice {{invoiceNum}} for {{amount}} is now {{daysOverdue}} day(s) past its due date.\n\nIf payment is already on its way, please ignore this note.\n\nThank you." } },
-      { type: "create_task", config: { title: "Chase invoice {{invoiceNum}}", dueInDays: 1, priority: "High", taskType: "Call" } },
+      {
+        type: "send_email",
+        config: {
+          subject: "Invoice {{invoiceNum}} is overdue",
+          body: "Hello,\n\nOur records show invoice {{invoiceNum}} for {{amount}} is now {{daysOverdue}} day(s) past its due date.\n\nIf payment is already on its way, please ignore this note.\n\nThank you.",
+        },
+      },
+      {
+        type: "create_task",
+        config: {
+          title: "Chase invoice {{invoiceNum}}",
+          dueInDays: 1,
+          priority: "High",
+          taskType: "Call",
+        },
+      },
     ],
   },
   {
@@ -295,11 +543,22 @@ const TEMPLATES = [
     module: "ticket",
     triggerType: "sla.breached",
     execution: "once",
-    description: "Raise the priority and alert the team when a ticket misses its first-response SLA.",
+    description:
+      "Raise the priority and alert the team when a ticket misses its first-response SLA.",
     groups: [{ name: "", match: "all", clauses: [] }],
     actions: [
-      { type: "update_field", config: { entity: "ticket", field: "priority", value: "Critical" } },
-      { type: "send_notification", config: { title: "SLA breached: {{subject}}", message: "Ticket #{{ticketId}} missed its first-response SLA and has been escalated." } },
+      {
+        type: "update_field",
+        config: { entity: "ticket", field: "priority", value: "Critical" },
+      },
+      {
+        type: "send_notification",
+        config: {
+          title: "SLA breached: {{subject}}",
+          message:
+            "Ticket #{{ticketId}} missed its first-response SLA and has been escalated.",
+        },
+      },
     ],
   },
   {
@@ -309,13 +568,37 @@ const TEMPLATES = [
     scheduled: true,
     triggerType: "schedule.recurring",
     execution: "every",
-    description: "Every Monday at 9am, raise a review task for each open deal worth chasing.",
-    scheduleConfig: { mode: "recurring", entity: "deal", frequency: "weekly", dayOfWeek: 1, timeOfDay: "09:00", maxRecords: 200 },
-    groups: [{ name: "Open and material", match: "all", clauses: [
-      { entity: "deal", field: "stage", op: "nin", value: ["won", "lost"] },
-      { entity: "deal", field: "amount", op: "gt", value: "0" },
-    ] }],
-    actions: [{ type: "create_task", config: { title: "Weekly review: {{title}}", dueInDays: 2, priority: "Medium", taskType: "Follow Up" } }],
+    description:
+      "Every Monday at 9am, raise a review task for each open deal worth chasing.",
+    scheduleConfig: {
+      mode: "recurring",
+      entity: "deal",
+      frequency: "weekly",
+      dayOfWeek: 1,
+      timeOfDay: "09:00",
+      maxRecords: 200,
+    },
+    groups: [
+      {
+        name: "Open and material",
+        match: "all",
+        clauses: [
+          { entity: "deal", field: "stage", op: "nin", value: ["won", "lost"] },
+          { entity: "deal", field: "amount", op: "gt", value: "0" },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "create_task",
+        config: {
+          title: "Weekly review: {{title}}",
+          dueInDays: 2,
+          priority: "Medium",
+          taskType: "Follow Up",
+        },
+      },
+    ],
   },
   {
     name: "Wish contacts a happy birthday",
@@ -325,9 +608,35 @@ const TEMPLATES = [
     triggerType: "schedule.date_field",
     execution: "every",
     description: "Send a greeting on each contact's birthday, every year.",
-    scheduleConfig: { mode: "date_field", entity: "contact", field: "birthDate", offsetDays: 0, annual: true, timeOfDay: "09:00", lookbackDays: 1, maxRecords: 500 },
-    groups: [{ name: "Has an email address", match: "all", clauses: [{ entity: "contact", field: "email", op: "exists", value: true }] }],
-    actions: [{ type: "send_email", config: { to: "{{email}}", subject: "Happy birthday, {{name}}!", body: "Hi {{name}},\n\nWishing you a very happy birthday from all of us.\n\nBest regards,\nThe team" } }],
+    scheduleConfig: {
+      mode: "date_field",
+      entity: "contact",
+      field: "birthDate",
+      offsetDays: 0,
+      annual: true,
+      timeOfDay: "09:00",
+      lookbackDays: 1,
+      maxRecords: 500,
+    },
+    groups: [
+      {
+        name: "Has an email address",
+        match: "all",
+        clauses: [
+          { entity: "contact", field: "email", op: "exists", value: true },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: "send_email",
+        config: {
+          to: "{{email}}",
+          subject: "Happy birthday, {{name}}!",
+          body: "Hi {{name}},\n\nWishing you a very happy birthday from all of us.\n\nBest regards,\nThe team",
+        },
+      },
+    ],
   },
 ];
 
@@ -338,38 +647,122 @@ const TEMPLATES = [
 // `invoice.overdue` offered but inert. These constants are the offline
 // fallback used until that request resolves (and in unit tests).
 const FALLBACK_TRIGGERS = [
-  { module: "contact", value: "contact.created_or_updated", label: "When a lead is created or updated" },
-  { module: "contact", value: "contact.created", label: "When a lead is created" },
-  { module: "contact", value: "contact.updated", label: "When a lead is updated" },
+  {
+    module: "contact",
+    value: "contact.created_or_updated",
+    label: "When a lead is created or updated",
+  },
+  {
+    module: "contact",
+    value: "contact.created",
+    label: "When a lead is created",
+  },
+  {
+    module: "contact",
+    value: "contact.updated",
+    label: "When a lead is updated",
+  },
   { module: "deal", value: "deal.created", label: "When a deal is created" },
   // Corrected: fires on update only. It used to read "created or updated",
   // which is what deal.created is for.
   { module: "deal", value: "deal.updated", label: "When a deal is updated" },
-  { module: "deal", value: "deal.stage_changed", label: "When a deal stage changes" },
+  {
+    module: "deal",
+    value: "deal.stage_changed",
+    label: "When a deal stage changes",
+  },
   { module: "deal", value: "deal.won", label: "When a deal is won" },
   { module: "deal", value: "deal.lost", label: "When a deal is lost" },
   { module: "task", value: "task.created", label: "When a task is created" },
-  { module: "task", value: "task.completed", label: "When a task is completed" },
-  { module: "ticket", value: "ticket.created", label: "When a ticket is created" },
+  {
+    module: "task",
+    value: "task.completed",
+    label: "When a task is completed",
+  },
+  {
+    module: "ticket",
+    value: "ticket.created",
+    label: "When a ticket is created",
+  },
   // Corrected: update-only, same reason as deal.updated.
-  { module: "ticket", value: "ticket.updated", label: "When a ticket is updated" },
-  { module: "ticket", value: "sla.breached", label: "When a ticket SLA is breached" },
-  { module: "invoice", value: "invoice.created", label: "When an invoice is created" },
-  { module: "invoice", value: "invoice.paid", label: "When an invoice is paid" },
-  { module: "invoice", value: "invoice.completed", label: "When an invoice is completed" },
-  { module: "invoice", value: "invoice.voided", label: "When an invoice is voided" },
-  { module: "invoice", value: "invoice.refunded", label: "When an invoice is refunded" },
-  { module: "invoice", value: "invoice.overdue", label: "When an invoice becomes overdue" },
-  { module: "payment", value: "payment.collected", label: "When a payment is collected" },
+  {
+    module: "ticket",
+    value: "ticket.updated",
+    label: "When a ticket is updated",
+  },
+  {
+    module: "ticket",
+    value: "sla.breached",
+    label: "When a ticket SLA is breached",
+  },
+  {
+    module: "invoice",
+    value: "invoice.created",
+    label: "When an invoice is created",
+  },
+  {
+    module: "invoice",
+    value: "invoice.paid",
+    label: "When an invoice is paid",
+  },
+  {
+    module: "invoice",
+    value: "invoice.completed",
+    label: "When an invoice is completed",
+  },
+  {
+    module: "invoice",
+    value: "invoice.voided",
+    label: "When an invoice is voided",
+  },
+  {
+    module: "invoice",
+    value: "invoice.refunded",
+    label: "When an invoice is refunded",
+  },
+  {
+    module: "invoice",
+    value: "invoice.overdue",
+    label: "When an invoice becomes overdue",
+  },
+  {
+    module: "payment",
+    value: "payment.collected",
+    label: "When a payment is collected",
+  },
   // `lead.converted` appeared under BOTH the contact and lead modules, so the
   // same trigger showed up twice in the contact tab. It belongs to leads.
-  { module: "lead", value: "lead.converted", label: "When a lead is converted" },
-  { module: "approval", value: "approval.created", label: "When an approval is created" },
-  { module: "approval", value: "approval.approved", label: "When an approval is approved" },
-  { module: "approval", value: "approval.rejected", label: "When an approval is rejected" },
+  {
+    module: "lead",
+    value: "lead.converted",
+    label: "When a lead is converted",
+  },
+  {
+    module: "approval",
+    value: "approval.created",
+    label: "When an approval is created",
+  },
+  {
+    module: "approval",
+    value: "approval.approved",
+    label: "When an approval is approved",
+  },
+  {
+    module: "approval",
+    value: "approval.rejected",
+    label: "When an approval is rejected",
+  },
   // Time-based. Offered on every module.
-  { module: "*", value: "schedule.date_field", label: "Before / after a date field" },
-  { module: "*", value: "schedule.recurring", label: "On a recurring schedule" },
+  {
+    module: "*",
+    value: "schedule.date_field",
+    label: "Before / after a date field",
+  },
+  {
+    module: "*",
+    value: "schedule.recurring",
+    label: "On a recurring schedule",
+  },
 ];
 
 const FALLBACK_ACTIONS = [
@@ -377,16 +770,28 @@ const FALLBACK_ACTIONS = [
   { value: "send_sms", label: "Send SMS", icon: Send },
   { value: "send_notification", label: "Send notification", icon: Activity },
   { value: "create_task", label: "Create task", icon: Check },
-  { value: "create_appointment", label: "Create appointment", icon: CalendarClock },
+  {
+    value: "create_appointment",
+    label: "Create appointment",
+    icon: CalendarClock,
+  },
   { value: "create_deal", label: "Create deal", icon: Activity },
   { value: "update_field", label: "Update field", icon: Pencil },
   { value: "add_tag", label: "Add tag", icon: TagIcon },
   { value: "remove_tag", label: "Remove tag", icon: TagIcon },
   { value: "assign_agent", label: "Assign owner", icon: Users },
   { value: "add_to_sequence", label: "Add to sales sequence", icon: Send },
-  { value: "remove_from_sequence", label: "Remove from sales sequence", icon: Send },
+  {
+    value: "remove_from_sequence",
+    label: "Remove from sales sequence",
+    icon: Send,
+  },
   { value: "send_webhook", label: "Trigger webhook", icon: Webhook },
-  { value: "create_approval", label: "Create approval request", icon: ShieldCheck },
+  {
+    value: "create_approval",
+    label: "Create approval request",
+    icon: ShieldCheck,
+  },
   { value: "wait", label: "Wait / delay", icon: Timer },
   { value: "delete_record", label: "Delete record", icon: Trash2 },
 ];
@@ -422,8 +827,16 @@ const FALLBACK_OPERATORS = [
   { value: "nin", label: "is none of", arity: "list" },
   { value: "exists", label: "is not empty", arity: "none" },
   { value: "not_exists", label: "is empty", arity: "none" },
-  { value: "date_within_next", label: "is within the next (days)", arity: "value" },
-  { value: "date_within_past", label: "is within the past (days)", arity: "value" },
+  {
+    value: "date_within_next",
+    label: "is within the next (days)",
+    arity: "value",
+  },
+  {
+    value: "date_within_past",
+    label: "is within the past (days)",
+    arity: "value",
+  },
   { value: "date_before", label: "is before (days from now)", arity: "value" },
   { value: "date_after", label: "is after (days from now)", arity: "value" },
   { value: "changed", label: "has changed", arity: "none" },
@@ -431,18 +844,235 @@ const FALLBACK_OPERATORS = [
   { value: "changed_from", label: "changed from", arity: "value" },
 ];
 
-
 const FALLBACK_FIELD_OPTIONS = {
-  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "webForm", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content"],
+  contact: [
+    "contactId",
+    "name",
+    "email",
+    "phone",
+    "company",
+    "title",
+    "status",
+    "source",
+    "webForm",
+    "tags",
+    "aiScore",
+    "assignedToId",
+    "firstTouchSource",
+    "lastTouchSource",
+    "callifiedLeadStatus",
+    "callifiedLeadStatusReason",
+    "externalId",
+    "metaLeadgenId",
+    "metaSignal",
+    "metaIsJunk",
+    "metaIsQualified",
+    "changedFields",
+    "createdAt",
+    "whatsappPhone",
+    "lifecycleStageKey",
+    "medium",
+    "subBrand",
+    "aiScoreLastComputedAt",
+    "callifiedCampaignId",
+    "callifiedLeadStatusSource",
+    "callifiedLeadStatusUpdatedAt",
+    "interestedPlotArea",
+    "callifiedDnpRetryCount",
+    "callifiedDnpNextRetryAt",
+    "industry",
+    "companySize",
+    "linkedin",
+    "website",
+    "facebookUrl",
+    "githubUrl",
+    "twitterUrl",
+    "lastEnrichedAt",
+    "territoryId",
+    "treatmentOfInterest",
+    "birthDate",
+    "anniversary",
+    "gst",
+    "walletBalance",
+    "stateCode",
+    "billingStateCode",
+    "referrerContactId",
+    "description",
+    "updatedAt",
+    "firstResponseDueAt",
+    "firstResponseAt",
+    "slaBreached",
+    "slaBreachedAt",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_id",
+    "utm_term",
+    "utm_content",
+  ],
   // fromStage / toStage ride on every deal.stage_changed payload but were
   // absent here, which is why "stage changed from X to Y" could not be built.
-  deal: ["dealId", "title", "amount", "currency", "stage", "probability", "fromStage", "toStage", "lostReason", "expectedClose", "contactId", "ownerId", "userId", "dealType", "pipelineId", "winLossReasonId", "createdAt"],
-  task: ["taskId", "title", "status", "priority", "type", "outcome", "dueDate", "contactId", "userId", "notes", "createdAt", "projectId"],
-  ticket: ["ticketId", "subject", "description", "status", "priority", "contactId", "assigneeId", "slaResponseDue", "slaResolveDue", "firstResponseAt", "resolvedAt", "breached", "breachedAt", "createdAt", "updatedAt"],
-  invoice: ["invoiceId", "invoiceNum", "status", "amount", "dueDate", "daysOverdue", "contactId", "dealId", "issuedDate", "paidAt", "isRecurring", "recurFrequency", "nextRecurDate", "parentInvoiceId", "currency", "amountPaid", "balance"],
-  payment: ["paymentId", "invoiceId", "contactId", "amount", "currency", "status", "method", "description", "gateway", "gatewayId", "plotPaymentReference", "paidAt", "metadata", "createdAt"],
-  lead: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields", "createdAt", "whatsappPhone", "lifecycleStageKey", "medium", "subBrand", "aiScoreLastComputedAt", "callifiedCampaignId", "callifiedLeadStatusSource", "callifiedLeadStatusUpdatedAt", "interestedPlotArea", "callifiedDnpRetryCount", "callifiedDnpNextRetryAt", "industry", "companySize", "linkedin", "website", "facebookUrl", "githubUrl", "twitterUrl", "lastEnrichedAt", "territoryId", "treatmentOfInterest", "birthDate", "anniversary", "gst", "walletBalance", "stateCode", "billingStateCode", "referrerContactId", "description", "updatedAt", "firstResponseDueAt", "firstResponseAt", "slaBreached", "slaBreachedAt", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content"],
-  approval: ["approvalId", "entity", "entityId", "status", "reason", "requesterId", "approverId", "comment", "requestedAt", "approvedAt"],
+  deal: [
+    "dealId",
+    "title",
+    "amount",
+    "currency",
+    "stage",
+    "probability",
+    "fromStage",
+    "toStage",
+    "lostReason",
+    "expectedClose",
+    "contactId",
+    "ownerId",
+    "userId",
+    "dealType",
+    "pipelineId",
+    "winLossReasonId",
+    "createdAt",
+  ],
+  task: [
+    "taskId",
+    "title",
+    "status",
+    "priority",
+    "type",
+    "outcome",
+    "dueDate",
+    "contactId",
+    "userId",
+    "notes",
+    "createdAt",
+    "projectId",
+  ],
+  ticket: [
+    "ticketId",
+    "subject",
+    "description",
+    "status",
+    "priority",
+    "contactId",
+    "assigneeId",
+    "slaResponseDue",
+    "slaResolveDue",
+    "firstResponseAt",
+    "resolvedAt",
+    "breached",
+    "breachedAt",
+    "createdAt",
+    "updatedAt",
+  ],
+  invoice: [
+    "invoiceId",
+    "invoiceNum",
+    "status",
+    "amount",
+    "dueDate",
+    "daysOverdue",
+    "contactId",
+    "dealId",
+    "issuedDate",
+    "paidAt",
+    "isRecurring",
+    "recurFrequency",
+    "nextRecurDate",
+    "parentInvoiceId",
+    "currency",
+    "amountPaid",
+    "balance",
+  ],
+  payment: [
+    "paymentId",
+    "invoiceId",
+    "contactId",
+    "amount",
+    "currency",
+    "status",
+    "method",
+    "description",
+    "gateway",
+    "gatewayId",
+    "plotPaymentReference",
+    "paidAt",
+    "metadata",
+    "createdAt",
+  ],
+  lead: [
+    "contactId",
+    "name",
+    "email",
+    "phone",
+    "company",
+    "title",
+    "status",
+    "source",
+    "tags",
+    "aiScore",
+    "assignedToId",
+    "firstTouchSource",
+    "lastTouchSource",
+    "callifiedLeadStatus",
+    "callifiedLeadStatusReason",
+    "externalId",
+    "metaLeadgenId",
+    "metaSignal",
+    "metaIsJunk",
+    "metaIsQualified",
+    "changedFields",
+    "createdAt",
+    "whatsappPhone",
+    "lifecycleStageKey",
+    "medium",
+    "subBrand",
+    "aiScoreLastComputedAt",
+    "callifiedCampaignId",
+    "callifiedLeadStatusSource",
+    "callifiedLeadStatusUpdatedAt",
+    "interestedPlotArea",
+    "callifiedDnpRetryCount",
+    "callifiedDnpNextRetryAt",
+    "industry",
+    "companySize",
+    "linkedin",
+    "website",
+    "facebookUrl",
+    "githubUrl",
+    "twitterUrl",
+    "lastEnrichedAt",
+    "territoryId",
+    "treatmentOfInterest",
+    "birthDate",
+    "anniversary",
+    "gst",
+    "walletBalance",
+    "stateCode",
+    "billingStateCode",
+    "referrerContactId",
+    "description",
+    "updatedAt",
+    "firstResponseDueAt",
+    "firstResponseAt",
+    "slaBreached",
+    "slaBreachedAt",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_id",
+    "utm_term",
+    "utm_content",
+  ],
+  approval: [
+    "approvalId",
+    "entity",
+    "entityId",
+    "status",
+    "reason",
+    "requesterId",
+    "approverId",
+    "comment",
+    "requestedAt",
+    "approvedAt",
+  ],
 };
 
 // Date columns a schedule.date_field rule may anchor to. Mirrors
@@ -492,7 +1122,9 @@ const catalogue = {
   actions: FALLBACK_ACTIONS,
   actionModules: FALLBACK_ACTION_MODULES,
   operators: FALLBACK_OPERATORS,
-  operatorArity: Object.fromEntries(FALLBACK_OPERATORS.map((op) => [op.value, op.arity])),
+  operatorArity: Object.fromEntries(
+    FALLBACK_OPERATORS.map((op) => [op.value, op.arity]),
+  ),
   fields: FALLBACK_FIELD_OPTIONS,
   fieldLabels: {},
   scheduleDateFields: FALLBACK_SCHEDULE_DATE_FIELDS,
@@ -520,7 +1152,9 @@ function applyServerSchema(schema) {
     // Icons are a purely visual concern the API has no business owning, so
     // they stay local and are matched back on by value. An action the server
     // adds that this build has no icon for still renders, with a neutral one.
-    const iconFor = new Map(FALLBACK_ACTIONS.map((action) => [action.value, action.icon]));
+    const iconFor = new Map(
+      FALLBACK_ACTIONS.map((action) => [action.value, action.icon]),
+    );
     catalogue.actions = schema.actions.map((action) => ({
       value: action.value,
       label: action.label,
@@ -528,14 +1162,18 @@ function applyServerSchema(schema) {
     }));
     catalogue.actionModules = Object.fromEntries(
       schema.actions
-        .filter((action) => Array.isArray(action.modules) && action.modules.length)
+        .filter(
+          (action) => Array.isArray(action.modules) && action.modules.length,
+        )
         .map((action) => [action.value, action.modules]),
     );
   }
 
   if (Array.isArray(schema.operators) && schema.operators.length) {
     catalogue.operators = schema.operators;
-    catalogue.operatorArity = Object.fromEntries(schema.operators.map((op) => [op.value, op.arity]));
+    catalogue.operatorArity = Object.fromEntries(
+      schema.operators.map((op) => [op.value, op.arity]),
+    );
   }
 
   if (schema.fields && typeof schema.fields === "object") {
@@ -544,15 +1182,21 @@ function applyServerSchema(schema) {
     catalogue.fields = Object.fromEntries(
       Object.entries(schema.fields).map(([module, fields]) => [
         module,
-        (Array.isArray(fields) ? fields : []).map((field) => (typeof field === "string" ? field : field.value)),
+        (Array.isArray(fields) ? fields : []).map((field) =>
+          typeof field === "string" ? field : field.value,
+        ),
       ]),
     );
     catalogue.fieldLabels = Object.fromEntries(
       Object.entries(schema.fields).map(([module, fields]) => [
         module,
-        Object.fromEntries((Array.isArray(fields) ? fields : []).map((field) => (
-          typeof field === "string" ? [field, field] : [field.value, field.label || field.value]
-        ))),
+        Object.fromEntries(
+          (Array.isArray(fields) ? fields : []).map((field) =>
+            typeof field === "string"
+              ? [field, field]
+              : [field.value, field.label || field.value],
+          ),
+        ),
       ]),
     );
   }
@@ -563,11 +1207,13 @@ function applyServerSchema(schema) {
     catalogue.scheduleDateFields = Object.fromEntries(
       Object.entries(schema.scheduleEntities).map(([entity, value]) => [
         entity,
-        (value && Array.isArray(value.dateFields) ? value.dateFields : []).map((field) => ({
-          value: field.value,
-          label: field.label,
-          annual: !!field.annualDefault,
-        })),
+        (value && Array.isArray(value.dateFields) ? value.dateFields : []).map(
+          (field) => ({
+            value: field.value,
+            label: field.label,
+            annual: !!field.annualDefault,
+          }),
+        ),
       ]),
     );
   }
@@ -580,7 +1226,9 @@ function applyServerSchema(schema) {
 // exact list here so "Customize table" and workflow conditions cannot drift.
 // A few presentation keys map back to their real Contact payload names.
 function applyGenericLeadColumns(response) {
-  const columns = Array.isArray(response?.availableColumns) ? response.availableColumns : [];
+  const columns = Array.isArray(response?.availableColumns)
+    ? response.availableColumns
+    : [];
   if (!columns.length) return false;
   const payloadFieldAliases = {
     assignedTo: "assignedToId",
@@ -588,13 +1236,16 @@ function applyGenericLeadColumns(response) {
     callStatus: "callifiedLeadStatus",
     lastUpdated: "updatedAt",
   };
-  const values = columns.map((column) => (
-    column.filterField || payloadFieldAliases[column.key] || column.key
-  ));
-  const labels = Object.fromEntries(columns.map((column, index) => [
-    values[index],
-    column.label || values[index],
-  ]));
+  const values = columns.map(
+    (column) =>
+      column.filterField || payloadFieldAliases[column.key] || column.key,
+  );
+  const labels = Object.fromEntries(
+    columns.map((column, index) => [
+      values[index],
+      column.label || values[index],
+    ]),
+  );
   catalogue.fields.contact = values;
   catalogue.fields.lead = values;
   catalogue.fieldLabels.contact = labels;
@@ -604,8 +1255,17 @@ function applyGenericLeadColumns(response) {
 
 const scheduleEntityValues = () => Object.keys(catalogue.scheduleDateFields);
 
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const isScheduleTrigger = (triggerType) => String(triggerType || "").startsWith("schedule.");
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+const isScheduleTrigger = (triggerType) =>
+  String(triggerType || "").startsWith("schedule.");
 
 const DEFAULT_LEAD_WEBHOOK_FIELDS = new Set([
   "name",
@@ -623,7 +1283,9 @@ const DEFAULT_LEAD_WEBHOOK_FIELDS = new Set([
 const defaultWebhookSelectedFields = (module) => {
   const availableFields = catalogue.fields[module] || [];
   if (module !== "contact" && module !== "lead") return availableFields;
-  return availableFields.filter((field) => DEFAULT_LEAD_WEBHOOK_FIELDS.has(field));
+  return availableFields.filter((field) =>
+    DEFAULT_LEAD_WEBHOOK_FIELDS.has(field),
+  );
 };
 
 const defaultWebhookConfig = (module) => ({
@@ -633,20 +1295,53 @@ const defaultWebhookConfig = (module) => ({
   bodyMode: "simple",
   selectedFields: defaultWebhookSelectedFields(module),
   headers: [],
-  bodyTemplate: JSON.stringify({
-    lead_id: "{{contactId}}",
-    classification: "{{status}}",
-    tags: "{{tags}}",
-    source: "{{source}}",
-  }, null, 2),
+  bodyTemplate: JSON.stringify(
+    {
+      lead_id: "{{contactId}}",
+      classification: "{{status}}",
+      tags: "{{tags}}",
+      source: "{{source}}",
+    },
+    null,
+    2,
+  ),
 });
 
 // Mirrors WORKFLOW_ENTITIES[].mutableFields in backend/lib/workflowSchema.js —
 // the allow-list update_field is checked against server-side.
 const MUTABLE_FIELD_OPTIONS = {
-  contact: ["name", "email", "phone", "company", "title", "status", "source", "assignedToId", "aiScore", "subBrand"],
-  deal: ["title", "amount", "currency", "probability", "stage", "expectedClose", "lostReason", "ownerId"],
-  task: ["title", "dueDate", "status", "priority", "notes", "userId", "type", "outcome"],
+  contact: [
+    "name",
+    "email",
+    "phone",
+    "company",
+    "title",
+    "status",
+    "source",
+    "assignedToId",
+    "aiScore",
+    "subBrand",
+  ],
+  deal: [
+    "title",
+    "amount",
+    "currency",
+    "probability",
+    "stage",
+    "expectedClose",
+    "lostReason",
+    "ownerId",
+  ],
+  task: [
+    "title",
+    "dueDate",
+    "status",
+    "priority",
+    "notes",
+    "userId",
+    "type",
+    "outcome",
+  ],
   ticket: ["subject", "description", "status", "priority", "assigneeId"],
 };
 
@@ -665,16 +1360,34 @@ const defaultScheduleConfig = (module) => {
   };
 };
 
-const defaultTriggerForModule = (module) => catalogue.triggers.find((trigger) => trigger.module === module)?.value || "contact.created";
+const defaultTriggerForModule = (module) =>
+  catalogue.triggers.find((trigger) => trigger.module === module)?.value ||
+  "contact.created";
 // `module: "*"` triggers (the time-based ones) are offered on every module.
-const triggersForModule = (module) => catalogue.triggers.filter((trigger) => (
-  trigger.module === module
-  || (module === "contact" && trigger.module === "lead")
-  || trigger.module === "*"
-));
-const actionsForModule = (module) => catalogue.actions.filter((action) => !catalogue.actionModules[action.value] || catalogue.actionModules[action.value].includes(module));
-const defaultCondition = (module = "contact") => ({ entity: module, field: "", op: "eq", value: "" });
-const defaultGroup = (module = "contact") => ({ name: "", match: "all", clauses: [defaultCondition(module)] });
+const triggersForModule = (module) =>
+  catalogue.triggers.filter(
+    (trigger) =>
+      trigger.module === module ||
+      (module === "contact" && trigger.module === "lead") ||
+      trigger.module === "*",
+  );
+const actionsForModule = (module) =>
+  catalogue.actions.filter(
+    (action) =>
+      !catalogue.actionModules[action.value] ||
+      catalogue.actionModules[action.value].includes(module),
+  );
+const defaultCondition = (module = "contact") => ({
+  entity: module,
+  field: "",
+  op: "eq",
+  value: "",
+});
+const defaultGroup = (module = "contact") => ({
+  name: "",
+  match: "all",
+  clauses: [defaultCondition(module)],
+});
 const operatorArity = (op) => catalogue.operatorArity[op] || "value";
 
 function formatDate(value, fallback = "Not run yet") {
@@ -691,7 +1404,10 @@ function formatDateTime(value, fallback = "\u2014") {
 
 function workflowOrder(workflow) {
   try {
-    const targetState = typeof workflow.targetState === "string" ? JSON.parse(workflow.targetState) : workflow.targetState;
+    const targetState =
+      typeof workflow.targetState === "string"
+        ? JSON.parse(workflow.targetState)
+        : workflow.targetState;
     const order = Number(targetState?.order);
     return Number.isFinite(order) ? order : Number.POSITIVE_INFINITY;
   } catch (_error) {
@@ -704,32 +1420,49 @@ function workflowTypeLabel(workflow, isGenericCrm) {
 
   let entity = "";
   try {
-    const condition = typeof workflow.condition === "string" ? JSON.parse(workflow.condition) : workflow.condition;
-    const groups = Array.isArray(condition) ? [{ clauses: condition }] : condition?.groups;
-    entity = groups?.flatMap((group) => group?.clauses || []).find((clause) => clause?.entity)?.entity || "";
-  } catch (_error) { /* fall back to the configured workflow module */ }
+    const condition =
+      typeof workflow.condition === "string"
+        ? JSON.parse(workflow.condition)
+        : workflow.condition;
+    const groups = Array.isArray(condition)
+      ? [{ clauses: condition }]
+      : condition?.groups;
+    entity =
+      groups
+        ?.flatMap((group) => group?.clauses || [])
+        .find((clause) => clause?.entity)?.entity || "";
+  } catch (_error) {
+    /* fall back to the configured workflow module */
+  }
 
   if (!entity) {
     try {
-      const target = typeof workflow.targetState === "string" ? JSON.parse(workflow.targetState) : workflow.targetState;
+      const target =
+        typeof workflow.targetState === "string"
+          ? JSON.parse(workflow.targetState)
+          : workflow.targetState;
       entity = target?.module || "";
-    } catch (_error) { /* fall back to the trigger below */ }
+    } catch (_error) {
+      /* fall back to the trigger below */
+    }
   }
   entity ||= workflow.triggerType?.split(".")[0] || "crm";
 
-  return ({
-    // Generic CRM leads are persisted in the Contact model, but the product
-    // surface consistently calls them Leads (module buttons, triggers, and
-    // workflow conditions). Keep that internal storage name out of the list.
-    contact: "Leads",
-    lead: "Leads",
-    deal: "Deals",
-    task: "Tasks",
-    ticket: "Tickets",
-    invoice: "Invoices",
-    payment: "Payments",
-    approval: "Approvals",
-  })[entity] || `${entity.charAt(0).toUpperCase()}${entity.slice(1)}`;
+  return (
+    {
+      // Generic CRM leads are persisted in the Contact model, but the product
+      // surface consistently calls them Leads (module buttons, triggers, and
+      // workflow conditions). Keep that internal storage name out of the list.
+      contact: "Leads",
+      lead: "Leads",
+      deal: "Deals",
+      task: "Tasks",
+      ticket: "Tickets",
+      invoice: "Invoices",
+      payment: "Payments",
+      approval: "Approvals",
+    }[entity] || `${entity.charAt(0).toUpperCase()}${entity.slice(1)}`
+  );
 }
 
 function emptyRule(template) {
@@ -739,12 +1472,22 @@ function emptyRule(template) {
     name: selected.name || "Untitled workflow",
     description: selected.description || "",
     module: selected.module || "contact",
-    triggerType: selected.triggerType || defaultTriggerForModule(selected.module || "contact"),
+    triggerType:
+      selected.triggerType ||
+      defaultTriggerForModule(selected.module || "contact"),
     execution: selected.execution || "once",
     groups: selected.groups || [defaultGroup(selected.module || "contact")],
-    actions: selected.actions || [{ type: selected.action || "send_email", config: selected.actionConfig || {} }],
-    scheduleConfig: selected.scheduleConfig
-      || (isScheduleTrigger(selected.triggerType) ? defaultScheduleConfig(selected.module || "contact") : null),
+    actions: selected.actions || [
+      {
+        type: selected.action || "send_email",
+        config: selected.actionConfig || {},
+      },
+    ],
+    scheduleConfig:
+      selected.scheduleConfig ||
+      (isScheduleTrigger(selected.triggerType)
+        ? defaultScheduleConfig(selected.module || "contact")
+        : null),
     order: null,
     isActive: false,
     health: null,
@@ -763,8 +1506,14 @@ function emptyWebhookRule() {
 function isWebhookWorkflow(workflow) {
   if (workflow?.actionType === "send_webhook") return true;
   try {
-    const target = typeof workflow?.targetState === "string" ? JSON.parse(workflow.targetState) : workflow?.targetState;
-    return Array.isArray(target?.actions) && target.actions.some((action) => action?.type === "send_webhook");
+    const target =
+      typeof workflow?.targetState === "string"
+        ? JSON.parse(workflow.targetState)
+        : workflow?.targetState;
+    return (
+      Array.isArray(target?.actions) &&
+      target.actions.some((action) => action?.type === "send_webhook")
+    );
   } catch {
     return false;
   }
@@ -772,21 +1521,32 @@ function isWebhookWorkflow(workflow) {
 
 function fromRule(rule) {
   let target = {};
-  try { target = rule.targetState ? JSON.parse(rule.targetState) : {}; } catch { target = {}; }
+  try {
+    target = rule.targetState ? JSON.parse(rule.targetState) : {};
+  } catch {
+    target = {};
+  }
   // Rules authored before the Generic CRM tabs were consolidated may carry
   // target.module/entity = "lead". Contacts are the underlying lead records,
   // so normalize only the editor representation and preserve the trigger.
-  const module = target.module === "lead" ? "contact" : (target.module || "contact");
+  const module =
+    target.module === "lead" ? "contact" : target.module || "contact";
   let groups = [];
   try {
     const parsed = rule.condition ? JSON.parse(rule.condition) : [];
-    groups = parsed?.groups || (Array.isArray(parsed) && parsed.length ? [{ name: "", match: "all", clauses: parsed }] : []);
-  } catch { groups = []; }
+    groups =
+      parsed?.groups ||
+      (Array.isArray(parsed) && parsed.length
+        ? [{ name: "", match: "all", clauses: parsed }]
+        : []);
+  } catch {
+    groups = [];
+  }
   groups = groups.map((group) => ({
     ...group,
-    clauses: (group.clauses || []).map((clause) => (
-      clause.entity === "lead" ? { ...clause, entity: "contact" } : clause
-    )),
+    clauses: (group.clauses || []).map((clause) =>
+      clause.entity === "lead" ? { ...clause, entity: "contact" } : clause,
+    ),
   }));
   return {
     id: rule.id,
@@ -796,14 +1556,21 @@ function fromRule(rule) {
     triggerType: rule.triggerType,
     execution: target.execution || "once",
     groups: groups.length ? groups : [defaultGroup(module)],
-    actions: target.actions?.length ? target.actions : [{ type: rule.actionType, config: target }],
-    scheduleConfig: parseSchedule(rule.scheduleConfig)
-      || (isScheduleTrigger(rule.triggerType) ? defaultScheduleConfig(module) : null),
+    actions: target.actions?.length
+      ? target.actions
+      : [{ type: rule.actionType, config: target }],
+    scheduleConfig:
+      parseSchedule(rule.scheduleConfig) ||
+      (isScheduleTrigger(rule.triggerType)
+        ? defaultScheduleConfig(module)
+        : null),
     // sortOrder is a real column now; targetState.order is the fallback for
     // rules saved before the parity migration backfilled it.
     order: Number.isFinite(Number(rule.sortOrder))
       ? Number(rule.sortOrder)
-      : (Number.isFinite(Number(target.order)) ? Number(target.order) : null),
+      : Number.isFinite(Number(target.order))
+        ? Number(target.order)
+        : null,
     isActive: !!rule.isActive,
     health: {
       lastRunAt: rule.lastRunAt || null,
@@ -818,33 +1585,96 @@ function fromRule(rule) {
 function parseSchedule(raw) {
   if (!raw) return null;
   if (typeof raw === "object") return raw;
-  try { return JSON.parse(raw); } catch { return null; }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
-function Select({ value, onChange, children, "aria-label": ariaLabel, disabled = false }) {
-  return <select aria-label={ariaLabel} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} className="workflow-select">{children}</select>;
+function Select({
+  value,
+  onChange,
+  children,
+  "aria-label": ariaLabel,
+  disabled = false,
+}) {
+  return (
+    <select
+      aria-label={ariaLabel}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      disabled={disabled}
+      className="workflow-select"
+    >
+      {children}
+    </select>
+  );
 }
 
-function ConditionGroup({ group, index, module, updateGroup, removeGroup, webForms = [], isGenericCrm = false }) {
+function ConditionGroup({
+  group,
+  index,
+  module,
+  updateGroup,
+  removeGroup,
+  webForms = [],
+  isGenericCrm = false,
+}) {
   const updateClause = (clauseIndex, patch) => {
-    const clauses = group.clauses.map((clause, currentIndex) => currentIndex === clauseIndex ? { ...clause, ...patch } : clause);
+    const clauses = group.clauses.map((clause, currentIndex) =>
+      currentIndex === clauseIndex ? { ...clause, ...patch } : clause,
+    );
     updateGroup(index, { clauses });
   };
   return (
     <div className="workflow-condition-group">
       <div className="workflow-group-head">
         <span className="workflow-group-number">{index + 1}</span>
-        <input aria-label={`Condition group ${index + 1} name`} value={group.name} onChange={(event) => updateGroup(index, { name: event.target.value })} placeholder="Add a name for this group of conditions" />
-        <label className="workflow-match">Match <b>{group.match === "all" ? "ALL" : "ANY"}</b> conditions
-          <input type="checkbox" checked={group.match === "any"} onChange={(event) => updateGroup(index, { match: event.target.checked ? "any" : "all" })} />
+        <input
+          aria-label={`Condition group ${index + 1} name`}
+          value={group.name}
+          onChange={(event) => updateGroup(index, { name: event.target.value })}
+          placeholder="Add a name for this group of conditions"
+        />
+        <label className="workflow-match">
+          Match <b>{group.match === "all" ? "ALL" : "ANY"}</b> conditions
+          <input
+            type="checkbox"
+            checked={group.match === "any"}
+            onChange={(event) =>
+              updateGroup(index, {
+                match: event.target.checked ? "any" : "all",
+              })
+            }
+          />
           <span className="workflow-switch" />
         </label>
-        {index > 0 && <button type="button" className="workflow-icon-button" onClick={() => removeGroup(index)} aria-label={`Remove condition group ${index + 1}`}><Trash2 size={15} /></button>}
+        {index > 0 && (
+          <button
+            type="button"
+            className="workflow-icon-button"
+            onClick={() => removeGroup(index)}
+            aria-label={`Remove condition group ${index + 1}`}
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
       </div>
       {group.clauses.map((clause, clauseIndex) => (
         <div className="workflow-condition-row" key={`${index}-${clauseIndex}`}>
-          <Select aria-label={`Condition ${index + 1} entity ${clauseIndex + 1}`} value={clause.entity} onChange={(entity) => updateClause(clauseIndex, { entity, field: "" })}>
-            {MODULES.map((module) => <option key={module.value} value={module.value}>{module.label.replace(/s$/, "")}</option>)}
+          <Select
+            aria-label={`Condition ${index + 1} entity ${clauseIndex + 1}`}
+            value={clause.entity}
+            onChange={(entity) =>
+              updateClause(clauseIndex, { entity, field: "" })
+            }
+          >
+            {MODULES.map((module) => (
+              <option key={module.value} value={module.value}>
+                {module.label.replace(/s$/, "")}
+              </option>
+            ))}
           </Select>
           <SearchableSelect
             ariaLabel={`Condition ${index + 1} field ${clauseIndex + 1}`}
@@ -852,7 +1682,10 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup, webFor
             onChange={(field) => updateClause(clauseIndex, { field })}
             options={[
               { value: "", label: "Select field" },
-              ...(catalogue.fields[clause.entity] || []).map((field) => ({ value: field, label: catalogue.fieldLabels[clause.entity]?.[field] || field })),
+              ...(catalogue.fields[clause.entity] || []).map((field) => ({
+                value: field,
+                label: catalogue.fieldLabels[clause.entity]?.[field] || field,
+              })),
             ]}
             placeholder="Select field"
             emptyLabel="No matching fields"
@@ -861,29 +1694,90 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup, webFor
             boundarySelector=".workflow-editor-content"
             wrapperStyle={{ minWidth: 0 }}
           />
-          <Select aria-label={`Condition ${index + 1} operator ${clauseIndex + 1}`} value={clause.op} onChange={(op) => updateClause(clauseIndex, { op })}>
-            {catalogue.operators.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
+          <Select
+            aria-label={`Condition ${index + 1} operator ${clauseIndex + 1}`}
+            value={clause.op}
+            onChange={(op) => updateClause(clauseIndex, { op })}
+          >
+            {catalogue.operators.map((operator) => (
+              <option key={operator.value} value={operator.value}>
+                {operator.label}
+              </option>
+            ))}
           </Select>
           {/* "is empty" / "has changed" take no operand, so rendering a value
               box for them invites a value the engine will ignore. */}
-          {operatorArity(clause.op) === "none"
-            ? <span className="workflow-operator-hint">no value needed</span>
-            : isGenericCrm && clause.entity === "contact" && clause.field === "webForm"
-              ? <Select aria-label={`Condition ${index + 1} value ${clauseIndex + 1}`} value={Array.isArray(clause.value) ? clause.value[0] || "" : clause.value} onChange={(value) => updateClause(clauseIndex, { value })}>
-                <option value="">Select web form</option>
-                {webForms.map((form) => <option key={form.value} value={form.value}>{form.label}</option>)}
-              </Select>
-            : <input
+          {operatorArity(clause.op) === "none" ? (
+            <span className="workflow-operator-hint">no value needed</span>
+          ) : isGenericCrm &&
+            clause.entity === "contact" &&
+            clause.field === "webForm" ? (
+            <Select
               aria-label={`Condition ${index + 1} value ${clauseIndex + 1}`}
-              value={Array.isArray(clause.value) ? clause.value.join(", ") : clause.value}
-              onChange={(event) => updateClause(clauseIndex, { value: event.target.value })}
-              placeholder={operatorArity(clause.op) === "list" ? "Comma-separated values" : "Enter value"}
-            />}
-          <button type="button" className="workflow-icon-button" onClick={() => updateGroup(index, { clauses: group.clauses.filter((_, currentIndex) => currentIndex !== clauseIndex) })} aria-label={`Remove condition ${clauseIndex + 1}`}><Trash2 size={15} /></button>
-          {clauseIndex < group.clauses.length - 1 && <span className="workflow-or">{group.match === "any" ? "OR" : "AND"}</span>}
+              value={
+                Array.isArray(clause.value)
+                  ? clause.value[0] || ""
+                  : clause.value
+              }
+              onChange={(value) => updateClause(clauseIndex, { value })}
+            >
+              <option value="">Select web form</option>
+              {webForms.map((form) => (
+                <option key={form.value} value={form.value}>
+                  {form.label}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <input
+              aria-label={`Condition ${index + 1} value ${clauseIndex + 1}`}
+              value={
+                Array.isArray(clause.value)
+                  ? clause.value.join(", ")
+                  : clause.value
+              }
+              onChange={(event) =>
+                updateClause(clauseIndex, { value: event.target.value })
+              }
+              placeholder={
+                operatorArity(clause.op) === "list"
+                  ? "Comma-separated values"
+                  : "Enter value"
+              }
+            />
+          )}
+          <button
+            type="button"
+            className="workflow-icon-button"
+            onClick={() =>
+              updateGroup(index, {
+                clauses: group.clauses.filter(
+                  (_, currentIndex) => currentIndex !== clauseIndex,
+                ),
+              })
+            }
+            aria-label={`Remove condition ${clauseIndex + 1}`}
+          >
+            <Trash2 size={15} />
+          </button>
+          {clauseIndex < group.clauses.length - 1 && (
+            <span className="workflow-or">
+              {group.match === "any" ? "OR" : "AND"}
+            </span>
+          )}
         </div>
       ))}
-      <button type="button" className="workflow-link-button" onClick={() => updateGroup(index, { clauses: [...group.clauses, defaultCondition(module)] })}><Plus size={15} /> Add condition</button>
+      <button
+        type="button"
+        className="workflow-link-button"
+        onClick={() =>
+          updateGroup(index, {
+            clauses: [...group.clauses, defaultCondition(module)],
+          })
+        }
+      >
+        <Plus size={15} /> Add condition
+      </button>
     </div>
   );
 }
@@ -891,101 +1785,418 @@ function ConditionGroup({ group, index, module, updateGroup, removeGroup, webFor
 function formatWebhookDiagnostic(value, fallback = "(empty)") {
   if (value == null || value === "") return fallback;
   if (typeof value === "string") {
-    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
   }
   return JSON.stringify(value, null, 2);
 }
 
-function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClose, isGenericCrm = false }) {
+function WebhookSettingsModal({
+  initialConfig,
+  module,
+  workflowId,
+  onSave,
+  onClose,
+  isGenericCrm = false,
+}) {
   const notify = useNotify();
-  const [draft, setDraft] = useState({ ...defaultWebhookConfig(module), ...initialConfig });
+  const [draft, setDraft] = useState({
+    ...defaultWebhookConfig(module),
+    ...initialConfig,
+  });
   const [fieldQuery, setFieldQuery] = useState("");
   const [testing, setTesting] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [testResult, setTestResult] = useState(null);
   useEffect(() => {
-    const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
   const update = (patch) => setDraft((current) => ({ ...current, ...patch }));
-  const updateHeader = (headerIndex, patch) => update({ headers: draft.headers.map((header, index) => index === headerIndex ? { ...header, ...patch } : header) });
+  const updateHeader = (headerIndex, patch) =>
+    setDraft((current) => ({
+      ...current,
+      headers: current.headers.map((header, index) =>
+        index === headerIndex ? { ...header, ...patch } : header,
+      ),
+    }));
+  const addHeader = () =>
+    setDraft((current) => ({
+      ...current,
+      headers: [...current.headers, { key: "", value: "", secret: true }],
+    }));
+  const removeHeader = (headerIndex) =>
+    setDraft((current) => ({
+      ...current,
+      headers: current.headers.filter((_, index) => index !== headerIndex),
+    }));
+  const saveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const saved = await onSave(draft);
+      if (!saved) return;
+      notify.success("Webhook settings saved");
+      onClose();
+    } finally {
+      setSavingSettings(false);
+    }
+  };
   const testWebhook = async () => {
-    if (!draft.url.trim()) { notify.error("Callback URL is required"); return; }
+    if (!draft.url.trim()) {
+      notify.error("Callback URL is required");
+      return;
+    }
     setTesting(true);
     try {
       const response = await fetchApi("/api/workflows/test-webhook", {
         method: "POST",
-        body: JSON.stringify({ config: draft, event: `${module}.updated`, workflowId }),
+        body: JSON.stringify({
+          config: draft,
+          event: `${module}.updated`,
+          workflowId,
+        }),
       });
       if (isGenericCrm) setTestResult({ success: true, ...response.result });
-      else notify.success(`Webhook responded with HTTP ${response.result?.status || 200}`);
+      else
+        notify.success(
+          `Webhook responded with HTTP ${response.result?.status || 200}`,
+        );
     } catch (error) {
       if (isGenericCrm && error.data?.result) {
-        setTestResult({ success: false, error: error.data.error || error.message, ...error.data.result });
+        setTestResult({
+          success: false,
+          error: error.data.error || error.message,
+          ...error.data.result,
+        });
       }
       // fetchApi already displays the canonical error toast.
+    } finally {
+      setTesting(false);
     }
-    finally { setTesting(false); }
   };
   const availableFields = catalogue.fields[module] || [];
   const fieldLabel = (field) => catalogue.fieldLabels[module]?.[field] || field;
   const selectedFields = new Set(draft.selectedFields || []);
   const visibleFields = availableFields
-    .filter((field) => (
-      fieldLabel(field).toLowerCase().includes(fieldQuery.trim().toLowerCase())
-      || field.toLowerCase().includes(fieldQuery.trim().toLowerCase())
-    ))
-    .sort((left, right) => Number(selectedFields.has(right)) - Number(selectedFields.has(left)));
-  if (testResult) return <div className="workflow-webhook-overlay" onMouseDown={onClose}>
-    <div className="workflow-webhook-panel workflow-webhook-test-panel" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Test webhook result">
-      <div className="workflow-webhook-head"><h2>TEST WEBHOOK</h2><button type="button" className="workflow-icon-button" onClick={onClose} aria-label="Close test webhook result"><X size={18} /></button></div>
-      <div className="workflow-webhook-test-body">
-        <div className={`workflow-webhook-test-status ${testResult.success ? "is-success" : "is-error"}`} role="status">
-          {testResult.success ? `Received success response (HTTP ${testResult.status || 200})` : `Webhook test failed${testResult.status ? ` (HTTP ${testResult.status})` : ""}`}
-        </div>
-        <section><h3>Request Sent</h3><pre aria-label="Webhook request sent">{formatWebhookDiagnostic(testResult.request || {
-          url: draft.url,
-          method: draft.method,
-          headers: Object.fromEntries((draft.headers || []).filter((header) => header.key).map((header) => [header.key, header.secret ? "[redacted]" : header.value])),
-        })}</pre></section>
-        <section><h3>Response Received</h3><pre aria-label="Webhook response received">{formatWebhookDiagnostic({
-          status: testResult.status,
-          statusText: testResult.statusText,
-          headers: testResult.responseHeaders || {},
-          body: testResult.response || testResult.error || "",
-          attempts: testResult.attempts,
-        })}</pre></section>
-      </div>
-      <div className="workflow-webhook-footer"><button type="button" className="workflow-secondary" onClick={() => setTestResult(null)}><ArrowLeft size={15} /> Back to webhook settings</button></div>
-    </div>
-  </div>;
-  return <div className="workflow-webhook-overlay" onMouseDown={onClose}>
-    <div className="workflow-webhook-panel" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Webhook settings">
-      <div className="workflow-webhook-head"><h2>WEBHOOK SETTINGS</h2><button type="button" className="workflow-icon-button" onClick={onClose} aria-label="Close webhook settings"><X size={18} /></button></div>
-      <div className="workflow-webhook-body">
-        <div className="workflow-webhook-help"><b>Configure how this workflow sends the matching CRM record.</b><span>Use placeholders such as <code>{"{{contactId}}"}</code> or <code>{"{{status}}"}</code> in an advanced JSON body.</span></div>
-        <label>Request method<Select aria-label="Webhook request method" value={draft.method} onChange={(method) => update({ method })}><option>POST</option><option>PUT</option><option>PATCH</option></Select></label>
-        <label>Callback URL<input aria-label="Webhook callback URL" value={draft.url} onChange={(event) => update({ url: event.target.value })} placeholder="https://your-domain.com/meta/lead-feedback" /></label>
-        <fieldset><legend>Custom headers</legend>{draft.headers.map((header, headerIndex) => <div className="workflow-webhook-header-row" key={headerIndex}>
-          <input aria-label={`Webhook header ${headerIndex + 1} name`} value={header.key || ""} onChange={(event) => updateHeader(headerIndex, { key: event.target.value })} placeholder="X-Webhook-Secret" />
-          <input aria-label={`Webhook header ${headerIndex + 1} value`} type={header.secret ? "password" : "text"} value={header.value || ""} onChange={(event) => updateHeader(headerIndex, { value: event.target.value })} placeholder="Header value" />
-          <label className="workflow-webhook-secret"><input type="checkbox" checked={!!header.secret} onChange={(event) => updateHeader(headerIndex, { secret: event.target.checked })} /> Secret</label>
-          <button type="button" className="workflow-icon-button" onClick={() => update({ headers: draft.headers.filter((_, index) => index !== headerIndex) })} aria-label={`Remove webhook header ${headerIndex + 1}`}><Trash2 size={15} /></button>
-        </div>)}<button type="button" className="workflow-link-button" onClick={() => update({ headers: [...draft.headers, { key: "", value: "", secret: true }] })}><Plus size={15} /> Add custom header</button></fieldset>
-        <fieldset><legend>Encoding format</legend><div className="workflow-webhook-options">{[["json", "JSON"], ["xml", "XML"], ["form", "Form URL encoded"]].map(([value, label]) => <label key={value}><input type="radio" checked={draft.encoding === value} onChange={() => update({ encoding: value })} /> {label}</label>)}</div></fieldset>
-        <fieldset className="workflow-webhook-request-body"><legend>Request body</legend><div className="workflow-webhook-body-controls"><div className="workflow-webhook-options"><label><input type="radio" checked={draft.bodyMode === "simple"} onChange={() => update({ bodyMode: "simple" })} /> Simple</label><label><input type="radio" checked={draft.bodyMode === "advanced"} onChange={() => update({ bodyMode: "advanced" })} /> Advanced JSON</label></div>
-          {draft.bodyMode === "simple" && <label className="workflow-webhook-field-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Search webhook fields" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} placeholder="Search fields" /></label>}
-        </div>
-          {draft.bodyMode === "simple" ? <>
-            <div className="workflow-webhook-fields" tabIndex="0" aria-label="Webhook fields">{visibleFields.map((field, fieldIndex) => <label key={`${field}-${fieldIndex}`} title={field}><input type="checkbox" checked={(draft.selectedFields || []).includes(field)} onChange={(event) => update({ selectedFields: event.target.checked ? [...(draft.selectedFields || []), field] : (draft.selectedFields || []).filter((item) => item !== field) })} /> {fieldLabel(field)}</label>)}
-              {visibleFields.length === 0 && <span className="workflow-webhook-fields-empty">No fields match “{fieldQuery.trim()}”.</span>}
+    .filter(
+      (field) =>
+        fieldLabel(field)
+          .toLowerCase()
+          .includes(fieldQuery.trim().toLowerCase()) ||
+        field.toLowerCase().includes(fieldQuery.trim().toLowerCase()),
+    )
+    .sort(
+      (left, right) =>
+        Number(selectedFields.has(right)) - Number(selectedFields.has(left)),
+    );
+  if (testResult)
+    return (
+      <div className="workflow-webhook-overlay" onMouseDown={onClose}>
+        <div
+          className="workflow-webhook-panel workflow-webhook-test-panel"
+          onMouseDown={(event) => event.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Test webhook result"
+        >
+          <div className="workflow-webhook-head">
+            <h2>TEST WEBHOOK</h2>
+            <button
+              type="button"
+              className="workflow-icon-button"
+              onClick={onClose}
+              aria-label="Close test webhook result"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <div className="workflow-webhook-test-body">
+            <div
+              className={`workflow-webhook-test-status ${testResult.success ? "is-success" : "is-error"}`}
+              role="status"
+            >
+              {testResult.success
+                ? `Received success response (HTTP ${testResult.status || 200})`
+                : `Webhook test failed${testResult.status ? ` (HTTP ${testResult.status})` : ""}`}
             </div>
-          </> : <textarea aria-label="Advanced webhook JSON body" value={draft.bodyTemplate || ""} onChange={(event) => update({ bodyTemplate: event.target.value })} rows={10} spellCheck="false" />}
-        </fieldset>
+            <section>
+              <h3>Request Sent</h3>
+              <pre aria-label="Webhook request sent">
+                {formatWebhookDiagnostic(
+                  testResult.request || {
+                    url: draft.url,
+                    method: draft.method,
+                    headers: Object.fromEntries(
+                      (draft.headers || [])
+                        .filter((header) => header.key)
+                        .map((header) => [
+                          header.key,
+                          header.secret ? "[redacted]" : header.value,
+                        ]),
+                    ),
+                  },
+                )}
+              </pre>
+            </section>
+            <section>
+              <h3>Response Received</h3>
+              <pre aria-label="Webhook response received">
+                {formatWebhookDiagnostic({
+                  status: testResult.status,
+                  statusText: testResult.statusText,
+                  headers: testResult.responseHeaders || {},
+                  body: testResult.response || testResult.error || "",
+                  attempts: testResult.attempts,
+                })}
+              </pre>
+            </section>
+          </div>
+          <div className="workflow-webhook-footer">
+            <button
+              type="button"
+              className="workflow-secondary"
+              onClick={() => setTestResult(null)}
+            >
+              <ArrowLeft size={15} /> Back to webhook settings
+            </button>
+          </div>
+        </div>
       </div>
-      <div className="workflow-webhook-footer"><button type="button" className="workflow-secondary" onClick={testWebhook} disabled={testing}>{testing ? "Testing..." : "Test this webhook"}</button><span /><button type="button" className="workflow-secondary" onClick={onClose}>Cancel</button><button type="button" className="workflow-primary" onClick={() => { onSave(draft); onClose(); }}>Save settings</button></div>
+    );
+  return (
+    <div className="workflow-webhook-overlay" onMouseDown={onClose}>
+      <div
+        className="workflow-webhook-panel"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Webhook settings"
+      >
+        <div className="workflow-webhook-head">
+          <h2>WEBHOOK SETTINGS</h2>
+          <button
+            type="button"
+            className="workflow-icon-button"
+            onClick={onClose}
+            aria-label="Close webhook settings"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="workflow-webhook-body">
+          <div className="workflow-webhook-help">
+            <b>Configure how this workflow sends the matching CRM record.</b>
+            <span>
+              Use placeholders such as <code>{"{{contactId}}"}</code> or{" "}
+              <code>{"{{status}}"}</code> in an advanced JSON body.
+            </span>
+          </div>
+          <label>
+            Request method
+            <Select
+              aria-label="Webhook request method"
+              value={draft.method}
+              onChange={(method) => update({ method })}
+            >
+              <option>POST</option>
+              <option>PUT</option>
+              <option>PATCH</option>
+            </Select>
+          </label>
+          <label>
+            Callback URL
+            <input
+              aria-label="Webhook callback URL"
+              value={draft.url}
+              onChange={(event) => update({ url: event.target.value })}
+              placeholder="https://your-domain.com/meta/lead-feedback"
+            />
+          </label>
+          <fieldset>
+            <legend>Custom headers</legend>
+            {draft.headers.map((header, headerIndex) => (
+              <div className="workflow-webhook-header-row" key={headerIndex}>
+                <input
+                  aria-label={`Webhook header ${headerIndex + 1} name`}
+                  value={header.key || ""}
+                  onChange={(event) =>
+                    updateHeader(headerIndex, { key: event.target.value })
+                  }
+                  placeholder="X-Webhook-Secret"
+                />
+                <input
+                  aria-label={`Webhook header ${headerIndex + 1} value`}
+                  type={header.secret ? "password" : "text"}
+                  value={header.value || ""}
+                  onChange={(event) =>
+                    updateHeader(headerIndex, { value: event.target.value })
+                  }
+                  placeholder="Header value"
+                />
+                <label className="workflow-webhook-secret">
+                  <input
+                    type="checkbox"
+                    checked={!!header.secret}
+                    onChange={(event) =>
+                      updateHeader(headerIndex, {
+                        secret: event.target.checked,
+                      })
+                    }
+                  />{" "}
+                  Secret
+                </label>
+                <button
+                  type="button"
+                  className="workflow-icon-button"
+                  onClick={() => removeHeader(headerIndex)}
+                  aria-label={`Remove webhook header ${headerIndex + 1}`}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="workflow-link-button"
+              onClick={addHeader}
+            >
+              <Plus size={15} /> Add custom header
+            </button>
+          </fieldset>
+          <fieldset>
+            <legend>Encoding format</legend>
+            <div className="workflow-webhook-options">
+              {[
+                ["json", "JSON"],
+                ["xml", "XML"],
+                ["form", "Form URL encoded"],
+              ].map(([value, label]) => (
+                <label key={value}>
+                  <input
+                    type="radio"
+                    checked={draft.encoding === value}
+                    onChange={() => update({ encoding: value })}
+                  />{" "}
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="workflow-webhook-request-body">
+            <legend>Request body</legend>
+            <div className="workflow-webhook-body-controls">
+              <div className="workflow-webhook-options">
+                <label>
+                  <input
+                    type="radio"
+                    checked={draft.bodyMode === "simple"}
+                    onChange={() => update({ bodyMode: "simple" })}
+                  />{" "}
+                  Simple
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    checked={draft.bodyMode === "advanced"}
+                    onChange={() => update({ bodyMode: "advanced" })}
+                  />{" "}
+                  Advanced JSON
+                </label>
+              </div>
+              {draft.bodyMode === "simple" && (
+                <label className="workflow-webhook-field-search">
+                  <Search size={16} aria-hidden="true" />
+                  <input
+                    type="search"
+                    aria-label="Search webhook fields"
+                    value={fieldQuery}
+                    onChange={(event) => setFieldQuery(event.target.value)}
+                    placeholder="Search fields"
+                  />
+                </label>
+              )}
+            </div>
+            {draft.bodyMode === "simple" ? (
+              <>
+                <div
+                  className="workflow-webhook-fields"
+                  tabIndex="0"
+                  aria-label="Webhook fields"
+                >
+                  {visibleFields.map((field, fieldIndex) => (
+                    <label key={`${field}-${fieldIndex}`} title={field}>
+                      <input
+                        type="checkbox"
+                        checked={(draft.selectedFields || []).includes(field)}
+                        onChange={(event) =>
+                          update({
+                            selectedFields: event.target.checked
+                              ? [...(draft.selectedFields || []), field]
+                              : (draft.selectedFields || []).filter(
+                                  (item) => item !== field,
+                                ),
+                          })
+                        }
+                      />{" "}
+                      {fieldLabel(field)}
+                    </label>
+                  ))}
+                  {visibleFields.length === 0 && (
+                    <span className="workflow-webhook-fields-empty">
+                      No fields match “{fieldQuery.trim()}”.
+                    </span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <textarea
+                aria-label="Advanced webhook JSON body"
+                value={draft.bodyTemplate || ""}
+                onChange={(event) =>
+                  update({ bodyTemplate: event.target.value })
+                }
+                rows={10}
+                spellCheck="false"
+              />
+            )}
+          </fieldset>
+        </div>
+        <div className="workflow-webhook-footer">
+          <button
+            type="button"
+            className="workflow-secondary"
+            onClick={testWebhook}
+            disabled={testing}
+          >
+            {testing ? "Testing..." : "Test this webhook"}
+          </button>
+          <span />
+          <button
+            type="button"
+            className="workflow-secondary"
+            onClick={onClose}
+            disabled={savingSettings}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="workflow-primary"
+            onClick={saveSettings}
+            disabled={savingSettings}
+          >
+            {savingSettings ? "Saving..." : "Save settings"}
+          </button>
+        </div>
+      </div>
     </div>
-  </div>;
+  );
 }
 
 /**
@@ -998,7 +2209,9 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
 function ScheduleBuilder({ schedule, module, onChange }) {
   const config = schedule || defaultScheduleConfig(module);
   const patch = (next) => onChange({ ...config, ...next });
-  const entity = catalogue.scheduleDateFields[config.entity] ? config.entity : "contact";
+  const entity = catalogue.scheduleDateFields[config.entity]
+    ? config.entity
+    : "contact";
   const fields = catalogue.scheduleDateFields[entity] || [];
   const offset = Number(config.offsetDays) || 0;
 
@@ -1006,11 +2219,23 @@ function ScheduleBuilder({ schedule, module, onChange }) {
     <div className="workflow-schedule-builder">
       <div className="workflow-trigger-line">
         <span>Run over</span>
-        <Select aria-label="Schedule record type" value={entity} onChange={(value) => {
-          const first = (catalogue.scheduleDateFields[value] || [])[0];
-          patch({ entity: value, field: first?.value, annual: !!first?.annual });
-        }}>
-          {scheduleEntityValues().map((value) => <option key={value} value={value}>{value}</option>)}
+        <Select
+          aria-label="Schedule record type"
+          value={entity}
+          onChange={(value) => {
+            const first = (catalogue.scheduleDateFields[value] || [])[0];
+            patch({
+              entity: value,
+              field: first?.value,
+              annual: !!first?.annual,
+            });
+          }}
+        >
+          {scheduleEntityValues().map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
         </Select>
         <span>records</span>
       </div>
@@ -1019,11 +2244,19 @@ function ScheduleBuilder({ schedule, module, onChange }) {
         <>
           <div className="workflow-trigger-line">
             <span>Relative to</span>
-            <Select aria-label="Schedule date field" value={config.field || ""} onChange={(value) => {
-              const chosen = fields.find((f) => f.value === value);
-              patch({ field: value, annual: !!chosen?.annual });
-            }}>
-              {fields.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+            <Select
+              aria-label="Schedule date field"
+              value={config.field || ""}
+              onChange={(value) => {
+                const chosen = fields.find((f) => f.value === value);
+                patch({ field: value, annual: !!chosen?.annual });
+              }}
+            >
+              {fields.map((field) => (
+                <option key={field.value} value={field.value}>
+                  {field.label}
+                </option>
+              ))}
             </Select>
             <input
               aria-label="Schedule offset days"
@@ -1034,9 +2267,18 @@ function ScheduleBuilder({ schedule, module, onChange }) {
                 patch({ offsetDays: offset < 0 ? -magnitude : magnitude });
               }}
             />
-            <Select aria-label="Schedule offset direction" value={offset < 0 ? "before" : "after"} onChange={(direction) => {
-              patch({ offsetDays: direction === "before" ? -Math.abs(offset) : Math.abs(offset) });
-            }}>
+            <Select
+              aria-label="Schedule offset direction"
+              value={offset < 0 ? "before" : "after"}
+              onChange={(direction) => {
+                patch({
+                  offsetDays:
+                    direction === "before"
+                      ? -Math.abs(offset)
+                      : Math.abs(offset),
+                });
+              }}
+            >
               <option value="before">day(s) before</option>
               <option value="after">day(s) on / after</option>
             </Select>
@@ -1047,149 +2289,654 @@ function ScheduleBuilder({ schedule, module, onChange }) {
               aria-label="Repeat every year"
               checked={!!config.annual}
               onChange={(event) => patch({ annual: event.target.checked })}
-            />
-            {" "}Repeat every year (match the day and month only &mdash; use this for birthdays and anniversaries)
+            />{" "}
+            Repeat every year (match the day and month only &mdash; use this for
+            birthdays and anniversaries)
           </label>
         </>
       ) : (
         <div className="workflow-trigger-line">
           <span>Repeat</span>
-          <Select aria-label="Schedule frequency" value={config.frequency || "daily"} onChange={(frequency) => patch({ frequency })}>
+          <Select
+            aria-label="Schedule frequency"
+            value={config.frequency || "daily"}
+            onChange={(frequency) => patch({ frequency })}
+          >
             <option value="hourly">Hourly</option>
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
           </Select>
-          {config.frequency === "weekly" && <Select aria-label="Schedule day of week" value={String(config.dayOfWeek ?? 1)} onChange={(dayOfWeek) => patch({ dayOfWeek: Number(dayOfWeek) })}>
-            {WEEKDAYS.map((day, dayIndex) => <option key={day} value={dayIndex}>{day}</option>)}
-          </Select>}
-          {config.frequency === "monthly" && <Select aria-label="Schedule day of month" value={String(config.dayOfMonth ?? 1)} onChange={(dayOfMonth) => patch({ dayOfMonth: Number(dayOfMonth) })}>
-            {Array.from({ length: 28 }, (_, dayIndex) => dayIndex + 1).map((day) => <option key={day} value={day}>Day {day}</option>)}
-          </Select>}
+          {config.frequency === "weekly" && (
+            <Select
+              aria-label="Schedule day of week"
+              value={String(config.dayOfWeek ?? 1)}
+              onChange={(dayOfWeek) => patch({ dayOfWeek: Number(dayOfWeek) })}
+            >
+              {WEEKDAYS.map((day, dayIndex) => (
+                <option key={day} value={dayIndex}>
+                  {day}
+                </option>
+              ))}
+            </Select>
+          )}
+          {config.frequency === "monthly" && (
+            <Select
+              aria-label="Schedule day of month"
+              value={String(config.dayOfMonth ?? 1)}
+              onChange={(dayOfMonth) =>
+                patch({ dayOfMonth: Number(dayOfMonth) })
+              }
+            >
+              {Array.from({ length: 28 }, (_, dayIndex) => dayIndex + 1).map(
+                (day) => (
+                  <option key={day} value={day}>
+                    Day {day}
+                  </option>
+                ),
+              )}
+            </Select>
+          )}
         </div>
       )}
 
       <div className="workflow-trigger-line">
         <span>at</span>
-        <input aria-label="Schedule time of day" value={config.timeOfDay || "09:00"} onChange={(event) => patch({ timeOfDay: event.target.value })} placeholder="HH:MM" />
+        <input
+          aria-label="Schedule time of day"
+          value={config.timeOfDay || "09:00"}
+          onChange={(event) => patch({ timeOfDay: event.target.value })}
+          placeholder="HH:MM"
+        />
         <span>and touch at most</span>
-        <input aria-label="Schedule max records" type="number" min="1" max="5000" value={config.maxRecords ?? 500} onChange={(event) => patch({ maxRecords: Number(event.target.value) || 500 })} />
+        <input
+          aria-label="Schedule max records"
+          type="number"
+          min="1"
+          max="5000"
+          value={config.maxRecords ?? 500}
+          onChange={(event) =>
+            patch({ maxRecords: Number(event.target.value) || 500 })
+          }
+        />
         <span>records per run</span>
       </div>
-      {config.frequency === "monthly" && <p className="workflow-action-hint">Days are capped at 28 so a month-end rule never skips February.</p>}
+      {config.frequency === "monthly" && (
+        <p className="workflow-action-hint">
+          Days are capped at 28 so a month-end rule never skips February.
+        </p>
+      )}
     </div>
   );
 }
 
-function ActionCard({ action, index, module, workflowId, updateAction, removeAction, pickers, webhookOnly = false, isGenericCrm = false }) {
+function ActionCard({
+  action,
+  index,
+  module,
+  workflowId,
+  updateAction,
+  saveWebhookSettings,
+  removeAction,
+  pickers,
+  webhookOnly = false,
+  isGenericCrm = false,
+}) {
   const [showWebhookSettings, setShowWebhookSettings] = useState(false);
-  const selected = catalogue.actions.find((item) => item.value === action.type) || catalogue.actions[0];
+  const selected =
+    catalogue.actions.find((item) => item.value === action.type) ||
+    catalogue.actions[0];
   const ActionIcon = selected.icon;
   const config = action.config || {};
-  const updateConfig = (key, value) => updateAction(index, { config: { ...config, [key]: value } });
+  const updateConfig = (key, value) =>
+    updateAction(index, { config: { ...config, [key]: value } });
   return (
     <div className="workflow-action-card">
       <div className="workflow-action-row">
         <span className="workflow-group-number">{index + 1}</span>
         <div className="workflow-action-content">
-          <div className="workflow-action-title">Action for: {MODULES.find((item) => item.value === module)?.label || "Leads"} <ChevronDown size={14} /></div>
-          <Select aria-label={`Action ${index + 1}`} value={action.type} onChange={(type) => updateAction(index, { type, config: type === "update_field" ? { entity: module } : type === "send_webhook" ? defaultWebhookConfig(module) : {} })}>
-            {actionsForModule(module).filter((item) => !webhookOnly || item.value === "send_webhook").map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          <div className="workflow-action-title">
+            Action for:{" "}
+            {MODULES.find((item) => item.value === module)?.label || "Leads"}{" "}
+            <ChevronDown size={14} />
+          </div>
+          <Select
+            aria-label={`Action ${index + 1}`}
+            value={action.type}
+            onChange={(type) =>
+              updateAction(index, {
+                type,
+                config:
+                  type === "update_field"
+                    ? { entity: module }
+                    : type === "send_webhook"
+                      ? defaultWebhookConfig(module)
+                      : {},
+              })
+            }
+          >
+            {actionsForModule(module)
+              .filter((item) => !webhookOnly || item.value === "send_webhook")
+              .map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
           </Select>
-          {(action.type === "send_email" || action.type === "send_sms") && <input aria-label={`Action ${index + 1} recipient`} value={config.to || ""} onChange={(event) => updateConfig("to", event.target.value)} placeholder={action.type === "send_email" ? "Recipient email or record field" : "Recipient phone or record field"} />}
-          {action.type === "send_notification" && <input aria-label={`Action ${index + 1} recipient user`} value={config.userId || ""} onChange={(event) => updateConfig("userId", event.target.value)} placeholder="Recipient user ID (optional)" inputMode="numeric" />}
+          {(action.type === "send_email" || action.type === "send_sms") && (
+            <input
+              aria-label={`Action ${index + 1} recipient`}
+              value={config.to || ""}
+              onChange={(event) => updateConfig("to", event.target.value)}
+              placeholder={
+                action.type === "send_email"
+                  ? "Recipient email or record field"
+                  : "Recipient phone or record field"
+              }
+            />
+          )}
+          {action.type === "send_notification" && (
+            <input
+              aria-label={`Action ${index + 1} recipient user`}
+              value={config.userId || ""}
+              onChange={(event) => updateConfig("userId", event.target.value)}
+              placeholder="Recipient user ID (optional)"
+              inputMode="numeric"
+            />
+          )}
           {/* Email template picker. The action previously accepted only a raw
               subject/body, so every rule duplicated its copy inline and edits
               to a stored template never reached the workflows using it. */}
-          {action.type === "send_email" && <Select aria-label={`Action ${index + 1} email template`} value={config.templateId || ""} onChange={(templateId) => updateConfig("templateId", templateId === "" ? "" : Number(templateId))}>
-            <option value="">No template &mdash; write it below</option>
-            {(pickers?.emailTemplates || []).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-          </Select>}
-          {action.type === "send_email" && <input aria-label={`Action ${index + 1} subject`} value={config.subject || ""} onChange={(event) => updateConfig("subject", event.target.value)} placeholder={config.templateId ? "Subject (blank uses the template's)" : "Subject"} />}
-          {action.type === "send_email" && <input aria-label={`Action ${index + 1} cc`} value={config.cc || ""} onChange={(event) => updateConfig("cc", event.target.value)} placeholder="Cc (comma-separated, optional)" />}
-          {action.type === "send_email" && <input aria-label={`Action ${index + 1} bcc`} value={config.bcc || ""} onChange={(event) => updateConfig("bcc", event.target.value)} placeholder="Bcc (comma-separated, optional)" />}
-          {action.type === "send_email" && <input aria-label={`Action ${index + 1} from name`} value={config.fromName || ""} onChange={(event) => updateConfig("fromName", event.target.value)} placeholder="From name (optional)" />}
-          {(action.type === "send_email" || action.type === "send_sms" || action.type === "send_notification") && <textarea aria-label={`Action ${index + 1} message`} value={config.message || config.body || ""} onChange={(event) => updateConfig(action.type === "send_email" ? "body" : "message", event.target.value)} placeholder="Message or body" rows={2} />}
-          {action.type === "create_task" && <input aria-label={`Action ${index + 1} task title`} value={config.title || ""} onChange={(event) => updateConfig("title", event.target.value)} placeholder="Task title" />}
-          {action.type === "create_task" && <input aria-label={`Action ${index + 1} task due days`} type="number" min="0" value={config.dueInDays || ""} onChange={(event) => updateConfig("dueInDays", event.target.value === "" ? "" : Number(event.target.value))} placeholder="Due in days (default: 3)" />}
-          {action.type === "create_task" && <Select aria-label={`Action ${index + 1} task assignee`} value={config.assignToId || ""} onChange={(assignToId) => updateConfig("assignToId", assignToId === "" ? "" : Number(assignToId))}>
-            <option value="">Assignee &mdash; the acting user</option>
-            {(pickers?.assignees || []).map((user) => <option key={user.id} value={user.id}>{user.name || user.email}</option>)}
-          </Select>}
-          {action.type === "create_task" && <Select aria-label={`Action ${index + 1} task priority`} value={config.priority || "Medium"} onChange={(priority) => updateConfig("priority", priority)}>
-            {["Low", "Medium", "High", "Critical"].map((value) => <option key={value} value={value}>{value}</option>)}
-          </Select>}
-          {action.type === "create_task" && <Select aria-label={`Action ${index + 1} task type`} value={config.taskType || "Task"} onChange={(taskType) => updateConfig("taskType", taskType)}>
-            {["Task", "Call", "Meeting", "Site Visit", "Follow Up"].map((value) => <option key={value} value={value}>{value}</option>)}
-          </Select>}
+          {action.type === "send_email" && (
+            <Select
+              aria-label={`Action ${index + 1} email template`}
+              value={config.templateId || ""}
+              onChange={(templateId) =>
+                updateConfig(
+                  "templateId",
+                  templateId === "" ? "" : Number(templateId),
+                )
+              }
+            >
+              <option value="">No template &mdash; write it below</option>
+              {(pickers?.emailTemplates || []).map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                </option>
+              ))}
+            </Select>
+          )}
+          {action.type === "send_email" && (
+            <input
+              aria-label={`Action ${index + 1} subject`}
+              value={config.subject || ""}
+              onChange={(event) => updateConfig("subject", event.target.value)}
+              placeholder={
+                config.templateId
+                  ? "Subject (blank uses the template's)"
+                  : "Subject"
+              }
+            />
+          )}
+          {action.type === "send_email" && (
+            <input
+              aria-label={`Action ${index + 1} cc`}
+              value={config.cc || ""}
+              onChange={(event) => updateConfig("cc", event.target.value)}
+              placeholder="Cc (comma-separated, optional)"
+            />
+          )}
+          {action.type === "send_email" && (
+            <input
+              aria-label={`Action ${index + 1} bcc`}
+              value={config.bcc || ""}
+              onChange={(event) => updateConfig("bcc", event.target.value)}
+              placeholder="Bcc (comma-separated, optional)"
+            />
+          )}
+          {action.type === "send_email" && (
+            <input
+              aria-label={`Action ${index + 1} from name`}
+              value={config.fromName || ""}
+              onChange={(event) => updateConfig("fromName", event.target.value)}
+              placeholder="From name (optional)"
+            />
+          )}
+          {(action.type === "send_email" ||
+            action.type === "send_sms" ||
+            action.type === "send_notification") && (
+            <textarea
+              aria-label={`Action ${index + 1} message`}
+              value={config.message || config.body || ""}
+              onChange={(event) =>
+                updateConfig(
+                  action.type === "send_email" ? "body" : "message",
+                  event.target.value,
+                )
+              }
+              placeholder="Message or body"
+              rows={2}
+            />
+          )}
+          {action.type === "create_task" && (
+            <input
+              aria-label={`Action ${index + 1} task title`}
+              value={config.title || ""}
+              onChange={(event) => updateConfig("title", event.target.value)}
+              placeholder="Task title"
+            />
+          )}
+          {action.type === "create_task" && (
+            <input
+              aria-label={`Action ${index + 1} task due days`}
+              type="number"
+              min="0"
+              value={config.dueInDays || ""}
+              onChange={(event) =>
+                updateConfig(
+                  "dueInDays",
+                  event.target.value === "" ? "" : Number(event.target.value),
+                )
+              }
+              placeholder="Due in days (default: 3)"
+            />
+          )}
+          {action.type === "create_task" && (
+            <Select
+              aria-label={`Action ${index + 1} task assignee`}
+              value={config.assignToId || ""}
+              onChange={(assignToId) =>
+                updateConfig(
+                  "assignToId",
+                  assignToId === "" ? "" : Number(assignToId),
+                )
+              }
+            >
+              <option value="">Assignee &mdash; the acting user</option>
+              {(pickers?.assignees || []).map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name || user.email}
+                </option>
+              ))}
+            </Select>
+          )}
+          {action.type === "create_task" && (
+            <Select
+              aria-label={`Action ${index + 1} task priority`}
+              value={config.priority || "Medium"}
+              onChange={(priority) => updateConfig("priority", priority)}
+            >
+              {["Low", "Medium", "High", "Critical"].map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </Select>
+          )}
+          {action.type === "create_task" && (
+            <Select
+              aria-label={`Action ${index + 1} task type`}
+              value={config.taskType || "Task"}
+              onChange={(taskType) => updateConfig("taskType", taskType)}
+            >
+              {["Task", "Call", "Meeting", "Site Visit", "Follow Up"].map(
+                (value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ),
+              )}
+            </Select>
+          )}
 
           {/* Create appointment */}
-          {action.type === "create_appointment" && <input aria-label={`Action ${index + 1} appointment title`} value={config.title || ""} onChange={(event) => updateConfig("title", event.target.value)} placeholder="Appointment title" />}
-          {action.type === "create_appointment" && <input aria-label={`Action ${index + 1} appointment in days`} type="number" min="0" value={config.inDays ?? ""} onChange={(event) => updateConfig("inDays", event.target.value === "" ? "" : Number(event.target.value))} placeholder="Days from now (default: 1)" />}
-          {action.type === "create_appointment" && <input aria-label={`Action ${index + 1} appointment time`} value={config.timeOfDay || ""} onChange={(event) => updateConfig("timeOfDay", event.target.value)} placeholder="Start time HH:MM (e.g. 10:30)" />}
-          {action.type === "create_appointment" && <input aria-label={`Action ${index + 1} appointment duration`} type="number" min="5" value={config.durationMinutes ?? ""} onChange={(event) => updateConfig("durationMinutes", event.target.value === "" ? "" : Number(event.target.value))} placeholder="Duration in minutes (default: 30)" />}
-          {action.type === "create_appointment" && <input aria-label={`Action ${index + 1} appointment location`} value={config.location || ""} onChange={(event) => updateConfig("location", event.target.value)} placeholder="Location or meeting link (optional)" />}
-          {action.type === "create_appointment" && <Select aria-label={`Action ${index + 1} appointment owner`} value={config.assignToId || ""} onChange={(assignToId) => updateConfig("assignToId", assignToId === "" ? "" : Number(assignToId))}>
-            <option value="">Owner &mdash; the acting user</option>
-            {(pickers?.assignees || []).map((user) => <option key={user.id} value={user.id}>{user.name || user.email}</option>)}
-          </Select>}
+          {action.type === "create_appointment" && (
+            <input
+              aria-label={`Action ${index + 1} appointment title`}
+              value={config.title || ""}
+              onChange={(event) => updateConfig("title", event.target.value)}
+              placeholder="Appointment title"
+            />
+          )}
+          {action.type === "create_appointment" && (
+            <input
+              aria-label={`Action ${index + 1} appointment in days`}
+              type="number"
+              min="0"
+              value={config.inDays ?? ""}
+              onChange={(event) =>
+                updateConfig(
+                  "inDays",
+                  event.target.value === "" ? "" : Number(event.target.value),
+                )
+              }
+              placeholder="Days from now (default: 1)"
+            />
+          )}
+          {action.type === "create_appointment" && (
+            <input
+              aria-label={`Action ${index + 1} appointment time`}
+              value={config.timeOfDay || ""}
+              onChange={(event) =>
+                updateConfig("timeOfDay", event.target.value)
+              }
+              placeholder="Start time HH:MM (e.g. 10:30)"
+            />
+          )}
+          {action.type === "create_appointment" && (
+            <input
+              aria-label={`Action ${index + 1} appointment duration`}
+              type="number"
+              min="5"
+              value={config.durationMinutes ?? ""}
+              onChange={(event) =>
+                updateConfig(
+                  "durationMinutes",
+                  event.target.value === "" ? "" : Number(event.target.value),
+                )
+              }
+              placeholder="Duration in minutes (default: 30)"
+            />
+          )}
+          {action.type === "create_appointment" && (
+            <input
+              aria-label={`Action ${index + 1} appointment location`}
+              value={config.location || ""}
+              onChange={(event) => updateConfig("location", event.target.value)}
+              placeholder="Location or meeting link (optional)"
+            />
+          )}
+          {action.type === "create_appointment" && (
+            <Select
+              aria-label={`Action ${index + 1} appointment owner`}
+              value={config.assignToId || ""}
+              onChange={(assignToId) =>
+                updateConfig(
+                  "assignToId",
+                  assignToId === "" ? "" : Number(assignToId),
+                )
+              }
+            >
+              <option value="">Owner &mdash; the acting user</option>
+              {(pickers?.assignees || []).map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name || user.email}
+                </option>
+              ))}
+            </Select>
+          )}
 
           {/* Create deal */}
-          {action.type === "create_deal" && <input aria-label={`Action ${index + 1} deal title`} value={config.title || ""} onChange={(event) => updateConfig("title", event.target.value)} placeholder="Deal title (supports {{name}})" />}
-          {action.type === "create_deal" && <input aria-label={`Action ${index + 1} deal amount`} value={config.amount || ""} onChange={(event) => updateConfig("amount", event.target.value)} placeholder="Amount (default: 0)" />}
-          {action.type === "create_deal" && <Select aria-label={`Action ${index + 1} deal stage`} value={config.stage || "lead"} onChange={(stage) => updateConfig("stage", stage)}>
-            {["lead", "contacted", "proposal", "won", "lost"].map((value) => <option key={value} value={value}>{value}</option>)}
-          </Select>}
-          {action.type === "create_deal" && <input aria-label={`Action ${index + 1} deal close in days`} type="number" min="0" value={config.expectedCloseInDays ?? ""} onChange={(event) => updateConfig("expectedCloseInDays", event.target.value === "" ? "" : Number(event.target.value))} placeholder="Expected close in N days (optional)" />}
+          {action.type === "create_deal" && (
+            <input
+              aria-label={`Action ${index + 1} deal title`}
+              value={config.title || ""}
+              onChange={(event) => updateConfig("title", event.target.value)}
+              placeholder="Deal title (supports {{name}})"
+            />
+          )}
+          {action.type === "create_deal" && (
+            <input
+              aria-label={`Action ${index + 1} deal amount`}
+              value={config.amount || ""}
+              onChange={(event) => updateConfig("amount", event.target.value)}
+              placeholder="Amount (default: 0)"
+            />
+          )}
+          {action.type === "create_deal" && (
+            <Select
+              aria-label={`Action ${index + 1} deal stage`}
+              value={config.stage || "lead"}
+              onChange={(stage) => updateConfig("stage", stage)}
+            >
+              {["lead", "contacted", "proposal", "won", "lost"].map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </Select>
+          )}
+          {action.type === "create_deal" && (
+            <input
+              aria-label={`Action ${index + 1} deal close in days`}
+              type="number"
+              min="0"
+              value={config.expectedCloseInDays ?? ""}
+              onChange={(event) =>
+                updateConfig(
+                  "expectedCloseInDays",
+                  event.target.value === "" ? "" : Number(event.target.value),
+                )
+              }
+              placeholder="Expected close in N days (optional)"
+            />
+          )}
 
           {/* Tags */}
-          {(action.type === "add_tag" || action.type === "remove_tag") && <input aria-label={`Action ${index + 1} tags`} value={Array.isArray(config.tags) ? config.tags.join(", ") : (config.tags || "")} onChange={(event) => updateConfig("tags", event.target.value)} placeholder="Comma-separated tags, e.g. vip, onboarding" />}
+          {(action.type === "add_tag" || action.type === "remove_tag") && (
+            <input
+              aria-label={`Action ${index + 1} tags`}
+              value={
+                Array.isArray(config.tags)
+                  ? config.tags.join(", ")
+                  : config.tags || ""
+              }
+              onChange={(event) => updateConfig("tags", event.target.value)}
+              placeholder="Comma-separated tags, e.g. vip, onboarding"
+            />
+          )}
 
           {/* Sequences */}
-          {(action.type === "add_to_sequence" || action.type === "remove_from_sequence") && <Select aria-label={`Action ${index + 1} sequence`} value={config.sequenceId || ""} onChange={(sequenceId) => updateConfig("sequenceId", sequenceId === "" ? "" : Number(sequenceId))}>
-            <option value="">{action.type === "remove_from_sequence" ? "Every sequence" : "Select a sequence"}</option>
-            {(pickers?.sequences || []).map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}{sequence.isActive ? "" : " (inactive)"}</option>)}
-          </Select>}
+          {(action.type === "add_to_sequence" ||
+            action.type === "remove_from_sequence") && (
+            <Select
+              aria-label={`Action ${index + 1} sequence`}
+              value={config.sequenceId || ""}
+              onChange={(sequenceId) =>
+                updateConfig(
+                  "sequenceId",
+                  sequenceId === "" ? "" : Number(sequenceId),
+                )
+              }
+            >
+              <option value="">
+                {action.type === "remove_from_sequence"
+                  ? "Every sequence"
+                  : "Select a sequence"}
+              </option>
+              {(pickers?.sequences || []).map((sequence) => (
+                <option key={sequence.id} value={sequence.id}>
+                  {sequence.name}
+                  {sequence.isActive ? "" : " (inactive)"}
+                </option>
+              ))}
+            </Select>
+          )}
 
           {/* Wait */}
-          {action.type === "wait" && <input aria-label={`Action ${index + 1} delay minutes`} type="number" min="1" value={config.delayMinutes ?? ""} onChange={(event) => updateConfig("delayMinutes", event.target.value === "" ? "" : Number(event.target.value))} placeholder="Delay in minutes (1440 = 1 day)" />}
-          {action.type === "wait" && <p className="workflow-action-hint">Everything below this step runs after the delay. A test run executes the whole chain immediately.</p>}
+          {action.type === "wait" && (
+            <input
+              aria-label={`Action ${index + 1} delay minutes`}
+              type="number"
+              min="1"
+              value={config.delayMinutes ?? ""}
+              onChange={(event) =>
+                updateConfig(
+                  "delayMinutes",
+                  event.target.value === "" ? "" : Number(event.target.value),
+                )
+              }
+              placeholder="Delay in minutes (1440 = 1 day)"
+            />
+          )}
+          {action.type === "wait" && (
+            <p className="workflow-action-hint">
+              Everything below this step runs after the delay. A test run
+              executes the whole chain immediately.
+            </p>
+          )}
 
           {/* Delete record */}
-          {action.type === "delete_record" && <label className="workflow-confirm-label">
-            <input type="checkbox" aria-label={`Action ${index + 1} delete confirmation`} checked={config.confirm === true} onChange={(event) => updateConfig("confirm", event.target.checked)} />
-            {" "}Yes, remove the matching {module} record
-          </label>}
-          {action.type === "delete_record" && <p className="workflow-action-hint">This cannot be undone from the workflow. Records that support it are soft-deleted.</p>}
-          {action.type === "update_field" && <Select aria-label={`Action ${index + 1} field name`} value={config.field || ""} onChange={(field) => updateConfig("field", field)}><option value="">Select field</option>{(MUTABLE_FIELD_OPTIONS[module] || []).map((field) => <option key={field} value={field}>{field}</option>)}</Select>}
-          {action.type === "update_field" && <input aria-label={`Action ${index + 1} field value`} value={config.value || ""} onChange={(event) => updateConfig("value", event.target.value)} placeholder="Field value" />}
+          {action.type === "delete_record" && (
+            <label className="workflow-confirm-label">
+              <input
+                type="checkbox"
+                aria-label={`Action ${index + 1} delete confirmation`}
+                checked={config.confirm === true}
+                onChange={(event) =>
+                  updateConfig("confirm", event.target.checked)
+                }
+              />{" "}
+              Yes, remove the matching {module} record
+            </label>
+          )}
+          {action.type === "delete_record" && (
+            <p className="workflow-action-hint">
+              This cannot be undone from the workflow. Records that support it
+              are soft-deleted.
+            </p>
+          )}
+          {action.type === "update_field" && (
+            <Select
+              aria-label={`Action ${index + 1} field name`}
+              value={config.field || ""}
+              onChange={(field) => updateConfig("field", field)}
+            >
+              <option value="">Select field</option>
+              {(MUTABLE_FIELD_OPTIONS[module] || []).map((field) => (
+                <option key={field} value={field}>
+                  {field}
+                </option>
+              ))}
+            </Select>
+          )}
+          {action.type === "update_field" && (
+            <input
+              aria-label={`Action ${index + 1} field value`}
+              value={config.value || ""}
+              onChange={(event) => updateConfig("value", event.target.value)}
+              placeholder="Field value"
+            />
+          )}
           {/* Ownership used to be a single hardcoded user ID. Rotation,
               least-busy and inherit-from-account are the Freshsales modes. */}
-          {action.type === "assign_agent" && <Select aria-label={`Action ${index + 1} assignment mode`} value={config.mode || "specific"} onChange={(mode) => updateConfig("mode", mode)}>
-            <option value="specific">A specific user</option>
-            <option value="round_robin">Round-robin across a pool</option>
-            <option value="least_busy">The least busy user</option>
-            <option value="record_owner">The related contact&apos;s owner</option>
-          </Select>}
-          {action.type === "assign_agent" && (config.mode || "specific") === "specific" && <Select aria-label={`Action ${index + 1} assignee`} value={config.userId || ""} onChange={(userId) => updateConfig("userId", userId === "" ? "" : Number(userId))}>
-            <option value="">Select a user</option>
-            {(pickers?.assignees || []).map((user) => <option key={user.id} value={user.id}>{user.name || user.email}</option>)}
-          </Select>}
-          {action.type === "assign_agent" && ["round_robin", "least_busy"].includes(config.mode) && <label className="workflow-pool-picker">
-            <span>Pool (leave empty for the whole team)</span>
-            <select multiple aria-label={`Action ${index + 1} assignee pool`} className="workflow-select" value={(config.userIds || []).map(String)} onChange={(event) => updateConfig("userIds", Array.from(event.target.selectedOptions).map((option) => Number(option.value)))}>
-              {(pickers?.assignees || []).map((user) => <option key={user.id} value={user.id}>{user.name || user.email}</option>)}
-            </select>
-          </label>}
-          {action.type === "create_approval" && <Select aria-label={`Action ${index + 1} approval entity`} value={config.entity || "Deal"} onChange={(entity) => updateConfig("entity", entity)}><option>Deal</option><option>Contact</option><option>Invoice</option><option>Ticket</option></Select>}
-          {action.type === "create_approval" && <input aria-label={`Action ${index + 1} approval reason`} value={config.reasonTemplate || ""} onChange={(event) => updateConfig("reasonTemplate", event.target.value)} placeholder="Reason, e.g. Discount review for {{title}}" />}
-          {action.type === "send_webhook" && <input aria-label={`Action ${index + 1} webhook URL`} value={config.url || ""} onChange={(event) => updateConfig("url", event.target.value)} placeholder="https://example.com/webhook" />}
-          {action.type === "send_webhook" && <button type="button" className="workflow-link-button workflow-webhook-edit-button" onClick={() => setShowWebhookSettings(true)}><Pencil size={14} /> Edit webhook settings</button>}
+          {action.type === "assign_agent" && (
+            <Select
+              aria-label={`Action ${index + 1} assignment mode`}
+              value={config.mode || "specific"}
+              onChange={(mode) => updateConfig("mode", mode)}
+            >
+              <option value="specific">A specific user</option>
+              <option value="round_robin">Round-robin across a pool</option>
+              <option value="least_busy">The least busy user</option>
+              <option value="record_owner">
+                The related contact&apos;s owner
+              </option>
+            </Select>
+          )}
+          {action.type === "assign_agent" &&
+            (config.mode || "specific") === "specific" && (
+              <Select
+                aria-label={`Action ${index + 1} assignee`}
+                value={config.userId || ""}
+                onChange={(userId) =>
+                  updateConfig("userId", userId === "" ? "" : Number(userId))
+                }
+              >
+                <option value="">Select a user</option>
+                {(pickers?.assignees || []).map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name || user.email}
+                  </option>
+                ))}
+              </Select>
+            )}
+          {action.type === "assign_agent" &&
+            ["round_robin", "least_busy"].includes(config.mode) && (
+              <label className="workflow-pool-picker">
+                <span>Pool (leave empty for the whole team)</span>
+                <select
+                  multiple
+                  aria-label={`Action ${index + 1} assignee pool`}
+                  className="workflow-select"
+                  value={(config.userIds || []).map(String)}
+                  onChange={(event) =>
+                    updateConfig(
+                      "userIds",
+                      Array.from(event.target.selectedOptions).map((option) =>
+                        Number(option.value),
+                      ),
+                    )
+                  }
+                >
+                  {(pickers?.assignees || []).map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name || user.email}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          {action.type === "create_approval" && (
+            <Select
+              aria-label={`Action ${index + 1} approval entity`}
+              value={config.entity || "Deal"}
+              onChange={(entity) => updateConfig("entity", entity)}
+            >
+              <option>Deal</option>
+              <option>Contact</option>
+              <option>Invoice</option>
+              <option>Ticket</option>
+            </Select>
+          )}
+          {action.type === "create_approval" && (
+            <input
+              aria-label={`Action ${index + 1} approval reason`}
+              value={config.reasonTemplate || ""}
+              onChange={(event) =>
+                updateConfig("reasonTemplate", event.target.value)
+              }
+              placeholder="Reason, e.g. Discount review for {{title}}"
+            />
+          )}
+          {action.type === "send_webhook" && (
+            <input
+              aria-label={`Action ${index + 1} webhook URL`}
+              value={config.url || ""}
+              onChange={(event) => updateConfig("url", event.target.value)}
+              placeholder="https://example.com/webhook"
+            />
+          )}
+          {action.type === "send_webhook" && (
+            <button
+              type="button"
+              className="workflow-link-button workflow-webhook-edit-button"
+              onClick={() => setShowWebhookSettings(true)}
+            >
+              <Pencil size={14} /> Edit webhook settings
+            </button>
+          )}
         </div>
         <ActionIcon size={18} className="workflow-action-icon" />
-        <button type="button" className="workflow-icon-button" onClick={() => removeAction(index)} aria-label={`Remove action ${index + 1}`}><Trash2 size={15} /></button>
+        <button
+          type="button"
+          className="workflow-icon-button"
+          onClick={() => removeAction(index)}
+          aria-label={`Remove action ${index + 1}`}
+        >
+          <Trash2 size={15} />
+        </button>
       </div>
-      {showWebhookSettings && <WebhookSettingsModal initialConfig={config} module={module} workflowId={workflowId} isGenericCrm={isGenericCrm} onSave={(nextConfig) => updateAction(index, { config: nextConfig })} onClose={() => setShowWebhookSettings(false)} />}
+      {showWebhookSettings && (
+        <WebhookSettingsModal
+          initialConfig={config}
+          module={module}
+          workflowId={workflowId}
+          isGenericCrm={isGenericCrm}
+          onSave={(nextConfig) => saveWebhookSettings(index, nextConfig)}
+          onClose={() => setShowWebhookSettings(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1197,7 +2944,8 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
 export default function Workflows({ webhookOnly = false, embedded = false }) {
   const notify = useNotify();
   const auth = useContext(AuthContext);
-  const isGenericCrm = (auth?.tenant?.vertical || auth?.user?.vertical) === "generic";
+  const isGenericCrm =
+    (auth?.tenant?.vertical || auth?.user?.vertical) === "generic";
   const [view, setView] = useState("all");
   const [templateCategory, setTemplateCategory] = useState("all");
   const [templateSearch, setTemplateSearch] = useState("");
@@ -1211,7 +2959,12 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
   // Email templates, sequences and assignable users for the action config
   // dropdowns. These used to be free-text ID boxes, so configuring an action
   // meant knowing a numeric primary key by heart.
-  const [pickers, setPickers] = useState({ emailTemplates: [], sequences: [], assignees: [], webForms: [] });
+  const [pickers, setPickers] = useState({
+    emailTemplates: [],
+    sequences: [],
+    assignees: [],
+    webForms: [],
+  });
   // Bumped once the server catalogue lands. `catalogue` is a module-level
   // object (see applyServerSchema), so mutating it does not itself re-render —
   // this counter is what tells React the trigger/action/operator/field lists
@@ -1225,37 +2978,53 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
       // is survivable: the FALLBACK_* constants keep the builder usable, so
       // this resolves to null rather than blocking the whole picker load.
       fetchApi("/api/workflows/schema").catch(() => null),
-      fetchApi("/api/table-column-prefs/leads", { silent: true }).catch(() => null),
+      fetchApi("/api/table-column-prefs/leads", { silent: true }).catch(
+        () => null,
+      ),
       fetchApi("/api/workflows/email-templates").catch(() => []),
       fetchApi("/api/workflows/sequences").catch(() => []),
       fetchApi("/api/workflows/assignees").catch(() => []),
       isGenericCrm
-        ? fetchApi("/api/contacts/filter-values/webForm").catch(() => ({ values: [] }))
+        ? fetchApi("/api/contacts/filter-values/webForm").catch(() => ({
+            values: [],
+          }))
         : Promise.resolve({ values: [] }),
-    ]).then(([schema, leadColumns, emailTemplates, sequences, assignees, webFormResponse]) => {
-      if (cancelled) return;
-      const schemaApplied = applyServerSchema(schema);
-      // `/api/table-column-prefs/leads` already enforces vertical eligibility
-      // server-side. Do not additionally depend on the newer schema.vertical
-      // marker: during a rolling deploy an older backend can omit that marker
-      // while still returning the complete tenant field catalogue. The old
-      // double gate silently discarded all 199 fields and fell back to the 57
-      // Prisma Contact fields.
-      const leadColumnsApplied = applyGenericLeadColumns(leadColumns);
-      if (schemaApplied || leadColumnsApplied) setSchemaVersion((version) => version + 1);
-      // Coerce rather than default: `|| []` still lets a non-array response
-      // (an error envelope, an unexpected object) through to a `.map` in the
-      // action config and take the whole builder down with it. A picker that
-      // cannot be populated should render empty, not crash the page.
-      const asList = (value) => (Array.isArray(value) ? value : []);
-      setPickers({
-        emailTemplates: asList(emailTemplates),
-        sequences: asList(sequences),
-        assignees: asList(assignees),
-        webForms: asList(webFormResponse?.values),
-      });
-    });
-    return () => { cancelled = true; };
+    ]).then(
+      ([
+        schema,
+        leadColumns,
+        emailTemplates,
+        sequences,
+        assignees,
+        webFormResponse,
+      ]) => {
+        if (cancelled) return;
+        const schemaApplied = applyServerSchema(schema);
+        // `/api/table-column-prefs/leads` already enforces vertical eligibility
+        // server-side. Do not additionally depend on the newer schema.vertical
+        // marker: during a rolling deploy an older backend can omit that marker
+        // while still returning the complete tenant field catalogue. The old
+        // double gate silently discarded all 199 fields and fell back to the 57
+        // Prisma Contact fields.
+        const leadColumnsApplied = applyGenericLeadColumns(leadColumns);
+        if (schemaApplied || leadColumnsApplied)
+          setSchemaVersion((version) => version + 1);
+        // Coerce rather than default: `|| []` still lets a non-array response
+        // (an error envelope, an unexpected object) through to a `.map` in the
+        // action config and take the whole builder down with it. A picker that
+        // cannot be populated should render empty, not crash the page.
+        const asList = (value) => (Array.isArray(value) ? value : []);
+        setPickers({
+          emailTemplates: asList(emailTemplates),
+          sequences: asList(sequences),
+          assignees: asList(assignees),
+          webForms: asList(webFormResponse?.values),
+        });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [isGenericCrm]);
 
   useEffect(() => {
@@ -1285,81 +3054,175 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
       setActionStats(statsResult || {});
       // sortOrder is a real column now; workflowOrder() still reads the legacy
       // targetState.order for rules saved before the parity migration.
-      setWorkflows([...items].sort((a, b) => workflowOrder(a) - workflowOrder(b) || a.id - b.id));
+      setWorkflows(
+        [...items].sort(
+          (a, b) => workflowOrder(a) - workflowOrder(b) || a.id - b.id,
+        ),
+      );
+    } catch (_error) {
+      /* fetchApi already toasted */
+    } finally {
+      setLoading(false);
     }
-    catch (_error) { /* fetchApi already toasted */ }
-    finally { setLoading(false); }
   };
   // The loader is intentionally stable for this page lifetime. It no longer
   // closes over `notify`, so exhaustive-deps is satisfied without a suppression.
-  useEffect(() => { loadWorkflows(); }, []);
+  useEffect(() => {
+    loadWorkflows();
+  }, []);
 
   const scopedWorkflows = useMemo(
-    () => webhookOnly ? workflows.filter(isWebhookWorkflow) : workflows,
+    () => (webhookOnly ? workflows.filter(isWebhookWorkflow) : workflows),
     [webhookOnly, workflows],
   );
-  const filteredWorkflows = useMemo(() => scopedWorkflows.filter((workflow) => view === "all" || (view === "active" ? workflow.isActive : !workflow.isActive)), [scopedWorkflows, view]);
-  const filteredTemplates = TEMPLATES
-    .filter((template) => (templateCategory === "all" || template.category === templateCategory) && template.name.toLowerCase().includes(templateSearch.toLowerCase()))
-    .sort((a, b) => Number(a.name === "Junk Lead Suppression to Meta") - Number(b.name === "Junk Lead Suppression to Meta"));
+  const filteredWorkflows = useMemo(
+    () =>
+      scopedWorkflows.filter(
+        (workflow) =>
+          view === "all" ||
+          (view === "active" ? workflow.isActive : !workflow.isActive),
+      ),
+    [scopedWorkflows, view],
+  );
+  const filteredTemplates = TEMPLATES.filter(
+    (template) =>
+      (templateCategory === "all" || template.category === templateCategory) &&
+      template.name.toLowerCase().includes(templateSearch.toLowerCase()),
+  ).sort(
+    (a, b) =>
+      Number(a.name === "Junk Lead Suppression to Meta") -
+      Number(b.name === "Junk Lead Suppression to Meta"),
+  );
 
   const save = async (activate, options = {}) => {
-    if (!editor.name.trim()) { notify.error("Workflow name is required"); return null; }
-    const normalizedWorkflowName = editor.name.trim().toLowerCase();
-    const duplicateName = workflows.some((workflow) => (
-      String(workflow.id) !== String(editor.id)
-      && String(workflow.name || "").trim().toLowerCase() === normalizedWorkflowName
-    ));
+    const currentEditor = options.editorOverride || editor;
+    if (!currentEditor.name.trim()) {
+      notify.error("Workflow name is required");
+      return null;
+    }
+    const normalizedWorkflowName = currentEditor.name.trim().toLowerCase();
+    const duplicateName = workflows.some(
+      (workflow) =>
+        String(workflow.id) !== String(currentEditor.id) &&
+        String(workflow.name || "")
+          .trim()
+          .toLowerCase() === normalizedWorkflowName,
+    );
     if (duplicateName) {
       notify.error("A workflow with this name already exists");
       return null;
     }
     setSaving(true);
-    const conditionGroups = editor.groups.map((group) => ({
+    const conditionGroups = currentEditor.groups.map((group) => ({
       ...group,
       clauses: group.clauses
         .filter((clause) => clause.field)
-        .map((clause) => (["in", "nin"].includes(clause.op) && typeof clause.value === "string"
-          ? { ...clause, value: clause.value.split(",").map((value) => value.trim()).filter(Boolean) }
-          : clause)),
+        .map((clause) =>
+          ["in", "nin"].includes(clause.op) && typeof clause.value === "string"
+            ? {
+                ...clause,
+                value: clause.value
+                  .split(",")
+                  .map((value) => value.trim())
+                  .filter(Boolean),
+              }
+            : clause,
+        ),
     }));
-    const actions = editor.actions.map((action) => ["update_field", "assign_agent"].includes(action.type) ? { ...action, config: { ...action.config, entity: action.config.entity || editor.module } } : action);
-    const targetState = { module: editor.module, execution: editor.execution, description: editor.description, actions, ...(editor.order !== null ? { order: editor.order } : {}) };
+    const actions = currentEditor.actions.map((action) =>
+      ["update_field", "assign_agent"].includes(action.type)
+        ? {
+            ...action,
+            config: {
+              ...action.config,
+              entity: action.config.entity || currentEditor.module,
+            },
+          }
+        : action,
+    );
+    const targetState = {
+      module: currentEditor.module,
+      execution: currentEditor.execution,
+      description: currentEditor.description,
+      actions,
+      ...(currentEditor.order !== null ? { order: currentEditor.order } : {}),
+    };
     const payload = {
-      name: editor.name.trim(),
-      triggerType: editor.triggerType,
-      actionType: editor.actions[0]?.type || "send_notification",
+      name: currentEditor.name.trim(),
+      triggerType: currentEditor.triggerType,
+      actionType: currentEditor.actions[0]?.type || "send_notification",
       targetState,
       condition: JSON.stringify({ groups: conditionGroups }),
       // null clears a schedule when a rule is converted back to event-driven.
-      scheduleConfig: isScheduleTrigger(editor.triggerType) ? (editor.scheduleConfig || defaultScheduleConfig(editor.module)) : null,
+      scheduleConfig: isScheduleTrigger(currentEditor.triggerType)
+        ? currentEditor.scheduleConfig ||
+          defaultScheduleConfig(currentEditor.module)
+        : null,
     };
     try {
-      const saved = editor.id
-        ? await fetchApi(`/api/workflows/${editor.id}`, { method: "PUT", body: JSON.stringify({ ...payload, isActive: activate }) })
-        : await fetchApi("/api/workflows", { method: "POST", body: JSON.stringify({ ...payload, isActive: activate }) });
-      if (!options.silent) notify.success(activate ? "Workflow enabled" : "Workflow saved as draft");
+      const saved = currentEditor.id
+        ? await fetchApi(`/api/workflows/${currentEditor.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ ...payload, isActive: activate }),
+          })
+        : await fetchApi("/api/workflows", {
+            method: "POST",
+            body: JSON.stringify({ ...payload, isActive: activate }),
+          });
+      if (!options.silent)
+        notify.success(
+          activate ? "Workflow enabled" : "Workflow saved as draft",
+        );
       if (options.keepOpen) setEditor(fromRule(saved));
       else setEditor(null);
       await loadWorkflows();
       return saved;
-    } catch (_error) { /* fetchApi already toasted; falls through to return null */ }
-    finally { setSaving(false); }
+    } catch (_error) {
+      /* fetchApi already toasted; falls through to return null */
+    } finally {
+      setSaving(false);
+    }
     return null;
   };
 
   const toggleWorkflow = async (workflow) => {
-    try { const updated = await fetchApi(`/api/workflows/${workflow.id}/toggle`, { method: "PUT" }); setWorkflows((items) => items.map((item) => item.id === workflow.id ? updated : item)); }
-    catch (_error) { /* fetchApi already toasted */ }
+    try {
+      const updated = await fetchApi(`/api/workflows/${workflow.id}/toggle`, {
+        method: "PUT",
+      });
+      setWorkflows((items) =>
+        items.map((item) => (item.id === workflow.id ? updated : item)),
+      );
+    } catch (_error) {
+      /* fetchApi already toasted */
+    }
   };
   const deleteWorkflow = async (workflow) => {
     if (!window.confirm(`Delete workflow "${workflow.name}"?`)) return;
-    try { await fetchApi(`/api/workflows/${workflow.id}`, { method: "DELETE" }); setWorkflows((items) => items.filter((item) => item.id !== workflow.id)); notify.success("Workflow deleted"); }
-    catch (_error) { /* fetchApi already toasted */ }
+    try {
+      await fetchApi(`/api/workflows/${workflow.id}`, { method: "DELETE" });
+      setWorkflows((items) => items.filter((item) => item.id !== workflow.id));
+      notify.success("Workflow deleted");
+    } catch (_error) {
+      /* fetchApi already toasted */
+    }
   };
   const testWorkflow = async (workflow) => {
-    try { const response = await fetchApi(`/api/workflows/${workflow.id}/test`, { method: "POST", body: JSON.stringify({}) }); if (response.success) notify.success(response.message || "Workflow test completed"); else notify.error(response.result?.error || response.message || "Workflow test failed"); await loadWorkflows(); }
-    catch (_error) { /* fetchApi already toasted */ }
+    try {
+      const response = await fetchApi(`/api/workflows/${workflow.id}/test`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (response.success)
+        notify.success(response.message || "Workflow test completed");
+      else
+        notify.error(
+          response.result?.error || response.message || "Workflow test failed",
+        );
+      await loadWorkflows();
+    } catch (_error) {
+      /* fetchApi already toasted */
+    }
   };
   const testEditor = async () => {
     let workflow = editor;
@@ -1385,7 +3248,10 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
         body: JSON.stringify({ dryRun: true }),
       });
       if (!preview?.matched) {
-        notify.info(preview?.message || "No existing records match this workflow's conditions.");
+        notify.info(
+          preview?.message ||
+            "No existing records match this workflow's conditions.",
+        );
         return;
       }
       if (!window.confirm(`${preview.message}\n\nApply it now?`)) return;
@@ -1393,9 +3259,13 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
         method: "POST",
         body: JSON.stringify({ dryRun: false }),
       });
-      notify.success(applied?.message || "Workflow applied to existing records");
+      notify.success(
+        applied?.message || "Workflow applied to existing records",
+      );
       await loadWorkflows();
-    } catch (_error) { /* fetchApi already toasted */ }
+    } catch (_error) {
+      /* fetchApi already toasted */
+    }
   };
 
   const reorderWorkflows = async (fromIndex, toIndex) => {
@@ -1407,7 +3277,9 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
     try {
       await fetchApi("/api/workflows/order", {
         method: "PUT",
-        body: JSON.stringify({ workflowIds: next.map((workflow) => workflow.id) }),
+        body: JSON.stringify({
+          workflowIds: next.map((workflow) => workflow.id),
+        }),
       });
     } catch (_error) {
       // fetchApi already toasted — just roll the optimistic reorder back.
@@ -1415,143 +3287,692 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
     }
   };
 
-  const createWorkflow = () => setEditor(webhookOnly ? emptyWebhookRule() : emptyRule());
+  const createWorkflow = () =>
+    setEditor(webhookOnly ? emptyWebhookRule() : emptyRule());
 
   if (editor) {
-    return <WorkflowEditor editor={editor} setEditor={setEditor} saving={saving} save={save} onTest={testEditor} onCancel={() => setEditor(null)} pickers={pickers} onRunNow={runNow} webhookOnly={webhookOnly} isGenericCrm={isGenericCrm} />;
+    return (
+      <WorkflowEditor
+        editor={editor}
+        setEditor={setEditor}
+        saving={saving}
+        save={save}
+        onTest={testEditor}
+        onCancel={() => setEditor(null)}
+        pickers={pickers}
+        onRunNow={runNow}
+        webhookOnly={webhookOnly}
+        isGenericCrm={isGenericCrm}
+      />
+    );
   }
 
-  if (history) return <HistoryPanel workflow={history} onClose={() => setHistory(null)} />;
+  if (history)
+    return <HistoryPanel workflow={history} onClose={() => setHistory(null)} />;
 
   if (embedded) {
     return (
-      <div className={`workflow-page workflow-embedded-page ${isGenericCrm ? "workflow-page--generic" : ""}`}>
+      <div
+        className={`workflow-page workflow-embedded-page ${isGenericCrm ? "workflow-page--generic" : ""}`}
+      >
         <div className="workflow-topbar">
-          <div className="workflow-breadcrumb"><b>Webhook workflows</b></div>
-          <button className="workflow-primary" onClick={createWorkflow}><Plus size={17} /> Create webhook workflow</button>
+          <div className="workflow-breadcrumb">
+            <b>Webhook workflows</b>
+          </div>
+          <button className="workflow-primary" onClick={createWorkflow}>
+            <Plus size={17} /> Create webhook workflow
+          </button>
         </div>
         <main className="workflow-main">
-          <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view="embedded" onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} isGenericCrm={isGenericCrm} />
+          <WorkflowList
+            workflows={filteredWorkflows}
+            actionStats={actionStats}
+            loading={loading}
+            onEdit={(workflow) => setEditor(fromRule(workflow))}
+            onToggle={toggleWorkflow}
+            onDelete={deleteWorkflow}
+            onTest={testWorkflow}
+            onHistory={setHistory}
+            openMenu={openMenu}
+            setOpenMenu={setOpenMenu}
+            view="embedded"
+            onCreate={createWorkflow}
+            onReorder={reorderWorkflows}
+            onRunNow={runNow}
+            isGenericCrm={isGenericCrm}
+          />
         </main>
       </div>
     );
   }
 
   return (
-    <div className={`workflow-page ${isGenericCrm ? "workflow-page--generic" : ""}`}>
-      <div className="workflow-topbar"><div className="workflow-breadcrumb"><b>Workflows</b></div><button className="workflow-primary" onClick={createWorkflow}><Plus size={17} /> Create workflow</button></div>
+    <div
+      className={`workflow-page ${isGenericCrm ? "workflow-page--generic" : ""}`}
+    >
+      <div className="workflow-topbar">
+        <div className="workflow-breadcrumb">
+          <b>Workflows</b>
+        </div>
+        <button className="workflow-primary" onClick={createWorkflow}>
+          <Plus size={17} /> Create workflow
+        </button>
+      </div>
       <div className="workflow-layout">
         <aside className="workflow-sidebar">
           <h2>Workflow templates</h2>
-          <nav>{TEMPLATE_CATEGORIES.map((category) => <button key={category.value} className={templateCategory === category.value ? "is-selected" : ""} onClick={() => { setTemplateCategory(category.value); setView("templates"); }}><span>{category.label}</span><small>{category.value === "all" ? TEMPLATES.length : TEMPLATES.filter((template) => template.category === category.value).length}</small></button>)}</nav>
-          <div className="workflow-status-nav"><h2>Workflows by status</h2>{[["all", "All workflows"], ["active", "Active"], ["inactive", "Inactive"]].map(([value, label]) => <button key={value} className={view === value ? "is-selected" : ""} onClick={() => setView(value)}><span><i className={`workflow-status-dot ${value}`} />{label}</span><small>{value === "all" ? scopedWorkflows.length : scopedWorkflows.filter((workflow) => value === "active" ? workflow.isActive : !workflow.isActive).length}</small></button>)}</div>
-          <div className="workflow-help"><b>What are workflows?</b><p>Automate repetitive CRM work when records change.</p></div>
+          <nav>
+            {TEMPLATE_CATEGORIES.map((category) => (
+              <button
+                key={category.value}
+                className={
+                  templateCategory === category.value ? "is-selected" : ""
+                }
+                onClick={() => {
+                  setTemplateCategory(category.value);
+                  setView("templates");
+                }}
+              >
+                <span>{category.label}</span>
+                <small>
+                  {category.value === "all"
+                    ? TEMPLATES.length
+                    : TEMPLATES.filter(
+                        (template) => template.category === category.value,
+                      ).length}
+                </small>
+              </button>
+            ))}
+          </nav>
+          <div className="workflow-status-nav">
+            <h2>Workflows by status</h2>
+            {[
+              ["all", "All workflows"],
+              ["active", "Active"],
+              ["inactive", "Inactive"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                className={view === value ? "is-selected" : ""}
+                onClick={() => setView(value)}
+              >
+                <span>
+                  <i className={`workflow-status-dot ${value}`} />
+                  {label}
+                </span>
+                <small>
+                  {value === "all"
+                    ? scopedWorkflows.length
+                    : scopedWorkflows.filter((workflow) =>
+                        value === "active"
+                          ? workflow.isActive
+                          : !workflow.isActive,
+                      ).length}
+                </small>
+              </button>
+            ))}
+          </div>
+          <div className="workflow-help">
+            <b>What are workflows?</b>
+            <p>Automate repetitive CRM work when records change.</p>
+          </div>
         </aside>
         <main className="workflow-main">
-          {view === "templates" ? <TemplateGallery search={templateSearch} setSearch={setTemplateSearch} category={templateCategory} templates={filteredTemplates} onUse={(template) => setEditor(emptyRule(template))} onCreate={createWorkflow} /> : <WorkflowList workflows={filteredWorkflows} actionStats={actionStats} loading={loading} onEdit={(workflow) => setEditor(fromRule(workflow))} onToggle={toggleWorkflow} onDelete={deleteWorkflow} onTest={testWorkflow} onHistory={setHistory} openMenu={openMenu} setOpenMenu={setOpenMenu} view={view} onCreate={createWorkflow} onReorder={reorderWorkflows} onRunNow={runNow} isGenericCrm={isGenericCrm} />}
+          {view === "templates" ? (
+            <TemplateGallery
+              search={templateSearch}
+              setSearch={setTemplateSearch}
+              category={templateCategory}
+              templates={filteredTemplates}
+              onUse={(template) => setEditor(emptyRule(template))}
+              onCreate={createWorkflow}
+            />
+          ) : (
+            <WorkflowList
+              workflows={filteredWorkflows}
+              actionStats={actionStats}
+              loading={loading}
+              onEdit={(workflow) => setEditor(fromRule(workflow))}
+              onToggle={toggleWorkflow}
+              onDelete={deleteWorkflow}
+              onTest={testWorkflow}
+              onHistory={setHistory}
+              openMenu={openMenu}
+              setOpenMenu={setOpenMenu}
+              view={view}
+              onCreate={createWorkflow}
+              onReorder={reorderWorkflows}
+              onRunNow={runNow}
+              isGenericCrm={isGenericCrm}
+            />
+          )}
         </main>
       </div>
     </div>
   );
 }
 
-function WorkflowList({ workflows, actionStats, loading, onEdit, onToggle, onDelete, onTest, onHistory, openMenu, setOpenMenu, view, onCreate, onReorder, onRunNow, isGenericCrm = false }) {
+function WorkflowList({
+  workflows,
+  actionStats,
+  loading,
+  onEdit,
+  onToggle,
+  onDelete,
+  onTest,
+  onHistory,
+  openMenu,
+  setOpenMenu,
+  view,
+  onCreate,
+  onReorder,
+  onRunNow,
+  isGenericCrm = false,
+}) {
   const [dragIndex, setDragIndex] = useState(null);
   const canReorder = view === "all";
   const drop = (toIndex) => {
-    if (dragIndex === null || dragIndex === toIndex) { setDragIndex(null); return; }
+    if (dragIndex === null || dragIndex === toIndex) {
+      setDragIndex(null);
+      return;
+    }
     onReorder(dragIndex, toIndex);
     setDragIndex(null);
   };
-  return <>
-    <div className="workflow-usage"><Activity size={16} /> <b>{workflows.filter((workflow) => workflow.isActive).length}</b> active workflows.</div>
-    <div className="workflow-heading"><div><h1>{view === "active" ? "Active workflows" : view === "inactive" ? "Inactive workflows" : "All workflows"}</h1><p>{view === "inactive" ? "Use the toggle to enable a workflow." : "All your workflows are executed in the order below. Feel free to reorder them."}</p></div></div>
-    {loading ? <div className="workflow-empty">Loading workflows...</div> : workflows.length === 0 ? <div className="workflow-empty"><Activity size={42} /><h3>No workflows found</h3><button className="workflow-primary" onClick={onCreate}>Create workflow</button></div> : <div className="workflow-list"><div className="workflow-list-header"><span>ORDER OF EXECUTION</span><span>NAME</span><span>TYPE</span><span>ACTIONS EXECUTED</span></div>{workflows.map((workflow, index) => <div className={`workflow-list-row ${dragIndex === index ? "is-dragging" : ""}`} key={workflow.id} draggable={canReorder} onDragStart={() => canReorder && setDragIndex(index)} onDragOver={(event) => canReorder && event.preventDefault()} onDrop={() => canReorder && drop(index)} onDragEnd={() => setDragIndex(null)}><div className="workflow-order"><GripVertical size={16} /><b>{index + 1}</b><button type="button" className={`workflow-toggle ${workflow.isActive ? "on" : ""}`} onClick={() => onToggle(workflow)} aria-label={`${workflow.isActive ? "Disable" : "Enable"} ${workflow.name}`}><span /></button></div><div className="workflow-name"><button onClick={() => onEdit(workflow)}>{workflow.name}</button><p>{workflow.autoDisabledAt ? "Paused automatically after repeated failures" : workflow.isActive ? (workflow.nextScheduledAt ? `Next run ${formatDateTime(workflow.nextScheduledAt)}` : "Runs when its trigger conditions are met") : "Inactive workflow"}</p><small>Last updated {formatDate(workflow.updatedAt || workflow.createdAt, "\u2014")} \u00b7 Last run {formatDateTime(workflow.lastRunAt, "never")}</small>{workflow.lastError && <small className="workflow-row-error"><AlertTriangle size={12} /> {workflow.lastError}</small>}</div><div className="workflow-type">{workflowTypeLabel(workflow, isGenericCrm)}</div><div className="workflow-actions-summary"><b>{actionStats[String(workflow.id)] || 0} successful actions</b><span>in the last 7 days.</span><button onClick={() => onHistory(workflow)}>View history <ArrowLeft size={13} /></button></div><div className="workflow-menu-wrap"><button className="workflow-icon-button" onClick={() => setOpenMenu(openMenu === workflow.id ? null : workflow.id)} aria-label={`Actions for ${workflow.name}`}><MoreVertical size={18} /></button>{openMenu === workflow.id && <div className={`workflow-menu ${index >= workflows.length - 2 ? "menu-up" : ""}`}><button onClick={() => onEdit(workflow)}><Pencil size={14} /> Edit</button><button onClick={() => onTest(workflow)}><Play size={14} /> Test workflow</button><button onClick={() => onEdit({ ...workflow, id: null, name: `${workflow.name} copy` })}><Copy size={14} /> Clone</button><button onClick={() => onRunNow(workflow)}><RefreshCw size={14} /> Apply to existing records</button><button onClick={() => onDelete(workflow)}><Trash2 size={14} /> Delete</button></div>}</div></div>)}</div>}
-  </>;
+  return (
+    <>
+      <div className="workflow-usage">
+        <Activity size={16} />{" "}
+        <b>{workflows.filter((workflow) => workflow.isActive).length}</b> active
+        workflows.
+      </div>
+      <div className="workflow-heading">
+        <div>
+          <h1>
+            {view === "active"
+              ? "Active workflows"
+              : view === "inactive"
+                ? "Inactive workflows"
+                : "All workflows"}
+          </h1>
+          <p>
+            {view === "inactive"
+              ? "Use the toggle to enable a workflow."
+              : "All your workflows are executed in the order below. Feel free to reorder them."}
+          </p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="workflow-empty">Loading workflows...</div>
+      ) : workflows.length === 0 ? (
+        <div className="workflow-empty">
+          <Activity size={42} />
+          <h3>No workflows found</h3>
+          <button className="workflow-primary" onClick={onCreate}>
+            Create workflow
+          </button>
+        </div>
+      ) : (
+        <div className="workflow-list">
+          <div className="workflow-list-header">
+            <span>ORDER OF EXECUTION</span>
+            <span>NAME</span>
+            <span>TYPE</span>
+            <span>ACTIONS EXECUTED</span>
+          </div>
+          {workflows.map((workflow, index) => (
+            <div
+              className={`workflow-list-row ${dragIndex === index ? "is-dragging" : ""}`}
+              key={workflow.id}
+              draggable={canReorder}
+              onDragStart={() => canReorder && setDragIndex(index)}
+              onDragOver={(event) => canReorder && event.preventDefault()}
+              onDrop={() => canReorder && drop(index)}
+              onDragEnd={() => setDragIndex(null)}
+            >
+              <div className="workflow-order">
+                <GripVertical size={16} />
+                <b>{index + 1}</b>
+                <button
+                  type="button"
+                  className={`workflow-toggle ${workflow.isActive ? "on" : ""}`}
+                  onClick={() => onToggle(workflow)}
+                  aria-label={`${workflow.isActive ? "Disable" : "Enable"} ${workflow.name}`}
+                >
+                  <span />
+                </button>
+              </div>
+              <div className="workflow-name">
+                <button onClick={() => onEdit(workflow)}>
+                  {workflow.name}
+                </button>
+                <p>
+                  {workflow.autoDisabledAt
+                    ? "Paused automatically after repeated failures"
+                    : workflow.isActive
+                      ? workflow.nextScheduledAt
+                        ? `Next run ${formatDateTime(workflow.nextScheduledAt)}`
+                        : "Runs when its trigger conditions are met"
+                      : "Inactive workflow"}
+                </p>
+                <small>
+                  Last updated{" "}
+                  {formatDate(
+                    workflow.updatedAt || workflow.createdAt,
+                    "\u2014",
+                  )}{" "}
+                  \u00b7 Last run {formatDateTime(workflow.lastRunAt, "never")}
+                </small>
+                {workflow.lastError && (
+                  <small className="workflow-row-error">
+                    <AlertTriangle size={12} /> {workflow.lastError}
+                  </small>
+                )}
+              </div>
+              <div className="workflow-type">
+                {workflowTypeLabel(workflow, isGenericCrm)}
+              </div>
+              <div className="workflow-actions-summary">
+                <b>
+                  {actionStats[String(workflow.id)] || 0} successful actions
+                </b>
+                <span>in the last 7 days.</span>
+                <button onClick={() => onHistory(workflow)}>
+                  View history <ArrowLeft size={13} />
+                </button>
+              </div>
+              <div className="workflow-menu-wrap">
+                <button
+                  className="workflow-icon-button"
+                  onClick={() =>
+                    setOpenMenu(openMenu === workflow.id ? null : workflow.id)
+                  }
+                  aria-label={`Actions for ${workflow.name}`}
+                >
+                  <MoreVertical size={18} />
+                </button>
+                {openMenu === workflow.id && (
+                  <div
+                    className={`workflow-menu ${index >= workflows.length - 2 ? "menu-up" : ""}`}
+                  >
+                    <button onClick={() => onEdit(workflow)}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button onClick={() => onTest(workflow)}>
+                      <Play size={14} /> Test workflow
+                    </button>
+                    <button
+                      onClick={() =>
+                        onEdit({
+                          ...workflow,
+                          id: null,
+                          name: `${workflow.name} copy`,
+                        })
+                      }
+                    >
+                      <Copy size={14} /> Clone
+                    </button>
+                    <button onClick={() => onRunNow(workflow)}>
+                      <RefreshCw size={14} /> Apply to existing records
+                    </button>
+                    <button onClick={() => onDelete(workflow)}>
+                      <Trash2 size={14} /> Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
 }
 
-function TemplateGallery({ search, setSearch, category, templates, onUse, onCreate }) {
-  return <div className="workflow-template-main"><div className="workflow-heading"><div><h1>Start by selecting a workflow template</h1><p>Choose a ready-made workflow or create your own.</p></div></div><label className="workflow-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search for a template" /></label><h2>{TEMPLATE_CATEGORIES.find((item) => item.value === category)?.label || "All templates"}</h2><div className="workflow-template-grid">{templates.map((template, index) => <article className="workflow-template-card" key={`${template.name}-${index}`}><div className="workflow-template-icon"><Activity size={21} /></div><h3>{template.name}</h3><button className="workflow-dark-button" onClick={() => onUse(template)}>Use template</button></article>)}</div>{templates.length === 0 && <div className="workflow-empty">No templates match your search.</div>}<div className="workflow-create-footer">Could not find a template which works for you?<button className="workflow-dark-button" onClick={onCreate}>Create your own workflow</button></div></div>;
+function TemplateGallery({
+  search,
+  setSearch,
+  category,
+  templates,
+  onUse,
+  onCreate,
+}) {
+  return (
+    <div className="workflow-template-main">
+      <div className="workflow-heading">
+        <div>
+          <h1>Start by selecting a workflow template</h1>
+          <p>Choose a ready-made workflow or create your own.</p>
+        </div>
+      </div>
+      <label className="workflow-search">
+        <Search size={16} />
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search for a template"
+        />
+      </label>
+      <h2>
+        {TEMPLATE_CATEGORIES.find((item) => item.value === category)?.label ||
+          "All templates"}
+      </h2>
+      <div className="workflow-template-grid">
+        {templates.map((template, index) => (
+          <article
+            className="workflow-template-card"
+            key={`${template.name}-${index}`}
+          >
+            <div className="workflow-template-icon">
+              <Activity size={21} />
+            </div>
+            <h3>{template.name}</h3>
+            <button
+              className="workflow-dark-button"
+              onClick={() => onUse(template)}
+            >
+              Use template
+            </button>
+          </article>
+        ))}
+      </div>
+      {templates.length === 0 && (
+        <div className="workflow-empty">No templates match your search.</div>
+      )}
+      <div className="workflow-create-footer">
+        Could not find a template which works for you?
+        <button className="workflow-dark-button" onClick={onCreate}>
+          Create your own workflow
+        </button>
+      </div>
+    </div>
+  );
 }
 
-function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pickers, onRunNow, webhookOnly = false, isGenericCrm = false }) {
+function WorkflowEditor({
+  editor,
+  setEditor,
+  saving,
+  save,
+  onTest,
+  onCancel,
+  pickers,
+  onRunNow,
+  webhookOnly = false,
+  isGenericCrm = false,
+}) {
   const update = (patch) => setEditor((current) => ({ ...current, ...patch }));
-  const updateGroup = (index, patch) => update({ groups: editor.groups.map((group, currentIndex) => currentIndex === index ? { ...group, ...patch } : group) });
-  const updateAction = (index, patch) => update({ actions: editor.actions.map((action, currentIndex) => currentIndex === index ? { ...action, ...patch } : action) });
-  const selectModule = (module) => setEditor((current) => ({
-    ...current,
-    module,
-    triggerType: defaultTriggerForModule(module),
-    scheduleConfig: null,
-    groups: current.groups.map((group) => ({
-      ...group,
-      clauses: group.clauses.map((clause) => ({ ...clause, entity: module, field: "" })),
-    })),
-  }));
+  const updateGroup = (index, patch) =>
+    update({
+      groups: editor.groups.map((group, currentIndex) =>
+        currentIndex === index ? { ...group, ...patch } : group,
+      ),
+    });
+  const updateAction = (index, patch) =>
+    setEditor((current) => ({
+      ...current,
+      actions: current.actions.map((action, currentIndex) =>
+        currentIndex === index ? { ...action, ...patch } : action,
+      ),
+    }));
+  const saveWebhookSettings = async (index, config) => {
+    const updatedEditor = {
+      ...editor,
+      actions: editor.actions.map((action, currentIndex) =>
+        currentIndex === index ? { ...action, config } : action,
+      ),
+    };
+    setEditor(updatedEditor);
+    const saved = await save(!!updatedEditor.isActive, {
+      editorOverride: updatedEditor,
+      keepOpen: true,
+      silent: true,
+    });
+    return !!saved;
+  };
+  const selectModule = (module) =>
+    setEditor((current) => ({
+      ...current,
+      module,
+      triggerType: defaultTriggerForModule(module),
+      scheduleConfig: null,
+      groups: current.groups.map((group) => ({
+        ...group,
+        clauses: group.clauses.map((clause) => ({
+          ...clause,
+          entity: module,
+          field: "",
+        })),
+      })),
+    }));
   // Switching to (or away from) a time-based trigger has to create or clear the
   // schedule, otherwise the rule saves as scheduled with nothing to schedule on
   // and the API rejects it.
-  const selectTrigger = (triggerType) => update({
-    triggerType,
-    scheduleConfig: isScheduleTrigger(triggerType)
-      ? (editor.scheduleConfig && editor.scheduleConfig.mode === (triggerType === "schedule.recurring" ? "recurring" : "date_field")
-        ? editor.scheduleConfig
-        : { ...defaultScheduleConfig(editor.module), mode: triggerType === "schedule.recurring" ? "recurring" : "date_field", ...(triggerType === "schedule.recurring" ? { frequency: "daily" } : {}) })
-      : null,
-  });
+  const selectTrigger = (triggerType) =>
+    update({
+      triggerType,
+      scheduleConfig: isScheduleTrigger(triggerType)
+        ? editor.scheduleConfig &&
+          editor.scheduleConfig.mode ===
+            (triggerType === "schedule.recurring" ? "recurring" : "date_field")
+          ? editor.scheduleConfig
+          : {
+              ...defaultScheduleConfig(editor.module),
+              mode:
+                triggerType === "schedule.recurring"
+                  ? "recurring"
+                  : "date_field",
+              ...(triggerType === "schedule.recurring"
+                ? { frequency: "daily" }
+                : {}),
+            }
+        : null,
+    });
   const scheduled = isScheduleTrigger(editor.triggerType);
   return (
-    <div className={`workflow-page workflow-editor-page ${isGenericCrm ? "workflow-page--generic" : ""}`}>
+    <div
+      className={`workflow-page workflow-editor-page ${isGenericCrm ? "workflow-page--generic" : ""}`}
+    >
       <div className="workflow-editor-topbar">
-        <button className="workflow-back" onClick={onCancel}><ArrowLeft size={16} /> {webhookOnly ? "Webhook workflows" : "Workflows"}</button>
+        <button className="workflow-back" onClick={onCancel}>
+          <ArrowLeft size={16} />{" "}
+          {webhookOnly ? "Webhook workflows" : "Workflows"}
+        </button>
         <div>
-          <button className="workflow-secondary" onClick={onCancel}>Cancel</button>
-          <button className="workflow-secondary" onClick={() => save(false)} disabled={saving}>Save as draft</button>
-          {!webhookOnly && <button className="workflow-secondary" onClick={onTest} disabled={saving}><Play size={14} /> Test workflow</button>}
+          <button className="workflow-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="workflow-secondary"
+            onClick={() => save(false)}
+            disabled={saving}
+          >
+            Save as draft
+          </button>
+          {!webhookOnly && (
+            <button
+              className="workflow-secondary"
+              onClick={onTest}
+              disabled={saving}
+            >
+              <Play size={14} /> Test workflow
+            </button>
+          )}
           {/* Freshsales lets an author backfill a workflow over records that
               already exist; without it a rule only ever affects records touched
               after it was created. Defaults to a dry run. */}
-          {editor.id && !webhookOnly && <button className="workflow-secondary" onClick={() => onRunNow(editor)} disabled={saving}><RefreshCw size={14} /> Apply to existing records</button>}
-          <button className="workflow-primary" onClick={() => save(true)} disabled={saving}><Check size={16} /> {saving ? "Saving..." : "Enable"}</button>
+          {editor.id && !webhookOnly && (
+            <button
+              className="workflow-secondary"
+              onClick={() => onRunNow(editor)}
+              disabled={saving}
+            >
+              <RefreshCw size={14} /> Apply to existing records
+            </button>
+          )}
+          <button
+            className="workflow-primary"
+            onClick={() => save(true)}
+            disabled={saving}
+          >
+            <Check size={16} /> {saving ? "Saving..." : "Enable"}
+          </button>
         </div>
       </div>
       <div className="workflow-editor-content">
         {/* The auto-disable guard pauses a workflow after repeated failures.
             Saying so here is the difference between "someone turned this off"
             and "this is broken". */}
-        {editor.health?.autoDisabledAt && <div className="workflow-alert" role="alert">
-          <AlertTriangle size={16} />
-          <span>This workflow was paused automatically after {editor.health.consecutiveFailures} consecutive failures. Last error: {editor.health.lastError || "unknown"}. Fix the problem and press Enable to resume it.</span>
-        </div>}
-        {!editor.health?.autoDisabledAt && editor.health?.lastError && <div className="workflow-alert workflow-alert-warn" role="alert">
-          <AlertTriangle size={16} />
-          <span>Last run failed: {editor.health.lastError}</span>
-        </div>}
-        <input className="workflow-title-input" value={editor.name} onChange={(event) => update({ name: event.target.value })} aria-label="Workflow name" />
-        <textarea className="workflow-description" value={editor.description} onChange={(event) => update({ description: event.target.value })} placeholder="Add description" aria-label="Workflow description" rows={1} />
+        {editor.health?.autoDisabledAt && (
+          <div className="workflow-alert" role="alert">
+            <AlertTriangle size={16} />
+            <span>
+              This workflow was paused automatically after{" "}
+              {editor.health.consecutiveFailures} consecutive failures. Last
+              error: {editor.health.lastError || "unknown"}. Fix the problem and
+              press Enable to resume it.
+            </span>
+          </div>
+        )}
+        {!editor.health?.autoDisabledAt && editor.health?.lastError && (
+          <div className="workflow-alert workflow-alert-warn" role="alert">
+            <AlertTriangle size={16} />
+            <span>Last run failed: {editor.health.lastError}</span>
+          </div>
+        )}
+        <input
+          className="workflow-title-input"
+          value={editor.name}
+          onChange={(event) => update({ name: event.target.value })}
+          aria-label="Workflow name"
+        />
+        <textarea
+          className="workflow-description"
+          value={editor.description}
+          onChange={(event) => update({ description: event.target.value })}
+          placeholder="Add description"
+          aria-label="Workflow description"
+          rows={1}
+        />
         <section>
           <h2>Run this workflow for</h2>
-          <div className="workflow-module-buttons">{MODULES.map((module) => <button key={module.value} className={editor.module === module.value ? "is-selected" : ""} onClick={() => selectModule(module.value)}><module.icon size={18} /> {module.label}</button>)}</div>
+          <div className="workflow-module-buttons">
+            {MODULES.map((module) => (
+              <button
+                key={module.value}
+                className={editor.module === module.value ? "is-selected" : ""}
+                onClick={() => selectModule(module.value)}
+              >
+                <module.icon size={18} /> {module.label}
+              </button>
+            ))}
+          </div>
         </section>
         <section>
           <h2>When to trigger this workflow?</h2>
           <div className="workflow-trigger-line">
             <span>Trigger</span>
-            <Select aria-label="Workflow trigger" value={editor.triggerType} onChange={selectTrigger}>{triggersForModule(editor.module).map((trigger) => <option key={trigger.value} value={trigger.value}>{trigger.label}</option>)}</Select>
+            <Select
+              aria-label="Workflow trigger"
+              value={editor.triggerType}
+              onChange={selectTrigger}
+            >
+              {triggersForModule(editor.module).map((trigger) => (
+                <option key={trigger.value} value={trigger.value}>
+                  {trigger.label}
+                </option>
+              ))}
+            </Select>
             <span>and run this workflow</span>
-            <Select aria-label="Workflow execution frequency" value={editor.execution} onChange={(execution) => update({ execution })}><option value="once">once for each {editor.module}</option><option value="every">every time conditions match</option></Select>
+            <Select
+              aria-label="Workflow execution frequency"
+              value={editor.execution}
+              onChange={(execution) => update({ execution })}
+            >
+              <option value="once">once for each {editor.module}</option>
+              <option value="every">every time conditions match</option>
+            </Select>
           </div>
-          {scheduled && <ScheduleBuilder schedule={editor.scheduleConfig} module={editor.module} onChange={(scheduleConfig) => update({ scheduleConfig })} />}
+          {scheduled && (
+            <ScheduleBuilder
+              schedule={editor.scheduleConfig}
+              module={editor.module}
+              onChange={(scheduleConfig) => update({ scheduleConfig })}
+            />
+          )}
         </section>
         <section>
           <h2>What conditions should be met?</h2>
-          {editor.groups.map((group, index) => <ConditionGroup key={index} group={group} index={index} module={editor.module} updateGroup={updateGroup} removeGroup={(groupIndex) => update({ groups: editor.groups.filter((_, currentIndex) => currentIndex !== groupIndex) })} webForms={pickers.webForms} isGenericCrm={isGenericCrm} />)}
-          <button className="workflow-add-group" onClick={() => update({ groups: [...editor.groups, defaultGroup(editor.module)] })}><Plus size={15} /> Add group</button>
+          {editor.groups.map((group, index) => (
+            <ConditionGroup
+              key={index}
+              group={group}
+              index={index}
+              module={editor.module}
+              updateGroup={updateGroup}
+              removeGroup={(groupIndex) =>
+                update({
+                  groups: editor.groups.filter(
+                    (_, currentIndex) => currentIndex !== groupIndex,
+                  ),
+                })
+              }
+              webForms={pickers.webForms}
+              isGenericCrm={isGenericCrm}
+            />
+          ))}
+          <button
+            className="workflow-add-group"
+            onClick={() =>
+              update({
+                groups: [...editor.groups, defaultGroup(editor.module)],
+              })
+            }
+          >
+            <Plus size={15} /> Add group
+          </button>
         </section>
         <section>
           <h2>What actions should be executed?</h2>
-          {editor.actions.map((action, index) => <ActionCard key={index} action={action} index={index} module={editor.module} workflowId={editor.id} pickers={pickers} webhookOnly={webhookOnly} isGenericCrm={isGenericCrm} updateAction={updateAction} removeAction={(actionIndex) => update({ actions: editor.actions.filter((_, currentIndex) => currentIndex !== actionIndex) })} />)}
-          <button className="workflow-link-button" onClick={() => update({ actions: [...editor.actions, webhookOnly ? { type: "send_webhook", config: defaultWebhookConfig(editor.module) } : { type: "send_notification", config: {} }] })}><Plus size={15} /> Add action</button>
+          {editor.actions.map((action, index) => (
+            <ActionCard
+              key={index}
+              action={action}
+              index={index}
+              module={editor.module}
+              workflowId={editor.id}
+              pickers={pickers}
+              webhookOnly={webhookOnly}
+              isGenericCrm={isGenericCrm}
+              updateAction={updateAction}
+              saveWebhookSettings={saveWebhookSettings}
+              removeAction={(actionIndex) =>
+                update({
+                  actions: editor.actions.filter(
+                    (_, currentIndex) => currentIndex !== actionIndex,
+                  ),
+                })
+              }
+            />
+          ))}
+          <button
+            className="workflow-link-button"
+            onClick={() =>
+              update({
+                actions: [
+                  ...editor.actions,
+                  webhookOnly
+                    ? {
+                        type: "send_webhook",
+                        config: defaultWebhookConfig(editor.module),
+                      }
+                    : { type: "send_notification", config: {} },
+                ],
+              })
+            }
+          >
+            <Plus size={15} /> Add action
+          </button>
         </section>
       </div>
     </div>
@@ -1585,7 +4006,12 @@ function HistoryPanel({ workflow, onClose }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset), status, days });
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String(offset),
+      status,
+      days,
+    });
     if (workflow?.id) params.set("workflowId", String(workflow.id));
     if (contactFilter) params.set("contactId", contactFilter);
     fetchApi(`/api/workflows/history?${params.toString()}`)
@@ -1594,59 +4020,176 @@ function HistoryPanel({ workflow, onClose }) {
         setLogs(data?.logs || []);
         setTotal(data?.total || 0);
       })
-      .catch(() => { if (!cancelled) { setLogs([]); setTotal(0); } })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .catch(() => {
+        if (!cancelled) {
+          setLogs([]);
+          setTotal(0);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [workflow?.id, offset, status, days, contactFilter]);
 
   // Reset to the first page whenever a filter changes, or page 3 of the old
   // filter would render as an empty page of the new one.
-  const changeFilter = (setter) => (value) => { setOffset(0); setter(value); };
+  const changeFilter = (setter) => (value) => {
+    setOffset(0);
+    setter(value);
+  };
 
-  const contacts = [...new Map(
-    logs.filter((log) => log.contactId).map((log) => [log.contactId, log.contactLabel || `Contact #${log.contactId}`]),
-  ).entries()];
+  const contacts = [
+    ...new Map(
+      logs
+        .filter((log) => log.contactId)
+        .map((log) => [
+          log.contactId,
+          log.contactLabel || `Contact #${log.contactId}`,
+        ]),
+    ).entries(),
+  ];
 
-  const statusLabel = (value) => (value === "SUCCESS" ? "Successful" : value === "FAILED" ? "Failed" : "Skipped");
+  const statusLabel = (value) =>
+    value === "SUCCESS"
+      ? "Successful"
+      : value === "FAILED"
+        ? "Failed"
+        : "Skipped";
 
-  return <div className="workflow-history-overlay"><div className="workflow-history-panel">
-    <div className="workflow-history-head"><h2>ACTION HISTORY</h2><button className="workflow-icon-button" onClick={onClose} aria-label="Close history"><X size={18} /></button></div>
-    <div className="workflow-history-meta">
-      <div className="workflow-history-name">Workflow name<br /><b>{workflow.name}</b></div>
-      <div className="workflow-history-filters">
-        <div>Showing: {[["all", "All actions"], ["failed", "Failed actions"], ["success", "Successful actions"]].map(([value, label]) => (
-          <label key={value}><input type="radio" name="workflow-history-status" checked={status === value} onChange={() => changeFilter(setStatus)(value)} /> {label}</label>
-        ))}</div>
-        <Select aria-label="History period" value={days} onChange={changeFilter(setDays)}>
-          <option value="1">Last 24 hours</option>
-          <option value="7">Last 7 days</option>
-          <option value="30">Last 30 days</option>
-          <option value="90">Last 90 days</option>
-        </Select>
+  return (
+    <div className="workflow-history-overlay">
+      <div className="workflow-history-panel">
+        <div className="workflow-history-head">
+          <h2>ACTION HISTORY</h2>
+          <button
+            className="workflow-icon-button"
+            onClick={onClose}
+            aria-label="Close history"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="workflow-history-meta">
+          <div className="workflow-history-name">
+            Workflow name
+            <br />
+            <b>{workflow.name}</b>
+          </div>
+          <div className="workflow-history-filters">
+            <div>
+              Showing:{" "}
+              {[
+                ["all", "All actions"],
+                ["failed", "Failed actions"],
+                ["success", "Successful actions"],
+              ].map(([value, label]) => (
+                <label key={value}>
+                  <input
+                    type="radio"
+                    name="workflow-history-status"
+                    checked={status === value}
+                    onChange={() => changeFilter(setStatus)(value)}
+                  />{" "}
+                  {label}
+                </label>
+              ))}
+            </div>
+            <Select
+              aria-label="History period"
+              value={days}
+              onChange={changeFilter(setDays)}
+            >
+              <option value="1">Last 24 hours</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </Select>
+          </div>
+          <label className="workflow-contact-filter">
+            Filter by contact
+            <Select
+              aria-label="Filter by contact"
+              value={contactFilter}
+              onChange={changeFilter(setContactFilter)}
+            >
+              <option value="">All contacts</option>
+              {contacts.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </Select>
+          </label>
+        </div>
+        <div className="workflow-history-table">
+          <div className="workflow-list-header">
+            <span>ACTION</span>
+            <span>TRIGGERED ON</span>
+            <span>STATUS</span>
+            <span>RECORD</span>
+          </div>
+          {loading ? (
+            <div className="workflow-empty">Loading history...</div>
+          ) : logs.length === 0 ? (
+            <div className="workflow-empty">No actions found.</div>
+          ) : (
+            logs.map((log) => (
+              <div className="workflow-history-row" key={log.id}>
+                <div>
+                  <b>{log.actionType}</b>
+                  <small>
+                    {log.triggerType}
+                    {log.durationMs != null
+                      ? ` \u00b7 ${log.durationMs}ms`
+                      : ""}
+                    {log.isTest ? " \u00b7 test run" : ""}
+                  </small>
+                  {log.error && (
+                    <small className="workflow-row-error">{log.error}</small>
+                  )}
+                </div>
+                <span>{formatDateTime(log.createdAt)}</span>
+                <span
+                  className={`workflow-history-status is-${String(log.status || "").toLowerCase()}`}
+                >
+                  {statusLabel(log.status)}
+                </span>
+                <span>{log.contactLabel || log.recordKey || "\u2014"}</span>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="workflow-history-footer">
+          <button
+            className="workflow-history-page-button"
+            disabled={offset === 0 || loading}
+            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+          >
+            Previous
+          </button>
+          <span>
+            {total === 0
+              ? "0 actions"
+              : `${offset + 1}\u2013${Math.min(offset + logs.length, total)} of ${total}`}
+          </span>
+          <button
+            className="workflow-history-page-button"
+            disabled={offset + logs.length >= total || loading}
+            onClick={() => setOffset(offset + PAGE_SIZE)}
+          >
+            Next
+          </button>
+          <button
+            className="workflow-secondary workflow-history-close"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
       </div>
-      <label className="workflow-contact-filter">Filter by contact
-        <Select aria-label="Filter by contact" value={contactFilter} onChange={changeFilter(setContactFilter)}>
-          <option value="">All contacts</option>
-          {contacts.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </Select>
-      </label>
     </div>
-    <div className="workflow-history-table">
-      <div className="workflow-list-header"><span>ACTION</span><span>TRIGGERED ON</span><span>STATUS</span><span>RECORD</span></div>
-      {loading ? <div className="workflow-empty">Loading history...</div>
-        : logs.length === 0 ? <div className="workflow-empty">No actions found.</div>
-          : logs.map((log) => <div className="workflow-history-row" key={log.id}>
-            <div><b>{log.actionType}</b><small>{log.triggerType}{log.durationMs != null ? ` \u00b7 ${log.durationMs}ms` : ""}{log.isTest ? " \u00b7 test run" : ""}</small>{log.error && <small className="workflow-row-error">{log.error}</small>}</div>
-            <span>{formatDateTime(log.createdAt)}</span>
-            <span className={`workflow-history-status is-${String(log.status || "").toLowerCase()}`}>{statusLabel(log.status)}</span>
-            <span>{log.contactLabel || log.recordKey || "\u2014"}</span>
-          </div>)}
-    </div>
-    <div className="workflow-history-footer">
-      <button className="workflow-history-page-button" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</button>
-      <span>{total === 0 ? "0 actions" : `${offset + 1}\u2013${Math.min(offset + logs.length, total)} of ${total}`}</span>
-      <button className="workflow-history-page-button" disabled={offset + logs.length >= total || loading} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</button>
-      <button className="workflow-secondary workflow-history-close" onClick={onClose}>Close</button>
-    </div>
-  </div></div>;
+  );
 }

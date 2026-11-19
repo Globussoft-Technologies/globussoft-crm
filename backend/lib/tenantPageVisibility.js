@@ -104,7 +104,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/agent-reports', label: 'Agent Reports', category: 'Analytics & Reports' },
   { path: '/revenue-goals', label: 'Revenue Goals', category: 'Analytics & Reports' },
 
-  { path: '/sales-teams', label: 'Sales Teams', category: 'Team & Access' },
+  { path: '/sales-teams', label: 'Teams', category: 'Team & Access' },
   { path: '/staff', label: 'Staff', category: 'Team & Access' },
   { path: '/settings/roles', label: 'Roles', category: 'Team & Access' },
   { path: '/territories', label: 'Territories', category: 'Team & Access' },
@@ -201,7 +201,7 @@ const LEGACY_GENERIC_PAGE_CATALOG = [
   },
   {
     path: '/sales-teams',
-    label: 'Sales Teams',
+    label: 'Teams',
     description: 'Manage sales team membership and ownership',
     category: 'Team & Access',
     requiredPermissions: [{ module: 'staff', action: 'read' }],

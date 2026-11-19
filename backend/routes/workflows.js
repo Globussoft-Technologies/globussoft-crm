@@ -2,7 +2,7 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { ensureEnum } = require("../lib/validators");
 const { resolveConfiguredWebhookUrl } = require("../lib/webhookDelivery");
-const { encryptCredential, looksLikeMaskedSentinel, maskCredential } = require("../lib/credentialMasking");
+const { encryptCredential, decryptCredential, looksLikeMaskedSentinel, maskCredential } = require("../lib/credentialMasking");
 const { requirePermission } = require("../middleware/requirePermission");
 // Triggers, actions, operators and mutable-entity metadata used to be declared
 // here AND in lib/eventBus.js AND again in the React builder, and had drifted:
@@ -73,11 +73,25 @@ function secureWebhookConfig(config, previousConfig = {}) {
     ...config,
     method: String(config.method || "POST").toUpperCase(),
     encoding: String(config.encoding || "json").toLowerCase(),
-    headers: (Array.isArray(config.headers) ? config.headers : []).map((header) => {
+    headers: (Array.isArray(config.headers) ? config.headers : []).map((header, index) => {
+      // Secret headers are masked on reads. If the UI sends that sentinel
+      // back, recover the stored value even when the header was renamed or
+      // its Secret checkbox was turned off, instead of persisting the mask.
+      const previous = previousHeaders.find((item) => String(item?.key || "").toLowerCase() === String(header?.key || "").toLowerCase())
+        || previousHeaders[index];
+      if (looksLikeMaskedSentinel(header?.value) && previous) {
+        let value;
+        if (header.secret) {
+          value = previous.secret
+            ? previous.value
+            : encryptCredential(String(previous.value || ""));
+        } else {
+          value = decryptCredential(previous.value);
+        }
+        return { ...header, value };
+      }
       if (!header?.secret) return header;
-      const previous = previousHeaders.find((item) => String(item?.key || "").toLowerCase() === String(header.key || "").toLowerCase());
-      const value = looksLikeMaskedSentinel(header.value) && previous ? previous.value : encryptCredential(String(header.value || ""));
-      return { ...header, value };
+      return { ...header, value: encryptCredential(String(header.value || "")) };
     }),
   };
 }

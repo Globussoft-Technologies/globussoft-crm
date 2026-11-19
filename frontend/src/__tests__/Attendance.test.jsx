@@ -19,8 +19,8 @@
  *   5. 30-day history table: page renders one <tr> per /me row, with
  *      Date / Clock-in / Clock-out / Total / Status / Source columns.
  *   6. Manager Staff section: for role=ADMIN or role=MANAGER, the
- *      "Today — All Staff" section renders, hits GET
- *      /api/attendance/summary?from=<today>&to=<today>, and renders a
+ *      "All Staff — Selected Period" section renders, hits GET
+ *      /api/attendance/summary for the default selected period, and renders a
  *      per-user row when the response carries `byUser` entries.
  *   7. Empty state: when /me returns [], the table is replaced with a
  *      "No attendance rows yet. Clock in to get started." message.
@@ -80,6 +80,11 @@ import Attendance from '../pages/wellness/Attendance';
 import { AuthContext } from '../App';
 
 const todayKey = new Date().toISOString().slice(0, 10);
+const thirtyDaysAgoKey = (() => {
+  const date = new Date();
+  date.setDate(date.getDate() - 30);
+  return date.toISOString().slice(0, 10);
+})();
 
 function makeMyRow(overrides = {}) {
   // Default: a closed-out PRESENT row from a prior day so the today
@@ -401,8 +406,8 @@ describe('<Attendance /> — manager Staff section', () => {
     renderAttendance({ user: regularUser });
 
     await waitFor(() => expect(screen.getByText(/My attendance/i)).toBeInTheDocument());
-    // The manager-only "Today — All Staff" heading must not be present.
-    expect(screen.queryByText(/Today — All Staff/i)).not.toBeInTheDocument();
+    // The manager-only "All Staff — Selected Period" heading must not be present.
+    expect(screen.queryByText(/All Staff — Selected Period/i)).not.toBeInTheDocument();
     // /summary must not have been called.
     const summaryCall = fetchApiMock.mock.calls.find(([u]) =>
       typeof u === 'string' && u.startsWith('/api/attendance/summary')
@@ -431,17 +436,17 @@ describe('<Attendance /> — manager Staff section', () => {
     renderAttendance({ user: adminUser });
 
     await waitFor(() =>
-      expect(screen.getByText(/Today — All Staff/i)).toBeInTheDocument()
+      expect(screen.getByText(/All Staff — Selected Period/i)).toBeInTheDocument()
     );
 
-    // Pin the call shape: /api/attendance/summary?from=<today>&to=<today>.
+    // The manager snapshot defaults to a 30-day range ending today.
     await waitFor(() => {
       const summaryCall = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' && u.startsWith('/api/attendance/summary?')
       );
       expect(summaryCall).toBeTruthy();
       const url = summaryCall[0];
-      expect(url).toMatch(new RegExp(`from=${todayKey}`));
+      expect(url).toMatch(new RegExp(`from=${thirtyDaysAgoKey}`));
       expect(url).toMatch(new RegExp(`to=${todayKey}`));
     });
 
@@ -512,7 +517,7 @@ describe('<Attendance /> — payroll CSV export (#804)', () => {
 
     renderAttendance({ user: adminUser });
 
-    await waitFor(() => expect(screen.getByText(/Today — All Staff/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/All Staff — Selected Period/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Export Payroll CSV/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Select payroll date range/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Payroll CSV from date/i)).not.toBeInTheDocument();

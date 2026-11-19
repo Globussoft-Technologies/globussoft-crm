@@ -1,13 +1,24 @@
 const express = require("express");
 const PDFDocument = require("pdfkit");
-// Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
-// names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
-const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
+const XLSX = require("xlsx");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { formatMoney } = require("../utils/formatMoney");
 const { reportDealTypeWhere } = require('../lib/reportDealType');
+
+function pdfStreamToBuffer(doc) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+  });
+}
+
+function formatReportPdfMoney(amount, currency, locale) {
+  return formatMoney(amount, currency, locale).replace(/₹/g, 'INR ');
+}
 
 // All queries are scoped to req.user.tenantId
 
@@ -370,6 +381,7 @@ router.get("/detailed/:type", async (req, res) => {
 router.get("/export-csv", async (req, res) => {
   try {
     const { startDate, endDate, type } = req.query;
+    const exportFormat = String(req.query.format || "csv").toLowerCase();
     const tenantId = req.user.tenantId;
     const baseWhere = buildWhere(req, startDate, endDate);
 
@@ -397,6 +409,33 @@ router.get("/export-csv", async (req, res) => {
         });
         headers = ['Name', 'Email', 'Company', 'Status', 'Source', 'AI Score', 'Assigned To', 'Created'];
         rows = data.map(d => [d.name, d.email, d.company || '', d.status, d.source || '', d.aiScore, d.assignedTo?.name || '', d.createdAt]);
+      } else if (type === 'calls') {
+        const where = { ...baseWhere };
+        if (ownerId) where.userId = parseInt(ownerId);
+        const data = await prisma.callLog.findMany({
+          where, orderBy: { createdAt: 'desc' },
+          include: { contact: { select: { name: true } }, user: { select: { name: true } } },
+        });
+        headers = ['Contact', 'Duration (seconds)', 'Direction', 'Owner', 'Created'];
+        rows = data.map(d => [d.contact?.name || '', d.duration || 0, d.direction || '', d.user?.name || '', d.createdAt]);
+      } else if (type === 'invoices') {
+        const where = buildWhere(req, startDate, endDate, {}, 'issuedDate');
+        if (status) where.status = status;
+        const data = await prisma.invoice.findMany({
+          where, orderBy: { issuedDate: 'desc' },
+          include: { contact: { select: { name: true } } },
+        });
+        headers = ['Invoice', 'Amount', 'Status', 'Contact', 'Due Date'];
+        rows = data.map(d => [d.invoiceNum, d.amount, d.status, d.contact?.name || '', d.dueDate]);
+      } else if (type === 'expenses') {
+        const where = { ...baseWhere };
+        if (status) where.status = status;
+        const data = await prisma.expense.findMany({
+          where, orderBy: { createdAt: 'desc' },
+          include: { user: { select: { name: true } } },
+        });
+        headers = ['Title', 'Amount', 'Category', 'Status', 'Submitted By'];
+        rows = data.map(d => [d.title, d.amount, d.category, d.status, d.user?.name || '']);
       } else if (type === 'agent-performance') {
         const users = await prisma.user.findMany({ where: { tenantId }, select: { id: true, name: true, email: true } });
         headers = ['Agent', 'Email', 'Deals Won', 'Revenue', 'Total Deals', 'Win Rate %', 'Tasks Done', 'Calls Made', 'Emails Sent', 'Contacts Assigned'];
@@ -416,6 +455,16 @@ router.get("/export-csv", async (req, res) => {
         return res.status(400).json({ error: 'Unsupported CSV export type' });
       }
 
+      if (exportFormat === "xlsx") {
+        const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
+        const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename=${type}-report.xlsx`);
+        return res.send(buffer);
+      }
+
       let csv = headers.join(',') + '\n';
       rows.forEach(row => {
         csv += row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',') + '\n';
@@ -427,6 +476,16 @@ router.get("/export-csv", async (req, res) => {
     }
 
     const formatted = await buildChartReport(req);
+
+    if (exportFormat === "xlsx") {
+      const worksheet = XLSX.utils.aoa_to_sheet([["Name", "Value"], ...formatted.map(row => [row.name, row.value])]);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
+      const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", "attachment; filename=report.xlsx");
+      return res.send(buffer);
+    }
 
     let csv = "Name,Value\n";
     formatted.forEach(row => {
@@ -506,7 +565,7 @@ router.get("/export-pdf", async (req, res) => {
       where: { id: tenantId },
       select: { defaultCurrency: true, locale: true },
     });
-    const isChart = !['deals', 'contacts', 'tasks', 'agent-performance'].includes(type);
+    const isChart = !['deals', 'contacts', 'tasks', 'calls', 'invoices', 'expenses', 'agent-performance'].includes(type);
     // Resolve/validate before streaming PDF headers, so a missing exchange
     // rate returns a normal error instead of a partial PDF attachment.
     const chartData = isChart ? await buildChartReport(req) : null;
@@ -514,10 +573,7 @@ router.get("/export-pdf", async (req, res) => {
     const locale = tenant?.locale || undefined;
 
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
-    applyRupeeCapableFonts(doc); // ₹ glyph fix
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${type}-report.pdf`);
-    doc.pipe(res);
+    const pdfBufferPromise = pdfStreamToBuffer(doc);
 
     doc.fontSize(20).text('Globussoft CRM', { align: 'center' });
     doc.fontSize(12).fillColor('#666').text(`${type.charAt(0).toUpperCase() + type.slice(1)} Report`, { align: 'center' });
@@ -544,7 +600,7 @@ router.get("/export-pdf", async (req, res) => {
         rows.push([
           user.name || user.email,
           String(dw),
-          formatMoney(rev._sum.amount || 0, currency, locale),
+          formatReportPdfMoney(rev._sum.amount || 0, currency, locale),
           String(dt),
           `${dt > 0 ? Math.round((dw / dt) * 100) : 0}%`,
           String(tc),
@@ -569,7 +625,7 @@ router.get("/export-pdf", async (req, res) => {
       doc.moveDown(0.5);
       const rows = deals.map((d) => [
         d.title || '—',
-        formatMoney(d.amount, d.currency || currency, locale),
+        formatReportPdfMoney(d.amount, d.currency || currency, locale),
         d.stage || '—',
         d.owner?.name || 'N/A',
         d.contact?.name || 'N/A',
@@ -619,13 +675,62 @@ router.get("/export-pdf", async (req, res) => {
         { header: 'Owner', width: 90 },
         { header: 'Contact', width: 90 },
       ], rows, { startY: doc.y });
+    } else if (type === 'calls') {
+      const calls = await prisma.callLog.findMany({
+        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 200,
+        include: { user: { select: { name: true } }, contact: { select: { name: true } } },
+      });
+      doc.fontSize(14).fillColor('#000').text(`Call Logs Report (${calls.length} records)`, { underline: true });
+      doc.moveDown(0.5);
+      const rows = calls.map((call) => [
+        call.contact?.name || '—', String(call.duration || 0), call.direction || '—', call.user?.name || '—',
+      ]);
+      drawReportTable(doc, [
+        { header: 'Contact', width: 150 },
+        { header: 'Duration (sec)', width: 90, align: 'right' },
+        { header: 'Direction', width: 90 },
+        { header: 'Owner', width: 150 },
+      ], rows, { startY: doc.y });
+    } else if (type === 'invoices') {
+      const invoices = await prisma.invoice.findMany({
+        where: buildWhere(req, startDate, endDate, {}, 'issuedDate'), orderBy: { issuedDate: 'desc' }, take: 200,
+        include: { contact: { select: { name: true } } },
+      });
+      doc.fontSize(14).fillColor('#000').text(`Invoices Report (${invoices.length} records)`, { underline: true });
+      doc.moveDown(0.5);
+      const rows = invoices.map((invoice) => [
+        invoice.invoiceNum || '—', formatReportPdfMoney(invoice.amount, invoice.currency || currency, locale), invoice.status || '—', invoice.contact?.name || '—',
+      ]);
+      drawReportTable(doc, [
+        { header: 'Invoice', width: 120 },
+        { header: 'Amount', width: 100, align: 'right' },
+        { header: 'Status', width: 90 },
+        { header: 'Contact', width: 170 },
+      ], rows, { startY: doc.y });
+    } else if (type === 'expenses') {
+      const expenses = await prisma.expense.findMany({
+        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 200,
+        include: { user: { select: { name: true } } },
+      });
+      doc.fontSize(14).fillColor('#000').text(`Expenses Report (${expenses.length} records)`, { underline: true });
+      doc.moveDown(0.5);
+      const rows = expenses.map((expense) => [
+        expense.title || '—', formatReportPdfMoney(expense.amount, expense.currency || currency, locale), expense.category || '—', expense.status || '—', expense.user?.name || '—',
+      ]);
+      drawReportTable(doc, [
+        { header: 'Title', width: 140 },
+        { header: 'Amount', width: 75, align: 'right' },
+        { header: 'Category', width: 100 },
+        { header: 'Status', width: 80 },
+        { header: 'Submitted By', width: 100 },
+      ], rows, { startY: doc.y });
     } else {
       const isMoney = ['revenue', 'invoices', 'expenses'].includes(metric);
       doc.fontSize(14).fillColor('#000').text(`${metric} by ${groupBy}${isMoney ? ` (${currency})` : ''}`, { underline: true });
       doc.moveDown(0.5);
       const rows = chartData.map((d) => [
         d.name,
-        isMoney ? formatMoney(d.value, currency, locale) : String(d.value),
+        isMoney ? formatReportPdfMoney(d.value, currency, locale) : String(d.value),
       ]);
       drawReportTable(doc, [
         { header: String(groupBy).toUpperCase(), width: 300 },
@@ -634,6 +739,11 @@ router.get("/export-pdf", async (req, res) => {
     }
 
     doc.end();
+    const pdfBuffer = await pdfBufferPromise;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', String(pdfBuffer.length));
+    res.setHeader('Content-Disposition', `attachment; filename=${type}-report.pdf`);
+    return res.send(pdfBuffer);
   } catch (err) {
     console.error("[PDF Export Error]:", err);
     if (!res.headersSent) res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to generate PDF report.", ...(err.code ? { code: err.code } : {}) });

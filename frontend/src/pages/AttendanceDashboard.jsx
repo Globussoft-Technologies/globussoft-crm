@@ -106,6 +106,41 @@ function fmtDepartureLabel(s) {
   return 'N/A';
 }
 
+function parseAttendanceNotePayload(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isImportedAttendancePayload(payload) {
+  if (!payload) return false;
+  const keys = Object.keys(payload).map((key) => key.trim().toLowerCase());
+  return keys.includes('staff id') && keys.includes('staff') && (
+    keys.includes('check-in method') || keys.includes('attendance status')
+  );
+}
+
+function getAttendanceNoteText(value) {
+  const payload = parseAttendanceNotePayload(value);
+  if (!isImportedAttendancePayload(payload)) return String(value || '').trim();
+  const noteKey = Object.keys(payload).find((key) => key.trim().toLowerCase() === 'notes');
+  return noteKey ? String(payload[noteKey] || '').trim() : '';
+}
+
+function updateAttendanceNoteValue(originalValue, noteText) {
+  const payload = parseAttendanceNotePayload(originalValue);
+  if (!isImportedAttendancePayload(payload)) return String(noteText || '').trim();
+  const noteKey = Object.keys(payload).find((key) => key.trim().toLowerCase() === 'notes') || 'Notes';
+  return JSON.stringify({ ...payload, [noteKey]: String(noteText || '').trim() });
+}
+
 // ──────────────────────────────────────────────────────────────────
 // KPI tile
 // ──────────────────────────────────────────────────────────────────
@@ -150,7 +185,7 @@ function EditAttendanceModal({ row, onClose, onSaved }) {
     clockInAt: toLocalInput(row.clockInAt),
     clockOutAt: toLocalInput(row.clockOutAt),
     status: row.status || 'PRESENT',
-    notes: row.notes || '',
+    notes: getAttendanceNoteText(row.notes),
   });
 
   const onSubmit = async (e) => {
@@ -161,7 +196,7 @@ function EditAttendanceModal({ row, onClose, onSaved }) {
         clockInAt: form.clockInAt ? new Date(form.clockInAt).toISOString() : null,
         clockOutAt: form.clockOutAt ? new Date(form.clockOutAt).toISOString() : null,
         status: form.status,
-        notes: form.notes,
+        notes: updateAttendanceNoteValue(row.notes, form.notes),
       };
       const updated = await fetchApi(`/api/attendance/${row.id}`, {
         method: 'PUT',
@@ -358,7 +393,7 @@ export default function AttendanceDashboard() {
     : '/wellness/attendance/calendar';
 
   return (
-    <div style={{ width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+    <div style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', padding: 'clamp(1rem, 3vw, 2rem)' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
         <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
@@ -487,8 +522,11 @@ export default function AttendanceDashboard() {
                     <td style={td}>
                       <AbsentPill absent={r.status === 'ABSENT'} />
                     </td>
-                    <td style={{ ...td, maxWidth: 220, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {r.notes || 'N/A'}
+                    <td
+                      title={getAttendanceNoteText(r.notes) || undefined}
+                      style={{ ...td, maxWidth: 220, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                    >
+                      {getAttendanceNoteText(r.notes) || 'N/A'}
                     </td>
                     {isAdmin ? (
                       <td style={td}>
@@ -521,7 +559,7 @@ export default function AttendanceDashboard() {
 
         {summary?.policy ? (
           <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
-            Shift policy: {String(summary.policy.shiftStartHour).padStart(2, '0')}:{String(summary.policy.shiftStartMinute).padStart(2, '0')} → {String(summary.policy.shiftEndHour).padStart(2, '0')}:{String(summary.policy.shiftEndMinute).padStart(2, '0')} UTC, ±{summary.policy.onTimeToleranceMin} min tolerance.
+            Shift policy: {String(summary.policy.shiftStartHour).padStart(2, '0')}:{String(summary.policy.shiftStartMinute).padStart(2, '0')} → {String(summary.policy.shiftEndHour).padStart(2, '0')}:{String(summary.policy.shiftEndMinute).padStart(2, '0')} {summary.policy.timezone === 'Asia/Kolkata' ? 'IST' : summary.policy.timezone || 'UTC'}, ±{summary.policy.onTimeToleranceMin} min tolerance.
           </div>
         ) : null}
       </section>

@@ -249,6 +249,19 @@ body[data-vertical="generic"] main.generic-page-content
   text-indent: 0 !important;
 }
 
+/* Leads cell actions are compact inline controls, not full-size page buttons.
+   Keep density scaling from widening their hit boxes or icons. */
+body[data-vertical] .app-shell .app-main > main .leads-page-root
+  .inline-cell-editor-display > button {
+  padding: 2px !important;
+}
+
+body[data-vertical] .app-shell .app-main > main .leads-page-root
+  .inline-cell-editor-display > button > svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
 /* Zapier Integration: keep the three-step setup compact as the available
  * content area narrows. The mobile stylesheet stacks the steps at 600px;
  * retain that fallback only where three readable cards can no longer fit. */

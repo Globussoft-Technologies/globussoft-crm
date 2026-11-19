@@ -238,6 +238,17 @@ body[data-vertical="generic"] main.generic-page-content
   left: 10px !important;
 }
 
+/* The fluid input-density rules above reset horizontal padding on every page
+   control. Restore the text gutter for the shared search wrapper and for
+   search icons positioned directly over their inputs. */
+.app-shell .app-main > main :is(
+  .search-with-leading-icon > input,
+  svg.lucide-search[style*="position: absolute"] + input
+) {
+  padding-inline-start: max(2.5rem, var(--viewport-control-x, 0px)) !important;
+  text-indent: 0 !important;
+}
+
 /* Zapier Integration: keep the three-step setup compact as the available
  * content area narrows. The mobile stylesheet stacks the steps at 600px;
  * retain that fallback only where three readable cards can no longer fit. */

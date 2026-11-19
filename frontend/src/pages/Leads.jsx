@@ -2121,6 +2121,7 @@ function BuiltInInlineCellEditor({
         }
         style={{
           ...inlineBuiltinCellStyle,
+          gap: copyable ? "0.2rem" : inlineBuiltinCellStyle.gap,
           cursor: editOnDisplayClick
             ? inlineBuiltinCellStyle.cursor
             : "default",
@@ -3919,9 +3920,14 @@ const Leads = ({ initialListState = null } = {}) => {
       10 +
       (isGeneric ? 40 : 0);
     const nameHeaderWidth = textWidth("Name", 500) + 16 + 16 + 13 + 8 + 28;
-    const phoneValueWidth = textWidth(longest.phone) + 16 + 8 + 4 + 20;
+    // Reserve room for cell/wrapper padding and both compact action icons so
+    // the longest full value stays visible without running under the buttons.
+    const copyableCellReservedWidth = 60;
+    const phoneValueWidth =
+      textWidth(longest.phone) + copyableCellReservedWidth;
     const phoneHeaderWidth = textWidth("Phone", 500) + 16 + 28 + 8;
-    const emailValueWidth = textWidth(longest.email) + 16 + 8 + 4 + 20;
+    const emailValueWidth =
+      textWidth(longest.email) + copyableCellReservedWidth;
     const emailHeaderWidth = textWidth("Email", 500) + 16 + 28 + 8;
     return {
       name: Math.ceil(
@@ -7890,6 +7896,13 @@ const Leads = ({ initialListState = null } = {}) => {
     phoneColumnOffset < 0
       ? -1
       : phoneColumnOffset + (usesGenericLeadTableLayout ? 0 : 1);
+  const emailColumnOffset = leadUserColumnDefs.findIndex(
+    (column) => column.key === "email",
+  );
+  const emailColumnIndex =
+    emailColumnOffset < 0
+      ? -1
+      : emailColumnOffset + (usesGenericLeadTableLayout ? 0 : 1);
   useLayoutEffect(() => {
     const table = leadsScrollableTableRef.current;
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
@@ -7916,7 +7929,7 @@ const Leads = ({ initialListState = null } = {}) => {
         autoFitLeadColumnWidths.phone,
         Number(current.widths?.phone) || 0,
       );
-      const requiredWidth = Math.ceil(currentWidth + overflowWidth);
+      const requiredWidth = Math.ceil(currentWidth + overflowWidth + 4);
       if (requiredWidth <= currentWidth) return current;
       return {
         ...current,
@@ -7929,6 +7942,54 @@ const Leads = ({ initialListState = null } = {}) => {
     autoFitLeadColumnWidths.phone,
     columnLayout.widths?.phone,
     columnLayout.collapsed?.phone,
+  ]);
+  useLayoutEffect(() => {
+    const table = leadsScrollableTableRef.current;
+    if (
+      !isGeneric ||
+      !table ||
+      emailColumnIndex < 0 ||
+      columnLayout.collapsed?.email
+    ) {
+      return;
+    }
+    let overflowWidth = 0;
+    const rowsById = new Map(
+      Array.from(table.querySelectorAll("tbody tr[data-lead-row-id]")).map(
+        (row) => [row.dataset.leadRowId, row],
+      ),
+    );
+    for (const lead of leads) {
+      const row = rowsById.get(String(lead.id));
+      const cell = row?.cells[emailColumnIndex];
+      const value = cell?.querySelector(".inline-cell-editor-display > span");
+      if (value) {
+        overflowWidth = Math.max(
+          overflowWidth,
+          value.scrollWidth - value.clientWidth,
+        );
+      }
+    }
+    if (overflowWidth <= 0) return;
+    setColumnLayout((current) => {
+      const currentWidth = Math.max(
+        autoFitLeadColumnWidths.email,
+        Number(current.widths?.email) || 0,
+      );
+      const requiredWidth = Math.ceil(currentWidth + overflowWidth + 4);
+      if (requiredWidth <= currentWidth) return current;
+      return {
+        ...current,
+        widths: { ...current.widths, email: requiredWidth },
+      };
+    });
+  }, [
+    isGeneric,
+    leads,
+    emailColumnIndex,
+    autoFitLeadColumnWidths.email,
+    columnLayout.widths?.email,
+    columnLayout.collapsed?.email,
   ]);
   // Only generic CRM uses the frozen Name pane.
   const leadsRowSyncEnabled = leadsFrozenColumnDefs.length > 0;
@@ -8108,9 +8169,9 @@ const Leads = ({ initialListState = null } = {}) => {
       isGeneric &&
       field === "phone" &&
       value &&
-      !/^\d{7,15}$/.test(String(value))
+      !/^\+?\d{7,15}$/.test(String(value))
     ) {
-      notify.error("Phone number can contain digits only (7-15 digits)");
+      notify.error("Phone number must contain 7-15 digits and may start with +");
       throw new Error("Invalid phone number");
     }
     if (isGeneric && field === "companySize") {

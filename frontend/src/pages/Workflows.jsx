@@ -908,7 +908,18 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
   const update = (patch) => setDraft((current) => ({ ...current, ...patch }));
-  const updateHeader = (headerIndex, patch) => update({ headers: draft.headers.map((header, index) => index === headerIndex ? { ...header, ...patch } : header) });
+  const updateHeader = (headerIndex, patch) => setDraft((current) => ({
+    ...current,
+    headers: current.headers.map((header, index) => index === headerIndex ? { ...header, ...patch } : header),
+  }));
+  const addHeader = () => setDraft((current) => ({
+    ...current,
+    headers: [...current.headers, { key: "", value: "", secret: true }],
+  }));
+  const removeHeader = (headerIndex) => setDraft((current) => ({
+    ...current,
+    headers: current.headers.filter((_, index) => index !== headerIndex),
+  }));
   const testWebhook = async () => {
     if (!draft.url.trim()) { notify.error("Callback URL is required"); return; }
     setTesting(true);
@@ -970,8 +981,8 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
           <input aria-label={`Webhook header ${headerIndex + 1} name`} value={header.key || ""} onChange={(event) => updateHeader(headerIndex, { key: event.target.value })} placeholder="X-Webhook-Secret" />
           <input aria-label={`Webhook header ${headerIndex + 1} value`} type={header.secret ? "password" : "text"} value={header.value || ""} onChange={(event) => updateHeader(headerIndex, { value: event.target.value })} placeholder="Header value" />
           <label className="workflow-webhook-secret"><input type="checkbox" checked={!!header.secret} onChange={(event) => updateHeader(headerIndex, { secret: event.target.checked })} /> Secret</label>
-          <button type="button" className="workflow-icon-button" onClick={() => update({ headers: draft.headers.filter((_, index) => index !== headerIndex) })} aria-label={`Remove webhook header ${headerIndex + 1}`}><Trash2 size={15} /></button>
-        </div>)}<button type="button" className="workflow-link-button" onClick={() => update({ headers: [...draft.headers, { key: "", value: "", secret: true }] })}><Plus size={15} /> Add custom header</button></fieldset>
+          <button type="button" className="workflow-icon-button" onClick={() => removeHeader(headerIndex)} aria-label={`Remove webhook header ${headerIndex + 1}`}><Trash2 size={15} /></button>
+        </div>)}<button type="button" className="workflow-link-button" onClick={addHeader}><Plus size={15} /> Add custom header</button></fieldset>
         <fieldset><legend>Encoding format</legend><div className="workflow-webhook-options">{[["json", "JSON"], ["xml", "XML"], ["form", "Form URL encoded"]].map(([value, label]) => <label key={value}><input type="radio" checked={draft.encoding === value} onChange={() => update({ encoding: value })} /> {label}</label>)}</div></fieldset>
         <fieldset className="workflow-webhook-request-body"><legend>Request body</legend><div className="workflow-webhook-body-controls"><div className="workflow-webhook-options"><label><input type="radio" checked={draft.bodyMode === "simple"} onChange={() => update({ bodyMode: "simple" })} /> Simple</label><label><input type="radio" checked={draft.bodyMode === "advanced"} onChange={() => update({ bodyMode: "advanced" })} /> Advanced JSON</label></div>
           {draft.bodyMode === "simple" && <label className="workflow-webhook-field-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Search webhook fields" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} placeholder="Search fields" /></label>}
@@ -983,7 +994,7 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
           </> : <textarea aria-label="Advanced webhook JSON body" value={draft.bodyTemplate || ""} onChange={(event) => update({ bodyTemplate: event.target.value })} rows={10} spellCheck="false" />}
         </fieldset>
       </div>
-      <div className="workflow-webhook-footer"><button type="button" className="workflow-secondary" onClick={testWebhook} disabled={testing}>{testing ? "Testing..." : "Test this webhook"}</button><span /><button type="button" className="workflow-secondary" onClick={onClose}>Cancel</button><button type="button" className="workflow-primary" onClick={() => { onSave(draft); onClose(); }}>Save settings</button></div>
+      <div className="workflow-webhook-footer"><button type="button" className="workflow-secondary" onClick={testWebhook} disabled={testing}>{testing ? "Testing..." : "Test this webhook"}</button><span /><button type="button" className="workflow-secondary" onClick={onClose}>Cancel</button><button type="button" className="workflow-primary" onClick={() => { onSave(draft); notify.success("Webhook settings saved to workflow draft"); onClose(); }}>Save settings</button></div>
     </div>
   </div>;
 }
@@ -1477,7 +1488,10 @@ function TemplateGallery({ search, setSearch, category, templates, onUse, onCrea
 function WorkflowEditor({ editor, setEditor, saving, save, onTest, onCancel, pickers, onRunNow, webhookOnly = false, isGenericCrm = false }) {
   const update = (patch) => setEditor((current) => ({ ...current, ...patch }));
   const updateGroup = (index, patch) => update({ groups: editor.groups.map((group, currentIndex) => currentIndex === index ? { ...group, ...patch } : group) });
-  const updateAction = (index, patch) => update({ actions: editor.actions.map((action, currentIndex) => currentIndex === index ? { ...action, ...patch } : action) });
+  const updateAction = (index, patch) => setEditor((current) => ({
+    ...current,
+    actions: current.actions.map((action, currentIndex) => currentIndex === index ? { ...action, ...patch } : action),
+  }));
   const selectModule = (module) => setEditor((current) => ({
     ...current,
     module,

@@ -433,7 +433,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     });
     expect(prisma.contact.findMany).toHaveBeenCalledWith({
       where: { phone: '+919876543210', tenantId: 1 },
-      select: { id: true, deletedAt: true },
+      select: { id: true, deletedAt: true, updatedAt: true },
       orderBy: { id: 'asc' },
       take: 2,
     });
@@ -761,7 +761,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0, errors: [] });
     expect(prisma.leadCustomFieldValue.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1, fieldId: 15, valueText: 'LEAD-1001' },
-      select: { contact: { select: { id: true, deletedAt: true } } },
+      select: { contact: { select: { id: true, deletedAt: true, updatedAt: true } } },
       orderBy: { id: 'asc' },
       take: 2,
     });
@@ -838,7 +838,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.body.errors).toEqual([]);
     expect(prisma.contact.findFirst).toHaveBeenCalledWith({
       where: { email: 'shashankbankar23@gmail.com', tenantId: 1 },
-      select: { id: true, deletedAt: true },
+      select: { id: true, deletedAt: true, updatedAt: true },
     });
     expect(prisma.contact.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -851,6 +851,41 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
       }),
     );
     expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('preserves the source creation date for a new Generic lead', async () => {
+    const sourceCreatedAt = new Date('2026-02-14T10:30:00.000Z');
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 109 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,email,createdAt\nHistorical Lead,historical@example.com,2026-02-14T10:30:00.000Z\n');
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        createdAt: sourceCreatedAt,
+        updatedAt: sourceCreatedAt,
+      }),
+    }));
+  });
+
+  test('does not change Generic lead timestamps during re-import', async () => {
+    const existingUpdatedAt = new Date('2026-04-20T12:00:00.000Z');
+    prisma.contact.findFirst.mockResolvedValue({ id: 110, deletedAt: null, updatedAt: existingUpdatedAt });
+    prisma.contact.update.mockResolvedValue({ id: 110 });
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .set('Content-Type', 'text/csv')
+      .send('name,email,createdAt,updatedAt\nReimported Lead,reimported@example.com,2025-01-01T00:00:00.000Z,2025-02-01T00:00:00.000Z\n');
+
+    expect(res.status).toBe(200);
+    const update = prisma.contact.update.mock.calls[0][0];
+    expect(update.data).toMatchObject({ updatedAt: existingUpdatedAt });
+    expect(update.data).not.toHaveProperty('createdAt');
   });
 
   test('returns the completed import when supplemental history persistence fails', async () => {

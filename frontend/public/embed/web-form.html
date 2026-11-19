@@ -1526,6 +1526,16 @@
         );
 
         var params = new URLSearchParams(location.search);
+        var isEmbeddedForm = params.get("embed") === "1";
+
+        document.documentElement.classList.toggle(
+          "landing-embed",
+          isEmbeddedForm,
+        );
+        if (isEmbeddedForm) {
+          document.body.style.padding = "0";
+          document.body.style.background = "transparent";
+        }
 
         var initialForm = window.__GBS_INITIAL_FORM__ || null;
         var slug =
@@ -4491,11 +4501,11 @@
             scope === "generic" && style.layoutColumns === "two",
           );
 
-          document.body.style.background = /^(#[0-9a-f]{6})$/i.test(
-            String(style.backgroundColor || ""),
-          )
-            ? style.backgroundColor
-            : "#EBEFF3";
+          document.body.style.background = isEmbeddedForm
+            ? "transparent"
+            : /^(#[0-9a-f]{6})$/i.test(String(style.backgroundColor || ""))
+              ? style.backgroundColor
+              : "#EBEFF3";
 
           document.documentElement.style.cssText = styleVars(style);
 

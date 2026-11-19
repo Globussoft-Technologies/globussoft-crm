@@ -282,6 +282,51 @@ body[data-vertical="generic"] main.generic-page-content > .generic-deals-pipelin
   scrollbar-gutter: stable;
 }
 
+/* Generic CRM: make horizontally hidden Kanban stages discoverable on narrow
+   screens without changing the wellness/travel pipeline layouts. */
+body[data-vertical="generic"] .generic-deals-pipeline .deals-pipeline-scroll-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  display: grid;
+  width: 30px;
+  height: 42px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.16);
+  font-size: 28px;
+  line-height: 1;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+body[data-vertical="generic"] .generic-deals-pipeline .deals-pipeline-scroll-arrow--left {
+  left: 4px;
+}
+
+body[data-vertical="generic"] .generic-deals-pipeline .deals-pipeline-scroll-arrow--right {
+  right: 4px;
+}
+
+body[data-vertical="generic"] .generic-deals-pipeline .deals-pipeline-scroll-arrow:disabled {
+  opacity: 0.32;
+  cursor: default;
+  box-shadow: none;
+}
+
+body[data-vertical="generic"] .generic-deals-pipeline .deals-pipeline-scroll-arrow:not(:disabled):hover {
+  background: var(--accent-bg, var(--subtle-bg));
+}
+
+body[data-vertical="generic"] .generic-deals-pipeline .deals-pipeline-scroll-arrow:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 /* Keep Generic CRM report-table headers separate from the first data row. */
 body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell.card {
   padding: 0 !important;

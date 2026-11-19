@@ -147,6 +147,7 @@ function buildIframeEmbedRuntime(form, base, containerId, createContainer) {
   const frameParams = new URLSearchParams(
     form?.id != null && String(form.id) !== '' ? { id: String(form.id) } : { slug: String(form?.slug || '') },
   );
+  frameParams.set('embed', '1');
   if (form?.scope && form.scope !== 'generic') frameParams.set('scope', form.scope);
   const config = {
     containerId,
@@ -162,7 +163,7 @@ var keys=${JSON.stringify(EMBED_TRACKING_QUERY_KEYS)};
 var taggedVisitKeys=["utm_source","utm_medium","utm_campaign","utm_id","utm_term","utm_content","gclid","gbraid","wbraid","fbclid","fbc","fbp","campaign_id","adset_id","ad_id","campaign_name","adset_name","ad_name"];
 var container=null;
 if(!${shouldCreate}){var previous=script.previousElementSibling;if(previous&&previous.id===config.containerId&&previous.classList.contains("gbs-web-form-embed"))container=previous;}
-if(!container){container=document.createElement("div");container.className="gbs-web-form-embed";container.id=config.containerId;container.style.cssText="display:block;width:100%;";var suffix=1;while(document.getElementById(container.id)){container.id=config.containerId+"-"+suffix++;}script.parentNode.insertBefore(container,script.nextSibling);}
+if(!container){container=document.createElement("div");container.className="gbs-web-form-embed";container.id=config.containerId;container.style.cssText="display:block;width:100%;max-width:620px;margin:0 auto;";var suffix=1;while(document.getElementById(container.id)){container.id=config.containerId+"-"+suffix++;}script.parentNode.insertBefore(container,script.nextSibling);}
 if(container.id===config.containerId&&document.getElementById(config.containerId)!==container){var requestedId=config.containerId,suffix=1;do{container.id=requestedId+"-"+suffix++;}while(document.getElementById(container.id)&&document.getElementById(container.id)!==container);}
 if(container.dataset.gbsWebFormLoaded==="true")return;container.dataset.gbsWebFormLoaded="true";
 var frame=document.createElement("iframe");frame.className="gbs-web-form-iframe";frame.title=config.title;frame.allow="geolocation *";frame.loading="lazy";frame.style.cssText="width:100%;height:620px;min-height:0;border:0;display:block;";
@@ -190,7 +191,7 @@ export function buildWebFormEmbedCode(form, origin) {
   const runtime = buildIframeEmbedRuntime(form, base, containerId, false);
   return [
     '<!-- Globussoft CRM web form -->',
-    `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;"></div>`,
+    `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;max-width:620px;margin:0 auto;"></div>`,
     `<script>${runtime}</script>`,
     `<p><a href="${buildPublicUrl(form, origin).replace(/&/g, '&amp;')}" target="_blank" rel="noopener noreferrer">Open public form</a></p>`,
   ].join('\n');

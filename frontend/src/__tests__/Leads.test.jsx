@@ -4318,7 +4318,10 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     expect(screen.getByLabelText(/Assign Callified campaign for Alice Smith/i)).toBeEnabled();
-    expect(screen.getByLabelText(/Call status for Alice Smith/i)).toBeEnabled();
+    const aliceCallStatus = screen.getByLabelText(/Call status for Alice Smith/i);
+    expect(aliceCallStatus).toBeEnabled();
+    expect(within(aliceCallStatus).getByRole('option', { name: 'New' })).toBeInTheDocument();
+    expect(within(aliceCallStatus).queryByRole('option', { name: 'Yet to Call' })).toBeNull();
     expect(screen.getByRole('button', { name: /Call settings/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeEnabled();
   });

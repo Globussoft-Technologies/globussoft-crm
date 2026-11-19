@@ -582,6 +582,26 @@ describe("GET /api/contacts/filter-values/:field", () => {
     ]);
   });
 
+  test("Generic Leads Call Status values map blank and legacy raw values to New", async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { callifiedLeadStatus: null },
+      { callifiedLeadStatus: "new" },
+      { callifiedLeadStatus: "legacy_unclassified" },
+      { callifiedLeadStatus: "connected" },
+    ]);
+
+    const res = await request(makeApp()).get(
+      "/api/contacts/filter-values/callifiedLeadStatus?includeCrmStatuses=true",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.values).toEqual(expect.arrayContaining([
+      { value: "connected", label: "Connected" },
+      { value: "yet_to_call", label: "New" },
+    ]));
+    expect(res.body.values).toHaveLength(2);
+  });
+
   test("Lifecycle Stage values use the Generic CRM tenant configuration", async () => {
     prisma.tenantSetting.findUnique.mockResolvedValueOnce({
       value: JSON.stringify([

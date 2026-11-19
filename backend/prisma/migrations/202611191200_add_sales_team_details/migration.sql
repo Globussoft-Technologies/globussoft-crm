@@ -1,0 +1,4 @@
+ALTER TABLE `SalesTeam`
+  ADD COLUMN `scope` VARCHAR(191) NOT NULL DEFAULT 'Sales',
+  ADD COLUMN `description` TEXT NULL,
+  ADD COLUMN `status` VARCHAR(191) NOT NULL DEFAULT 'Active';

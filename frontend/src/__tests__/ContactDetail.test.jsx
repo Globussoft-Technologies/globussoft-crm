@@ -445,6 +445,16 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Change status to Interested');
   });
 
+  it('opens Contact details from the Overview Show all control', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+
+    fireEvent.click(profile.getByRole('button', { name: 'Show all' }));
+
+    expect(profile.getByText('Page URL')).toBeInTheDocument();
+  });
+
   it('does not render an orphan title/company separator when both values are empty', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({
       contact: { kind: 'ok', data: { ...BASE_CONTACT, title: '', company: '' } },

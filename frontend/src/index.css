@@ -5971,6 +5971,64 @@ table.leads-table thead th {
   padding-bottom: 0.25rem !important;
 }
 
+/* Keep the Callified status control readable inside the split table. The
+   scroll pane remains horizontally scrollable on narrow screens, while the
+   control itself uses the available column width instead of overflowing or
+   being clipped by the cell. */
+.leads-page-root--generic .leads-call-status-cell {
+  min-width: 0;
+}
+
+.leads-page-root--generic .leads-call-status-select {
+  width: min(100%, 125px);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1199px) {
+  .leads-page-root--generic .leads-call-status-cell {
+    padding-inline: 0.5rem !important;
+  }
+
+  .leads-page-root--generic .leads-call-status-select {
+    width: 100%;
+    min-width: 0 !important;
+    font-size: 0.72rem !important;
+    padding-inline: 0.45rem !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .leads-page-root--generic .leads-call-status-cell {
+    padding-inline: 0.35rem !important;
+    position: sticky !important;
+    left: 0;
+    z-index: 8;
+    background: var(--surface-color);
+    box-shadow: -1px 0 0 var(--border-color), 1px 0 0 var(--border-color);
+  }
+
+  .leads-page-root--generic .leads-call-status-select {
+    font-size: 0.68rem !important;
+  }
+
+  .leads-page-root--generic
+    .leads-table-scroll-pane
+    table.leads-table
+    thead
+    th[data-column-header="callStatus"] {
+    position: sticky !important;
+    left: 0;
+    z-index: 35;
+    background: var(--modal-bg) !important;
+    box-shadow: -1px 0 0 var(--border-color), 1px 0 0 var(--border-color);
+  }
+
+  .leads-page-root--generic .leads-table-scroll-pane {
+    min-width: 0;
+  }
+}
+
 .leads-page-root--generic table.leads-table tbody tr:hover td {
   background: var(--surface-hover);
 }

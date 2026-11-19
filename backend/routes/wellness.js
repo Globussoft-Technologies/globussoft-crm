@@ -25,6 +25,7 @@ const prescriptionRenewals = require("../lib/prescriptionRenewalService");
 const { applyPrescriptionStock } = require("../lib/drugStock");
 const {
   SOURCE_TYPES,
+  applyProductConsumptionDelta,
   roundMoney,
   usagePricing,
   syncPrescriptionConsumption,
@@ -64,6 +65,7 @@ const waWebClient = require("../services/whatsappWebClient");
 const listProjection = require("../lib/listProjection");
 const { isFullShape } = listProjection;
 const { verifyToken } = require("../middleware/auth");
+const { parseZyluInvoicePaymentBreakdown } = require("../lib/zyluImportMappings");
 // Patient-portal notification inbox (additive  patient-scoped, separate from
 // the staff Notification table). Backs /portal/me/notifications* below.
 const {
@@ -4510,11 +4512,11 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
     const catalogProduct = await (requestedProductId
       ? prisma.product.findFirst({
           where: tenantWhere(req, { id: requestedProductId }),
-          select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true },
+          select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true, currentStock: true, partialMlUsed: true },
         })
       : prisma.product.findFirst({
           where: tenantWhere(req, { name: String(productName).trim() }),
-          select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true },
+          select: { id: true, name: true, productCode: true, price: true, volume: true, unit: true, currentStock: true, partialMlUsed: true },
         })).catch(() => null);
     if (requestedProductId && !catalogProduct) {
       return res.status(400).json({ error: "product not found in this tenant", code: "PRODUCT_NOT_FOUND" });
@@ -4561,22 +4563,38 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
       });
     }
 
-    const c = await prisma.serviceConsumption.create({
-      data: {
-        productName: String(catalogProduct?.name || productName).trim(),
-        qty: qNum,
-        unitCost: cNum,
-        visitId: id,
-        productId: catalogProduct?.id || null,
-        sourceType: SOURCE_TYPES.MANUAL,
-        transactionType: "Sale",
-        unit: catalogProduct?.unit || req.body.unit || "unit",
-        productCode: catalogProduct?.productCode || null,
-        salePrice: Number(catalogProduct?.price) || 0,
-        usageValue: pricing.usageValue,
-        tenantId: req.user.tenantId,
-      },
+    const { consumption: c, stockUpdate } = await prisma.$transaction(async (tx) => {
+      const consumption = await tx.serviceConsumption.create({
+        data: {
+          productName: String(catalogProduct?.name || productName).trim(),
+          qty: qNum,
+          unitCost: cNum,
+          visitId: id,
+          productId: catalogProduct?.id || null,
+          sourceType: SOURCE_TYPES.MANUAL,
+          transactionType: "Sale",
+          unit: catalogProduct?.unit || req.body.unit || "unit",
+          productCode: catalogProduct?.productCode || null,
+          salePrice: Number(catalogProduct?.price) || 0,
+          usageValue: pricing.usageValue,
+          tenantId: req.user.tenantId,
+        },
+      });
+      const stockUpdate = catalogProduct
+        ? await applyProductConsumptionDelta(
+            tx,
+            catalogProduct,
+            qNum,
+            req.user.tenantId,
+          )
+        : null;
+      return { consumption, stockUpdate };
     });
+    if (stockUpdate && !stockUpdate.applied) {
+      console.warn(
+        `[wellness] visit ${id} consumption ${c.id} recorded, stock unchanged: ${stockUpdate.reason}`,
+      );
+    }
     const consumptionVisit = await prisma.visit.findFirst({
       where: tenantWhere(req, { id }),
       select: {
@@ -4597,7 +4615,11 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
         );
       }
     }
-    res.status(201).json(enrichConsumptionRow(c, { visit: consumptionVisit, product: catalogProduct }));
+    const response = enrichConsumptionRow(c, { visit: consumptionVisit, product: catalogProduct });
+    if (stockUpdate && !stockUpdate.applied) {
+      response.stockWarning = "Usage was recorded, but stock could not be reduced. Check the product balance.";
+    }
+    res.status(201).json(response);
   } catch (e) {
     console.error("[wellness] consumption add error:", e.message);
     res.status(500).json({ error: "Failed to add consumption item" });
@@ -4637,11 +4659,11 @@ router.put(
         return res.status(400).json({ error: "productName required" });
 
       // Same non-negative + per-line caps as the POST create path (#321).
-      const qNum = parseInt(qty) || 0;
+      const qNum = parseFloat(qty) || 0;
       const cNum = parseFloat(unitCost) || 0;
-      if (qNum < 1) {
+      if (qNum <= 0) {
         return res.status(400).json({
-          error: "qty must be at least 1",
+          error: "qty must be greater than 0",
           code: "AMOUNT_NEGATIVE",
         });
       }
@@ -4670,15 +4692,47 @@ router.put(
         });
       }
 
-      const updated = await prisma.serviceConsumption.update({
-        where: { id: existing.id },
-        data: {
-          productName: String(productName).trim(),
-          qty: qNum,
-          unitCost: cNum,
-          usageValue: roundMoney(qNum * cNum),
-        },
+      const { updated, stockUpdate } = await prisma.$transaction(async (tx) => {
+        const updated = await tx.serviceConsumption.update({
+          where: { id: existing.id },
+          data: {
+            productName: String(productName).trim(),
+            qty: qNum,
+            unitCost: cNum,
+            usageValue: roundMoney(qNum * cNum),
+          },
+        });
+        let stockUpdate = null;
+        if (
+          existing.productId &&
+          existing.sourceType !== SOURCE_TYPES.IMPORT &&
+          existing.sourceType !== SOURCE_TYPES.PRESCRIPTION
+        ) {
+          const product = await tx.product.findFirst({
+            where: tenantWhere(req, { id: existing.productId }),
+            select: {
+              id: true,
+              currentStock: true,
+              partialMlUsed: true,
+              volume: true,
+            },
+          });
+          if (product) {
+            stockUpdate = await applyProductConsumptionDelta(
+              tx,
+              product,
+              qNum - Number(existing.qty || 0),
+              req.user.tenantId,
+            );
+          }
+        }
+        return { updated, stockUpdate };
       });
+      if (stockUpdate && !stockUpdate.applied) {
+        console.warn(
+          `[wellness] visit ${visitId} amended consumption ${existing.id}, stock unchanged: ${stockUpdate.reason}`,
+        );
+      }
 
       // Amendment trail: capture the before/after for the three editable
       // fields so the permanent record stays auditable (policy "Corrections").
@@ -4717,7 +4771,12 @@ router.put(
         );
       }
 
-      res.json(updated);
+      res.json({
+        ...updated,
+        ...(stockUpdate && !stockUpdate.applied
+          ? { stockWarning: "Usage was updated, but stock could not be adjusted. Check the product balance." }
+          : {}),
+      });
     } catch (e) {
       console.error("[wellness] consumption amend error:", e.message);
       res.status(500).json({ error: "Failed to amend consumption item" });
@@ -10074,7 +10133,12 @@ const PAYMENT_MODE_LABELS = {
   combined: "Combined",
   cashback: "Cashback",
   paylater: "Pay later",
+  pay_later: "Pay later",
   online: "Online",
+  razorpay: "Razorpay",
+  stripe: "Stripe",
+  wallet_redemption: "Wallet redemption",
+  cashback_redemption: "Cashback redemption",
   other: "Other",
 };
 
@@ -10368,6 +10432,28 @@ async function computePaymentsByMode(req) {
     add(sale.paymentMethod, paidAmount, "pos");
   }
   for (const invoice of invoices) {
+    // A zero-value imported invoice can have status PAID while no money was
+    // collected and no payment mode was recorded. It is not a payment
+    // transaction; counting it as "Other" inflates transaction totals.
+    const invoiceAmount = Number(invoice.amount || 0);
+    if (!Number.isFinite(invoiceAmount) || invoiceAmount <= 0) continue;
+
+    const importedBreakdown = parseZyluInvoicePaymentBreakdown(
+      invoice.lineItemsJson,
+    );
+    const importedTotal = importedBreakdown.reduce(
+      (sum, item) => sum + item.amount,
+      0,
+    );
+    if (
+      importedBreakdown.length > 0 &&
+      Math.abs(importedTotal - invoiceAmount) <= 0.01
+    ) {
+      for (const item of importedBreakdown) {
+        add(item.mode, item.amount, "invoice", invoice.id);
+      }
+      continue;
+    }
     add(invoice.paymentMode, invoice.amount, "invoice", invoice.id);
   }
   const rows = Object.values(acc).map((row) => ({

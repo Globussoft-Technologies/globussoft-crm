@@ -121,6 +121,7 @@ const KEYS = {
   CALLIFIED_PENDING_RETRY_DAY_INTERVAL:   "feature.callified.pending_retry.day_interval",
   CALLIFIED_PENDING_RETRY_TIME_LOCAL:     "feature.callified.pending_retry.time_local",
   CALLIFIED_RETRY_TIMEZONE:               "feature.callified.retry.timezone",
+  ATTENDANCE_TIMEZONE:                     "attendance.timezone",
   // Generic CRM Leads page — auto-campaign assignment rules (replaces the
   // single tenant.callifiedAutoCampaignId default). Each rule maps a lead
   // column + normalised value to a Callified campaign id.

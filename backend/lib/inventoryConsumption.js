@@ -5,7 +5,67 @@ const SOURCE_TYPES = Object.freeze({
   MANUAL: "MANUAL",
   PRESCRIPTION: "PRESCRIPTION",
   AUTO_RULE: "AUTO_RULE",
+  IMPORT: "IMPORT",
 });
+
+const STOCK_EPSILON = 1e-9;
+
+/**
+ * Apply a service-use quantity change to a product's on-hand balance.
+ * Product stock is counted in complete packages; partialMlUsed tracks the
+ * open package. A usage row remains in the visit ledger even when stock is
+ * already exhausted, so this helper reports a warning instead of making
+ * the product balance negative or aborting the clinical record.
+ */
+async function applyProductConsumptionDelta(tx, product, quantityDelta, tenantId) {
+  const delta = Number(quantityDelta);
+  if (!product?.id || !Number.isFinite(delta) || delta === 0) {
+    return { applied: false, reason: "INVALID_CONSUMPTION_DELTA" };
+  }
+
+  const volumeValue = Number(product.volume);
+  const volume = Number.isFinite(volumeValue) && volumeValue > 0 ? volumeValue : 1;
+  const currentStock = Math.max(0, Number(product.currentStock) || 0);
+  const partialBefore = Math.max(0, Number(product.partialMlUsed) || 0);
+  const total = partialBefore + delta;
+  const unitsDelta = Math.floor((total + STOCK_EPSILON) / volume);
+  let partialAfter = total - unitsDelta * volume;
+  if (Math.abs(partialAfter) < STOCK_EPSILON || Math.abs(partialAfter - volume) < STOCK_EPSILON) {
+    partialAfter = 0;
+  }
+
+  // A partial remainder occupies an open package. The stock count includes
+  // that package, so ensure enough complete packages exist for both the
+  // fully consumed units and any remaining partial package.
+  const requiredStock = unitsDelta + (partialAfter > STOCK_EPSILON ? 1 : 0);
+  if (delta > 0 && requiredStock > currentStock) {
+    return { applied: false, reason: "INSUFFICIENT_STOCK", requiredStock, currentStock };
+  }
+
+  const data = { partialMlUsed: partialAfter };
+  if (unitsDelta > 0) data.currentStock = { decrement: unitsDelta };
+  else if (unitsDelta < 0) data.currentStock = { increment: Math.abs(unitsDelta) };
+
+  const where = {
+    id: product.id,
+    tenantId,
+    currentStock: { equals: Number(product.currentStock) || 0 },
+    partialMlUsed: Number(product.partialMlUsed) || 0,
+  };
+  if (delta > 0) where.currentStock.gte = requiredStock;
+
+  const result = await tx.product.updateMany({ where, data });
+  if (result.count !== 1) {
+    return { applied: false, reason: "CONCURRENT_STOCK_CHANGE", currentStock };
+  }
+
+  return {
+    applied: true,
+    unitsDelta,
+    currentStock: currentStock - unitsDelta,
+    partialMlUsed: partialAfter,
+  };
+}
 
 function roundMoney(value) {
   const number = Number(value);
@@ -475,6 +535,7 @@ async function getVisitTotalAmount({ visit, tenantId, client = prisma }) {
 
 module.exports = {
   SOURCE_TYPES,
+  applyProductConsumptionDelta,
   roundMoney,
   normalizeInventoryUnit,
   usagePricing,

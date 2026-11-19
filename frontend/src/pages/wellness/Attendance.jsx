@@ -402,12 +402,14 @@ function ManagerStaffSnapshot() {
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    fetchApi(`/api/attendance/summary?from=${todayKey}&to=${todayKey}`)
-      .then(setSummary)
-      .catch(() => setSummary(null))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let active = true;
+    setLoading(true);
+    fetchApi(`/api/attendance/summary?from=${exportFrom}&to=${exportTo}`)
+      .then((data) => { if (active) setSummary(data); })
+      .catch(() => { if (active) setSummary(null); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [exportFrom, exportTo]);
 
   const onExport = async () => {
     setExporting(true);
@@ -444,21 +446,21 @@ function ManagerStaffSnapshot() {
     }
   };
 
-  // Zylu-spec KPI numbers — backend may not emit early/onTime yet; default to 0.
+  // Attendance summary for the date range selected above.
   const present = summary?.present || 0;
   const halfDay = summary?.halfDay || 0;
   const late = summary?.late || 0;
   const absent = summary?.absent || 0;
   const early = summary?.early || 0;
   const onTime = summary?.onTime || 0;
-  const total = present + halfDay + late + absent;
+  const total = summary?.totalRows ?? (present + halfDay + late + absent);
   const totalMinutes = summary?.totalMinutes || 0;
 
   return (
     <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
         <h2 style={{ marginTop: 0, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Users size={20} aria-hidden /> Today &mdash; All Staff
+          <Users size={20} aria-hidden /> All Staff — Selected Period
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
@@ -524,15 +526,22 @@ function ManagerStaffSnapshot() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>User</th>
+                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Staff member</th>
                   <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Days</th>
                   <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Minutes</th>
                 </tr>
               </thead>
               <tbody>
-                {Object.values(summary.byUser).map((u) => (
+                {Object.values(summary.byUser)
+                  .sort((a, b) => String(a.name || a.email || a.userId).localeCompare(String(b.name || b.email || b.userId)))
+                  .map((u) => (
                   <tr key={u.userId}>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>User #{u.userId}</td>
+                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>
+                      <div>{u.name || u.email || `User #${u.userId}`}</div>
+                      {u.name && u.email && (
+                        <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary, #888)' }}>{u.email}</div>
+                      )}
+                    </td>
                     <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{u.days}</td>
                     <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{u.minutes}</td>
                   </tr>
@@ -541,7 +550,11 @@ function ManagerStaffSnapshot() {
             </table>
             </TopScrollSync>
           ) : (
-            <div style={{ color: 'var(--text-secondary, #888)' }}>Nobody clocked in today yet.</div>
+            <div style={{ color: 'var(--text-secondary, #888)' }}>
+              {exportFrom === todayKey && exportTo === todayKey
+                ? 'Nobody clocked in today yet.'
+                : 'No attendance rows for the selected period.'}
+            </div>
           )}
         </div>
       )}

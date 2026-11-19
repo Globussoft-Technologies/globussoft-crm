@@ -4241,18 +4241,48 @@ const Leads = ({ initialListState = null } = {}) => {
           : "";
       const paginationQs = isGeneric
         ? `&page=${pageOverride ?? leadsPage + 1}&limit=${genericLeadsPageSize}`
-        : "&limit=500";
+        : "&page=1&limit=500";
       // Keep Generic CRM rows visible after an inline CRM Status change.
       // Lifecycle Stage (the pipeline status) remains a separate field.
       const crmStatusQs = isGeneric ? "&includeCrmStatuses=true" : "";
       const data = await fetchApi(
         `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}${crmStatusQs}`,
       );
-      const rows = Array.isArray(data)
+      let rows = Array.isArray(data)
         ? data
         : Array.isArray(data?.data)
           ? data.data
           : [];
+      // Wellness and travel still use client-side search, sorting, and
+      // pagination. Load each API page so datasets larger than the API's
+      // 500-row page cap remain available to those controls.
+      if (!isGeneric && !Array.isArray(data)) {
+        const totalPages = Math.max(1, Number(data?.totalPages) || 1);
+        for (let firstPage = 2; firstPage <= totalPages; firstPage += 4) {
+          if (requestSequence !== leadRequestSequenceRef.current) return rows;
+          const pageNumbers = Array.from(
+            { length: Math.min(4, totalPages - firstPage + 1) },
+            (_, index) => firstPage + index,
+          );
+          const pageResults = await Promise.all(
+            pageNumbers.map((page) =>
+              fetchApi(
+                `/api/contacts?status=Lead&page=${page}&limit=500${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}${crmStatusQs}`,
+                { silent: true },
+              ),
+            ),
+          );
+          rows = rows.concat(
+            ...pageResults.map((pageData) =>
+              Array.isArray(pageData)
+                ? pageData
+                : Array.isArray(pageData?.data)
+                  ? pageData.data
+                  : [],
+            ),
+          );
+        }
+      }
       if (requestSequence !== leadRequestSequenceRef.current) return rows;
       if (isGeneric) {
         const contactIds = rows
@@ -9753,9 +9783,6 @@ const Leads = ({ initialListState = null } = {}) => {
             style={LEAD_CHECKBOX_STYLE}
           />
         )}
-        <span className="generic-lead-avatar" aria-hidden="true">
-          {String(lead.name || "?").trim().charAt(0).toUpperCase() || "?"}
-        </span>
         <div style={{ minWidth: 0, flex: 1 }}>
           <BuiltInInlineCellEditor
             lead={lead}
@@ -12822,15 +12849,6 @@ const Leads = ({ initialListState = null } = {}) => {
                                 style={LEAD_CHECKBOX_STYLE}
                               />
                             )}
-                            <span
-                              className="generic-lead-avatar"
-                              aria-hidden="true"
-                            >
-                              {String(lead.name || "?")
-                                .trim()
-                                .charAt(0)
-                                .toUpperCase() || "?"}
-                            </span>
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <BuiltInInlineCellEditor
                                 lead={lead}

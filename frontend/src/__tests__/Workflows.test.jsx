@@ -224,17 +224,38 @@ describe("Workflows page", () => {
     await user.type(screen.getByRole("textbox", { name: "Webhook callback URL" }), "https://hooks.example.com/meta-feedback");
     await user.click(screen.getByRole("button", { name: /add custom header/i }));
     await user.type(screen.getByRole("textbox", { name: "Webhook header 1 name" }), "X-Webhook-Secret");
-    await user.type(screen.getByLabelText("Webhook header 1 value"), "secret-value");
-    fetchApiMock.mockImplementation((path) => mockApi(path, {
-      "/api/workflows/test-webhook": { success: true, result: {
+    const headerValue = screen.getByLabelText("Webhook header 1 value");
+    const secretCheckbox = screen.getByRole("checkbox", { name: "Secret" });
+    expect(secretCheckbox).toBeChecked();
+    expect(headerValue).toHaveAttribute("type", "password");
+    await user.type(headerValue, "secret-value");
+    await user.click(secretCheckbox);
+    expect(headerValue).toHaveAttribute("type", "text");
+    await user.click(secretCheckbox);
+    expect(headerValue).toHaveAttribute("type", "password");
+    fetchApiMock.mockImplementation((path, options) => {
+      if (path === "/api/workflows/test-webhook") return Promise.resolve({ success: true, result: {
         status: 202,
         statusText: "Accepted",
         request: { url: "https://hooks.example.com/meta-feedback", method: "POST", headers: { "X-Webhook-Secret": "[redacted]" }, body: "{\"contactId\":0}" },
         responseHeaders: { "content-type": "application/json" },
         response: "{\"received\":true}",
         attempts: 1,
-      } },
-    }));
+      } });
+      if (path === "/api/workflows" && options?.method === "POST") {
+        const body = JSON.parse(options.body);
+        const target = JSON.parse(JSON.stringify(body.targetState));
+        target.actions[0].config.headers[0].value = "****alue";
+        return Promise.resolve({
+          ...existingWorkflow,
+          ...body,
+          id: 8,
+          actionType: "send_webhook",
+          targetState: JSON.stringify(target),
+        });
+      }
+      return mockApi(path);
+    });
     await user.click(screen.getByRole("button", { name: /test this webhook/i }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows/test-webhook", expect.objectContaining({ method: "POST" })));
@@ -249,8 +270,94 @@ describe("Workflows page", () => {
     await user.click(screen.getByRole("button", { name: /back to webhook settings/i }));
     expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save settings/i }));
-    expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument());
+    const createCall = fetchApiMock.mock.calls.find(([path, options]) => path === "/api/workflows" && options?.method === "POST");
+    expect(createCall).toBeDefined();
+    const savedConfig = JSON.parse(createCall[1].body).targetState.actions[0].config;
+    expect(savedConfig.headers[0]).toMatchObject({ key: "X-Webhook-Secret", value: "secret-value", secret: true });
+    expect(notify.success).toHaveBeenCalledWith("Webhook settings saved");
     expect(screen.getByRole("textbox", { name: "Action 1 webhook URL" })).toHaveValue("https://hooks.example.com/meta-feedback");
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    expect(screen.getByRole("checkbox", { name: "Secret" })).toBeChecked();
+    expect(screen.getByLabelText("Webhook header 1 value")).toHaveValue("****alue");
+    expect(screen.getByLabelText("Webhook header 1 value")).toHaveAttribute("type", "password");
+  });
+
+  it("persists Secret checkbox changes while retaining the custom header value", async () => {
+    const user = userEvent.setup();
+    const secretValue = "initial-secret-value";
+    let persistedSecret = secretValue;
+    let savedRule = {
+      ...existingWorkflow,
+      id: 8,
+      name: "Partner webhook",
+      actionType: "send_webhook",
+      isActive: false,
+      targetState: JSON.stringify({
+        module: "contact",
+        actions: [{
+          type: "send_webhook",
+          config: {
+            url: "https://hooks.example.com/leads",
+            method: "POST",
+            encoding: "json",
+            headers: [{ key: "X-Webhook-Secret", value: "****alue", secret: true }],
+          },
+        }],
+      }),
+    };
+    fetchApiMock.mockImplementation((path, options) => {
+      if (path === "/api/workflows") return Promise.resolve([savedRule]);
+      if (path === "/api/workflows/stats/actions") return Promise.resolve({});
+      if (path === "/api/workflows/8" && options?.method === "PUT") {
+        const body = JSON.parse(options.body);
+        const target = JSON.parse(JSON.stringify(body.targetState));
+        const header = target.actions[0].config.headers[0];
+        if (!header.value.startsWith("****")) persistedSecret = header.value;
+        header.value = header.secret ? "****alue" : persistedSecret;
+        savedRule = { ...savedRule, ...body, targetState: JSON.stringify(target) };
+        return Promise.resolve(savedRule);
+      }
+      return mockApi(path);
+    });
+
+    render(<Workflows webhookOnly />);
+    await user.click(await screen.findByRole("button", { name: "Partner webhook" }));
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+
+    const secretCheckbox = screen.getByRole("checkbox", { name: "Secret" });
+    const headerValue = screen.getByLabelText("Webhook header 1 value");
+    expect(secretCheckbox).toBeChecked();
+    expect(headerValue).toHaveValue("****alue");
+    expect(headerValue).toHaveAttribute("type", "password");
+
+    await user.click(secretCheckbox);
+    expect(secretCheckbox).not.toBeChecked();
+    expect(headerValue).toHaveAttribute("type", "text");
+    await user.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument());
+
+    let updateCalls = fetchApiMock.mock.calls.filter(([path, callOptions]) => path === "/api/workflows/8" && callOptions?.method === "PUT");
+    let savedHeader = JSON.parse(updateCalls[0][1].body).targetState.actions[0].config.headers[0];
+    expect(savedHeader).toMatchObject({ value: "****alue", secret: false });
+
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    expect(screen.getByRole("checkbox", { name: "Secret" })).not.toBeChecked();
+    expect(screen.getByLabelText("Webhook header 1 value")).toHaveValue(secretValue);
+    expect(screen.getByLabelText("Webhook header 1 value")).toHaveAttribute("type", "text");
+
+    await user.click(screen.getByRole("checkbox", { name: "Secret" }));
+    await user.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Webhook settings" })).not.toBeInTheDocument());
+
+    updateCalls = fetchApiMock.mock.calls.filter(([path, callOptions]) => path === "/api/workflows/8" && callOptions?.method === "PUT");
+    savedHeader = JSON.parse(updateCalls[1][1].body).targetState.actions[0].config.headers[0];
+    expect(savedHeader).toMatchObject({ value: secretValue, secret: true });
+
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    expect(screen.getByRole("checkbox", { name: "Secret" })).toBeChecked();
+    expect(screen.getByLabelText("Webhook header 1 value")).toHaveValue("****alue");
+    expect(screen.getByLabelText("Webhook header 1 value")).toHaveAttribute("type", "password");
   });
 
   it("keeps the existing compact webhook-test notification outside Generic CRM", async () => {

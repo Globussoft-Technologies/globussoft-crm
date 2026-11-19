@@ -69,6 +69,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const { decryptCredential } = requireCJS('../../lib/credentialMasking');
 
 // ── prisma singleton patching ──────────────────────────────────────────
 const prisma = requireCJS('../../lib/prisma');
@@ -553,6 +554,39 @@ describe('POST / — create automation rule', () => {
       { field: 'value', op: 'gte', value: 10000 },
     ]);
   });
+
+  test('201 persists custom secret headers and masks them in the response', async () => {
+    prisma.automationRule.create.mockImplementation(async ({ data }) => ({ id: 101, ...data }));
+
+    const res = await request(makeApp())
+      .post('/api/workflows')
+      .send({
+        name: 'Send lead to partner',
+        triggerType: 'contact.created',
+        actionType: 'send_webhook',
+        isActive: false,
+        targetState: {
+          module: 'contact',
+          actions: [{
+            type: 'send_webhook',
+            config: {
+              url: 'https://hooks.example.com/leads',
+              method: 'POST',
+              encoding: 'json',
+              headers: [{ key: 'X-Webhook-Secret', value: 'initial-secret-value', secret: true }],
+            },
+          }],
+        },
+      });
+
+    expect(res.status).toBe(201);
+    const createArg = prisma.automationRule.create.mock.calls[0][0].data;
+    const storedHeader = JSON.parse(createArg.targetState).actions[0].config.headers[0];
+    expect(storedHeader.secret).toBe(true);
+    expect(decryptCredential(storedHeader.value)).toBe('initial-secret-value');
+    const responseHeader = JSON.parse(res.body.targetState).actions[0].config.headers[0];
+    expect(responseHeader).toEqual({ key: 'X-Webhook-Secret', value: '****alue', secret: true });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -622,6 +656,65 @@ describe('PUT /:id — update automation rule', () => {
       where: { id: 50 },
       data: { name: 'Renamed', updatedById: 7 },
     });
+  });
+
+  test('round-trips a masked secret and applies Secret checkbox changes without losing the value', async () => {
+    const secretValue = 'initial-secret-value';
+    const maskedValue = '****alue';
+    const makeTargetState = (value, secret) => ({
+      module: 'contact',
+      actions: [{
+        type: 'send_webhook',
+        config: {
+          url: 'https://hooks.example.com/leads',
+          method: 'POST',
+          encoding: 'json',
+          headers: [{ key: 'X-Webhook-Secret', value, secret }],
+        },
+      }],
+    });
+    let storedRule = {
+      id: 50,
+      tenantId: 1,
+      name: 'Send lead to partner',
+      triggerType: 'contact.created',
+      actionType: 'send_webhook',
+      targetState: JSON.stringify(makeTargetState(secretValue, true)),
+    };
+    prisma.automationRule.findFirst.mockImplementation(async () => storedRule);
+    prisma.automationRule.update.mockImplementation(async ({ data }) => {
+      storedRule = { ...storedRule, ...data };
+      return storedRule;
+    });
+
+    const unchangedSecret = await request(makeApp())
+      .put('/api/workflows/50')
+      .send({ targetState: makeTargetState(maskedValue, true) });
+
+    expect(unchangedSecret.status).toBe(200);
+    let persistedHeader = JSON.parse(storedRule.targetState).actions[0].config.headers[0];
+    expect(decryptCredential(persistedHeader.value)).toBe(secretValue);
+    expect(JSON.parse(unchangedSecret.body.targetState).actions[0].config.headers[0].value).toBe(maskedValue);
+
+    const markedNonSecret = await request(makeApp())
+      .put('/api/workflows/50')
+      .send({ targetState: makeTargetState(maskedValue, false) });
+
+    expect(markedNonSecret.status).toBe(200);
+    persistedHeader = JSON.parse(storedRule.targetState).actions[0].config.headers[0];
+    expect(persistedHeader.secret).toBe(false);
+    expect(persistedHeader.value).toBe(secretValue);
+    expect(JSON.parse(markedNonSecret.body.targetState).actions[0].config.headers[0].value).toBe(secretValue);
+
+    const markedSecret = await request(makeApp())
+      .put('/api/workflows/50')
+      .send({ targetState: makeTargetState(secretValue, true) });
+
+    expect(markedSecret.status).toBe(200);
+    persistedHeader = JSON.parse(storedRule.targetState).actions[0].config.headers[0];
+    expect(persistedHeader.secret).toBe(true);
+    expect(decryptCredential(persistedHeader.value)).toBe(secretValue);
+    expect(JSON.parse(markedSecret.body.targetState).actions[0].config.headers[0].value).toBe(maskedValue);
   });
 
   test('200 isActive coerced to bool (#19 — PUT-side toggle shortcut)', async () => {

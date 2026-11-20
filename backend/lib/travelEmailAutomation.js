@@ -104,9 +104,30 @@ function mergeEventObject(payload, key, aliases = {}) {
 
 async function buildContext(tenantId, payload = {}) {
   let contactId = Number(payload.contactId || payload.parentContactId || 0) || null;
-  if (!contactId && payload.paymentId && prisma.payment?.findFirst) {
-    const payment = await prisma.payment.findFirst({ where: { id: Number(payload.paymentId), tenantId }, select: { contactId: true } }).catch(() => null);
-    contactId = payment?.contactId || null;
+  let paymentRecipientEmail = "";
+  let paymentRecipientName = "";
+  let paymentTripName = "";
+  if (payload.paymentId && prisma.payment?.findFirst) {
+    const paymentRecord = await prisma.payment.findFirst({
+      where: { id: Number(payload.paymentId), tenantId },
+      select: { contactId: true, metadata: true },
+    }).catch(() => null);
+    contactId = contactId || paymentRecord?.contactId || null;
+    if (paymentRecord?.metadata) {
+      try {
+        const metadata = typeof paymentRecord.metadata === "string"
+          ? JSON.parse(paymentRecord.metadata)
+          : paymentRecord.metadata;
+        const registration = metadata.registration && typeof metadata.registration === "object"
+          ? metadata.registration
+          : {};
+        paymentRecipientEmail = registration.parentEmail || metadata.parentEmail || "";
+        paymentRecipientName = registration.parentName || metadata.parentName || "";
+        paymentTripName = metadata.tripName || metadata.pageTitle || metadata.destination || "";
+      } catch (error) {
+        console.warn("[TravelEmailAutomation] payment metadata could not be parsed:", error.message);
+      }
+    }
   }
   if (!contactId && payload.invoiceId && prisma.travelInvoice?.findFirst) {
     const invoice = await prisma.travelInvoice.findFirst({ where: { id: Number(payload.invoiceId), tenantId }, select: { contactId: true } }).catch(() => null);
@@ -116,8 +137,12 @@ async function buildContext(tenantId, payload = {}) {
     prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, slug: true, ownerEmail: true } }),
     contactId ? prisma.contact.findFirst({ where: { id: contactId, tenantId }, select: { id: true, name: true, email: true, subBrand: true } }) : null,
   ]);
-  const name = payload.recipientName || payload.parentName || payload.customerName || contact?.name || "there";
+  const name = payload.recipientName || payload.parentName || payload.customerName || paymentRecipientName || contact?.name || "there";
   const firstName = String(name).trim().split(/\s+/)[0] || "there";
+  const recipientEmail = recipientForEvent(
+    { ...payload, recipientEmail: payload.recipientEmail || paymentRecipientEmail },
+    contact,
+  );
   const tenantContext = tenant ? { ...tenant, email: tenant.ownerEmail || "" } : {};
   const trip = mergeEventObject(payload, "trip", {
     name: ["tripName", "event.tripName"],
@@ -129,6 +154,7 @@ async function buildContext(tenantId, payload = {}) {
     status: ["tripStatus", "status", "event.tripStatus"],
     cancellationReason: ["cancellationReason", "reason", "event.cancellationReason"],
   });
+  trip.name = trip.name || paymentTripName || trip.destination || "your trip";
   const payment = mergeEventObject(payload, "payment", {
     amount: ["amount", "event.amount"],
     transactionAmount: ["transactionAmount", "paymentAmount", "event.transactionAmount"],
@@ -163,7 +189,7 @@ async function buildContext(tenantId, payload = {}) {
     location: ["siteVisitLocation", "event.siteVisitLocation"],
   });
   return {
-    tenant: tenantContext, contact: { ...(contact || {}), first_name: firstName }, recipient: { name, email: recipientForEvent(payload, contact) },
+    tenant: tenantContext, contact: { ...(contact || {}), first_name: firstName }, recipient: { name, email: recipientEmail },
     sender: { name: payload.senderName || tenant?.name || "Travel Team", email: payload.senderEmail || tenant?.ownerEmail || "" },
     trip: { destination: "your trip", ...trip },
     account: {
@@ -188,7 +214,7 @@ async function processTravelEmailEvent(eventKey, payload = {}, tenantId) {
   if (tenant?.vertical !== "travel") return { ignored: true, reason: "not_travel" };
   await ensureDefaultTemplates(tenantId);
   const context = await buildContext(tenantId, payload);
-  const recipientEmail = recipientForEvent(payload, context.contact);
+  const recipientEmail = context.recipient.email;
   if (!recipientEmail) return { ignored: true, reason: "missing_recipient" };
   const requestedBrand = payload.subBrand || context.contact?.subBrand || null;
   const templates = await prisma.travelEmailTemplate.findMany({

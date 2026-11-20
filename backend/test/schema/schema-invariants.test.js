@@ -112,6 +112,11 @@ const NON_TENANT_MODELS = new Set([
   'CustomField',
   'CustomValue',
   'SequenceStep',
+  // TravelEmailSequenceStep is a child junction scoped through its
+  // TravelEmailSequence parent. Sequence CRUD first scopes the parent by
+  // tenantId and validates every templateId against that same tenant before
+  // creating nested step rows, so a redundant tenantId could drift.
+  'TravelEmailSequenceStep',
   'QuoteLineItem',
   'EstimateLineItem',
   // Patient↔Tag junction. Both parents (Patient + Tag) carry tenantId and

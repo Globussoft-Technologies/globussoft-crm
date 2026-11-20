@@ -1,3 +1,9 @@
+/**
+ * Covers travelEmailAutomation context rendering and event dispatch, including
+ * paymentId-to-registration metadata fallback so first-payment receipts reach
+ * a landing-page payer before a Contact is linked. Prisma and email delivery
+ * are mocked; the payment lookup reproduces the hosted-checkout payload shape.
+ */
 import { describe, expect, test, vi } from "vitest";
 import { createRequire } from "node:module";
 const requireCJS = createRequire(import.meta.url);
@@ -8,6 +14,7 @@ vi.mock("../../lib/prisma", () => ({
   tenant: { findUnique: vi.fn() },
   tenantSetting: { findUnique: vi.fn() },
   contact: { findFirst: vi.fn() },
+  payment: { findFirst: vi.fn() },
   travelEmailTemplate: { findMany: vi.fn(), createMany: vi.fn(), updateMany: vi.fn() },
   travelEmailSequence: { findMany: vi.fn() },
   travelEmailEnrollment: { create: vi.fn(), findMany: vi.fn() },
@@ -19,6 +26,7 @@ const automation = requireCJS("../../lib/travelEmailAutomation");
 beforeEach(() => {
   prisma.tenant.findUnique = vi.fn();
   prisma.contact.findFirst = vi.fn();
+  prisma.payment.findFirst = vi.fn();
   prisma.travelEmailTemplate.findMany = vi.fn();
   prisma.travelEmailTemplate.createMany = vi.fn();
   prisma.travelEmailTemplate.updateMany = vi.fn();
@@ -110,6 +118,78 @@ describe("Travel email automation", () => {
       where: { id: 2 },
       select: { name: true, slug: true, ownerEmail: true },
     });
+  });
+
+  test("sends the first landing-page payment receipt to the payer from payment metadata", async () => {
+    prisma.tenant.findUnique
+      .mockResolvedValueOnce({ vertical: "travel" })
+      .mockResolvedValueOnce({ name: "Travel Stall", ownerEmail: "support@travelstall.test" });
+    prisma.payment.findFirst.mockResolvedValueOnce({
+      contactId: null,
+      metadata: JSON.stringify({
+        kind: "landing-page-registration",
+        parentEmail: "asha@example.com",
+        registration: { parentName: "Asha Rao", parentEmail: "asha@example.com" },
+      }),
+    });
+    prisma.travelEmailTemplate.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 11,
+        eventKey: "payment.received",
+        subject: "Payment received",
+        body: "Hello {{recipient.name}}, payment received: {{payment.amount}}",
+        subBrand: null,
+      }]);
+
+    await expect(automation.processTravelEmailEvent(
+      "payment.received",
+      { paymentId: 51, amount: 5000 },
+      2,
+    )).resolves.toMatchObject({ templateId: 11, recipientEmail: "asha@example.com" });
+
+    expect(prisma.contact.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelEmailDeliveryLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        recipientEmail: "asha@example.com",
+        bodyHtml: "Hello Asha Rao, payment received: 5000",
+      }),
+    }));
+  });
+
+  test("uses the landing-page title for trip.name when a payment already has a Contact", async () => {
+    prisma.tenant.findUnique
+      .mockResolvedValueOnce({ vertical: "travel" })
+      .mockResolvedValueOnce({ name: "Travel Stall", ownerEmail: "support@travelstall.test" });
+    prisma.payment.findFirst.mockResolvedValueOnce({
+      contactId: 4,
+      metadata: JSON.stringify({ kind: "landing-page-registration", pageTitle: "Bali Family Tour" }),
+    });
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      id: 4, name: "Asha Rao", email: "asha@example.com", subBrand: "tmc",
+    });
+    prisma.travelEmailTemplate.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 12,
+        eventKey: "payment.received",
+        subject: "Payment received for {{trip.name}}",
+        body: "Payment received for {{trip.name}}",
+        subBrand: null,
+      }]);
+
+    await expect(automation.processTravelEmailEvent(
+      "payment.received",
+      { paymentId: 52, contactId: 4, amount: 5000 },
+      2,
+    )).resolves.toMatchObject({ templateId: 12, recipientEmail: "asha@example.com" });
+
+    expect(prisma.travelEmailDeliveryLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        subject: "Payment received for Bali Family Tour",
+        bodyHtml: "Payment received for Bali Family Tour",
+      }),
+    }));
   });
 
 });

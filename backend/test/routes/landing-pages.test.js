@@ -143,6 +143,14 @@ import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const Module = requireCJS('node:module');
 const hardDeleteContactMock = vi.fn().mockResolvedValue(1);
+const emitEventMock = vi.fn().mockResolvedValue(undefined);
+const eventBusPath = requireCJS.resolve('../../lib/eventBus.js');
+Module._cache[eventBusPath] = {
+  id: eventBusPath,
+  filename: eventBusPath,
+  loaded: true,
+  exports: { emitEvent: emitEventMock, safeEmitEvent: vi.fn(), onEvent: () => {} },
+};
 const contactHardDeletePath = requireCJS.resolve('../../lib/contactHardDelete.js');
 Module._cache[contactHardDeletePath] = {
   id: contactHardDeletePath,
@@ -167,7 +175,10 @@ const paymentLinksCreateMock = vi.fn();
 const paymentLinksFetchMock = vi.fn();
 requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayClient = getTenantRazorpayClientMock;
 requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayCreds = getTenantRazorpayCredsMock;
-requireCJS('../../lib/landingPagePayments').applyLandingPagePaymentToTrip = applyLandingPagePaymentToTripMock;
+const landingPagePayments = requireCJS('../../lib/landingPagePayments');
+const ensureLandingPagePaymentRegistrationMock = vi.fn().mockResolvedValue(null);
+landingPagePayments.applyLandingPagePaymentToTrip = applyLandingPagePaymentToTripMock;
+landingPagePayments.ensureLandingPagePaymentRegistration = ensureLandingPagePaymentRegistrationMock;
 const { router: authedRouter, publicRouter } = requireCJS('../../routes/landing_pages');
 
 function makeApp() {
@@ -252,6 +263,7 @@ function wanderluxPaymentPage(overrides = {}) {
 }
 
 beforeEach(() => {
+  emitEventMock.mockReset().mockResolvedValue(undefined);
   paymentLinksFetchMock.mockReset();
   prisma.landingPage.findMany.mockReset();
   prisma.landingPage.findFirst.mockReset();
@@ -299,6 +311,7 @@ beforeEach(() => {
       keySecret: KEY_SECRET,
     });
   getTenantRazorpayCredsMock.mockReset().mockResolvedValue({ keySecret: KEY_SECRET });
+  ensureLandingPagePaymentRegistrationMock.mockReset().mockResolvedValue(null);
   applyLandingPagePaymentToTripMock.mockReset().mockResolvedValue({
     tripId: 100,
     participantId: 77,
@@ -2042,6 +2055,52 @@ describe('POST /p/:slug/payment-order + payment submit', () => {
     expect(res.body).toMatchObject({ paid: true, paymentLinkId: 'plink_confirmed_first' });
   });
 
+  test('first landing-page payment confirmation emits one payment receipt event', async () => {
+    const pendingPayment = {
+      id: 908,
+      gatewayId: 'plink_first_payment',
+      status: 'PENDING',
+      amount: 5000,
+      currency: 'INR',
+      gateway: 'razorpay',
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        pageId: 51,
+        tripId: 7,
+        draftToken: 'draft-first-payment',
+        parentEmail: 'asha@example.com',
+        registration: { parentName: 'Asha Rao', parentEmail: 'asha@example.com' },
+      }),
+    };
+    const confirmedPayment = { ...pendingPayment, status: 'SUCCESS', paidAt: new Date() };
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 701, tenantId: 1, tripId: 7, landingPageId: 51, draftToken: 'draft-first-payment',
+    });
+    prisma.payment.findMany.mockResolvedValue([pendingPayment]);
+    prisma.payment.update.mockResolvedValue(confirmedPayment);
+    paymentLinksFetchMock.mockResolvedValue({ status: 'paid' });
+
+    const firstCheck = await request(makeApp()).get('/p/australia-2026/payment-status')
+      .query({ draftToken: 'draft-first-payment' });
+
+    expect(firstCheck.status).toBe(200);
+    expect(firstCheck.body).toMatchObject({ paid: true, paymentLinkId: 'plink_first_payment' });
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'payment.collected',
+      expect.objectContaining({ paymentId: 908, amount: 5000, currency: 'INR' }),
+      1,
+      null,
+    );
+
+    prisma.payment.findMany.mockResolvedValue([{ ...confirmedPayment }]);
+    const repeatedCheck = await request(makeApp()).get('/p/australia-2026/payment-status')
+      .query({ draftToken: 'draft-first-payment' });
+
+    expect(repeatedCheck.status).toBe(200);
+    expect(emitEventMock).toHaveBeenCalledTimes(1);
+  });
+
   test('an open payment link from another draft blocks a duplicate checkout', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
     prisma.payment.findMany.mockResolvedValue([{
@@ -2566,6 +2625,47 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
         }),
       }),
     );
+  });
+
+  test('workflow dispatch failure does not leave the registration Contact without a Deal', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: wanderluxContent, templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100, subBrand: 'tmc',
+    });
+    prisma.pendingTripRegistration.create.mockResolvedValue({
+      id: 7007, tenantId: 1, tripId: 100, status: 'DRAFT',
+      draftToken: 'workflow-failure-token',
+    });
+    prisma.contact.create.mockResolvedValue({
+      id: 8007, name: 'Rohan Iyer', email: 'rohan@example.com',
+      phone: '+919876543210', status: 'Lead', source: 'tmc_registration', tenantId: 1,
+    });
+    emitEventMock.mockRejectedValueOnce(new Error('automation unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(makeApp())
+      .post('/p/trip-bali2026/submit')
+      .send({
+        student: { name: 'Aarav Iyer' },
+        parent: { name: 'Rohan Iyer', email: 'rohan@example.com', phone: '+919876543210' },
+      });
+
+    expect(res.status).toBe(201);
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'contact.created',
+      expect.objectContaining({ contactId: 8007 }),
+      1,
+      undefined,
+    );
+    expect(prisma.deal.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ contactId: 8007, tenantId: 1 }),
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      '[LandingPage] draft lead sync error:',
+      'automation unavailable',
+    );
+    consoleError.mockRestore();
   });
 
   test('non-valid passport status still continues to the parent portal', async () => {

@@ -718,11 +718,15 @@ body[data-vertical="travel"] .travel-app-shell .tmc-catalogue-library
   transform: translateY(-50%);
 }
 
-.travel-app-shell .travel-content-frame .search-with-leading-icon > input {
+body[data-vertical="travel"]
+  .travel-app-shell
+  .travel-content-frame
+  .search-with-leading-icon
+  > input {
   width: 100%;
   min-width: 0;
-  padding-left: 40px !important;
-  text-indent: 20px !important;
+  padding-inline-start: 44px !important;
+  text-indent: 0 !important;
 }
 
 .travel-app-shell .travel-dashboard-section {

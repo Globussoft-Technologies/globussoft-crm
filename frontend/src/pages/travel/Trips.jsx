@@ -612,31 +612,36 @@ export default function Trips() {
           style={{ color: "var(--text-secondary)" }}
         />
         <div
-          className="travel-trips-page__search search-with-leading-icon"
+          className="travel-trips-page__search"
           style={{
-              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              paddingLeft: 10,
+              paddingRight: 8,
+              border: "1px solid var(--border-color)",
+              borderRadius: 8,
+              background: "var(--surface-color)",
+              boxSizing: "border-box",
           }}
         >
           <Search
             size={14}
             aria-hidden
             style={{
-                position: "absolute",
-                left: 12,
-                top: "50%",
-                transform: "translateY(-50%)",
               color: "var(--text-secondary)",
               pointerEvents: "none",
+              flex: "0 0 auto",
             }}
           />
           <input
               type="search"
-            className="crm-search-input"
+            className="travel-trips-search-input"
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search trip code or destination…"
             aria-label="Search trips"
-              style={{ ...selectStyle, padding: "6px 8px 6px 40px", minWidth: 0, width: "100%" }}
+              style={{ ...selectStyle, padding: "6px 0", minWidth: 0, width: "100%", flex: "1 1 auto", border: 0, outline: 0, background: "transparent", boxShadow: "none" }}
           />
         </div>
         <select

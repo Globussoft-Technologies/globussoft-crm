@@ -452,7 +452,17 @@ function drawTravelTable(doc, columns, rows, opts = {}) {
   const x = opts.x || 50;
   const baseRowH = opts.rowHeight || 20;
   const pad = 5;
-  const totalW = columns.reduce((sum, c) => sum + c.width, 0);
+  // A4 with the report's 50pt margins has 495pt of usable width. Keep the
+  // table inside that boundary even when a new report adds columns whose
+  // requested widths exceed the page. Without this guard the last columns
+  // are painted outside the page and appear clipped in downloaded PDFs.
+  const availableW = doc.page.width - x - (opts.rightMargin || 50);
+  const requestedW = columns.reduce((sum, c) => sum + c.width, 0);
+  const widthScale = requestedW > availableW ? availableW / requestedW : 1;
+  const fittedColumns = widthScale === 1
+    ? columns
+    : columns.map((column) => ({ ...column, width: column.width * widthScale }));
+  const totalW = fittedColumns.reduce((sum, c) => sum + c.width, 0);
   const bottom = doc.page.height - 62;
   let y = opts.startY != null ? opts.startY : doc.y;
 
@@ -463,7 +473,7 @@ function drawTravelTable(doc, columns, rows, opts = {}) {
     doc.restore();
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
     let cx = x;
-    for (const c of columns) {
+    for (const c of fittedColumns) {
       doc.text(String(c.header), cx + pad, y + 6, { width: c.width - pad * 2, align: c.align || "left", lineBreak: false, ellipsis: true });
       cx += c.width;
     }
@@ -480,7 +490,7 @@ function drawTravelTable(doc, columns, rows, opts = {}) {
   drawHeader();
   doc.font("Helvetica").fontSize(7.8);
   rows.forEach((row, i) => {
-    const contentH = Math.max(...columns.map((column, ci) => cellHeight(row[ci], column)));
+    const contentH = Math.max(...fittedColumns.map((column, ci) => cellHeight(row[ci], column)));
     const rowH = Math.max(baseRowH, Math.ceil(contentH + 12));
     if (y + rowH > bottom) {
       doc.addPage();
@@ -493,8 +503,8 @@ function drawTravelTable(doc, columns, rows, opts = {}) {
     doc.restore();
     doc.fillColor("#1f2937");
     let cx = x;
-    for (let ci = 0; ci < columns.length; ci += 1) {
-      const c = columns[ci];
+    for (let ci = 0; ci < fittedColumns.length; ci += 1) {
+      const c = fittedColumns[ci];
       const text = row[ci] == null ? "" : String(row[ci]);
       doc.text(text, cx + pad, y + 6, {
         width: c.width - pad * 2,
@@ -1322,8 +1332,11 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       ]);
 
       tableSection("Trip Revenue Source Detail", [
-        { header: "Trip", width: 88 }, { header: "Destination", width: 92 }, { header: "School", width: 115 },
-        { header: "Status", width: 62 }, { header: "Pax", width: 38, align: "right" }, { header: "Rate", width: 72, align: "right" }, { header: "Revenue", width: 78, align: "right" },
+        // These widths total the 495pt printable area (A4 minus 50pt
+        // margins). The previous 545pt layout clipped Rate/Revenue and
+        // made the Trip column unnecessarily narrow in the exported PDF.
+        { header: "Trip", width: 110 }, { header: "Destination", width: 80 }, { header: "School", width: 95 },
+        { header: "Status", width: 58 }, { header: "Pax", width: 32, align: "right" }, { header: "Rate", width: 60, align: "right" }, { header: "Revenue", width: 60, align: "right" },
       ], (d.revenue.rows || []).map((r) => [
         r.tripCode || `Trip #${r.id}`,
         r.destination || "-",

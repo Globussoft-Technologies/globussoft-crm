@@ -19,7 +19,11 @@
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { createRequire } from 'node:module';
 import prisma from '../../lib/prisma.js';
+
+const requireCJS = createRequire(import.meta.url);
+const eventBus = requireCJS('../../lib/eventBus');
 
 import {
   runJourneyRemindersForTenant,
@@ -30,6 +34,7 @@ import {
 
 beforeAll(() => {
   prisma.itinerary = { findMany: vi.fn() };
+  prisma.contact = { findMany: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
   // subBrandConfig resolver pull — Q9 cut-over plumbing reads tenant
   // .subBrandConfigJson once per pass for the milestone-fire wabaId log.
@@ -38,10 +43,12 @@ beforeAll(() => {
 
 beforeEach(() => {
   prisma.itinerary.findMany.mockReset();
+  prisma.contact.findMany.mockReset();
   prisma.notification.findFirst.mockReset();
   prisma.notification.create.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.itinerary.findMany.mockResolvedValue([]);
+  prisma.contact.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue({ subBrandConfigJson: null });
@@ -117,6 +124,35 @@ describe('cron/travelJourneyReminders — runJourneyRemindersForTenant', () => {
     expect(createArg.data.title).toContain('[group-meeting-t1]');
   });
 
+  test('emails the active Upcoming trip reminder event with complete trip details', async () => {
+    const startDate = new Date(Date.now() + 86400_000);
+    const endDate = new Date(Date.now() + 5 * 86400_000);
+    prisma.itinerary.findMany.mockResolvedValue([
+      { id: 7, contactId: 100, title: 'Umrah December Group', destination: 'Makkah', startDate, endDate },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 100, name: 'Asha Rao', email: 'asha@example.com', phone: null },
+    ]);
+    const originalEmitEvent = eventBus.emitEvent;
+    eventBus.emitEvent = vi.fn().mockResolvedValue({});
+    try {
+      await runJourneyRemindersForTenant(1);
+      expect(eventBus.emitEvent).toHaveBeenCalledWith('trip.reminder', expect.objectContaining({
+        itineraryId: 7,
+        recipientEmail: 'asha@example.com',
+        trip: expect.objectContaining({
+          name: 'Umrah December Group',
+          code: '7',
+          destination: 'Makkah',
+          startDate,
+          endDate,
+        }),
+      }), 1);
+    } finally {
+      eventBus.emitEvent = originalEmitEvent;
+    }
+  });
+
   test('itinerary outside any milestone window → no notification', async () => {
     const startDate = new Date(Date.now() + 11 * 86400_000); // 11 days out (between T-7 and T-14)
     prisma.itinerary.findMany.mockResolvedValue([
@@ -169,7 +205,7 @@ describe('cron/travelJourneyReminders — runJourneyRemindersForTenant', () => {
     const arg = prisma.itinerary.findMany.mock.calls[0][0];
     expect(arg.take).toBe(500);
     expect(arg.select).toEqual({
-      id: true, contactId: true, destination: true, startDate: true,
+      id: true, contactId: true, title: true, destination: true, startDate: true, endDate: true,
     });
   });
 

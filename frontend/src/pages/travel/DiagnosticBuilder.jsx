@@ -2794,11 +2794,13 @@ const templatePickerOptionText = {
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
+  flex: 1,
   minWidth: 0,
 };
 const templatePickerOptionName = {
   fontSize: 13,
   fontWeight: 600,
+  lineHeight: 1.25,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -2806,6 +2808,7 @@ const templatePickerOptionName = {
 const templatePickerOptionMeta = {
   fontSize: 11,
   fontWeight: 500,
+  lineHeight: 1.25,
   opacity: 0.75,
 };
 const templatePickerEmpty = {

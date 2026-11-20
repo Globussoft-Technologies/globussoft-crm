@@ -6940,6 +6940,26 @@ router.post(
         },
       );
 
+      // Every successful instalment is a payment received, including partial
+      // settlement. Full settlement keeps using travel.invoice.paid below so
+      // it does not generate a duplicate Payment received email.
+      if (!allPaid) {
+        require("../lib/eventBus").emitEvent(
+          "payment.collected",
+          {
+            invoiceId,
+            paymentId: payment.id,
+            amount: amountRounded,
+            method: methodNorm,
+            currency: existing.expectedCurrency || invoice.currency,
+            paidAt: paidAtDate,
+            subBrand: invoice.subBrand,
+          },
+          req.travelTenant.id,
+          req.io,
+        );
+      }
+
       // 5. Emit invoice.paid event on full settlement (downstream cron +
       // notification consumers). Best-effort; eventBus is optional.
       if (allPaid && invoiceAfter.status === "Paid") {

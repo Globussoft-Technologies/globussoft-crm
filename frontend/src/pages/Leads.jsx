@@ -11156,8 +11156,12 @@ const Leads = ({ initialListState = null } = {}) => {
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      right: 0,
-                      left: "auto",
+                      // Anchor from the trigger's left edge. Right-aligning a
+                      // 420px menu makes it extend outside the table card when
+                      // the trigger sits near the left side, clipping the
+                      // first action labels.
+                      left: 0,
+                      right: "auto",
                       zIndex: 1089,
                       width: "min(420px, 92vw)",
                       maxWidth: "calc(100vw - 1rem)",

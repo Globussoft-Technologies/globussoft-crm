@@ -100,9 +100,11 @@ async function upsertContactByEmail({ email, tenantId, update, create }) {
     where: { email, tenantId, deletedAt: null },
   });
   if (existing) {
-    return prisma.contact.update({ where: { id: existing.id }, data: update });
+    const updated = await prisma.contact.update({ where: { id: existing.id }, data: update });
+    return { ...updated, __created: false };
   }
-  return prisma.contact.create({ data: create });
+  const created = await prisma.contact.create({ data: create });
+  return { ...created, __created: true };
 }
 
 
@@ -6476,6 +6478,28 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       },
     });
 
+    require("../lib/eventBus").emitEvent("payment.link_issued", {
+      paymentId: payment.id,
+      recipientEmail: registration.parentEmail,
+      recipientName: registration.parentName,
+      parentEmail: registration.parentEmail,
+      parentName: registration.parentName,
+      parentPhone: registration.parentPhone,
+      studentName: registration.studentName,
+      studentSchool: registration.studentSchool,
+      studentClass: registration.studentClass,
+      tripId: page.tripId,
+      destination: page.destination || page.title || "your trip",
+      paymentLink: paymentLink.short_url,
+      payment: {
+        amount: selection.amountMajor,
+        link: paymentLink.short_url,
+      },
+      subBrand: page.subBrand || null,
+    }, tenantId, req.io).catch((error) => {
+      console.error("[LandingPage] payment.link_issued email event failed:", error.message);
+    });
+
     const prefillSource = req.body && typeof req.body.fields === "object" && req.body.fields ? req.body.fields : req.body || {};
     const pickPrefill = (...keys) => {
       for (const key of keys) {
@@ -7898,6 +7922,18 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     });
     await applyLeadRouting(formProps, tenantId, contact.id);
 
+    if (contact.__created) {
+      await require("../lib/eventBus").emitEvent("contact.created", {
+        contactId: contact.id,
+        name: contact.name,
+        email: contact.email,
+        phone: contact.phone,
+        status: contact.status,
+        source: contact.source,
+        subBrand: contact.subBrand || page.subBrand || null,
+      }, tenantId, req.io);
+    }
+
     await prisma.deal.create({
 
       data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },
@@ -7996,6 +8032,10 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   });
   const portalRedirect = tmcParentRegistrationUrl
     || `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(resolvedParentName)}&email=${encodeURIComponent(resolvedParentEmail)}&next=${encodeURIComponent('/travel/portal')}`;
+  require("../lib/eventBus").emitEvent("registration.submitted", {
+    parentEmail: resolvedParentEmail, parentName: resolvedParentName, subBrand: page.subBrand || null,
+    registrationId: completedDraftId, tripId: page.tripId, setupLink: portalRedirect,
+  }, tenantId, req.io).catch(() => {});
   return res.status(201).json({
 
     ok: true,

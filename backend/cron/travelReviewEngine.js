@@ -25,6 +25,7 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/travelReviewContent");
+const travelEmailAutomation = require("../lib/travelEmailAutomation");
 const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 
 // "Agreement-secured" set — any booking the customer committed to is reviewable
@@ -47,7 +48,7 @@ async function runTravelReviewTick(now = new Date()) {
       subBrand: { not: "visasure" },
       endDate: { gte: floor, lt: now }, // completed within the lookback window
     },
-    select: { id: true, tenantId: true, contactId: true, destination: true, endDate: true },
+    select: { id: true, tenantId: true, contactId: true, destination: true, subBrand: true, endDate: true },
   });
 
   // Skip itineraries that already have a review row (requested or submitted).
@@ -84,12 +85,31 @@ async function runTravelReviewTick(now = new Date()) {
     }
 
     summary.requested += 1;
-    const mail = content.buildRequestEmail({
-      destination: itin.destination,
-      customerName: contact.name,
-      reviewUrl: reviewUrl(token),
-    });
-    const res = await emailSender.sendEmail({ tenantId: itin.tenantId, to: contact.email, subject: mail.subject, text: mail.text, html: mail.html });
+    const reviewLink = reviewUrl(token);
+    let automation = null;
+    try {
+      automation = await travelEmailAutomation.processTravelEmailEvent("trip.completed", {
+        contactId: contact.id,
+        recipientEmail: contact.email,
+        recipientName: contact.name,
+        subBrand: itin.subBrand,
+        destination: itin.destination,
+        reviewUrl: reviewLink,
+        review: { url: reviewLink, destination: itin.destination || "your trip" },
+        trip: { id: itin.id, destination: itin.destination, endDate: itin.endDate, status: "completed" },
+      }, itin.tenantId);
+    } catch (error) {
+      console.warn(`[TravelReview] optional trip.completed automation failed for itin=${itin.id}:`, error.message);
+    }
+    let res = automation?.reason === "no_template" ? null : { sent: automation?.sent || false, reason: automation?.reason };
+    if (!res) {
+      const mail = content.buildRequestEmail({
+        destination: itin.destination,
+        customerName: contact.name,
+        reviewUrl: reviewLink,
+      });
+      res = await emailSender.sendEmail({ tenantId: itin.tenantId, to: contact.email, subject: mail.subject, text: mail.text, html: mail.html });
+    }
     if (res.sent) summary.sent += 1;
     // Mirror to the customer's in-app portal bell (no SMS — no phone collected).
     // The booking detail in the portal hosts the review form. Best-effort.

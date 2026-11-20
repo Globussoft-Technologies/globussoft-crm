@@ -7,7 +7,8 @@
  *
  * Each step is one of: email (links to an EmailTemplate), sms (free body),
  * wait (delayMinutes), condition (JSON clause-list, evaluated by the same
- * eventBus.evaluateCondition() the workflow engine uses).
+ * eventBus.evaluateCondition() the workflow engine uses). Conditions can
+ * route the contact to different next steps through true/false positions.
  *
  * Functional > pretty: drag-handle visible but reordering is a v2 concern.
  *
@@ -196,7 +197,7 @@ export default function SequenceBuilder() {
                 const days = mins / 1440;
                 summary = days >= 1 ? `Wait ${days % 1 === 0 ? days : days.toFixed(1)}d` : `Wait ${mins}m`;
               } else if (s.kind === 'condition') {
-                summary = 'Condition branch';
+                summary = `Condition branch — If / Else${s.trueNextPosition != null || s.falseNextPosition != null ? ` — Yes → #${s.trueNextPosition ?? s.position + 1}, No → #${s.falseNextPosition ?? s.position + 1}` : ''}`;
               } else {
                 summary = meta.label;
               }
@@ -249,7 +250,7 @@ export default function SequenceBuilder() {
                     {s.kind === 'email' && (s.emailTemplate?.name || 'No template selected')}
                     {s.kind === 'sms' && (s.smsBody?.slice(0, 60) || 'Empty body')}
                     {s.kind === 'wait' && `Wait ${s.delayMinutes ?? 0} min`}
-                    {s.kind === 'condition' && (s.conditionJson ? 'Conditional branch' : 'No condition set')}
+                    {s.kind === 'condition' && (s.conditionJson ? `Conditional branch — If / Else${s.trueNextPosition != null || s.falseNextPosition != null ? ` — Yes → #${s.trueNextPosition ?? s.position + 1}, No → #${s.falseNextPosition ?? s.position + 1}` : ''}` : 'No condition set')}
                   </div>
                 </div>
                 {(s.kind === 'email' || s.kind === 'sms') && (
@@ -279,7 +280,7 @@ export default function SequenceBuilder() {
               <Plus size={14} /> Wait
             </button>
             <button onClick={() => addStep('condition')} style={addBtn('#8b5cf6')}>
-              <Plus size={14} /> Condition
+              <Plus size={14} /> If / Else
             </button>
           </div>
         </div>
@@ -289,6 +290,7 @@ export default function SequenceBuilder() {
           <StepEditor
             key={editing.id}
             step={editing}
+            steps={steps}
             templates={templates}
             onSave={saveStep}
             onClose={() => setEditing(null)}
@@ -307,13 +309,15 @@ function addBtn(color) {
   };
 }
 
-function StepEditor({ step, templates, onSave, onClose }) {
+function StepEditor({ step, steps = [], templates, onSave, onClose }) {
   const notify = useNotify();
   const [draft, setDraft] = useState({
     emailTemplateId: step.emailTemplateId ?? '',
     smsBody: step.smsBody ?? '',
     delayMinutes: step.delayMinutes ?? 0,
     conditionJson: step.conditionJson ?? '',
+    trueNextPosition: step.trueNextPosition ?? '',
+    falseNextPosition: step.falseNextPosition ?? '',
     pauseOnReply: step.pauseOnReply ?? true,
   });
 
@@ -353,6 +357,8 @@ function StepEditor({ step, templates, onSave, onClose }) {
       patch.delayMinutes = parsed;
     } else if (step.kind === 'condition') {
       patch.conditionJson = draft.conditionJson;
+      patch.trueNextPosition = draft.trueNextPosition === '' ? null : parseInt(draft.trueNextPosition, 10);
+      patch.falseNextPosition = draft.falseNextPosition === '' ? null : parseInt(draft.falseNextPosition, 10);
     }
     onSave(patch);
   };
@@ -444,6 +450,39 @@ function StepEditor({ step, templates, onSave, onClose }) {
           <small style={{ color: 'var(--text-secondary)' }}>
             Same eq/neq/gt/gte/lt/lte/in/nin/contains/startsWith ops as the workflow engine.
           </small>
+          <div style={{ display: 'grid', gap: 8, marginTop: 14 }}>
+            <label style={lbl}>If true, go to</label>
+            <select
+              aria-label="If true, go to"
+              value={draft.trueNextPosition}
+              onChange={e => setDraft({ ...draft, trueNextPosition: e.target.value })}
+              style={inp}
+            >
+              <option value="">Next step</option>
+              {steps.filter(candidate => candidate.id !== step.id).map(candidate => (
+                <option key={candidate.id} value={candidate.position}>
+                  #{candidate.position} {candidate.name || candidate.kind}
+                </option>
+              ))}
+            </select>
+            <label style={lbl}>If false, go to</label>
+            <select
+              aria-label="If false, go to"
+              value={draft.falseNextPosition}
+              onChange={e => setDraft({ ...draft, falseNextPosition: e.target.value })}
+              style={inp}
+            >
+              <option value="">Next step</option>
+              {steps.filter(candidate => candidate.id !== step.id).map(candidate => (
+                <option key={candidate.id} value={candidate.position}>
+                  #{candidate.position} {candidate.name || candidate.kind}
+                </option>
+              ))}
+            </select>
+            <small style={{ color: 'var(--text-secondary)' }}>
+              Leave either path as “Next step” to continue normally. Choose another step to create an If / Else branch.
+            </small>
+          </div>
         </>
       )}
 

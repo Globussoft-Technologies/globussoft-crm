@@ -403,6 +403,9 @@ const TravelWebCheckinQueue = lazy(
 const TravelAutomationHealth = lazy(
   () => import("./pages/travel/AutomationHealth"),
 );
+const TravelEmailAutomation = lazy(
+  () => import("./pages/travel/EmailAutomation"),
+);
 // Slice C2  Passport OCR verification queue (ADMIN+MANAGER). PRD_PASSPORT_OCR 5.4.
 const TravelPassportVerificationQueue = lazy(
   () => import("./pages/travel/PassportVerificationQueue"),
@@ -3531,6 +3534,9 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
+                      <Route path="travel/email-automation" element={<TravelOnly><TravelEmailAutomation /></TravelOnly>} />
+                      {/* Backward-compatible alias for the original page-style URL. */}
+                      <Route path="travel/EmailAutomation" element={<TravelOnly><TravelEmailAutomation /></TravelOnly>} />
                       {/* Slice C2  Passport OCR verification queue. Backend route gates
                   ADMIN+MANAGER; frontend RoleGuard mirrors so non-privileged
                   users hit a friendly access-denied surface rather than the

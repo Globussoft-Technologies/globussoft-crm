@@ -1,3 +1,4 @@
+import { formatTimestamp } from '../utils/date';
 import { useEffect, useState, useMemo } from "react";
 import { FileText, X, Loader, Phone, Clock, Smile, Calendar, AlertCircle, RefreshCw, User, Play, Download } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
@@ -214,7 +215,7 @@ export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
     if (!iso) return "Unknown time";
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
+    return formatTimestamp(d, {
       month: "short",
       day: "numeric",
       year: "numeric",

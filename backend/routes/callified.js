@@ -19,6 +19,7 @@
 
 const express = require("express");
 const router = express.Router();
+router.use('/dial-jobs', require('./generic_lead_dial_jobs'));
 const { verifyToken } = require("../middleware/auth");
 const {
   requirePermission,
@@ -33,10 +34,15 @@ const {
   VALID_LEAD_STATUSES,
   normalizeLeadStatus,
   classifyLeadStatus,
+  isManualLeadStatus,
+  leadStatusVersion,
+  isRetryStatus,
+  preserveRetryStatus,
+  automaticLeadStatusData,
   assignQualifiedLeadRoundRobin,
+  assignQualifiedLeadsBatch,
 } = require("../lib/callifiedLeadStatus");
 const {
-  clearDnpRetryState,
   scheduleDnpRetry,
   schedulePendingRetry,
 } = require("../lib/callifiedDnpRetryEngine");
@@ -335,26 +341,27 @@ router.post(
         });
       }
 
-      // A manual call takes precedence over any pending DNP retry schedule.
-      await clearDnpRetryState(leadId).catch((e) => {
-        console.error(`[callified] failed to clear DNP retry state for contact ${leadId}:`, e.message);
-      });
-      await prisma.contact.update({
-        where: { id: Number(leadId), tenantId: req.user.tenantId },
-        data: {
-          callifiedLeadStatus: CALL_STATUS.CONNECTED,
-          callifiedLeadStatusSource: "manual",
-          callifiedLeadStatusReason: "Manual call in progress.",
-          callifiedLeadStatusUpdatedAt: new Date(),
-        },
-      });
-
+      const where = { id: Number(leadId), tenantId: req.user.tenantId };
+      const contact = await prisma.contact.findFirst({ where });
+      if (!contact) return res.status(404).json({ error: "Lead not found", code: "LEAD_NOT_FOUND" });
       const result = await callifiedClient.initiateCallForContact({
+        historyType: 'single',
         tenantId: req.user.tenantId,
         contactId: leadId,
         campaignId,
         userId: req.user.userId,
         interest,
+      });
+      await prisma.contact.updateMany({
+        where: { ...where, ...leadStatusVersion(contact) },
+        data: {
+          callifiedLeadStatus: CALL_STATUS.CONNECTED,
+          callifiedLeadStatusSource: "manual",
+          callifiedLeadStatusReason: "Manual call in progress.",
+          callifiedLeadStatusUpdatedAt: new Date(),
+          callifiedDnpRetryCount: 0,
+          callifiedDnpNextRetryAt: null,
+        },
       });
 
       await writeAudit(
@@ -882,62 +889,69 @@ router.get("/calls/lead/:leadId/latest", verifyToken, async (req, res) => {
  * with no current assignee are automatically assigned to the next staff user in
  * round-robin.
  */
+const callStatusInclude = { assignedTo: { select: { id: true, name: true, email: true } } };
+
+function leadStatusResponse(contact, reason = contact.callifiedLeadStatusReason) {
+  return {
+    id: contact.id,
+    ...leadStatusVersion(contact),
+    assignedToId: contact.assignedToId,
+    assignedTo: contact.assignedTo,
+    reason,
+  };
+}
+
 router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
   try {
     const leadId = Number(req.params.leadId);
+    const { tenantId } = req.user;
     if (!Number.isFinite(leadId) || leadId <= 0) {
       return res.status(400).json({ error: "Invalid leadId", code: "INVALID_LEAD_ID" });
     }
 
-    const contact = await prisma.contact.findFirst({
-      where: { id: leadId, tenantId: req.user.tenantId },
-    });
+    const where = { id: leadId, tenantId };
+    const contact = await prisma.contact.findFirst({ where, include: callStatusInclude });
     if (!contact) return res.status(404).json({ error: "Lead not found" });
+    if (isManualLeadStatus(contact)) return res.json(leadStatusResponse(contact));
 
-    const classification = await classifyLeadStatus(req.user.tenantId, leadId, { userId: req.user.userId });
+    const classification = await classifyLeadStatus(tenantId, leadId, { userId: req.user.userId });
+    if (preserveRetryStatus(contact.callifiedLeadStatus, classification.status)) {
+      return res.json(leadStatusResponse(contact));
+    }
     // Prisma's optional String columns map to VARCHAR(191) by default. Provider
     // summaries can be much longer, so store a compact reason while returning
     // the complete reason to the caller.
-    const storedReason = String(classification.reason || "").slice(0, 190);
-    const updateData = {
-      callifiedLeadStatus: classification.status,
-      callifiedLeadStatusSource: classification.source,
-      callifiedLeadStatusReason: storedReason,
-      callifiedLeadStatusUpdatedAt: new Date(),
-    };
-
-    if (classification.status === CALL_STATUS.QUALIFIED && !contact.assignedToId) {
-      const assignedToId = await assignQualifiedLeadRoundRobin(req.user.tenantId, leadId, classification.status);
-      if (assignedToId) updateData.assignedToId = assignedToId;
-    }
-
+    const data = automaticLeadStatusData(contact, classification);
     try {
-      const updated = await prisma.contact.update({
-        where: { id: leadId },
-        data: updateData,
-        include: { assignedTo: { select: { id: true, name: true, email: true } } },
-      });
-
-      if (classification.status === CALL_STATUS.DNP) {
-        await scheduleDnpRetry(req.user.tenantId, leadId).catch(() => {});
-      } else if (classification.status === CALL_STATUS.PENDING) {
-        await schedulePendingRetry(req.user.tenantId, leadId).catch(() => {});
-      } else {
-        await clearDnpRetryState(leadId).catch(() => {});
+      let updated = contact;
+      if (contact.callifiedLeadStatus !== classification.status ||
+          contact.callifiedLeadStatusSource !== classification.source ||
+          contact.callifiedLeadStatusReason !== data.callifiedLeadStatusReason) {
+        updated = await prisma.contact.update({
+          where: { ...where, ...leadStatusVersion(contact) },
+          data,
+          include: callStatusInclude,
+        });
+        await require('../lib/callifiedAttemptStatus').recordStandaloneOutcome(tenantId, leadId, classification.status, req.user.userId, updated.callifiedLeadStatusUpdatedAt || new Date());
       }
 
-      res.json({
-        id: updated.id,
-        callifiedLeadStatus: updated.callifiedLeadStatus,
-        callifiedLeadStatusSource: updated.callifiedLeadStatusSource,
-        callifiedLeadStatusUpdatedAt: updated.callifiedLeadStatusUpdatedAt,
-        assignedToId: updated.assignedToId,
-        assignedTo: updated.assignedTo,
-        reason: classification.reason,
-      });
+      if (!updated.callifiedDnpNextRetryAt) {
+        if (classification.status === CALL_STATUS.DNP) {
+          await scheduleDnpRetry(tenantId, leadId).catch(() => {});
+        } else if (classification.status === CALL_STATUS.PENDING) {
+          await schedulePendingRetry(tenantId, leadId).catch(() => {});
+        }
+      }
+      if (classification.status === CALL_STATUS.QUALIFIED && !updated.assignedToId) {
+        const assignedToId = await assignQualifiedLeadRoundRobin(tenantId, leadId, classification.status);
+        if (assignedToId) updated = await prisma.contact.findFirst({ where, include: callStatusInclude }) || updated;
+      }
+      res.json(leadStatusResponse(updated, classification.reason));
     } catch (updateErr) {
       if (updateErr.code === "P2025") {
-        console.error(`[callified] leads/:leadId/classify contact ${leadId} not found during update`);
+        // An operator or worker changed the status while the provider was being read.
+        const current = await prisma.contact.findFirst({ where, include: callStatusInclude });
+        if (current) return res.json(leadStatusResponse(current));
         return res.status(404).json({ error: "Lead not found", code: "LEAD_NOT_FOUND" });
       }
       throw updateErr;
@@ -974,12 +988,9 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
       callifiedLeadStatusReason: "Status changed manually by user.",
       callifiedLeadStatusUpdatedAt: new Date(),
     };
-    if (normalized === CALL_STATUS.DNP) {
-      // A manual DNP override starts a fresh retry streak.
+    if (!isRetryStatus(normalized) || normalizeLeadStatus(contact.callifiedLeadStatus) !== normalized) {
       updateData.callifiedDnpRetryCount = 0;
-    }
-    if (normalized === CALL_STATUS.PENDING) {
-      updateData.callifiedDnpRetryCount = 0;
+      updateData.callifiedDnpNextRetryAt = null;
     }
     if (normalized === CALL_STATUS.QUALIFIED && !contact.assignedToId) {
       const assignedToId = await assignQualifiedLeadRoundRobin(req.user.tenantId, leadId, normalized);
@@ -993,16 +1004,14 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
     });
 
     // Sync DNP retry state with the manual status change.
-    if (normalized === CALL_STATUS.DNP) {
+    if (normalized === CALL_STATUS.DNP && !updated.callifiedDnpNextRetryAt) {
       await scheduleDnpRetry(req.user.tenantId, leadId).catch((e) => {
         console.error(`[callified] failed to schedule DNP retry for contact ${leadId}:`, e.message);
       });
-    } else if (normalized === CALL_STATUS.PENDING) {
+    } else if (normalized === CALL_STATUS.PENDING && !updated.callifiedDnpNextRetryAt) {
       await schedulePendingRetry(req.user.tenantId, leadId).catch((e) => {
         console.error(`[callified] failed to schedule pending retry for contact ${leadId}:`, e.message);
       });
-    } else {
-      await clearDnpRetryState(leadId).catch((e) => console.error(`[callified] failed to clear retry state for contact ${leadId}:`, e.message));
     }
 
     res.json({
@@ -1034,7 +1043,7 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
  *
  * Returns { assigned: number, skipped: number, details: [{ contactId, assignedToId, reason }] }.
  */
-router.post("/leads/ensure-assigned", verifyToken, async (req, res) => {
+router.post("/leads/ensure-assigned", verifyToken, requirePermission('leads', 'update'), async (req, res) => {
   try {
     const { contactIds } = req.body || {};
     const tenantId = req.user.tenantId;
@@ -1054,7 +1063,14 @@ router.post("/leads/ensure-assigned", verifyToken, async (req, res) => {
       where,
       select: { id: true },
       orderBy: { id: "asc" },
+      take: 100,
     });
+
+    const vertical = req.permissionTenant?.vertical || (await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }))?.vertical;
+    if (vertical === 'generic') {
+      const result = await assignQualifiedLeadsBatch(tenantId, qualifiedLeads.map((lead) => lead.id));
+      return res.json({ ...result, batchLimit: 100, hasMore: qualifiedLeads.length === 100 });
+    }
 
     const details = [];
     let assigned = 0;
@@ -1084,7 +1100,7 @@ router.post("/leads/ensure-assigned", verifyToken, async (req, res) => {
  * "Call Status" button in the generic CRM leads page. Reads from existing
  * CallLog rows so history survives refresh and cookie clearing.
  */
-router.get("/leads/call-status-history", verifyToken, async (req, res) => {
+router.get("/leads/call-status-history", verifyToken, requirePermission('leads', 'read'), async (req, res) => {
   try {
     const logs = await prisma.callLog.findMany({
       where: {
@@ -1092,6 +1108,7 @@ router.get("/leads/call-status-history", verifyToken, async (req, res) => {
         provider: "callified",
       },
       orderBy: { createdAt: "desc" },
+      take: 200,
       select: {
         id: true,
         createdAt: true,
@@ -1101,11 +1118,12 @@ router.get("/leads/call-status-history", verifyToken, async (req, res) => {
         contactId: true,
         notes: true,
         user: { select: { id: true, name: true, email: true } },
-        contact: { select: { id: true, name: true, email: true, phone: true } },
+        contact: { select: { id: true, name: true, email: true, phone: true, ...classificationFields } },
       },
     });
 
     const history = logs.map((log) => {
+      log.status = attemptStatus(log);
       let notes = {};
       try {
         notes = JSON.parse(log.notes || "{}");
@@ -1406,6 +1424,7 @@ router.post(
       });
 
       const results = [];
+      const requestedAt = Date.now();
       let succeeded = 0;
       let failed = 0;
       let skippedCooldown = 0;
@@ -1442,6 +1461,7 @@ router.post(
 
         try {
           const result = await callifiedClient.initiateCallForContact({
+            requestedAt,
             tenantId: req.user.tenantId,
             contactId: lead.id,
             campaignId,
@@ -1583,3 +1603,4 @@ router.get("/leads/call-summary", verifyToken, async (req, res) => {
 });
 
 module.exports = router;
+const { classificationFields, attemptStatus } = require('../lib/callifiedAttemptStatus');

@@ -47,6 +47,7 @@ beforeEach(() => {
   prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 1 });
   prisma.tenant = prisma.tenant || {};
   prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+  prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
   prisma.customerPickup = prisma.customerPickup || {};
   prisma.customerPickup.upsert = vi.fn();
   prisma.callLog = prisma.callLog || {};
@@ -137,6 +138,48 @@ describe('enrollLeadTolerant', () => {
       throw Object.assign(new Error('Not Found'), { status: 404 });
     });
     await expect(client.enrollLeadTolerant(1, 42, 900)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('AI retry submission', () => {
+  test('recovers the verified provider lead from the same contact’s call history before creating a duplicate', async () => {
+    prisma.callLog.findFirst.mockResolvedValue({
+      calleeNumber: '+919876543210', providerCallId: '900', notes: '{}',
+    });
+    stub('getCallifiedToken', async () => 'test-token');
+    stub('getCallifiedConfig', async () => ({ baseUrl: 'http://callified.test' }));
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([
+      { id: 900, phone: '+919876543210' },
+    ])));
+    await expect(client.createLead(1, { campaignId: 42, contactId: CONTACT.id, phone: CONTACT.phone }))
+      .resolves.toMatchObject({ id: 900, source: 'crm_calllog' });
+    expect(prisma.callLog.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, provider: 'callified', contactId: CONTACT.id },
+    }));
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      'http://callified.test/api/campaigns/42/leads?limit=1000', expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
+  test('honors a provider DND refusal without trying the alternate dial endpoint', async () => {
+    stub('createLead', async () => ({ id: 900 }));
+    stub('enrollLeadTolerant', async () => ({ alreadyEnrolled: true }));
+    stub('dialCampaign', async () => { throw Object.assign(new Error('lead is on DND list'), { status: 409 }); });
+    const alternate = stub('dialLead', async () => ({}));
+    await expect(client.initiateCallForContact({ tenantId: 1, contactId: CONTACT.id, campaignId: 42 }))
+      .rejects.toMatchObject({ status: 409 });
+    expect(alternate).not.toHaveBeenCalled();
+    expect(prisma.callLog.create).not.toHaveBeenCalled();
+  });
+
+  test('uses the single-lead endpoint when the campaign rejects an earlier call', async () => {
+    stub('createLead', async () => ({ id: 900 }));
+    stub('enrollLeadTolerant', async () => ({ alreadyEnrolled: true }));
+    stub('dialCampaign', async () => { throw Object.assign(new Error('lead has already been called'), { status: 409 }); });
+    const alternate = stub('dialLead', async () => ({ status: 'queued' }));
+    await expect(client.initiateCallForContact({ tenantId: 1, contactId: CONTACT.id, campaignId: 42 }))
+      .resolves.toMatchObject({ callLogId: 501, callifiedLeadId: 900 });
+    expect(alternate).toHaveBeenCalledExactlyOnceWith(1, 900, 42);
   });
 });
 

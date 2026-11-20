@@ -31,7 +31,8 @@ const {
 } = require("../utils/deduplication");
 const { notify } = require("../lib/notificationService");
 const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
-const { getSetting, setSetting, KEYS } = require("../lib/tenantSettings");
+const { getSetting, setSetting, KEYS, getGenericCrmTimezone } = require("../lib/tenantSettings");
+const { parseDateTimeLocalInTZ, formatInTenantTZ } = require('../lib/datetime');
 const {
   evaluateAutoCampaignRules,
 } = require("../lib/callifiedAutoCampaignRules");
@@ -808,39 +809,23 @@ function customFieldDefIdFromKey(field) {
 // (see that route), so a "contains" match here means "occurred on this
 // day", not an exact-to-the-millisecond DateTime equality that would never
 // match a real timestamp.
-function dayRange(value) {
-  const start = new Date(value);
-  if (Number.isNaN(start.getTime())) return null;
-  start.setUTCHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return { gte: start, lt: end };
+function dayRange(value, timezone = "UTC") {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const startDay = date.toISOString().slice(0, 10);
+  date.setUTCDate(date.getUTCDate() + 1);
+  const endDay = date.toISOString().slice(0, 10);
+  return {
+    gte: parseDateTimeLocalInTZ(`${startDay}T00:00`, timezone),
+    lt: parseDateTimeLocalInTZ(`${endDay}T00:00`, timezone),
+  };
 }
 
-// [from, to] "YYYY-MM-DD" pair → an inclusive-of-both-days Prisma range.
-// `to` becomes the START of the following day and is compared with `lt`, so
-// a stored timestamp anywhere inside the end day still matches — comparing
-// `lte` against the end day's midnight would drop everything after 00:00 on
-// that day. Either side may be blank for an open-ended range; both blank
-// (or both unparseable) yields null so the caller drops the clause.
-function betweenRange(fromValue, toValue) {
-  const range = {};
-  if (fromValue) {
-    const from = new Date(fromValue);
-    if (!Number.isNaN(from.getTime())) {
-      from.setUTCHours(0, 0, 0, 0);
-      range.gte = from;
-    }
-  }
-  if (toValue) {
-    const to = new Date(toValue);
-    if (!Number.isNaN(to.getTime())) {
-      to.setUTCHours(0, 0, 0, 0);
-      to.setUTCDate(to.getUTCDate() + 1);
-      range.lt = to;
-    }
-  }
-  return Object.keys(range).length ? range : null;
+// An end date is inclusive of its entire local calendar day.
+function betweenRange(fromValue, toValue, timezone) {
+  const from = fromValue ? dayRange(fromValue, timezone) : null;
+  const to = toValue ? dayRange(toValue, timezone) : null;
+  return from || to ? { ...(from ? { gte: from.gte } : {}), ...(to ? { lt: to.lt } : {}) } : null;
 }
 
 // is_empty/is_not_empty on a `required` (non-nullable) column — Contact.
@@ -852,7 +837,7 @@ function betweenRange(fromValue, toValue) {
 // NUMBER/DATE field (aiScore, createdAt) has no such "empty" representation
 // at all — every row always has a value — so is_empty matches nothing and
 // is_not_empty matches everything for those two kinds.
-function buildFilterClause(fieldDef, operator, values) {
+function buildFilterClause(fieldDef, operator, values, timezone) {
   const { column, kind, required } = fieldDef;
   // A DateTime / Int column has no empty-string state, and Prisma rejects
   // '' as a value for one outright ("Invalid value for argument: Expected
@@ -880,7 +865,7 @@ function buildFilterClause(fieldDef, operator, values) {
   // an open-ended range — compacting the array would shift `to` into `from`.
   if (operator === "between") {
     if (kind !== "date") return null;
-    const range = betweenRange((values || [])[0], (values || [])[1]);
+    const range = betweenRange((values || [])[0], (values || [])[1], timezone);
     return range ? { [column]: range } : null;
   }
   const list = (values || []).filter(
@@ -945,7 +930,7 @@ function buildFilterClause(fieldDef, operator, values) {
       : { OR: picked.map((b) => ({ [column]: { gte: b.min, lte: b.max } })) };
   }
   if (kind === "date") {
-    const ranges = list.map(dayRange).filter(Boolean);
+    const ranges = list.map((value) => dayRange(value, timezone)).filter(Boolean);
     if (ranges.length === 0) return null;
     return operator === "not_contains"
       ? { AND: ranges.map((r) => ({ NOT: { [column]: r } })) }
@@ -1117,12 +1102,12 @@ function buildWebFormClause(operator, values) {
   return { webFormSubmissions: { some: { webForm: { name: { in: list } } } } };
 }
 
-function buildTrackingFilterClause(field, operator, values) {
+function buildTrackingFilterClause(field, operator, values, timezone) {
   if (field !== "submittedAt") return null;
   if (operator === "is_empty") return { webFormSubmissions: { none: {} } };
   if (operator === "is_not_empty") return { webFormSubmissions: { some: {} } };
   if (operator !== "between") return null;
-  const range = betweenRange((values || [])[0], (values || [])[1]);
+  const range = betweenRange((values || [])[0], (values || [])[1], timezone);
   return range ? { webFormSubmissions: { some: { submittedAt: range } } } : null;
 }
 
@@ -1756,6 +1741,10 @@ router.get("/", async (req, res) => {
     // FILTER_OPERATORS. Invalid entries are skipped rather than erroring —
     // the panel only ever sends known field/operator pairs, so a mismatch
     // here means stale client cache, not attacker input.
+    let timezonePromise;
+    const timestampZone = () => timezonePromise ??= isGenericCrmRequest(req)
+      ? getGenericCrmTimezone(req.user.tenantId)
+      : Promise.resolve("UTC");
     if (req.query.filters) {
       let parsed;
       try {
@@ -1872,6 +1861,7 @@ router.get("/", async (req, res) => {
             f.field,
             f.operator,
             rawValues,
+            await timestampZone(),
           );
           if (clause) clauses.push(clause);
           continue;
@@ -1911,7 +1901,8 @@ router.get("/", async (req, res) => {
             ],
           };
         } else {
-          clause = buildFilterClause(fieldDef, f.operator, rawValues);
+          const timezone = ["createdAt", "updatedAt"].includes(fieldDef.column) ? await timestampZone() : undefined;
+          clause = buildFilterClause(fieldDef, f.operator, rawValues, timezone);
         }
         if (clause) clauses.push(clause);
       }
@@ -1926,19 +1917,37 @@ router.get("/", async (req, res) => {
     // Total Contacts KPI on /dashboard now reflects own-book size for sales reps.
     if (!viewAllLeads) where.assignedToId = req.user.userId;
     if (req.query.from || req.query.to) {
-      const from = req.query.from ? new Date(req.query.from) : null;
-      const to = req.query.to ? new Date(req.query.to) : null;
-      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime())) || (from && to && from > to)) {
+      const isDateOnly = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const dateOnlyFrom = isDateOnly(req.query.from);
+      const dateOnlyTo = isDateOnly(req.query.to);
+      const zone = dateOnlyFrom || dateOnlyTo ? await timestampZone() : undefined;
+      const from = dateOnlyFrom ? dayRange(req.query.from, zone)?.gte : req.query.from ? new Date(req.query.from) : null;
+      const to = dateOnlyTo ? dayRange(req.query.to, zone)?.lt : req.query.to ? new Date(req.query.to) : null;
+      if ((req.query.from && !Number.isFinite(from?.getTime())) ||
+          (req.query.to && !Number.isFinite(to?.getTime())) ||
+          (from && to && (dateOnlyTo ? from >= to : from > to))) {
         return res.status(400).json({ error: "Invalid date range", code: "INVALID_DATE_RANGE" });
       }
-      const dateOnlyTo = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to);
-      if (dateOnlyTo) to.setUTCDate(to.getUTCDate() + 1);
       where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? (dateOnlyTo ? { lt: to } : { lte: to }) : {}) };
     }
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === "1") {
       const total = await prisma.contact.count({ where });
       return res.json({ total });
+    }
+    if (req.query.fields === "ids") {
+      const afterId = Number(req.query.afterId ?? 0);
+      if (!Number.isSafeInteger(afterId) || afterId < 0) {
+        return res.status(400).json({ error: "Invalid contact cursor", code: "INVALID_CURSOR" });
+      }
+      const rows = await prisma.contact.findMany({
+        where: { ...where, AND: [...(where.AND || []), { id: { gt: afterId } }] },
+        select: { id: true },
+        orderBy: { id: "asc" },
+        take: 501,
+      });
+      const ids = rows.slice(0, 500).map(({ id }) => id);
+      return res.json({ ids, nextAfterId: rows.length > 500 ? ids[499] : null });
     }
     // #172: honor limit / offset / page query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
@@ -2189,7 +2198,9 @@ router.get("/filter-values/:field", async (req, res) => {
         : {};
     const valueSearch =
       typeof req.query.q === "string" ? req.query.q.trim().slice(0, 191) : "";
-    const scopeWhere = statusScope ? { status: statusScope } : {};
+    const scopeWhere = { ...(statusScope && { status: statusScope }), ...assignedToScope };
+    const ruleValues = req.query.ruleValues === "1";
+    if (ruleValues && !viewAllLeads) scopeWhere.assignedToId = req.user.userId;
     if (isCustomField(req.params.field)) {
       const defId = customFieldDefIdFromKey(req.params.field);
       if (defId === null)
@@ -2222,14 +2233,8 @@ router.get("/filter-values/:field", async (req, res) => {
           valueText: valueSearch
             ? { contains: valueSearch }
             : { not: null },
-          ...(statusScope || Object.keys(assignedToScope).length
-            ? {
-                contact: {
-                  ...(statusScope ? { status: statusScope } : {}),
-                  ...assignedToScope,
-                  deletedAt: null,
-                },
-              }
+          ...(Object.keys(scopeWhere).length
+            ? { contact: { ...scopeWhere, deletedAt: null } }
             : {}),
         },
         select: { valueText: true },
@@ -2515,7 +2520,7 @@ router.get("/filter-values/:field", async (req, res) => {
     // range-kind fields offer their fixed buckets, not a DISTINCT scan of
     // every individual value present (see the "range" note above
     // FILTERABLE_FIELDS — Lead Score would otherwise list 5, 36, 49, 64…).
-    if (fieldDef.kind === "range") {
+    if (fieldDef.kind === "range" && !ruleValues) {
       return res.json({
         values: (fieldDef.buckets || []).map((b) => ({
           value: b.value,
@@ -2532,7 +2537,7 @@ router.get("/filter-values/:field", async (req, res) => {
     let notNullFilter;
     if (
       fieldDef.required &&
-      (fieldDef.kind === "number" || fieldDef.kind === "date")
+      (fieldDef.kind === "number" || fieldDef.kind === "date" || fieldDef.kind === "range")
     ) {
       notNullFilter = undefined;
     } else if (fieldDef.required) {
@@ -2572,12 +2577,15 @@ router.get("/filter-values/:field", async (req, res) => {
     // deliberately — the panel filters by "occurred on this day", matching
     // how a human reads a date column in a table, not exact timestamps.
     if (fieldDef.kind === "date") {
+      const zone = isGenericCrmRequest(req) && ["createdAt", "updatedAt"].includes(fieldDef.column)
+        ? await getGenericCrmTimezone(tenantId)
+        : "UTC";
       const days = [
         ...new Set(
           rows
             .map((r) => r[fieldDef.column])
             .filter((v) => v !== null)
-            .map((v) => new Date(v).toISOString().slice(0, 10)),
+            .map((v) => formatInTenantTZ(v, zone, "yyyy-MM-dd")),
         ),
       ].sort();
       return res.json({ values: days.map((d) => ({ value: d, label: d })) });
@@ -3273,26 +3281,22 @@ router.put(
 
     if (nextAssignedToId) {
       const actorName = req.user?.name || req.user?.email || "Admin";
-      for (const row of assignableRows) {
-        if (nextAssignedToId === row.assignedToId) continue;
+      const changed = assignableRows.filter((row) => nextAssignedToId !== row.assignedToId);
+      const grouped = isGenericCrmRequest(req) && changed.length > 1;
+      await require('../lib/boundedWork').mapBounded(grouped ? [null] : changed, 4, async (row) => {
         try {
-          const leadName = row.name || "#" + row.id;
           await notify({
             userId: nextAssignedToId,
             tenantId: req.user.tenantId,
-            title: "New lead assigned",
-            message:
-              actorName +
-              ' has assigned lead "' +
-              leadName +
-              '" to you. Please look into it.',
+            title: grouped ? `${changed.length} leads assigned` : "New lead assigned",
+            message: grouped
+              ? `${actorName} assigned ${changed.length} leads to you.`
+              : `${actorName} has assigned lead "${row.name || "#" + row.id}" to you. Please look into it.`,
             type: "info",
             category: "lead",
             entityType: "lead",
-            entityId: row.id,
-            link:
-              (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
-              row.id,
+            entityId: row?.id,
+            link: grouped ? "/leads" : (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") + row.id,
             io: req.io,
           });
         } catch (notifyErr) {
@@ -3301,7 +3305,7 @@ router.put(
             notifyErr && notifyErr.message,
           );
         }
-      }
+      });
     }
 
     res.json({

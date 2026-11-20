@@ -54,6 +54,35 @@ export function tenantLocale() {
   return 'en-US';
 }
 
+export function tenantTimezone(tenant = readTenant()) {
+  return tenant?.vertical === 'generic' ? tenant.timezone || 'UTC' : undefined;
+}
+
+export function workspaceDayKey(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = toDate(value);
+  if (!date) return '';
+  const options = { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tenantTimezone() };
+  const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(date);
+  const { year, month, day } = Object.fromEntries(parts.map(({ type, value: part }) => [type, part]));
+  return `${year}-${month}-${day}`;
+}
+
+// Date-only fields are calendar dates. Preserve them even when an instant
+// at UTC midnight would otherwise appear as the previous day.
+export function formatTimestamp(value, options = {}, locale) {
+  const date = toDate(value);
+  if (!date) return '—';
+  const timeZone = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? 'UTC'
+    : options.timeZone || tenantTimezone();
+  try {
+    return new Intl.DateTimeFormat(locale || tenantLocale(), { ...options, timeZone }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
 function toDate(value) {
   if (value == null || value === '') return null;
   if (value instanceof Date) {
@@ -72,70 +101,28 @@ function toDate(value) {
  * @returns {string} formatted date or '—' when value is missing/invalid
  */
 export function formatDateShort(value, locale) {
-  const d = toDate(value);
-  if (!d) return '—';
-  try {
-    return new Intl.DateTimeFormat(locale || tenantLocale(), {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(d);
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
+  return formatTimestamp(value, { year: 'numeric', month: '2-digit', day: '2-digit' }, locale);
 }
 
 /**
  * Medium date — abbreviated month name (8 May 2026 / May 8, 2026).
  */
 export function formatDateMedium(value, locale) {
-  const d = toDate(value);
-  if (!d) return '—';
-  try {
-    return new Intl.DateTimeFormat(locale || tenantLocale(), {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    }).format(d);
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
+  return formatTimestamp(value, { year: 'numeric', month: 'short', day: 'numeric' }, locale);
 }
 
 /**
  * Long date — full month name (8 May 2026 / May 8, 2026).
  */
 export function formatDateLong(value, locale) {
-  const d = toDate(value);
-  if (!d) return '—';
-  try {
-    return new Intl.DateTimeFormat(locale || tenantLocale(), {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    }).format(d);
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
+  return formatTimestamp(value, { year: 'numeric', month: 'long', day: 'numeric' }, locale);
 }
 
 /**
  * Short date + short time (08/05/2026, 15:45 / 5/8/2026, 3:45 PM).
  */
 export function formatDateTime(value, locale) {
-  const d = toDate(value);
-  if (!d) return '—';
-  try {
-    return new Intl.DateTimeFormat(locale || tenantLocale(), {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
+  return formatTimestamp(value, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }, locale);
 }
 
 /**

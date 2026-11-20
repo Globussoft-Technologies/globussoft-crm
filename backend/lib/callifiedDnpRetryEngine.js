@@ -6,8 +6,8 @@
  * retries. Manual calls and manual status overrides clear the pending retry
  * state so the lead follows the normal flow immediately.
  *
- * The engine runs on a 1-minute tick, scans for DNP leads that are due for
- * retry, and enqueues them in the existing auto-dial queue.
+ * Due retries are checked every five seconds. Leads without a deadline
+ * are backfilled once per minute.
  */
 
 const prisma = require("./prisma");
@@ -15,7 +15,8 @@ const { getSetting, KEYS } = require("./tenantSettings");
 const { CALL_STATUS } = require("./callifiedLeadStatus");
 const { formatInTenantTZ, parseDateTimeLocalInTZ } = require("./datetime");
 
-const DNP_RETRY_TICK_MS = 60 * 1000; // 1 minute
+const RETRY_TICK_MS = 5_000;
+const RETRY_BACKFILL_MS = 60_000;
 
 let tickInterval = null;
 let isProcessingTick = false;
@@ -43,10 +44,10 @@ async function getDnpRetrySettings(tenantId) {
       coerce: Number,
       fallback: 60,
     }),
-    getSetting(tenantId, KEYS.CALLIFIED_DNP_RETRY_MODE, { fallback: "delay" }),
+    getSetting(tenantId, KEYS.CALLIFIED_DNP_RETRY_MODE, { coerce: String, fallback: "delay" }),
     getSetting(tenantId, KEYS.CALLIFIED_DNP_RETRY_DAY_INTERVAL, { coerce: Number, fallback: 1 }),
-    getSetting(tenantId, KEYS.CALLIFIED_DNP_RETRY_TIME_LOCAL, { fallback: "10:00" }),
-    getSetting(tenantId, KEYS.CALLIFIED_RETRY_TIMEZONE, { fallback: "UTC" }),
+    getSetting(tenantId, KEYS.CALLIFIED_DNP_RETRY_TIME_LOCAL, { coerce: String, fallback: "10:00" }),
+    getSetting(tenantId, KEYS.CALLIFIED_RETRY_TIMEZONE, { coerce: String, fallback: "UTC" }),
   ]);
 
   const enabled = Boolean(enabledRaw);
@@ -73,10 +74,10 @@ async function getPendingRetrySettings(tenantId) {
     }),
     getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_MAX_RETRIES, { coerce: Number, fallback: 3 }),
     getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES, { coerce: Number, fallback: 60 }),
-    getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_MODE, { fallback: "delay" }),
+    getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_MODE, { coerce: String, fallback: "delay" }),
     getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_DAY_INTERVAL, { coerce: Number, fallback: 1 }),
-    getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL, { fallback: "10:00" }),
-    getSetting(tenantId, KEYS.CALLIFIED_RETRY_TIMEZONE, { fallback: "UTC" }),
+    getSetting(tenantId, KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL, { coerce: String, fallback: "10:00" }),
+    getSetting(tenantId, KEYS.CALLIFIED_RETRY_TIMEZONE, { coerce: String, fallback: "UTC" }),
   ]);
   return {
     enabled: Boolean(enabledRaw),
@@ -100,16 +101,20 @@ function computeNextRetryAt(settings, now = new Date()) {
     return new Date(now.getTime() + settings.intervalMinutes * 60 * 1000);
   }
   const todayKey = formatInTenantTZ(now, settings.timezone, "yyyy-MM-dd");
-  let dateKey = todayKey;
-  let candidate = parseDateTimeLocalInTZ(`${dateKey}T${settings.timeLocal}`, settings.timezone);
-  const mustAdvance = settings.dayInterval > 1 || Number.isNaN(candidate.getTime()) || candidate <= now;
-  if (mustAdvance) {
-    dateKey = addDaysToDateKey(todayKey, settings.dayInterval);
-    candidate = parseDateTimeLocalInTZ(`${dateKey}T${settings.timeLocal}`, settings.timezone);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(todayKey)) {
+    const firstOffset = settings.dayInterval > 1 ? settings.dayInterval : 0;
+    for (let i = 0; i < 3; i++) {
+      const dateKey = addDaysToDateKey(todayKey, firstOffset + i * settings.dayInterval);
+      const wallTime = `${dateKey}T${settings.timeLocal}`;
+      const candidate = parseDateTimeLocalInTZ(wallTime, settings.timezone);
+      // A DST gap can normalize to a different hour. Wait for the next
+      // configured occurrence instead of silently calling at that hour.
+      if (candidate > now && formatInTenantTZ(candidate, settings.timezone, "yyyy-MM-dd'T'HH:mm") === wallTime) {
+        return candidate;
+      }
+    }
   }
-  return Number.isNaN(candidate.getTime())
-    ? new Date(now.getTime() + settings.dayInterval * 24 * 60 * 60 * 1000)
-    : candidate;
+  return new Date(now.getTime() + settings.dayInterval * 24 * 60 * 60 * 1000);
 }
 
 /**
@@ -138,12 +143,9 @@ async function scheduleDnpRetry(tenantId, contactId) {
   const { enabled } = settings;
   if (!enabled) return null;
 
-  const nextRetryAt = computeNextRetryAt(settings);
-  return prisma.contact.update({
-    where: { id: Number(contactId), tenantId },
-    data: {
-      callifiedDnpNextRetryAt: nextRetryAt,
-    },
+  return prisma.contact.updateMany({
+    where: { id: Number(contactId), tenantId, callifiedLeadStatus: CALL_STATUS.DNP, callifiedDnpNextRetryAt: null, callifiedDnpRetryCount: { lt: settings.maxRetries } },
+    data: { callifiedDnpNextRetryAt: computeNextRetryAt(settings) },
   });
 }
 
@@ -151,13 +153,27 @@ async function schedulePendingRetry(tenantId, contactId) {
   const settings = await getPendingRetrySettings(tenantId);
   const { enabled } = settings;
   if (!enabled) return null;
-  return prisma.contact.update({
-    where: { id: Number(contactId), tenantId },
+  // Refresh can classify the same call repeatedly. Keep its original due time.
+  return prisma.contact.updateMany({
+    where: { id: Number(contactId), tenantId, callifiedLeadStatus: CALL_STATUS.PENDING, callifiedDnpNextRetryAt: null, callifiedDnpRetryCount: { lt: settings.maxRetries } },
     data: { callifiedDnpNextRetryAt: computeNextRetryAt(settings) },
   });
 }
 
-async function processPendingRetries(now = new Date()) {
+async function retryDeadlineWhere(now, includeUnscheduled) {
+  const stops = await prisma.tenantSetting.findMany({
+    where: { key: 'feature.callified.dialing_paused', value: 'true' },
+    select: { tenantId: true, updatedAt: true },
+  });
+  const deadline = includeUnscheduled
+    ? { OR: [{ callifiedDnpNextRetryAt: { lte: now } }, { callifiedDnpNextRetryAt: null }] }
+    : { callifiedDnpNextRetryAt: { lte: now } };
+  return stops.length ? { ...deadline, NOT: stops.map(stop => ({
+    tenantId: stop.tenantId, OR: [{ callifiedLeadStatusUpdatedAt: null }, { callifiedLeadStatusUpdatedAt: { lte: stop.updatedAt } }],
+  })) } : deadline;
+}
+
+async function processPendingRetries(now = new Date(), includeUnscheduled = true) {
   if (isProcessingPendingTick) return;
   isProcessingPendingTick = true;
   try {
@@ -170,7 +186,7 @@ async function processPendingRetries(now = new Date()) {
         callifiedDnpRetryCount: { lt: 10 },
         callifiedCampaignId: { not: null },
         phone: { not: null },
-        OR: [{ callifiedDnpNextRetryAt: { lte: now } }, { callifiedDnpNextRetryAt: null }],
+        ...await retryDeadlineWhere(now, includeUnscheduled),
       },
       select: {
         id: true,
@@ -193,31 +209,21 @@ async function processPendingRetries(now = new Date()) {
       if (!settings.enabled) continue;
       for (const contact of contacts) {
         if (contact.callifiedDnpRetryCount >= settings.maxRetries) continue;
-        const nextRetryAt = computeNextRetryAt(settings, now);
-
         // Leads that became Pending while retries were disabled have no due
         // timestamp. Start their configured delay now; do not dial them
         // immediately or consume a retry before the delay has elapsed.
         if (!contact.callifiedDnpNextRetryAt) {
-          await prisma.contact.update({
-            where: { id: contact.id, tenantId: Number(tenantId) },
-            data: { callifiedDnpNextRetryAt: nextRetryAt },
+          await prisma.contact.updateMany({
+            where: { id: contact.id, tenantId: Number(tenantId), callifiedLeadStatus: CALL_STATUS.PENDING, callifiedDnpNextRetryAt: null },
+            data: { callifiedDnpNextRetryAt: computeNextRetryAt(settings, now) },
           });
           continue;
         }
 
-        const enqueued = getAutoDialQueue().enqueue({
+        getAutoDialQueue().enqueue({
           tenantId: Number(tenantId), contactId: contact.id,
           campaignId: contact.callifiedCampaignId, userId: null, retryAttempt: true,
-        });
-        // Only consume a retry after the queue accepts it. A duplicate or
-        // in-flight lead must retain its retry budget and due timestamp.
-        if (!enqueued) continue;
-        await prisma.contact.update({
-          where: { id: contact.id, tenantId: Number(tenantId) },
-          data: {
-            callifiedDnpNextRetryAt: nextRetryAt,
-          },
+          retrySchedule: { status: CALL_STATUS.PENDING, dueAt: contact.callifiedDnpNextRetryAt },
         });
       }
     }
@@ -232,7 +238,7 @@ async function processPendingRetries(now = new Date()) {
  * Main tick: find DNP leads whose retry window has arrived and enqueue them
  * for an auto-dial. Grouped by tenant so per-tenant retry settings are honored.
  */
-async function processDnpRetries(now = new Date()) {
+async function processDnpRetries(now = new Date(), includeUnscheduled = true) {
   if (isProcessingTick) return;
   isProcessingTick = true;
 
@@ -247,7 +253,7 @@ async function processDnpRetries(now = new Date()) {
         callifiedDnpRetryCount: { lt: 10 },
         callifiedCampaignId: { not: null },
         phone: { not: null },
-        OR: [{ callifiedDnpNextRetryAt: { lte: now } }, { callifiedDnpNextRetryAt: null }],
+        ...await retryDeadlineWhere(now, includeUnscheduled),
       },
       select: {
         id: true,
@@ -281,14 +287,13 @@ async function processDnpRetries(now = new Date()) {
       for (const contact of contacts) {
         if (contact.callifiedDnpRetryCount >= settings.maxRetries) continue;
 
-        const nextRetryAt = computeNextRetryAt(settings, now);
         try {
           // A DNP recorded while retries were disabled must first receive its
           // configured delay. It is not an immediately-due retry.
           if (!contact.callifiedDnpNextRetryAt) {
-            await prisma.contact.update({
-              where: { id: contact.id, tenantId: Number(tenantId) },
-              data: { callifiedDnpNextRetryAt: nextRetryAt },
+            await prisma.contact.updateMany({
+              where: { id: contact.id, tenantId: Number(tenantId), callifiedLeadStatus: CALL_STATUS.DNP, callifiedDnpNextRetryAt: null },
+              data: { callifiedDnpNextRetryAt: computeNextRetryAt(settings, now) },
             });
             continue;
           }
@@ -299,15 +304,9 @@ async function processDnpRetries(now = new Date()) {
             campaignId: contact.callifiedCampaignId,
             userId: null,
             retryAttempt: true,
+            retrySchedule: { status: CALL_STATUS.DNP, dueAt: contact.callifiedDnpNextRetryAt },
           });
           if (!enqueued) continue;
-
-          await prisma.contact.update({
-            where: { id: contact.id, tenantId: Number(tenantId) },
-            data: {
-              callifiedDnpNextRetryAt: nextRetryAt,
-            },
-          });
 
           console.log(
             `[callifiedDnpRetry] enqueued retry ${contact.callifiedDnpRetryCount + 1}/${settings.maxRetries} for contact ${contact.id} (tenant ${tenantId})`,
@@ -326,10 +325,14 @@ async function processDnpRetries(now = new Date()) {
 
 function startDnpRetryEngine() {
   if (tickInterval) return;
+  let backfillAt = Date.now() + RETRY_BACKFILL_MS;
   tickInterval = setInterval(() => {
-    processDnpRetries().catch((e) => console.error("[callifiedDnpRetry] interval tick error:", e.message));
-    processPendingRetries().catch((e) => console.error("[callifiedPendingRetry] interval tick error:", e.message));
-  }, DNP_RETRY_TICK_MS);
+    const now = new Date();
+    const includeUnscheduled = now.getTime() >= backfillAt;
+    if (includeUnscheduled) backfillAt = now.getTime() + RETRY_BACKFILL_MS;
+    void processDnpRetries(now, includeUnscheduled);
+    void processPendingRetries(now, includeUnscheduled);
+  }, RETRY_TICK_MS);
 
   // Process any work that is already due immediately on startup.
   processDnpRetries().catch((e) => console.error("[callifiedDnpRetry] initial tick error:", e.message));

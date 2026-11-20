@@ -233,7 +233,7 @@ export default function SearchableSelect({
         autoComplete="off"
         disabled={disabled}
         required={required}
-        className={className}
+        className={`${className} crm-searchable-select-trigger`}
         value={displayValue}
         placeholder={displayPlaceholder}
         onChange={(e) => {
@@ -302,6 +302,7 @@ export default function SearchableSelect({
           <div
             ref={popRef}
             role="listbox"
+            className="crm-select-popover"
             aria-label={ariaLabel}
             style={{
               position: "fixed",

@@ -1,0 +1,49 @@
+.call-status-layer { position:fixed; inset:0; z-index:1000; display:flex; justify-content:flex-end }
+.call-status-backdrop { position:absolute; inset:0; background:#12142566 }
+.call-status-panel { position:relative; width:min(520px,100%); height:100dvh; display:flex; flex-direction:column; color:var(--text-primary); background:var(--bg-color); box-shadow:-8px 0 36px #10142820 }
+.call-status-panel>header,.call-status-panel>footer { display:flex; align-items:center; justify-content:space-between; padding:15px 20px; border-bottom:1px solid var(--border-color); gap:8px }
+.call-status-panel h2,.call-status-panel h3 { margin:0; font-size:1.14rem }
+.call-status-panel h3 { font-size:.92rem }
+.call-status-panel small,.cs-meta,.cs-day { color:var(--text-secondary); font-size:.74rem }
+.call-status-panel>footer { border:0; border-top:1px solid var(--border-color); padding:10px 20px; justify-content:flex-start }
+.call-status-panel>footer .btn-secondary { margin-left:auto }
+.call-status-body { overflow:auto; flex:1; min-height:0; padding:16px 18px 22px; background:var(--surface-color) }
+.call-status-panel .cs-icon,.cs-tools button { background:transparent; border:0; color:var(--text-secondary); padding:7px; cursor:pointer; border-radius:6px }
+.call-status-panel button:where(:not(.dh-summary)):hover:not(:disabled) { box-shadow:inset 0 0 0 1px var(--accent-color) }
+.call-status-panel button:focus-visible,.call-status-panel summary:focus-visible { outline:2px solid var(--accent-color); outline-offset:2px }
+.call-status-panel .lead-dial-runs,.cs-card,.cs-stats button,.cs-search { background:var(--bg-color); border:1px solid var(--border-color); border-radius:14px }
+.call-status-panel .lead-dial-run-filters { display:flex; background:var(--surface-color); padding:4px; border-radius:12px; gap:2px }
+.call-status-panel .lead-dial-run-filters button { flex:1; border:1px solid transparent; background:transparent }
+.call-status-panel .lead-dial-run-filters button[aria-pressed=true] { background:var(--bg-color); border-color:var(--border-color); box-shadow:0 1px 3px #17152718 }
+.call-status-panel article.lead-dial-run { border:1px solid var(--border-color); border-radius:12px; padding:10px 12px; margin-top:7px }
+.cs-section,.cs-person,.cs-meta,.cs-tools,.cs-search { display:flex; align-items:center; gap:8px }
+.cs-section { justify-content:space-between; margin:22px 0 10px }
+.cs-section i { display:inline-block; width:7px; height:7px; background:var(--success-color,#139967); border-radius:50% }
+.cs-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px }
+.cs-stats button { padding:10px 13px; text-align:left; font:inherit; font-size:.76rem; color:var(--text-secondary); cursor:pointer }
+.cs-stats button[aria-pressed=true] { border-color:var(--accent-color) }
+.cs-stats b { display:block; font-size:1.5rem; color:var(--accent-color); margin-bottom:2px }
+.cs-stats button:nth-child(2) b { color:var(--success-color) }
+.cs-stats button:nth-child(3) b { color:var(--danger-color) }
+.cs-search { margin:12px 0; padding:0 12px; border-radius:9px; color:var(--text-secondary) }
+.cs-search:focus-within { border-color:var(--accent-color) }
+.cs-search input { width:100%; min-width:0; padding:11px 0; background:transparent; border:0; outline:none; color:var(--text-primary); font:inherit; font-size:.8rem }
+.cs-day { text-transform:uppercase; letter-spacing:.045em; margin:18px 0 6px }
+.cs-card { margin:7px 0; padding:12px 14px; font-size:.82rem }
+.cs-person>div { flex:1; min-width:0; overflow-wrap:anywhere }
+.cs-person small { display:block; margin-top:2px }
+.cs-avatar { flex:none; display:grid; place-items:center; width:34px; height:34px; border-radius:50%; background:color-mix(in srgb,var(--accent-color) 13%,var(--bg-color)); color:var(--accent-color); font-weight:650 }
+.cs-pill { padding:4px 9px; border-radius:99px; background:var(--subtle-bg); font-size:.7rem; font-weight:600 }
+.cs-pill[data-tone=COMPLETED] { background:var(--status-success-bg); color:var(--status-success-text) }
+.cs-pill[data-tone=MISSED],.cs-pill[data-tone=RINGING],.cs-pill[data-tone=INITIATED] { background:var(--status-warning-bg); color:var(--status-warning-text) }
+.cs-pill[data-tone=FAILED] { background:var(--status-danger-bg); color:var(--status-danger-text) }
+.cs-meta { flex-wrap:wrap; gap:4px; border-top:1px solid var(--border-color); padding-top:7px; margin-top:8px }
+.cs-tools { margin-left:auto }
+.cs-tools button { color:var(--accent-color); font:inherit; font-weight:600 }
+.cs-more { width:100%; margin-top:8px }
+.call-status-panel .lead-dial-run details { margin:0 }
+.call-status-panel .lead-dial-run summary { display:block; position:relative; width:100%; padding:2px 24px 2px 0; box-sizing:border-box }
+.call-status-panel .lead-dial-run summary::after { content:''; position:absolute; right:4px; top:8px; width:6px; height:6px; border:solid var(--text-secondary); border-width:0 1.5px 1.5px 0; transform:rotate(45deg) }
+.call-status-panel .lead-dial-run details[open] summary::after { transform:rotate(225deg) }
+.call-status-panel .lead-dial-run details[open] summary { border-bottom:1px solid var(--border-color); padding-bottom:8px }
+.call-status-panel .lead-dial-run-state[data-status=completed] { color:var(--status-success-text); background:var(--status-success-bg) }

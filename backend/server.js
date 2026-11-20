@@ -2419,6 +2419,7 @@ if (process.env.NODE_ENV !== "test" && process.env.DISABLE_CALLIFIED_AUTOMATION 
   startCallifiedAutoDial();
   const { startDnpRetryEngine } = require("./lib/callifiedDnpRetryEngine");
   startDnpRetryEngine();
+  require('./lib/genericLeadDialJobs').start();
 }
 
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-

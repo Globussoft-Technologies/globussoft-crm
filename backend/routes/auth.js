@@ -19,6 +19,7 @@ const {
   otpVerifyLimiter,
 } = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
+const { getGenericCrmTimezone } = require("../lib/tenantSettings");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { resolveTenantVertical } = require("../lib/tenantVertical");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
@@ -1977,6 +1978,7 @@ router.post("/login", async (req, res) => {
             country: user.tenant.country || "US",
             defaultCurrency: user.tenant.defaultCurrency || "USD",
             locale: user.tenant.locale || "en-US",
+            timezone: user.tenant.vertical === "generic" ? await getGenericCrmTimezone(user.tenant.id).catch(() => "UTC") : undefined,
             logoUrl: user.tenant.logoUrl,
             brandColor: user.tenant.brandColor,
             themeColor: user.tenant.themeColor,
@@ -2397,7 +2399,11 @@ router.get("/me", verifyToken, async (req, res) => {
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
       features: { smsConfigured },
-      tenant: user.tenant ? { ...user.tenant, themeColor } : null,
+      tenant: user.tenant ? {
+        ...user.tenant,
+        themeColor,
+        timezone: user.tenant.vertical === "generic" ? await getGenericCrmTimezone(user.tenant.id).catch(() => "UTC") : undefined,
+      } : null,
     });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });

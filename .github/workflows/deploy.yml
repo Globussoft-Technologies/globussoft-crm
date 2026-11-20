@@ -582,6 +582,7 @@ jobs:
             tests/tour-progress-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \
+            tests/generic-lead-dial-jobs-api.spec.js \
             tests/wellness-callified-api.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

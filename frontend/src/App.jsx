@@ -1267,7 +1267,10 @@ export default function App() {
           const profile = await res.json();
           if (!cancelled) {
             setUser(profile);
-            if (profile.tenant) setTenant(profile.tenant);
+            if (profile.tenant) {
+              localStorage.setItem("tenant", JSON.stringify(profile.tenant));
+              setTenant(profile.tenant);
+            }
             setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
           }
         } else if (res.status === 401 || res.status === 403) {
@@ -1317,6 +1320,20 @@ export default function App() {
       localStorage.removeItem("tenant");
     }
   }, [tenant]);
+
+  useEffect(() => {
+    const onTenantStorage = (event) => {
+      if (event.key !== "tenant" || !event.newValue) return;
+      let updated;
+      try { updated = JSON.parse(event.newValue); } catch { return; }
+      setTenant((current) => current?.vertical === "generic" && updated?.id === current.id &&
+        updated.timezone && current.timezone !== updated.timezone
+        ? { ...current, timezone: updated.timezone }
+        : current);
+    };
+    window.addEventListener("storage", onTenantStorage);
+    return () => window.removeEventListener("storage", onTenantStorage);
+  }, []);
 
   // Admins receive billing details; other staff need only workspace access.
   useEffect(() => {
@@ -1516,6 +1533,10 @@ export default function App() {
       throw new Error("SSO token rejected");
     }
     const profile = await res.json();
+    if (profile.tenant) {
+      localStorage.setItem("tenant", JSON.stringify(profile.tenant));
+      setTenant(profile.tenant);
+    }
     setUser(profile);
     localStorage.setItem("user", JSON.stringify(profile));
     setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));

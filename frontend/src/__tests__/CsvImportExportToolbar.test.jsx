@@ -65,6 +65,15 @@ afterEach(() => {
 });
 
 describe("CsvImportExportToolbar", () => {
+  it('combines import and export into one menu without losing format choices', async () => {
+    render(<CsvImportExportToolbar entity="contacts" label="Leads" combinedMenu genericLeadWizard formats={['csv', 'xlsx']} />);
+    expect(screen.queryByRole('button', { name: 'Import contacts' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Import & export' }));
+    expect(screen.getByRole('menuitem', { name: 'Import contacts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export leads' }));
+    expect(screen.getByRole('menuitem', { name: 'CSV' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Excel (XLSX)' })).toBeInTheDocument();
+  });
   it("renders default endpoints when no endpoint overrides are supplied", () => {
     render(<CsvImportExportToolbar entity="bookings" label="Bookings" />);
 

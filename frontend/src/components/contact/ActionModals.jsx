@@ -5,6 +5,8 @@ import { fetchApi } from '../../utils/api';
 import './ContactProfile.css';
 import { useNotify } from '../../utils/notify';
 import { tenantCurrency } from '../../utils/money';
+import { formatTimestamp, tenantTimezone, workspaceDayKey } from '../../utils/date';
+import { parseWorkspaceDateTime, wallTimeParts } from '../../utils/workspaceClock';
 import {
   createDeal, createTask, postActivity, sendEmail, sendSms, sendWhatsapp,
   syncMeetingToCalendar, updateDeal,
@@ -14,10 +16,27 @@ import { FormRow, Modal } from './ProfileWidgets';
 import { AuthContext } from '../../appContexts';
 import { scopedStorageKey } from '../../utils/scopedStorage';
 
+function inputInstant(value) {
+  const timezone = tenantTimezone();
+  return timezone ? parseWorkspaceDateTime(value, timezone) : new Date(value);
+}
+
+function taskDueDate(value) {
+  if (!tenantTimezone()) return value;
+  const date = inputInstant(value);
+  if (Number.isNaN(date.getTime())) throw new Error('Choose a valid time in the workspace timezone.');
+  return date.toISOString();
+}
+
 function todayPlus(days) {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 16);
+  const now = new Date();
+  const timezone = tenantTimezone();
+  if (!timezone) {
+    now.setDate(now.getDate() + days);
+    return now.toISOString().slice(0, 16);
+  }
+  const { year, month, day, hour, minute } = wallTimeParts(now, timezone);
+  return new Date(Date.UTC(year, month - 1, day + days, hour, minute)).toISOString().slice(0, 16);
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -136,7 +155,7 @@ export function EmailModal({ contact, onClose, onDone }) {
   const saveDraft = useCallback((silent) => {
     try {
       localStorage.setItem(draftKey, JSON.stringify({ toList, ccList, bccList, subject, bodyHtml: editorRef.current?.innerHTML || '', trackEmail, addUnsub, savedAt: new Date().toISOString() }));
-      setDraftNote(`Draft saved ${new Date().toLocaleTimeString()}`);
+      setDraftNote(`Draft saved ${formatTimestamp(new Date(), { timeStyle: 'medium' })}`);
       if (!silent) notify.success('Draft saved.');
     } catch { if (!silent) notify.error('Could not save draft.'); }
   }, [draftKey, toList, ccList, bccList, subject, trackEmail, addUnsub, notify]);
@@ -173,7 +192,7 @@ export function EmailModal({ contact, onClose, onDone }) {
         }
         if (Array.isArray(d.ccList) && d.ccList.length) { setCcList(d.ccList.filter((x) => EMAIL_RE.test(x))); setShowCc(true); }
         if (Array.isArray(d.bccList) && d.bccList.length) { setBccList(d.bccList.filter((x) => EMAIL_RE.test(x))); setShowBcc(true); }
-        if (d.savedAt) setDraftNote(`Draft saved ${new Date(d.savedAt).toLocaleTimeString()}`);
+        if (d.savedAt) setDraftNote(`Draft saved ${formatTimestamp(d.savedAt, { timeStyle: 'medium' })}`);
         if (typeof d.trackEmail === 'boolean') setTrackEmail(d.trackEmail);
         if (typeof d.addUnsub === 'boolean') setAddUnsub(d.addUnsub);
       }
@@ -559,7 +578,7 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
       await createTask({
         title: title.trim(),
         notes: description.trim() || undefined,
-        dueDate: `${dueDate}T${time || '00:00'}`,
+        dueDate: taskDueDate(`${dueDate}T${time || '00:00'}`),
         status: !isGeneric && completed ? 'Completed' : 'Pending',
         ...(isGeneric ? { priority } : {}),
         ...(isGeneric && canAssignGenericTask && assigneeId ? { targetUserId: assigneeId } : {}),
@@ -625,7 +644,7 @@ export function LegacyTaskModal({ contact, onClose, onDone }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await createTask({ title: title.trim(), dueDate, priority, notes: notes.trim() || undefined, contactId: contact.id });
+      await createTask({ title: title.trim(), dueDate: taskDueDate(dueDate), priority, notes: notes.trim() || undefined, contactId: contact.id });
       notify.success('Task created.');
       onDone();
       onClose();
@@ -783,9 +802,12 @@ export function MeetingModal({ contact, onClose, onDone }) {
         meetingNotes.trim() ? `Meeting notes: ${meetingNotes.trim()}` : '',
         location.trim() ? `Location: ${location.trim()}` : '',
       ].filter(Boolean).join('\n');
+      const start = inputInstant(`${fromDate}T${allDay ? '00:00' : (fromTime || '00:00')}`);
+      const end = inputInstant(`${toDate || fromDate}T${allDay ? '00:00' : (toTime || fromTime || '00:00')}`);
+      if (tenantTimezone() && (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()))) {
+        throw new Error('Choose a valid meeting time in the workspace timezone.');
+      }
       const activity = await postActivity(contact.id, { type: 'Meeting', description: details || `Meeting: ${title.trim()}` });
-      const start = new Date(`${fromDate}T${allDay ? '00:00' : (fromTime || '00:00')}`);
-      const end = new Date(`${toDate || fromDate}T${allDay ? '00:00' : (toTime || fromTime || '00:00')}`);
       if (contact.email && !Number.isNaN(start.getTime())) {
         await syncMeetingToCalendar({ title: title.trim(), description: details, startTime: start.toISOString(), endTime: (Number.isNaN(end.getTime()) ? new Date(start.getTime() + 30 * 60000) : end).toISOString(), attendees: [contact.email], contactId: activity?.contactId || contact.id });
       }
@@ -830,13 +852,13 @@ function MeetingDateField({ label, date, setDate, time, setTime, allDay }) {
 
 export function LegacyMeetingModal({ contact, onClose, onDone }) {
   const notify = useNotify();
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => workspaceDayKey(new Date()));
   const [time, setTime] = useState('10:00');
   const [agenda, setAgenda] = useState('');
   const [saving, setSaving] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
-    const start = new Date(`${date}T${time}`);
+    const start = inputInstant(`${date}T${time}`);
     if (Number.isNaN(start.getTime())) {
       notify.error('Choose a valid date and time.');
       return;

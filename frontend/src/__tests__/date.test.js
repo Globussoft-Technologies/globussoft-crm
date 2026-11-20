@@ -154,3 +154,14 @@ describe('utils/date — tenantLocale fallback chain', () => {
     expect(tenantLocale()).toBe('en-US');
   });
 });
+
+it('formats Generic CRM timestamps in the configured timezone and preserves calendar-only dates', () => {
+  setTenant({ vertical: 'generic', locale: 'en-US', timezone: 'Asia/Kolkata' });
+  expect(formatDateShort('2026-11-18T20:00:00Z')).toBe('11/19/2026');
+  setTenant({ vertical: 'generic', locale: 'en-US', timezone: 'America/New_York' });
+  expect(formatDateShort('2026-11-19')).toBe('11/19/2026');
+  expect(formatDateShort('2026-11-19T00:00:00Z')).toBe('11/18/2026');
+  setTenant({ vertical: 'generic', locale: 'en-US' });
+  expect(formatDateShort('2026-11-19T00:00:00Z')).toBe('11/19/2026');
+  setTenant(null);
+});

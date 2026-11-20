@@ -29,6 +29,10 @@ export default function ColumnPicker({
   hiddenColumnKeys = EMPTY_HIDDEN_COLUMN_KEYS,
   deletableColumns = [],
   onFieldDeleted,
+  triggerLabel = 'Customize table',
+  density,
+  onDensityChange,
+  onManageFields,
 }) {
   const notify = useNotify();
   const [open, setOpen] = useState(false);
@@ -158,7 +162,7 @@ export default function ColumnPicker({
     const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
     const viewportHeight = window.innerHeight;
     const width = Math.min(320, Math.max(0, viewportWidth - gutter * 2));
-    const preferredHeight = Math.min(420, Math.max(0, viewportHeight - gutter * 2));
+    const preferredHeight = Math.min(density ? 600 : 420, Math.max(0, viewportHeight - gutter * 2));
     const spaceBelow = viewportHeight - rect.bottom - gap - gutter;
     const spaceAbove = rect.top - gap - gutter;
     const minUsefulHeight = Math.min(240, preferredHeight);
@@ -398,7 +402,7 @@ export default function ColumnPicker({
   const deletableHidden = hidden.filter((column) => deletableColumns.some((item) => item.key === column.key));
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+    <div ref={wrapRef} className={density ? 'leads-view-control' : undefined} style={{ position: "relative", display: "inline-block" }}>
       <button
         ref={triggerRef}
         type="button"
@@ -409,7 +413,7 @@ export default function ColumnPicker({
         aria-expanded={open}
         style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}
       >
-        <SlidersHorizontal size={15} /> Customize table
+        <SlidersHorizontal size={15} /> {triggerLabel}
       </button>
       {open && popoverPos && createPortal(
         <div
@@ -429,6 +433,7 @@ export default function ColumnPicker({
             boxSizing: "border-box",
           }}
         >
+          {density && <div style={{ padding: '14px 14px 8px' }}><p style={{ fontSize: '.65rem', letterSpacing: '.06em', color: 'var(--text-secondary)', margin: '0 0 9px' }}>ROW DENSITY</p><div style={{ display: 'flex', gap: 8 }}>{['comfortable', 'compact'].map((value) => <button key={value} type="button" className="btn-secondary" aria-pressed={density === value} onClick={() => onDensityChange?.(value)} style={{ flex: 1, borderRadius: 999, fontSize: '.75rem', padding: '7px 12px', borderColor: density === value ? 'var(--primary-color, var(--accent-color))' : undefined, color: density === value ? 'var(--primary-color, var(--accent-color))' : undefined }}>{value === 'compact' ? 'Compact' : 'Comfortable'}</button>)}</div></div>}
           <div style={{ padding: "0.6rem 0.75rem", borderBottom: "1px solid var(--border-color)" }}>
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: "0.6rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)" }} />
@@ -628,6 +633,7 @@ export default function ColumnPicker({
               <div style={{ padding: "0.75rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>No matching fields.</div>
             )}
           </div>
+          {onManageFields && <button type="button" onClick={() => { setOpen(false); onManageFields(); }} style={{ textAlign: 'left', padding: '12px 16px', border: 0, borderTop: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '.78rem' }}>Manage lead fields</button>}
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", padding: "0.6rem 0.75rem", borderTop: "1px solid var(--border-color)" }}>
             <button type="button" onClick={handleReset} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
               Reset

@@ -366,6 +366,21 @@ function evaluateCap(spentCents, capCents) {
   };
 }
 
+function normalizeWorkspaceTimezone(value) {
+  if (typeof value !== 'string' || !value.trim() || /^[+-]/.test(value.trim())) return null;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value.trim() });
+    return value.trim() === 'Asia/Calcutta' ? 'Asia/Kolkata' : value.trim();
+  } catch {
+    return null;
+  }
+}
+
+async function getGenericCrmTimezone(tenantId) {
+  const value = await getSetting(tenantId, KEYS.CALLIFIED_RETRY_TIMEZONE, { coerce: String, fallback: 'UTC' });
+  return normalizeWorkspaceTimezone(value) || 'UTC';
+}
+
 module.exports = {
   // PRD §4.7 originals
   getTenantSetting,
@@ -374,6 +389,8 @@ module.exports = {
   KEYS,
   DEFAULTS,
   getSetting,
+  getGenericCrmTimezone,
+  normalizeWorkspaceTimezone,
   setSetting,
   getBudgetCap,
   evaluateCap,

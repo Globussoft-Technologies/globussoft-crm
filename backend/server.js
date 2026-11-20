@@ -1949,6 +1949,22 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
   }
 });
 
+// The web-form document loads this isolated sanitizer at runtime. Serve it
+// beside the document when the embed is reached directly through Express.
+app.get("/embed/web-form-custom-css.js", (req, res, next) => {
+  const embedPath = path.join(
+    __dirname,
+    "..",
+    "frontend",
+    "public",
+    "embed",
+    "web-form-custom-css.js",
+  );
+  return res.sendFile(embedPath, (err) => {
+    if (err) next();
+  });
+});
+
 // Travel Meeting Forms widget. The public form key resolves the tenant above,
 // which means the normal per-tenant embed allowlist controls who may frame it.
 app.get("/embed/meeting-form.html", async (req, res, next) => {

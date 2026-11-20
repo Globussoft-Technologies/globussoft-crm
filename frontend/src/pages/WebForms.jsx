@@ -10407,11 +10407,11 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
 
-    if (!selectedForm?.id) return;
+    if (!selectedForm?.id) return false;
 
     if (hasDuplicateWebFormName(forms, selectedForm.name, selectedForm.id)) {
       notify.error("A web form with this name already exists");
-      return;
+      return false;
     }
 
 
@@ -10782,6 +10782,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
       clearWebFormDraft(draftStorageKey);
       notify.success("Form saved");
+      return true;
 
 
 
@@ -10814,6 +10815,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
       notify.error(err?.message || "Failed to save form");
+      return false;
 
 
 
@@ -11281,6 +11283,14 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
 
 
   const publicUrl = selectedForm ? buildPublicUrl(selectedForm, origin) : "";
+
+  const openEmbedCode = async () => {
+    if (dirty) {
+      const saved = await saveForm();
+      if (!saved) return;
+    }
+    setShowEmbed(true);
+  };
 
 
 
@@ -20543,7 +20553,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {builderOpen ? <button type="button" className="btn-secondary" onClick={showFormsLibrary}>Back to all forms</button> : null}
           <button type="button" className="btn-secondary" onClick={createForm}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />New form</button>
-          {builderOpen ? <button type="button" className="btn-secondary" disabled={!selectedForm} onClick={() => setShowEmbed(true)}><Code2 size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Get embed code and URL</button> : null}
+          {builderOpen ? <button type="button" className="btn-secondary" disabled={!selectedForm || saving} onClick={openEmbedCode}><Code2 size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Get embed code and URL</button> : null}
           {builderOpen ? <button type="button" className="btn-secondary" disabled={!selectedForm} onClick={() => setShowPreview(true)}><Eye size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Preview form</button> : null}
           {builderOpen ? <button type="button" className="btn-primary" disabled={!selectedForm || saving || !dirty} onClick={saveForm}><Save size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Save</button> : null}
         </div>

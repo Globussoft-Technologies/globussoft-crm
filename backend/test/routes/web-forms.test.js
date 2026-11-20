@@ -238,6 +238,7 @@ describe('iframe web-form embeds', () => {
     expect(code).toContain('document.createElement("iframe")');
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=7');
     expect(code).toContain('embed=1');
+    expect(code).toContain('api=https%3A%2F%2Fcrm.example.com');
     expect(code).toContain('max-width:620px;margin:0 auto;');
     expect(code).toContain('gbs-web-form-host');
     expect(code.match(/<div\b/g)).toHaveLength(1);
@@ -255,6 +256,7 @@ describe('iframe web-form embeds', () => {
     try {
       const code = buildEmbedCode({ id: 7, name: 'Contact Us', slug: 'contact-us', scope: 'generic' });
       expect(code).toContain('https://globuscrm.com/embed/web-form.html?id=7');
+      expect(code).toContain('api=https%3A%2F%2Fglobuscrm.com');
     } finally {
       if (previousFrontendUrl === undefined) delete process.env.FRONTEND_URL;
       else process.env.FRONTEND_URL = previousFrontendUrl;
@@ -267,6 +269,7 @@ describe('iframe web-form embeds', () => {
     const code = buildEmbedCode({ id: 8, name: 'Travel Enquiry', slug: 'travel-enquiry', scope: 'travel' }, 'https://crm.example.com');
 
     expect(code).toContain('scope=travel');
+    expect(code).toContain('api=https%3A%2F%2Fcrm.example.com');
   });
 });
 

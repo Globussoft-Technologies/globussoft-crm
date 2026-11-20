@@ -148,6 +148,9 @@ function buildIframeEmbedRuntime(form, base, containerId, createContainer) {
     form?.id != null && String(form.id) !== '' ? { id: String(form.id) } : { slug: String(form?.slug || '') },
   );
   frameParams.set('embed', '1');
+  // Keep public-form data (including saved customCss) on the CRM origin even
+  // when the embed document is served through a CDN or another host.
+  frameParams.set('api', base);
   if (form?.scope && form.scope !== 'generic') frameParams.set('scope', form.scope);
   const config = {
     containerId,
@@ -193,7 +196,6 @@ export function buildWebFormEmbedCode(form, origin) {
     '<!-- Globussoft CRM web form -->',
     `<div class="gbs-web-form-embed" id="${containerId}" style="display:block;width:100%;max-width:620px;margin:0 auto;"></div>`,
     `<script>${runtime}</script>`,
-    `<p><a href="${buildPublicUrl(form, origin).replace(/&/g, '&amp;')}" target="_blank" rel="noopener noreferrer">Open public form</a></p>`,
   ].join('\n');
 }
 

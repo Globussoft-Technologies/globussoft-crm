@@ -21,6 +21,7 @@ COPY backend/ .
 # as the separately-built frontend image so Compose deployments can render
 # the hero form without relying on files outside the container.
 COPY frontend/public/embed/web-form.html /frontend/public/embed/web-form.html
+COPY frontend/public/embed/web-form-custom-css.js /frontend/public/embed/web-form-custom-css.js
 
 # Health check
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \

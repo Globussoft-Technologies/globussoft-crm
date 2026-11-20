@@ -136,10 +136,11 @@ describe('buildWebFormEmbedCode', () => {
     expect(code).toContain('style="display:block;width:100%;max-width:620px;margin:0 auto;"');
     expect(code).toContain('document.createElement("iframe")');
     expect(code).toContain('https://crm.example.com/embed/web-form.html?slug=contact-us&embed=1');
+    expect(code).toContain('api=https%3A%2F%2Fcrm.example.com');
     expect(code).toContain('gbs-web-form-host');
     expect(code).not.toMatch(/<\/?(?:html|head|body)\b/i);
     expect(code).not.toContain('<iframe');
-    expect(code).toContain('Open public form');
+    expect(code).not.toContain('Open public form');
     expect(code.match(/<div\b/g)).toHaveLength(1);
     const script = code.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
     expect(() => Function(script)).not.toThrow();
@@ -156,6 +157,7 @@ describe('buildWebFormEmbedCode', () => {
     const code = buildWebFormEmbedCode({ id: 101, name: 'Contact Us', slug: 'contact-us' }, 'https://crm.example.com');
 
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=101');
+    expect(code).toContain('api=https%3A%2F%2Fcrm.example.com');
     expect(code).not.toContain('?slug=contact-us');
   });
 
@@ -166,6 +168,7 @@ describe('buildWebFormEmbedCode', () => {
     );
 
     expect(code).toContain('scope=travel');
+    expect(code).toContain('api=https%3A%2F%2Fcrm.example.com');
     expect(code).not.toContain('<iframe');
   });
 });
@@ -183,6 +186,7 @@ describe('buildWebFormScriptEmbedCode', () => {
     expect(code).toContain('max-width:620px;margin:0 auto;');
     expect(code).toContain('document.createElement("iframe")');
     expect(code).toContain('https://crm.example.com/embed/web-form.html?id=104&embed=1');
+    expect(code).toContain('api=https%3A%2F%2Fcrm.example.com');
     expect(code).toContain('gbs-web-form-host');
     expect(code).not.toContain('Contact </script> Form');
     expect(() => Function(code.slice('<script>'.length, -'</script>'.length))).not.toThrow();
@@ -317,6 +321,15 @@ describe('public web form embed footer', () => {
     expect(builder).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
     expect(html).toContain('gbs-custom-form-css');
     expect(html).toContain('customCss.textContent = sanitizeCustomCss(style.customCss)');
+  });
+
+  test('saves pending customization before opening the embed dialog', () => {
+    const builder = readFileSync(join(process.cwd(), 'src/pages/WebForms.jsx'), 'utf8');
+
+    expect(builder).toContain('const openEmbedCode = async () =>');
+    expect(builder).toContain('const saved = await saveForm();');
+    expect(builder).toContain('if (!saved) return;');
+    expect(builder).toContain('onClick={openEmbedCode}');
   });
 
   test('links the powered-by footer to the home page', () => {

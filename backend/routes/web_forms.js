@@ -1193,6 +1193,9 @@ function buildEmbedCode(form, origin) {
   const formSlug = String(form?.slug || "");
   const params = new URLSearchParams(formId ? { id: formId } : { slug: formSlug });
   params.set("embed", "1");
+  // Pin the public-form fetch to the CRM origin so saved customCss and the
+  // rest of the persisted form style are loaded from the right tenant.
+  params.set("api", base);
   if (form?.scope && form.scope !== "generic") params.set("scope", form.scope);
   const frameUrl = `${base}/embed/web-form.html?${params.toString()}`;
   const config = {
